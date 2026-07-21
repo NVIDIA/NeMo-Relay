@@ -54,7 +54,12 @@ under the active session scope.
 Use the agent shortcuts for no-install local observability. The wrapper starts
 a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and gateway
 configuration into the launched coding agent, and stops the gateway when the
-agent exits.
+agent exits. Relay owns the launched wrapper and its descendants as one process
+tree, so a gateway failure cannot leave an agent running without its private
+gateway and hook configuration. Interactive Unix launches transfer foreground
+terminal ownership and preserve Ctrl-C and Ctrl-Z job control. Non-interactive
+Unix launches forward termination signals to the complete agent process tree
+before Relay removes the injected configuration.
 
 ```bash
 nemo-relay codex
@@ -69,6 +74,14 @@ instead of the built-in shortcut:
 nemo-relay run -- codex
 ```
 
+For Claude Code and Codex, transparent mode leaves the caller's source settings,
+selected profile, and installed plugin state unchanged. A process marker makes
+any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's
+persistent hooks exit without forwarding; Codex disables the known Relay plugin
+hook identities in its process-local CLI state. Only the injected wrapper hooks
+deliver events. Hermes gets the same isolation through its process-private
+configuration overlay.
+
 If a launcher or wrapper hides the real agent name, set that wrapper as the
 configured command and pass `--agent`. The same pattern applies to Claude Code,
 Codex, and Hermes:
@@ -82,27 +95,40 @@ command = "my-codex-wrapper"
 nemo-relay run --agent codex
 ```
 
-Hermes is different from the other transparent modes: `run --agent hermes`
-starts the gateway and exports the dynamic `NEMO_RELAY_GATEWAY_URL`, but Hermes
-shell hooks still need to be installed or otherwise approved in Hermes config.
+For Hermes, interactive setup configures only Relay's transparent wrapper.
+Persistent MCP and trusted shell-hook state is owned by
+`nemo-relay install hermes`. Transparent `run --agent hermes` exports the
+dynamic `NEMO_RELAY_GATEWAY_URL` through a process-private `HERMES_HOME`
+overlay; it never rewrites the user's Hermes config.
 
 Use `--dry-run --print` to inspect the generated hook config, gateway
 environment, gateway URL, and final command without launching the agent.
 
-## Persistent Host Plugins
+## Persistent Host Integrations
 
-Use persistent plugin installation when Claude Code or Codex should load NeMo
-Relay through the host's plugin system instead of through a wrapper command:
+Use persistent integration installation to let Claude Code, Codex, or Hermes
+Agent load Relay without a wrapper command:
 
 ```bash
 nemo-relay install claude-code
 nemo-relay install codex
+nemo-relay install hermes
 nemo-relay install all
 ```
 
-Plugin installation writes a local marketplace, installs the generated
-`nemo-relay-plugin`, and configures the host-specific hook and provider routing
-needed for full observability. It still relies on the same local `nemo-relay`
+Claude Code and Codex use marketplace plugins. Hermes exposes the same stdio
+MCP lifecycle through user configuration.
+
+Hermes, Claude Code, and Codex MCP clients can share the native gateway on
+`127.0.0.1:47632`. Every `nemo-relay mcp` process acquires that gateway when it
+launches. Claude Code uses `alwaysLoad` to wait for the MCP connection;
+Hermes starts discovery asynchronously, so its hook command waits for gateway
+readiness before it sends the original payload.
+
+For Claude Code and Codex, installation writes a local marketplace, installs
+the generated `nemo-relay-plugin`, and configures host-specific hooks and
+provider routing. For Hermes, installation updates the Relay-owned portions of
+the user configuration instead. All three paths use the local `nemo-relay`
 binary on `PATH`.
 
 Use plugin doctor and uninstall for the installed host state:
@@ -112,8 +138,8 @@ nemo-relay doctor --plugin codex
 nemo-relay uninstall codex
 ```
 
-Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
-directories, host-specific behavior, and Codex lazy sidecar constraints.
+Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
+install directories, host-specific behavior, and the shared-sidecar lifecycle.
 
 ## Shared Configuration
 
@@ -141,6 +167,81 @@ Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with `nemo-relay plugins edit`, or use
 `nemo-relay plugins edit --project` for project configuration.
+
+### Provider Upstreams
+
+Set provider base URLs under `[upstream]` when you want Relay to forward
+compatible requests to a proxy, enterprise endpoint, or another provider host:
+
+```toml
+[upstream]
+openai_base_url = "https://api.openai.com/v1"
+anthropic_base_url = "https://api.anthropic.com"
+```
+
+Relay normally chooses the upstream from the request path, regardless of which
+compatible client sends the request. The gateway routes map to settings as
+follows:
+
+| Gateway Endpoint | Upstream Setting |
+| --- | --- |
+| `/responses`, `/v1/responses` | `openai_base_url` |
+| `/chat/completions`, `/v1/chat/completions` | `openai_base_url` |
+| `/models`, `/v1/models` | `openai_base_url` |
+| `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
+
+For ordinary provider requests, Relay resolves credentials in this order:
+
+1. Relay preserves an inbound `Authorization`, `x-api-key`, `api-key`, or
+   `anthropic-api-key` header.
+2. If no inbound credential is present, Relay uses the route-specific custom
+   `Authorization` value from `[upstream]` or its environment override.
+3. If no custom value is configured, Relay reads `OPENAI_API_KEY` or
+   `ANTHROPIC_API_KEY` and applies the provider's standard authentication
+   scheme.
+
+Set `openai_auth_header` or `anthropic_auth_header` under `[upstream]` only when
+an enterprise gateway, proxy, or compatible endpoint requires a complete
+`Authorization` value such as `Bearer ...` or `Basic ...`. Prefer the
+corresponding environment variables so you don't store credentials in
+`config.toml`:
+
+```bash
+export NEMO_RELAY_OPENAI_AUTH_HEADER="Bearer <openai-credential>"
+export NEMO_RELAY_ANTHROPIC_AUTH_HEADER="Basic <anthropic-credential>"
+```
+
+If you override a base URL with `NEMO_RELAY_OPENAI_BASE_URL` or
+`NEMO_RELAY_ANTHROPIC_BASE_URL`, set the matching auth-header environment
+variable when the new endpoint needs custom authentication. Relay doesn't carry
+a custom header from `config.toml` across an environment-level endpoint
+override.
+
+An MCP-managed gateway uses custom or environment credentials only after the
+client proves that it belongs to that managed gateway.
+
+Codex ChatGPT credentials are the exception to the normal inbound precedence.
+On OpenAI routes, Relay recognizes `Bearer eyJ...` JWTs and `Bearer at-...`
+access tokens. If `openai_auth_header`, `NEMO_RELAY_OPENAI_AUTH_HEADER`, or a
+nonempty `OPENAI_API_KEY` is available, Relay removes the ChatGPT credential,
+applies the replacement, and forwards the request to the configured
+`openai_base_url`. Without a replacement, Relay preserves the ChatGPT credential
+and routes the request to the Codex ChatGPT backend instead of
+`openai_base_url`.
+
+### Operational Logging
+
+The CLI initializes operational logging before operational commands run.
+`nemo-relay config` and `nemo-relay plugins edit` skip initialization so invalid
+logging settings do not prevent configuration repair.
+
+Configure temporary CLI settings with `--log-level` and
+`--log-stderr-format`, or select an absolute TOML file with
+`--log-config-path`.
+
+For defaults, source precedence, environment variables, TOML file sinks, and
+Rust APIs, refer to
+[Operational Logging](/reference/operational-logging).
 
 ## Add Model Pricing for Cost Estimates
 
@@ -229,7 +330,9 @@ port is discovered by the wrapper and exposed to hooks through
 Common environment variables for direct gateway server use are:
 
 - `NEMO_RELAY_GATEWAY_BIND`
+- `NEMO_RELAY_OPENAI_AUTH_HEADER`
 - `NEMO_RELAY_OPENAI_BASE_URL`
+- `NEMO_RELAY_ANTHROPIC_AUTH_HEADER`
 - `NEMO_RELAY_ANTHROPIC_BASE_URL`
 - `NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES`
 - `NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES`
@@ -240,6 +343,18 @@ limit is `100MiB`. Set both values in bytes.
 Plugin configuration controls process-level Observability exporters. Per-session
 configuration controls structured metadata on the top-level agent begin event
 and the plugin configuration metadata associated with the session.
+
+For example, attach a user identity to a transparent run:
+
+```bash
+nemo-relay run --session-metadata '{"user_id":"alice"}' -- codex
+```
+
+The CLI emits one `session.start` mark for the lifecycle and copies the merged
+metadata onto each top-level trace scope. It also adds a non-overridable
+`session_instance_id` derived from the session's existing root scope UUID.
+Keep `user_id` a top-level string when OTLP exporters should expose it as
+`user.id`.
 
 `hook-forward` can also pass per-session configuration through headers:
 
@@ -258,15 +373,17 @@ where provider traffic was expected to pass through the gateway.
 The gateway normalizes vendor hook payloads into private internal events before
 calling NeMo Relay APIs.
 
-- Agent start opens a top-level `ScopeType::Agent` scope on a dedicated
-  `ScopeStackHandle`.
+- Agent start emits a `session.start` mark on a dedicated `ScopeStackHandle`.
+  Harnesses with a reliable session boundary also open a top-level
+  `ScopeType::Agent` scope; Claude Code and Codex use bounded turn scopes.
 - Subagent start opens a child `ScopeType::Agent` scope. Subagent stop closes
   that scope when it is still active.
 - Tool pre-use starts a NeMo Relay tool span. Tool post-use, denial, or failure
   closes it.
-- Prompt, response, agent-thought, and legacy Hermes `pre_llm_call` /
-  `post_llm_call` hooks are retained as private correlation hints. They are not
-  emitted as NeMo Relay events.
+- Generated `UserPromptSubmit`, `Stop`, and Hermes `pre_llm_call` /
+  `post_llm_call` hooks are retained as private correlation hints. The adapters
+  do the same when a custom or older integration delivers a response or
+  agent-thought hook. These hints are not emitted as NeMo Relay events.
 - Compaction, notification, and unknown hook events become mark events under
   the active session scope.
 - Gateway requests emit NeMo Relay LLM start and end events under the active
@@ -295,19 +412,21 @@ Correlation hints expire after five minutes. If the gateway cannot select one
 unambiguous hint, it falls back to the previous LLM owner, then to the only
 active subagent, then to the top-level agent scope.
 
-Every gateway LLM event includes `llm_correlation_status` metadata. Possible
-values are `explicit`, `single_hint`, `matched_hint`, `sticky_last_owner`,
-`active_subagent`, `agent_fallback`, and `ambiguous_fallback`. Matched hints can
-also add `llm_correlation_source`, `llm_correlation_subagent_id`,
+Every gateway LLM event includes `llm_correlation_status` metadata. Managed
+requests can use `explicit`, `single_hint`, `matched_hint`,
+`request_affinity`, `sticky_last_owner`, `recent_tool_owner`,
+`subagent_start`, `active_subagent`, `agent_fallback`, or
+`ambiguous_fallback`. Claude Code startup probes use `pre_turn_probe`. Matched
+hints can also add `llm_correlation_source`, `llm_correlation_subagent_id`,
 `llm_correlation_conversation_id`, `llm_correlation_generation_id`,
 `llm_correlation_request_id`, and `llm_correlation_agent_type`.
 
 Generated hook bundles subscribe to the events needed for that mapping:
 
-| Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
+| Agent | LLM Lifecycle and Correlation Hooks | Scope, Tool, and Mark Hooks |
 | --- | --- | --- |
-| Claude Code | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
-| Codex | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
+| Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
+| Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
 | Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
 
 Hermes `pre_api_request`, `post_api_request`, and `api_request_error` hooks
@@ -316,26 +435,36 @@ map to NeMo Relay LLM start/end events when present. Hermes `pre_llm_call` and
 
 ## Hook Forwarding
 
-Hooks generated by the wrapper (Claude/Codex ephemeral, Hermes via
-setup) invoke `nemo-relay hook-forward <agent>` from stdin. Inside the wrapper
-the gateway URL comes from `NEMO_RELAY_GATEWAY_URL` injected on every run;
-outside the wrapper (Hermes standalone, IDE-launched Claude/Codex) the hook
-command falls back to its embedded `--gateway-url`.
+Transparent Claude Code and Codex hooks invoke
+`nemo-relay hook-forward <agent>` with the canonical payload on standard input.
+The wrapper-owned hook command embeds its ephemeral gateway URL and is marked
+as transparent so it cannot recover the fixed gateway.
 
-Hooks installed by Claude Code and Codex plugins use the plugin shim path
-managed by `nemo-relay install`. That path starts or reuses the local plugin
-sidecar before forwarding the hook payload.
+Persistent Claude Code, Codex, and Hermes hooks also use
+`nemo-relay hook-forward <agent>`. Each generated command identifies the fixed
+gateway and its private install-generation fence, waits for the MCP-owned Relay
+gateway, verifies it, and forwards the unchanged payload once. Hermes setup
+stores the canonical absolute command and trusts only its exact event pairs; it
+does not enable global hook auto-acceptance.
 
 `hook-forward` reads the canonical hook payload from standard input, sends it
 to the matching endpoint, and prints the endpoint response. It fails open by
 default so observability outages do not block the coding agent. Add
 `--fail-closed` only when policy requires hook delivery to block the agent.
 
-Optional flags map to gateway headers:
+These flags control delivery and metadata:
 
+- `--gateway-url <url>` selects the Relay gateway that receives the payload.
+- `--forward-only` allows source plugins and custom automation to use an
+  existing compatible gateway without an installer-owned generation fence. It
+  verifies the gateway but never launches or recovers Relay. Generated
+  installed hooks use a private generation fence instead.
 - `--session-metadata` sets `x-nemo-relay-session-metadata`.
 - `--profile` sets `x-nemo-relay-config-profile`.
 - `--gateway-mode` sets `x-nemo-relay-gateway-mode`.
+- `--fail-closed` returns a failure when delivery fails or Relay rejects the
+  hook. Without it, forwarding fails open so an observability outage does not
+  block the coding agent.
 
 ## Agent Guides
 
@@ -344,9 +473,9 @@ application-mode caveats.
 
 - [Claude Code](/nemo-relay-cli/claude-code)
 - [Codex](/nemo-relay-cli/codex)
-- [Plugin Installation](/nemo-relay-cli/plugin-installation)
+- [Coding Agent Installation](/nemo-relay-cli/plugin-installation)
 - [Hermes Agent](/nemo-relay-cli/hermes)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,
-Agent Trajectory Interchange Format (ATIF) export verification on session end,
-and troubleshooting missing LLM lifecycle data.
+Agent Trajectory Interchange Format (ATIF) export verification at the host's
+supported snapshot boundary, and troubleshooting missing LLM lifecycle data.

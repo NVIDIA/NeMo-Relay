@@ -19,7 +19,10 @@ use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeHandle, ScopeTyp
 use crate::api::tool::{ToolAttributes, ToolHandle};
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::response::AnnotatedLlmResponse;
-use crate::config_editor::{EditorConfig, EditorFieldKind};
+use crate::config_editor::{
+    EditorConfig, EditorFieldKind, JSON_LIST_ITEM, STRING_LIST_ITEM, default_json_list_item_value,
+    default_string_list_item_value,
+};
 
 #[derive(Default, serde::Serialize)]
 struct NestedEditorFixture {
@@ -555,6 +558,16 @@ fn scope_type_strings_and_editor_metadata_cover_public_helpers() {
     assert!(nested.schema().unwrap().field("enabled").is_some());
     assert_eq!(nested.default_value().unwrap(), json!({"enabled": false}));
     assert!(schema.field("missing").is_none());
+}
+
+#[test]
+fn editor_list_defaults_describe_empty_string_and_null_values() {
+    assert_eq!(default_string_list_item_value(), json!(""));
+    assert_eq!(default_json_list_item_value(), json!(null));
+    assert_eq!(STRING_LIST_ITEM.kind, EditorFieldKind::String);
+    assert_eq!(STRING_LIST_ITEM.default.unwrap()(), json!(""));
+    assert_eq!(JSON_LIST_ITEM.kind, EditorFieldKind::Json);
+    assert_eq!(JSON_LIST_ITEM.default.unwrap()(), json!(null));
 }
 
 #[test]

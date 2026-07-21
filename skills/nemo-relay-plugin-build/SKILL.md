@@ -10,6 +10,7 @@ metadata:
 
 Use this skill when a user wants to package reusable NeMo Relay runtime behavior
 behind plugin configuration.
+Keep reusable plugin behavior separate from one-off application startup code.
 
 ## Use This When
 
@@ -67,13 +68,15 @@ Do not build a plugin when a narrower NeMo Relay surface is enough:
    unsafe config, and invalid field combinations.
 5. Validate config before initialization. Validation must not open network
    connections, create clients, register middleware, or mutate process state.
-6. Register runtime behavior through `PluginContext`, not by hand-registering
+6. If validation returns error diagnostics, return them and stop without
+   initialization or registration.
+7. Register runtime behavior through `PluginContext`, not by hand-registering
    global behavior inside application startup.
-7. Test activation, disabled components, validation failures, and registration
+8. Test activation, disabled components, validation failures, and registration
    failure rollback.
-8. Document how to enable the plugin, what config fields are supported, and how
+9. Document how to enable the plugin, what config fields are supported, and how
    to roll back the component.
-9. For a dynamic plugin that should provide structured fields in
+10. For a dynamic plugin that should provide structured fields in
    `nemo-relay plugins edit`, declare the `config_schema` capability and
    reference a local Draft 7 or Draft 2020-12 JSON Schema file from
    `[config_schema].path` in `relay-plugin.toml`. Schema-less plugins remain
@@ -156,9 +159,3 @@ helper functions can be `camelCase`, but plugin config objects remain
   `nemo-relay-plugin-observability`
 - You need to debug plugin activation, missing events, or load failures ->
   `nemo-relay-debug-runtime-integration`
-
-## Related Skills
-
-- `nemo-relay-instrument-calls`
-- `nemo-relay-plugin-observability`
-- `nemo-relay-debug-runtime-integration`

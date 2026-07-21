@@ -73,31 +73,39 @@ pub struct PiiRedactionConfig {
     #[serde(default = "default_pii_redaction_config_version")]
     pub version: u32,
     /// Backend mode: `builtin` or `local_model`.
-    #[serde(default = "default_mode")]
+    #[serde(default = "default_mode", skip_serializing_if = "is_default_mode")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "mode_schema"))]
     pub mode: String,
     /// Whether to sanitize managed LLM request payloads.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub input: bool,
     /// Whether to sanitize managed LLM response payloads.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub output: bool,
     /// Whether to sanitize mark event observability fields.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub mark: bool,
     /// Whether to sanitize managed tool request payloads.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub tool_input: bool,
     /// Whether to sanitize managed tool response payloads.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub tool_output: bool,
     /// Guardrail priority. Lower values run earlier.
-    #[serde(default = "default_priority")]
+    #[serde(
+        default = "default_priority",
+        skip_serializing_if = "is_default_priority"
+    )]
     pub priority: i32,
     /// Provider request/response codec for LLM-managed surfaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "codec_schema"))]
     pub codec: Option<String>,
+    /// Ordered redaction profiles. When present, legacy backend and surface
+    /// fields must be omitted and every enabled profile covers all supported
+    /// sanitization surfaces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<PiiRedactionProfile>,
     /// Built-in backend settings used when `mode = "builtin"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin: Option<BuiltinBackendConfig>,
@@ -121,9 +129,44 @@ impl Default for PiiRedactionConfig {
             tool_output: true,
             priority: default_priority(),
             codec: None,
+            profiles: Vec::new(),
             builtin: None,
             local: None,
             policy: ConfigPolicy::default(),
+        }
+    }
+}
+
+/// One ordered redaction policy within the singleton PII component.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PiiRedactionProfile {
+    /// Whether this profile registers runtime sanitizers.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Backend mode: `builtin` or `local_model`.
+    #[serde(default = "default_mode")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "mode_schema"))]
+    pub mode: String,
+    /// Guardrail priority. Lower values run earlier; array order breaks ties.
+    #[serde(default = "default_priority")]
+    pub priority: i32,
+    /// Built-in backend settings used when `mode = "builtin"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<BuiltinBackendConfig>,
+    /// Local-backend settings used when `mode = "local_model"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<LocalBackendConfig>,
+}
+
+impl Default for PiiRedactionProfile {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: default_mode(),
+            priority: default_priority(),
+            builtin: None,
+            local: None,
         }
     }
 }
@@ -214,6 +257,7 @@ nemo_relay::editor_config! {
             values: ["openai_chat", "openai_responses", "anthropic_messages"],
             optional: true,
         },
+        profiles => { label: "profiles", kind: List, list: &PII_REDACTION_PROFILE_LIST_ITEM },
         builtin => {
             label: "builtin",
             kind: Section,
@@ -238,13 +282,57 @@ nemo_relay::editor_config! {
 }
 
 nemo_relay::editor_config! {
+    impl PiiRedactionProfile {
+        enabled => { label: "enabled", kind: Boolean },
+        mode => {
+            label: "mode",
+            kind: Enum,
+            values: ["builtin", "local_model"],
+        },
+        priority => { label: "priority", kind: Integer },
+        builtin => {
+            label: "builtin",
+            kind: Section,
+            optional: true,
+            nested: BuiltinBackendConfig,
+            default: BuiltinBackendConfig,
+        },
+        local => {
+            label: "local",
+            kind: Section,
+            optional: true,
+            nested: LocalBackendConfig,
+            default: LocalBackendConfig,
+        },
+    }
+}
+
+fn pii_redaction_profile_editor_schema() -> &'static nemo_relay::config_editor::EditorSchema {
+    <PiiRedactionProfile as nemo_relay::config_editor::EditorConfig>::editor_schema()
+}
+
+fn default_pii_redaction_profile_editor_value() -> Json {
+    serde_json::to_value(PiiRedactionProfile::default())
+        .expect("PII redaction profile should serialize")
+}
+
+static PII_REDACTION_PROFILE_LIST_ITEM: nemo_relay::config_editor::EditorListItemSpec =
+    nemo_relay::config_editor::EditorListItemSpec {
+        kind: nemo_relay::config_editor::EditorFieldKind::Section,
+        schema: Some(pii_redaction_profile_editor_schema),
+        default: Some(default_pii_redaction_profile_editor_value),
+        tagged_union: None,
+        list_item: None,
+    };
+
+nemo_relay::editor_config! {
     impl BuiltinBackendConfig {
         action => {
             label: "action",
             kind: Enum,
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
-        target_paths => { label: "target_paths", kind: Json },
+        target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",
@@ -384,12 +472,54 @@ fn register_pii_redaction_backend(
     config: PiiRedactionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    if !config.profiles.is_empty() {
+        let profiles = config.profiles.clone();
+        for (index, profile) in profiles.into_iter().enumerate() {
+            if !profile.enabled {
+                continue;
+            }
+            let profile_name = format!("profile_{index}");
+            let profile_config = profile_as_legacy_config(&config, profile);
+            register_single_pii_redaction_backend(profile_config, ctx, Some(&profile_name))?;
+        }
+        return Ok(());
+    }
+
+    register_single_pii_redaction_backend(config, ctx, None)
+}
+
+fn register_single_pii_redaction_backend(
+    config: PiiRedactionConfig,
+    ctx: &mut PluginRegistrationContext,
+    profile_name: Option<&str>,
+) -> PluginResult<()> {
     match config.mode.as_str() {
-        "builtin" => register_builtin_backend(config, ctx),
-        "local_model" => register_local_backend(config, ctx),
+        "builtin" => register_builtin_backend(config, ctx, profile_name),
+        "local_model" => register_local_backend(config, ctx, profile_name),
         other => Err(PluginError::InvalidConfig(format!(
             "unsupported PII redaction mode '{other}'"
         ))),
+    }
+}
+
+fn profile_as_legacy_config(
+    component: &PiiRedactionConfig,
+    profile: PiiRedactionProfile,
+) -> PiiRedactionConfig {
+    PiiRedactionConfig {
+        version: component.version,
+        mode: profile.mode,
+        input: true,
+        output: true,
+        mark: true,
+        tool_input: true,
+        tool_output: true,
+        priority: profile.priority,
+        codec: component.codec.clone(),
+        profiles: Vec::new(),
+        builtin: profile.builtin,
+        local: profile.local,
+        policy: component.policy,
     }
 }
 
@@ -434,12 +564,20 @@ fn validate_pii_redaction_plugin_config(
             "tool_output",
             "priority",
             "codec",
+            "profiles",
             "builtin",
             "local",
             "policy",
         ],
     );
     validate_policy_fields(&mut diagnostics, &config.policy, plugin_config);
+    if plugin_config.contains_key("profiles") {
+        validate_profile_configuration(&mut diagnostics, plugin_config, &config);
+        validate_version(&mut diagnostics, &config.policy, config.version);
+        validate_codec_requirements(&mut diagnostics, &config.policy, &config);
+        return diagnostics;
+    }
+
     validate_section_fields(
         &mut diagnostics,
         &config.policy,
@@ -478,6 +616,138 @@ fn validate_pii_redaction_plugin_config(
     validate_local_mode_requirements(&mut diagnostics, &config.policy, plugin_config, &config);
 
     diagnostics
+}
+
+fn validate_profile_configuration(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    plugin_config: &Map<String, Json>,
+    config: &PiiRedactionConfig,
+) {
+    const LEGACY_FIELDS: &[&str] = &[
+        "mode",
+        "input",
+        "output",
+        "mark",
+        "tool_input",
+        "tool_output",
+        "priority",
+        "builtin",
+        "local",
+    ];
+    for field in LEGACY_FIELDS {
+        if plugin_config.contains_key(*field) {
+            push_policy_diag(
+                diagnostics,
+                config.policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some((*field).to_string()),
+                format!("legacy field '{field}' cannot be combined with profiles"),
+            );
+        }
+    }
+
+    if !config.profiles.iter().any(|profile| profile.enabled) {
+        push_policy_diag(
+            diagnostics,
+            config.policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("profiles".to_string()),
+            "profiles must contain at least one enabled redaction profile".to_string(),
+        );
+        return;
+    }
+
+    let raw_profiles = plugin_config
+        .get("profiles")
+        .and_then(Json::as_array)
+        .expect("successfully parsed profiles must be an array");
+    for (index, (profile, raw_profile)) in
+        config.profiles.iter().zip(raw_profiles.iter()).enumerate()
+    {
+        let Json::Object(raw_profile) = raw_profile else {
+            continue;
+        };
+        let profile_config = profile_as_legacy_config(config, profile.clone());
+        let mut profile_diagnostics = Vec::new();
+        validate_unknown_fields(
+            &mut profile_diagnostics,
+            &config.policy,
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            raw_profile,
+            &["enabled", "mode", "priority", "builtin", "local"],
+        );
+        validate_section_fields(
+            &mut profile_diagnostics,
+            &config.policy,
+            raw_profile,
+            "builtin",
+            &[
+                "action",
+                "target_paths",
+                "pattern",
+                "detector",
+                "replacement",
+                "mask_char",
+                "unmasked_prefix",
+                "unmasked_suffix",
+            ],
+        );
+        validate_section_fields(
+            &mut profile_diagnostics,
+            &config.policy,
+            raw_profile,
+            "local",
+            &[
+                "backend",
+                "model_id",
+                "detector_profile",
+                "allow_network",
+                "max_latency_ms",
+            ],
+        );
+        validate_mode(&mut profile_diagnostics, &config.policy, &profile_config);
+        validate_builtin_mode_requirements(
+            &mut profile_diagnostics,
+            &config.policy,
+            raw_profile,
+            &profile_config,
+        );
+        validate_builtin_action_requirements(
+            &mut profile_diagnostics,
+            &config.policy,
+            &profile_config,
+        );
+        validate_local_mode_requirements(
+            &mut profile_diagnostics,
+            &config.policy,
+            raw_profile,
+            &profile_config,
+        );
+        if profile.mode == "local_model" && !raw_profile.contains_key("local") {
+            push_policy_diag(
+                &mut profile_diagnostics,
+                config.policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some("local".to_string()),
+                "`local` settings are required for a local-model profile".to_string(),
+            );
+        }
+        prefix_profile_diagnostics(&mut profile_diagnostics, index);
+        diagnostics.extend(profile_diagnostics);
+    }
+}
+
+fn prefix_profile_diagnostics(diagnostics: &mut [ConfigDiagnostic], index: usize) {
+    let prefix = format!("profiles[{index}]");
+    for diagnostic in diagnostics {
+        diagnostic.field = Some(match diagnostic.field.take() {
+            Some(field) => format!("{prefix}.{field}"),
+            None => prefix.clone(),
+        });
+    }
 }
 
 fn validate_mode(
@@ -723,15 +993,24 @@ fn validate_codec_requirements(
 fn register_builtin_backend(
     config: PiiRedactionConfig,
     ctx: &mut PluginRegistrationContext,
+    profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let builtin = config.builtin.clone().ok_or_else(|| {
         PluginError::InvalidConfig("built-in PII redaction config is missing".to_string())
     })?;
     let compiled = CompiledBuiltinBackend::new(builtin, config.codec.clone())?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_validation_completed",
+        plugin_kind = PII_REDACTION_PLUGIN_KIND,
+        profile = profile_name.unwrap_or("legacy"),
+        resource_count = 0;
+        "Plugin resource validation completed"
+    );
 
     if config.mark {
         ctx.register_mark_sanitize_guardrail(
-            "mark",
+            &registration_name(profile_name, "mark"),
             config.priority,
             super::builtin::event_sanitize_callback(compiled.clone()),
         )?;
@@ -739,38 +1018,94 @@ fn register_builtin_backend(
 
     if config.tool_input {
         let sanitizer = tool_sanitize_callback(compiled.clone());
-        ctx.register_tool_sanitize_request_guardrail("tool_input", config.priority, sanitizer)?;
+        ctx.register_tool_sanitize_request_guardrail(
+            &registration_name(profile_name, "tool_input"),
+            config.priority,
+            sanitizer,
+        )?;
     }
     if config.tool_output {
         let sanitizer = tool_sanitize_callback(compiled.clone());
-        ctx.register_tool_sanitize_response_guardrail("tool_output", config.priority, sanitizer)?;
+        ctx.register_tool_sanitize_response_guardrail(
+            &registration_name(profile_name, "tool_output"),
+            config.priority,
+            sanitizer,
+        )?;
     }
     if config.input {
         ctx.register_llm_sanitize_request_guardrail(
-            "input",
+            &registration_name(profile_name, "input"),
             config.priority,
             llm_sanitize_request_callback(compiled.clone()),
         )?;
+    }
+    if config.input || config.tool_input {
         ctx.register_scope_sanitize_start_guardrail(
-            "input",
+            &registration_name(
+                profile_name,
+                if profile_name.is_some() {
+                    "scope_start"
+                } else {
+                    "input"
+                },
+            ),
             config.priority,
-            super::builtin::event_sanitize_callback(compiled.clone()),
+            super::builtin::scope_event_sanitize_callback(
+                compiled.clone(),
+                config.input,
+                config.tool_input,
+            ),
         )?;
     }
     if config.output {
         ctx.register_llm_sanitize_response_guardrail(
-            "output",
+            &registration_name(profile_name, "output"),
             config.priority,
             llm_sanitize_response_callback(compiled.clone()),
         )?;
+    }
+    if config.output || config.tool_output {
         ctx.register_scope_sanitize_end_guardrail(
-            "output",
+            &registration_name(
+                profile_name,
+                if profile_name.is_some() {
+                    "scope_end"
+                } else {
+                    "output"
+                },
+            ),
             config.priority,
-            super::builtin::event_sanitize_callback(compiled),
+            super::builtin::scope_event_sanitize_callback(
+                compiled,
+                config.output,
+                config.tool_output,
+            ),
         )?;
     }
 
     Ok(())
+}
+
+fn registration_name(profile_name: Option<&str>, callback_name: &str) -> String {
+    profile_name.map_or_else(
+        || callback_name.to_string(),
+        |profile_name| {
+            format!(
+                "{}/{callback_name}",
+                profile_registration_prefix(profile_name)
+            )
+        },
+    )
+}
+
+pub(super) fn profile_registration_prefix(profile_name: &str) -> String {
+    profile_name
+        .strip_prefix("profile_")
+        .and_then(|index| index.parse::<usize>().ok())
+        .map_or_else(
+            || profile_name.to_string(),
+            |index| format!("profile_{index:020}"),
+        )
 }
 
 fn validate_unknown_fields(
@@ -894,6 +1229,18 @@ fn default_true() -> bool {
 
 fn default_priority() -> i32 {
     100
+}
+
+fn is_default_mode(mode: &str) -> bool {
+    mode == "builtin"
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+fn is_default_priority(priority: &i32) -> bool {
+    *priority == default_priority()
 }
 
 #[cfg(test)]

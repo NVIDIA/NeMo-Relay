@@ -281,6 +281,23 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || FixtureNativePlugin);
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_observability_collision(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "observability",
+            None,
+            None,
+            Some(raw_noop_register),
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_entry_error(
     host: *const NemoRelayNativeHostApiV1,
     _out: *mut NemoRelayNativePluginV1,
@@ -402,6 +419,23 @@ pub unsafe extern "C" fn nemo_relay_fixture_tool_outcome_errors(
     }
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_event_sanitize_errors(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "fixture_native",
+            None,
+            None,
+            Some(raw_register_event_sanitize_errors),
+        )
+    }
+}
+
 type RawValidate = unsafe extern "C" fn(
     *mut c_void,
     *const NemoRelayNativeString,
@@ -510,6 +544,32 @@ unsafe extern "C" fn raw_register_tool_outcome_errors(
     status
 }
 
+unsafe extern "C" fn raw_register_event_sanitize_errors(
+    user_data: *mut c_void,
+    _plugin_config_json: *const NemoRelayNativeString,
+    ctx: *mut NemoRelayNativePluginContext,
+) -> NemoRelayStatus {
+    let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let name = unsafe { raw_host_string(host, "fixture_raw_event_sanitize") };
+    if name.is_null() {
+        return NemoRelayStatus::Internal;
+    }
+    let status = unsafe {
+        (host.plugin_context_register_mark_sanitize_guardrail)(
+            ctx,
+            name,
+            0,
+            raw_event_sanitize_error_callback,
+            user_data,
+            None,
+        )
+    };
+    unsafe { (host.string_free)(name) };
+    status
+}
+
 unsafe extern "C" fn raw_tool_outcome_callback(
     user_data: *mut c_void,
     name: *const NemoRelayNativeString,
@@ -556,6 +616,20 @@ unsafe extern "C" fn raw_tool_outcome_callback(
             NemoRelayStatus::Ok
         }
     }
+}
+
+unsafe extern "C" fn raw_event_sanitize_error_callback(
+    user_data: *mut c_void,
+    _event_json: *const NemoRelayNativeString,
+    _fields_json: *const NemoRelayNativeString,
+    out_fields_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_fields_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_fields_json = ptr::null_mut() };
+    unsafe { set_raw_last_error_from_user_data(user_data, "fixture event sanitizer failed") };
+    NemoRelayStatus::Internal
 }
 
 unsafe extern "C" fn raw_drop_host(user_data: *mut c_void) {

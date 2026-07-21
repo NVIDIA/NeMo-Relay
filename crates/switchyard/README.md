@@ -9,17 +9,20 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Switchyard Plugin
 
-`nemo-relay-switchyard` is NeMo Relay's experimental, source-only integration
+`nemo-relay-switchyard` is NeMo Relay's experimental integration
 with the [NVIDIA NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard)
 Decision API. It adds routing-aware LLM execution intercepts to the Relay
 runtime while preserving Relay ownership of provider credentials, target
 bindings, dispatch, retries, fallbacks, and observability.
 
-This crate is intentionally not published to crates.io yet. Build it from the
-NeMo Relay source checkout with the optional CLI feature while the Switchyard
-Decision API contract and service/library boundary are still evolving.
+NeMo Relay 0.6.0 uses a separately running Switchyard Decision API from the
+`topic/nemo-relay-integration` branch.
 
-## Why use it?
+Install it from crates.io, or build it from the NeMo Relay source checkout with
+the optional CLI feature while the Switchyard Decision API contract and
+service/library boundary are still evolving.
+
+Use the plugin to:
 
 - **Route through Switchyard decisions**: Select an exact Relay-owned target
   using a versioned Decision API contract.
@@ -31,21 +34,29 @@ Decision API contract and service/library boundary are still evolving.
 - **Support staged rollout**: Run in enforce or observe-only mode with
   explicit target bindings and protocol defaults.
 
-## What you get
+## Implementation and Runtime Behavior
 
-- `SwitchyardConfig`: the typed plugin configuration contract.
-- `SwitchyardRuntime`: buffered and streaming routing intercepts.
+The plugin includes the following implementation and runtime behavior:
+
+- `SwitchyardConfig`: The typed plugin configuration contract.
+- `SwitchyardRuntime`: Buffered and streaming routing intercepts.
 - Decision and target validation for exact backend, model, protocol, and
   endpoint bindings.
 - ATOF-backed or payload-only routing context modes.
 - Routing marks and model-routing optimization contributions for Relay's
   cumulative accounting pipeline.
-- Switchyard-owned protocol translation through the pinned
+- Switchyard-owned protocol translation through the
   `switchyard-translation` dependency.
 
-## Source build
+## Installation and Source Build
 
-The crate is a private workspace member and must be built from source:
+Add the crate from crates.io:
+
+```bash
+cargo add nemo-relay-switchyard
+```
+
+To build the optional CLI integration from a NeMo Relay source checkout:
 
 ```bash
 cargo build -p nemo-relay-cli --features switchyard
@@ -56,24 +67,24 @@ The resulting CLI includes the Switchyard component only when the `switchyard`
 feature is enabled. A default Relay build does not include this experimental
 integration.
 
-## Runtime boundary
+## Runtime Boundary
 
 The current integration calls Switchyard's HTTP Decision API at runtime. Relay
 does not start or supervise the Switchyard service. For ATOF-backed profiles,
 Switchyard also provides the `/v1/atof/events` ingestion and accumulator
-runtime. A reachable service must therefore be configured before routed traffic
-is sent.
+runtime. The service must therefore be running before Relay activates the
+plugin. Activation performs a bounded request to the service's `/health`
+endpoint and fails if it does not return `{"status":"ok"}`. This requirement
+applies to enforce and observe-only rollout modes.
 
 The current service setup is documented in
 [`examples/switchyard/README.md`](../../examples/switchyard/README.md), including
 the pinned topic-branch commit, local configuration, compatibility smoke test,
 and trajectory workflow.
 
-Translation is already in-process through Switchyard's Rust translation
-library. A future in-process DecisionProvider may replace the HTTP Decision API
-call without changing the Relay-owned dispatch and observability boundary.
+Translation runs in-process through Switchyard's Rust translation library.
 
-## Configuration and registration
+## Configuration and Registration
 
 The CLI registers the component when built with `--features switchyard` and
 accepts a `[[components]]` entry with `kind = "switchyard"`. A minimal
@@ -97,13 +108,18 @@ openai_responses = "my-responses-target"
 anthropic_messages = "my-anthropic-target"
 ```
 
-For ATOF-backed profiles, configure an enabled Relay ATOF HTTP exporter that
-targets the Switchyard `/v1/atof/events` endpoint and use environment-referenced
-authentication headers. Keep provider and Decision API credentials outside
-tracked configuration files.
+For ATOF-backed profiles, configure an enabled Relay ATOF HTTP stream sink that
+has a unique `name`, targets the Switchyard ingestion URL, and uses
+environment-referenced authentication headers. Set `atof_endpoint_name` in the
+Switchyard component to that name. Local ATOF JSONL output alone does not
+populate the Switchyard accumulator. Keep provider and Decision API credentials
+outside tracked configuration files.
 
 ## Documentation
 
+For more information, refer to the following resources:
+
+- [Switchyard 0.6.0 setup and validation guide](https://docs.nvidia.com/nemo/relay/v0.6.0/configure-plugins/switchyard/about)
+- [Switchyard configuration reference](https://docs.nvidia.com/nemo/relay/v0.6.0/configure-plugins/switchyard/configuration)
 - [Switchyard integration examples](../../examples/switchyard/README.md)
-- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
 - [Switchyard repository](https://github.com/NVIDIA-NeMo/Switchyard)

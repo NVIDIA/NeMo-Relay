@@ -84,6 +84,7 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             runtime,
             fixture_flag(config, "block_tool"),
             fixture_flag(config, "tool_request_error"),
+            fixture_flag(config, "exit_in_tool_request"),
         );
         register_fixture_llm_hooks(
             ctx,
@@ -129,6 +130,7 @@ fn register_fixture_tool_hooks(
     runtime: nemo_relay_worker::PluginRuntime,
     block_tool: bool,
     tool_request_error: bool,
+    exit_in_tool_request: bool,
 ) {
     ctx.register_tool_sanitize_request_guardrail(
         "fixture_tool_sanitize_request",
@@ -152,6 +154,9 @@ fn register_fixture_tool_hooks(
         },
     );
     ctx.register_tool_request_intercept("fixture_rewrite_args", 0, false, move |_name, args| {
+        if exit_in_tool_request {
+            std::process::exit(44);
+        }
         if tool_request_error {
             return Err(WorkerSdkError::Callback(
                 "fixture tool request error requested".into(),

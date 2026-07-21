@@ -55,16 +55,30 @@ func TestSubscriberShorthands(t *testing.T) {
 	var seenStart bool
 	var mu sync.Mutex
 
+	stack, err := nemo_relay.NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() { exerciseGlobalSubscriber(t, &mu, &seenStart) })
+
+	mu.Lock()
+	assertSeenStart(t, seenStart)
+	mu.Unlock()
+}
+
+func exerciseGlobalSubscriber(t *testing.T, mu *sync.Mutex, seenStart *bool) {
+	t.Helper()
 	if err := subscriberspkg.Register("subs_global", func(event nemo_relay.Event) {
 		if event.Kind() == "scope" && event.ScopeCategory() == "start" {
 			mu.Lock()
-			seenStart = true
+			*seenStart = true
 			mu.Unlock()
 		}
 	}); err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
-
 	handle, err := nemo_relay.PushScope("subs_scope", nemo_relay.ScopeTypeAgent)
 	if err != nil {
 		t.Fatalf("PushScope failed: %v", err)
@@ -78,10 +92,6 @@ func TestSubscriberShorthands(t *testing.T) {
 	if err := subscriberspkg.Flush(); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
-
-	mu.Lock()
-	assertSeenStart(t, seenStart)
-	mu.Unlock()
 }
 
 func TestScopeSubscriberShorthands(t *testing.T) {

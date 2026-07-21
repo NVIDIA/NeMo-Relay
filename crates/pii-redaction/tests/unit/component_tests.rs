@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventSanitizeFields, MarkEvent, ScopeCategory,
+    BaseEvent, CategoryProfile, Event, EventCategory, EventSanitizeFields, MarkEvent,
+    ScopeCategory, ScopeEvent,
 };
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, llm_call, llm_call_execute,
@@ -24,9 +25,9 @@ use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::traits::LlmResponseCodec;
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, PluginRegistrationContext, clear_plugin_configuration,
-    ensure_builtin_plugins_registered, initialize_plugins, list_plugin_kinds,
-    validate_plugin_config,
+    PluginComponentSpec, PluginConfig, PluginError, PluginRegistrationContext,
+    clear_plugin_configuration, ensure_builtin_plugins_registered, initialize_plugins,
+    list_plugin_kinds, rollback_registrations, validate_plugin_config,
 };
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
@@ -37,7 +38,19 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+static TEST_LOGGING: Once = Once::new();
+
+fn enable_operational_logs() {
+    TEST_LOGGING.call_once(|| {
+        let runtime =
+            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+                .expect("test logging should initialize");
+        Box::leak(Box::new(runtime));
+    });
+}
 
 fn component(config: Json) -> PluginComponentSpec {
     let Json::Object(config) = config else {
@@ -59,6 +72,7 @@ fn plugin_config(config: Json) -> PluginConfig {
 }
 
 fn reset_runtime() {
+    enable_operational_logs();
     let _ = clear_plugin_configuration();
     crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
     crate::shared_runtime::reset_runtime_owner_for_tests();
@@ -124,6 +138,268 @@ fn builtin_backend_config_default_matches_documented_action_default() {
 fn pii_redaction_defaults_enable_mark_sanitization() {
     let config = PiiRedactionConfig::default();
     assert!(config.mark);
+    assert!(config.profiles.is_empty());
+}
+
+#[test]
+fn generated_registration_names_sort_in_profile_array_order() {
+    assert!(
+        registration_name(Some("profile_2"), "mark")
+            < registration_name(Some("profile_10"), "mark")
+    );
+}
+
+#[test]
+fn typed_profile_config_serializes_without_conflicting_legacy_defaults() {
+    let config = PiiRedactionConfig {
+        codec: Some("openai_chat".into()),
+        profiles: vec![PiiRedactionProfile {
+            builtin: Some(BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                ..BuiltinBackendConfig::default()
+            }),
+            ..PiiRedactionProfile::default()
+        }],
+        ..PiiRedactionConfig::default()
+    };
+    let serialized = serde_json::to_value(&config).unwrap();
+    let object = serialized.as_object().unwrap();
+    for legacy_field in [
+        "mode",
+        "input",
+        "output",
+        "mark",
+        "tool_input",
+        "tool_output",
+        "priority",
+        "builtin",
+        "local",
+    ] {
+        assert!(!object.contains_key(legacy_field), "{legacy_field}");
+    }
+
+    let report = validate_plugin_config(&plugin_config(serialized));
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+}
+
+#[test]
+fn profile_array_executes_every_profile_in_stable_array_order() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [
+            {
+                "mode": "builtin",
+                "priority": 100,
+                "builtin": {
+                    "action": "regex_replace",
+                    "pattern": "alpha",
+                    "replacement": "beta"
+                }
+            },
+            {
+                "mode": "builtin",
+                "priority": 100,
+                "builtin": {
+                    "action": "regex_replace",
+                    "pattern": "beta",
+                    "replacement": "gamma"
+                }
+            }
+        ]
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-profile-order");
+    event(
+        EmitMarkEventParams::builder()
+            .name("ordered-profile-mark")
+            .data(json!({"value": "alpha"}))
+            .build(),
+    )
+    .unwrap();
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured[0].data().unwrap()["value"], "gamma");
+
+    deregister_subscriber("pii-profile-order").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn profile_array_rejects_legacy_fields_and_reports_profile_paths() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "mark": true,
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "action": "regex_replace"
+            },
+            "unexpected": true
+        }]
+    })));
+
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("mark")
+            && diagnostic
+                .message
+                .contains("cannot be combined with profiles")
+    }));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.field.as_deref() == Some("profiles[0].unexpected") })
+    );
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("profiles[0].builtin.pattern")
+        })
+    );
+}
+
+#[test]
+fn profile_array_requires_at_least_one_profile_and_matching_local_settings() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let empty = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": []
+    })));
+    assert!(empty.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("profiles")
+            && diagnostic.message.contains("at least one")
+    }));
+
+    let all_disabled = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "enabled": false,
+            "mode": "builtin",
+            "builtin": {"action": "remove"}
+        }]
+    })));
+    assert!(all_disabled.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "pii_redaction.unsupported_value"
+            && diagnostic.field.as_deref() == Some("profiles")
+            && diagnostic.message.contains("at least one enabled")
+    }));
+
+    let missing_local = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{"mode": "local_model"}]
+    })));
+    assert!(missing_local.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("profiles[0].local")
+            && diagnostic.message.contains("required")
+    }));
+}
+
+#[test]
+fn disabled_profiles_are_validated_when_an_enabled_profile_exists() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [
+            {
+                "enabled": false,
+                "mode": "builtin",
+                "builtin": {
+                    "action": "not-an-action"
+                }
+            },
+            {
+                "mode": "builtin",
+                "builtin": {"action": "remove"}
+            }
+        ]
+    })));
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("profiles[0].builtin.action")
+        })
+    );
+}
+
+#[test]
+fn local_profile_registrations_receive_generated_namespaces() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    register_local_backend_provider(Arc::new(|_, ctx| {
+        ctx.register_mark_sanitize_guardrail("shared", 100, Arc::new(|_, fields| fields))
+    }))
+    .unwrap();
+
+    let plugin = PiiRedactionPlugin;
+    let config = json!({
+        "codec": "openai_chat",
+        "profiles": [
+            {"mode": "local_model", "local": {"backend": "one"}},
+            {"mode": "local_model", "local": {"backend": "two"}}
+        ]
+    });
+    let Json::Object(config) = config else {
+        panic!("component config must be object");
+    };
+    let mut ctx = PluginRegistrationContext::with_namespace("profiles::");
+    futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
+    let mut registrations = ctx.into_registrations();
+    let registrations_debug = format!("{registrations:?}");
+    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/shared"));
+    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/shared"));
+    rollback_registrations(&mut registrations);
+    assert!(registrations.is_empty());
+}
+
+#[test]
+fn failed_later_profile_rolls_back_earlier_profile_registrations() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    register_local_backend_provider(Arc::new(|_, _| {
+        Err(PluginError::RegistrationFailed(
+            "intentional profile failure".into(),
+        ))
+    }))
+    .unwrap();
+    let activation = futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [
+            {
+                "mode": "builtin",
+                "builtin": {"action": "redact", "detector": "email"}
+            },
+            {
+                "mode": "local_model",
+                "local": {"backend": "failing"}
+            }
+        ]
+    }))));
+    assert!(activation.is_err());
+
+    let events = capture_events("pii-profile-rollback");
+    event(
+        EmitMarkEventParams::builder()
+            .name("raw-after-rollback")
+            .data(json!({"email": "person@example.com"}))
+            .build(),
+    )
+    .unwrap();
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured[0].data().unwrap()["email"], "person@example.com");
+    deregister_subscriber("pii-profile-rollback").unwrap();
 }
 
 #[test]
@@ -162,6 +438,100 @@ fn event_sanitizer_transforms_data_category_profile_and_metadata_independently()
         Some("[REDACTED]")
     );
     assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
+}
+
+#[test]
+fn llm_and_tool_scope_metadata_is_sanitized_without_reprocessing_typed_fields() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "redact".into(),
+            detector: Some("email".into()),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let callback = crate::builtin::event_sanitize_callback(backend);
+
+    for category in [EventCategory::llm(), EventCategory::tool()] {
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().name("typed-scope").build(),
+            ScopeCategory::Start,
+            Vec::new(),
+            category,
+            None,
+        ));
+        let original_profile = CategoryProfile::builder()
+            .subtype("person@example.com")
+            .build();
+        let sanitized = callback(
+            &event,
+            EventSanitizeFields {
+                data: Some(json!({"content": "person@example.com"})),
+                category_profile: Some(original_profile.clone()),
+                metadata: Some(json!({"owner": "person@example.com"})),
+            },
+        );
+
+        assert_eq!(
+            sanitized.data.unwrap()["content"],
+            "person@example.com",
+            "specialized scope data must not be generically sanitized twice"
+        );
+        assert_eq!(sanitized.category_profile.unwrap(), original_profile);
+        assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
+    }
+}
+
+#[test]
+fn scope_event_sanitizer_respects_enabled_llm_and_tool_surfaces() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "redact".into(),
+            detector: Some("email".into()),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    for (sanitize_llm, sanitize_tool, expected_llm, expected_tool) in [
+        (true, false, "[REDACTED]", "person@example.com"),
+        (false, true, "person@example.com", "[REDACTED]"),
+    ] {
+        let callback = crate::builtin::scope_event_sanitize_callback(
+            backend.clone(),
+            sanitize_llm,
+            sanitize_tool,
+        );
+        for (category, expected_owner) in [
+            (EventCategory::llm(), expected_llm),
+            (EventCategory::tool(), expected_tool),
+        ] {
+            let event = Event::Scope(ScopeEvent::new(
+                BaseEvent::builder().name("typed-scope").build(),
+                ScopeCategory::Start,
+                Vec::new(),
+                category,
+                None,
+            ));
+            let original_profile = CategoryProfile::builder()
+                .subtype("person@example.com")
+                .build();
+            let sanitized = callback(
+                &event,
+                EventSanitizeFields {
+                    data: Some(json!({"content": "person@example.com"})),
+                    category_profile: Some(original_profile.clone()),
+                    metadata: Some(json!({"owner": "person@example.com"})),
+                },
+            );
+
+            assert_eq!(sanitized.data.unwrap()["content"], "person@example.com");
+            assert_eq!(sanitized.category_profile.unwrap(), original_profile);
+            assert_eq!(sanitized.metadata.unwrap()["owner"], expected_owner);
+        }
+    }
 }
 
 #[test]
@@ -464,6 +834,37 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
 }
 
 #[test]
+fn local_backend_reports_missing_and_failed_provider_initialization() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let plugin = PiiRedactionPlugin;
+    let config = json!({"mode": "local_model"});
+    let Json::Object(config) = config else {
+        panic!("component config must be object");
+    };
+    let mut ctx = PluginRegistrationContext::with_namespace("missing::");
+    let missing = futures::executor::block_on(plugin.register(&config, &mut ctx))
+        .expect_err("missing local provider should fail registration");
+    assert!(missing.to_string().contains("unavailable"));
+
+    register_local_backend_provider(Arc::new(|_, _| {
+        Err(PluginError::RegistrationFailed(
+            "provider initialization failed".into(),
+        ))
+    }))
+    .unwrap();
+    let mut ctx = PluginRegistrationContext::with_namespace("failed::");
+    let failed = futures::executor::block_on(plugin.register(&config, &mut ctx))
+        .expect_err("failed local provider should fail registration");
+    assert!(
+        failed
+            .to_string()
+            .contains("provider initialization failed")
+    );
+}
+
+#[test]
 fn builtin_backend_sanitizes_mark_and_generic_scope_observability_fields() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -669,7 +1070,7 @@ fn sanitized_pii_never_reaches_subscribers_or_exporters() {
     openinference.force_flush().unwrap();
 
     let subscriber_json = serde_json::to_string(&captured_events_snapshot(&captured)).unwrap();
-    let atof_json = std::fs::read_to_string(atof.path()).unwrap();
+    let atof_json = std::fs::read_to_string(atof.path().expect("file sink path")).unwrap();
     let atif_json = serde_json::to_string(&trajectory).unwrap();
     let otel_debug = format!("{:?}", otel_exporter.get_finished_spans().unwrap());
     let openinference_debug = format!("{:?}", openinference_exporter.get_finished_spans().unwrap());
@@ -770,11 +1171,11 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
     );
     assert_eq!(
         captured_events[0].metadata().unwrap()["owner"],
-        "sk-universal-metadata"
+        "[REDACTED]"
     );
     assert_eq!(
         captured_events[1].metadata().unwrap()["reviewer"],
-        "sk-universal-metadata"
+        "[REDACTED]"
     );
 
     deregister_subscriber("pii-redaction-tool-events").unwrap();
@@ -2402,7 +2803,7 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
     );
     assert_eq!(
         captured_events[0].metadata().unwrap()["audit_owner"],
-        "sk-universal-metadata"
+        "[REDACTED]"
     );
 
     deregister_subscriber("pii-redaction-llm-events").unwrap();
@@ -2509,7 +2910,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
     assert_eq!(annotated.model.as_deref(), Some("gpt-4o-mini"));
     assert_eq!(
         captured_events[1].metadata().unwrap()["audit_owner"],
-        "sk-universal-metadata"
+        "[REDACTED]"
     );
 
     deregister_subscriber("pii-redaction-llm-end-events").unwrap();

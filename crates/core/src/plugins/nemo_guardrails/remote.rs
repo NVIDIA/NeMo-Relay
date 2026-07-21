@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use serde_json::{Map, Value as Json, json};
@@ -29,6 +30,7 @@ struct RemoteBackendRuntime {
     llm_guardrails: Option<Map<String, Json>>,
     tool_input_guardrails: Map<String, Json>,
     tool_output_guardrails: Map<String, Json>,
+    access_state: Arc<AtomicU8>,
 }
 
 #[derive(Clone, Copy)]
@@ -74,6 +76,15 @@ impl RemoteBackendRuntime {
 
         let request_defaults = config.request_defaults.as_ref();
 
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_pending",
+            plugin_kind = "nemo_guardrails",
+            resource_kind = "http_endpoint",
+            permission = "invoke";
+            "Plugin resource access will be validated on first use"
+        );
+
         Ok(Self {
             endpoint: endpoint.trim_end_matches('/').to_string(),
             client,
@@ -98,6 +109,7 @@ impl RemoteBackendRuntime {
                 &remote.config_ids,
                 request_defaults,
             ),
+            access_state: Arc::new(AtomicU8::new(0)),
         })
     }
 
@@ -170,7 +182,7 @@ impl RemoteBackendRuntime {
         let (tx, rx) = mpsc::channel(16);
         self.spawn_stream_decoder(response, status, parent.clone(), tx);
 
-        Ok(Box::pin(ReceiverStream::new(rx)) as LlmJsonStream)
+        Ok(LlmJsonStream::new(ReceiverStream::new(rx)))
     }
 
     fn emit_remote_start(&self, parent: &Option<ScopeHandle>, stream: bool) {
@@ -219,21 +231,79 @@ impl RemoteBackendRuntime {
         body: Json,
     ) -> crate::error::Result<reqwest::Response> {
         let serialized = self.serialize_request_body_with_marks(parent, stream, body)?;
-        self.client
+        match self
+            .client
             .post(self.chat_completions_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(serialized)
             .send()
             .await
-            .map_err(|err| {
+        {
+            Ok(response) => {
+                self.record_access_status(response.status());
+                Ok(response)
+            }
+            Err(err) => {
+                self.record_access_failure("connection_failed", None);
                 let message = if stream {
                     format!("remote stream request failed: {err}")
                 } else {
                     format!("remote request failed: {err}")
                 };
                 self.emit_remote_error(parent, stream, None, message.clone());
-                FlowError::Internal(format!("nemo_guardrails {message}"))
-            })
+                Err(FlowError::Internal(format!("nemo_guardrails {message}")))
+            }
+        }
+    }
+
+    fn record_access_status(&self, status: reqwest::StatusCode) {
+        if status.is_success() {
+            if self.access_state.swap(2, Ordering::AcqRel) != 2 {
+                log::info!(
+                    target: "nemo_relay.plugin",
+                    event = "plugin_resource_access_validated",
+                    plugin_kind = "nemo_guardrails",
+                    resource_kind = "http_endpoint",
+                    permission = "invoke",
+                    status_code = status.as_u16();
+                    "Plugin resource access validated"
+                );
+            }
+            return;
+        }
+        let reason = if matches!(status.as_u16(), 401 | 403) {
+            "permission_denied"
+        } else {
+            "unsuccessful_status"
+        };
+        self.record_access_failure(reason, Some(status.as_u16()));
+    }
+
+    fn record_access_failure(&self, reason: &'static str, status_code: Option<u16>) {
+        if self.access_state.swap(1, Ordering::AcqRel) == 1 {
+            return;
+        }
+        match status_code {
+            Some(status_code) => log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_resource_access_failed",
+                plugin_kind = "nemo_guardrails",
+                resource_kind = "http_endpoint",
+                permission = "invoke",
+                reason = reason,
+                status_code = status_code;
+                "Plugin resource access validation failed"
+            ),
+            None => log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_resource_access_failed",
+                plugin_kind = "nemo_guardrails",
+                resource_kind = "http_endpoint",
+                permission = "invoke",
+                reason = reason;
+                "Plugin resource access validation failed"
+            ),
+        }
     }
 
     fn serialize_request_body_with_marks(
@@ -492,14 +562,20 @@ impl RemoteBackendRuntime {
             );
             FlowError::Internal(message)
         })?;
-        let response = self
+        let response = match self
             .client
             .post(self.chat_completions_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(serialized)
             .send()
             .await
-            .map_err(|err| {
+        {
+            Ok(response) => {
+                self.record_access_status(response.status());
+                response
+            }
+            Err(err) => {
+                self.record_access_failure("connection_failed", None);
                 let message = format!("nemo_guardrails remote request failed: {err}");
                 self.emit_mark(
                     "nemo_guardrails.remote.error",
@@ -513,8 +589,9 @@ impl RemoteBackendRuntime {
                         Some(message.clone()),
                     ),
                 );
-                FlowError::Internal(message)
-            })?;
+                return Err(FlowError::Internal(message));
+            }
+        };
         let status = response.status();
         let payload = response.text().await.map_err(|err| {
             let message = format!("nemo_guardrails failed to read remote response body: {err}");

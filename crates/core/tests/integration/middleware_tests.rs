@@ -958,10 +958,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     for (key, value) in [
         ("nemo_relay.mark.category", "custom"),
         (
-            "nemo_relay.mark.category_profile_json",
-            "{\"subtype\":\"example.compaction\"}",
+            "nemo_relay.mark.category_profile.subtype",
+            "example.compaction",
         ),
-        ("nemo_relay.mark.metadata_json", "{\"source\":\"test\"}"),
+        ("nemo_relay.mark.metadata.source", "test"),
     ] {
         assert!(otel_mark.attributes.iter().any(|attribute| {
             attribute.key.as_str() == key && attribute.value.to_string() == value
@@ -989,10 +989,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     for (key, value) in [
         ("nemo_relay.mark.category", "custom"),
         (
-            "nemo_relay.mark.category_profile_json",
-            "{\"subtype\":\"example.compaction\"}",
+            "nemo_relay.mark.category_profile.subtype",
+            "example.compaction",
         ),
-        ("nemo_relay.mark.metadata_json", "{\"source\":\"test\"}"),
+        ("nemo_relay.mark.metadata.source", "test"),
     ] {
         assert!(openinference_mark.attributes.iter().any(|attribute| {
             attribute.key.as_str() == key && attribute.value.to_string() == value
@@ -2753,7 +2753,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         assert_middleware_callback_locks_are_free();
         Box::pin(async move {
             let stream = tokio_stream::iter(vec![Ok(json!({"chunk": true}))]);
-            Ok(Box::pin(stream) as LlmJsonStream)
+            Ok(LlmJsonStream::new(stream))
         })
     });
     let tracked = callbacks.clone();
@@ -3738,10 +3738,9 @@ async fn test_stream_optimization_mark_uses_the_llm_captured_sanitizer_scope() {
             })
             .func(Arc::new(|_| {
                 Box::pin(async {
-                    Ok(
-                        Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": "done"}))]))
-                            as LlmJsonStream,
-                    )
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                        "chunk": "done"
+                    }))])))
                 })
             }))
             .collector(Box::new(|_| Ok(())))
@@ -4130,7 +4129,7 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
                     .unwrap()
                     .insert("phase".into(), json!("execution"));
                 let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "short-circuited"}))]);
-                Ok(Box::pin(stream) as LlmJsonStream)
+                Ok(LlmJsonStream::new(stream))
             })
         }),
     )
@@ -4142,7 +4141,7 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
         oc.store(true, Ordering::SeqCst);
         Box::pin(async move {
             let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
-            Ok(Box::pin(stream) as LlmJsonStream)
+            Ok(LlmJsonStream::new(stream))
         })
     });
 

@@ -251,6 +251,7 @@ extern void nemo_relay_atof_exporter_free(void*);
 
 // OpenTelemetry subscriber
 extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_attribute_mappings(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -259,6 +260,7 @@ extern void nemo_relay_otel_subscriber_free(void*);
 
 // OpenInference subscriber
 extern int32_t nemo_relay_openinference_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_openinference_subscriber_create_with_attribute_mappings(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
 extern int32_t nemo_relay_openinference_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_openinference_subscriber_deregister(const char*);
 extern int32_t nemo_relay_openinference_subscriber_force_flush(const void*);
@@ -335,38 +337,14 @@ var (
 		return checkedValue(int32(status), &AtifExporter{ptr: ptr})
 	}
 	newAtofExporterFunc = func(config AtofExporterConfig) (*AtofExporter, error) {
-		if config.Mode == "" {
-			config.Mode = AtofExporterModeAppend
+		payload, err := json.Marshal(config)
+		if err != nil {
+			return nil, err
 		}
-		if len(config.Endpoints) > 0 {
-			payload, err := json.Marshal(config)
-			if err != nil {
-				return nil, err
-			}
-			cConfig := C.CString(string(payload))
-			defer C.free(unsafe.Pointer(cConfig))
-			var ptr unsafe.Pointer
-			status := C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr)
-			return checkedValue(int32(status), &AtofExporter{ptr: ptr})
-		}
-
-		var cOutputDirectory *C.char
-		if config.OutputDirectory != "" {
-			cOutputDirectory = C.CString(config.OutputDirectory)
-			defer C.free(unsafe.Pointer(cOutputDirectory))
-		}
-
-		cMode := C.CString(string(config.Mode))
-		defer C.free(unsafe.Pointer(cMode))
-
-		var cFilename *C.char
-		if config.Filename != "" {
-			cFilename = C.CString(config.Filename)
-			defer C.free(unsafe.Pointer(cFilename))
-		}
-
+		cConfig := C.CString(string(payload))
+		defer C.free(unsafe.Pointer(cConfig))
 		var ptr unsafe.Pointer
-		status := C.nemo_relay_atof_exporter_create(cOutputDirectory, cMode, cFilename, &ptr)
+		status := C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr)
 		return checkedValue(int32(status), &AtofExporter{ptr: ptr})
 	}
 )
@@ -1142,13 +1120,14 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 // an [LlmStream] that yields individual SSE (Server-Sent Event) chunks.
 // Stream execution intercepts are applied to each chunk as it is consumed.
 // The caller must call [LlmStream.Next] repeatedly until [io.EOF] is
-// returned, then call [LlmStream.Close].
+// returned, or call [LlmStream.Close] to stop early. Close waits for producer
+// cleanup, finalizes the partial response, and returns any cleanup error.
 //
 // The optional collector callback is invoked with each intercepted chunk string,
 // allowing the caller to accumulate chunks for aggregation. The optional
-// finalizer callback is invoked once when the stream is exhausted and must
-// return a JSON string representing the aggregated response. Pass nil for
-// either to use the default no-op behavior.
+// finalizer callback is invoked once when the stream is exhausted or closed
+// early and must return a JSON string representing the aggregated response.
+// Pass nil for either to use the default no-op behavior.
 func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
@@ -1704,12 +1683,42 @@ const (
 	AtofExporterModeOverwrite AtofExporterMode = "overwrite"
 )
 
-// AtofExporterConfig configures the filesystem-backed ATOF JSONL exporter.
+// AtofExporterConfig configures one tagged ATOF sink.
 type AtofExporterConfig struct {
-	OutputDirectory string               `json:"output_directory,omitempty"`
-	Mode            AtofExporterMode     `json:"mode,omitempty"`
-	Filename        string               `json:"filename,omitempty"`
-	Endpoints       []AtofEndpointConfig `json:"endpoints,omitempty"`
+	Sink AtofSinkConfigurer `json:"-"`
+}
+
+// MarshalJSON serializes the selected tagged sink directly, matching the Rust API.
+func (config AtofExporterConfig) MarshalJSON() ([]byte, error) {
+	if config.Sink == nil {
+		return json.Marshal(NewAtofFileSinkConfig())
+	}
+	return json.Marshal(config.Sink)
+}
+
+// AtofSinkConfigurer is one ATOF exporter destination.
+type AtofSinkConfigurer interface {
+	atofExporterSink()
+}
+
+// AtofFileSinkConfig configures one filesystem ATOF JSONL destination.
+type AtofFileSinkConfig struct {
+	OutputDirectory string           `json:"output_directory,omitempty"`
+	Mode            AtofExporterMode `json:"mode,omitempty"`
+	Filename        string           `json:"filename,omitempty"`
+}
+
+func (AtofFileSinkConfig) atofExporterSink() {
+	// This marker method intentionally has no runtime behavior.
+}
+
+// MarshalJSON serializes the fixed file sink discriminator.
+func (config AtofFileSinkConfig) MarshalJSON() ([]byte, error) {
+	type alias AtofFileSinkConfig
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{Type: "file", alias: alias(config)})
 }
 
 // AtofEndpointTransport controls how an ATOF streaming endpoint receives events.
@@ -1734,19 +1743,46 @@ const (
 	AtofEndpointFieldNamePolicyReplaceDots AtofEndpointFieldNamePolicy = "replace_dots"
 )
 
-// AtofEndpointConfig configures one streaming destination for raw ATOF events.
-type AtofEndpointConfig struct {
+// AtofStreamSinkConfig configures one streaming destination for raw ATOF events.
+type AtofStreamSinkConfig struct {
 	URL             string                      `json:"url"`
 	Transport       AtofEndpointTransport       `json:"transport,omitempty"`
 	Headers         map[string]string           `json:"headers,omitempty"`
+	HeaderEnv       map[string]string           `json:"header_env,omitempty"`
 	TimeoutMillis   uint64                      `json:"timeout_millis,omitempty"`
 	FieldNamePolicy AtofEndpointFieldNamePolicy `json:"field_name_policy,omitempty"`
 }
 
+func (AtofStreamSinkConfig) atofExporterSink() {
+	// This marker method intentionally has no runtime behavior.
+}
+
+// MarshalJSON serializes the fixed stream sink discriminator.
+func (config AtofStreamSinkConfig) MarshalJSON() ([]byte, error) {
+	type alias AtofStreamSinkConfig
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{Type: "stream", alias: alias(config)})
+}
+
 // NewAtofExporterConfig returns a config initialized with native defaults.
 func NewAtofExporterConfig() AtofExporterConfig {
-	return AtofExporterConfig{
-		Mode: AtofExporterModeAppend,
+	return AtofExporterConfig{Sink: NewAtofFileSinkConfig()}
+}
+
+// NewAtofFileSinkConfig returns a file sink initialized with native defaults.
+func NewAtofFileSinkConfig() AtofFileSinkConfig {
+	return AtofFileSinkConfig{Mode: AtofExporterModeAppend}
+}
+
+// NewAtofStreamSinkConfig returns an HTTP POST stream sink with native defaults.
+func NewAtofStreamSinkConfig(url string) AtofStreamSinkConfig {
+	return AtofStreamSinkConfig{
+		URL:             url,
+		Transport:       AtofEndpointTransportHTTPPost,
+		TimeoutMillis:   3000,
+		FieldNamePolicy: AtofEndpointFieldNamePolicyPreserve,
 	}
 }
 
@@ -1755,20 +1791,24 @@ type AtofExporter struct {
 	ptr unsafe.Pointer
 }
 
-// NewAtofExporter creates a new filesystem-backed ATOF JSONL exporter.
+// NewAtofExporter creates a new single-sink ATOF exporter.
 func NewAtofExporter(config AtofExporterConfig) (*AtofExporter, error) {
 	return newAtofExporterFunc(config)
 }
 
-// Path returns the JSONL output path.
-func (e *AtofExporter) Path() (string, error) {
+// Path returns the JSONL output path, or nil for a stream-backed exporter.
+func (e *AtofExporter) Path() (*string, error) {
 	var cOut *C.char
 	status := C.nemo_relay_atof_exporter_path(e.ptr, &cOut)
 	if err := checkStatus(status); err != nil {
-		return "", err
+		return nil, err
+	}
+	if cOut == nil {
+		return nil, nil
 	}
 	defer C.nemo_relay_string_free(cOut)
-	return C.GoString(cOut), nil
+	path := C.GoString(cOut)
+	return &path, nil
 }
 
 // Register registers the exporter as a global event subscriber.
@@ -1835,6 +1875,13 @@ type OpenTelemetryConfig struct {
 	ServiceVersion       string
 	InstrumentationScope string
 	Timeout              time.Duration
+	AttributeMappings    []OtlpAttributeMapping
+}
+
+// OtlpAttributeMapping copies a projected OTLP attribute to an alias.
+type OtlpAttributeMapping struct {
+	Key   string `json:"key"`
+	Alias string `json:"alias"`
 }
 
 // NewOpenTelemetryConfig returns a config initialized with sensible defaults.
@@ -1898,6 +1945,16 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
 	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
 
+	var cAttributeMappingsJSON *C.char
+	if config.AttributeMappings != nil {
+		attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
+		if err != nil {
+			return nil, err
+		}
+		cAttributeMappingsJSON = C.CString(string(attributeMappingsJSON))
+		defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
+	}
+
 	cServiceName := C.CString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 
@@ -1917,7 +1974,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create(
+	status := C.nemo_relay_otel_subscriber_create_with_attribute_mappings(
 		cTransport,
 		cEndpoint,
 		cHeadersJSON,
@@ -1927,6 +1984,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cServiceVersion,
 		cInstrumentationScope,
 		C.uint64_t(config.Timeout/time.Millisecond),
+		cAttributeMappingsJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {
@@ -1999,6 +2057,7 @@ type OpenInferenceConfig struct {
 	ServiceVersion       string
 	InstrumentationScope string
 	Timeout              time.Duration
+	AttributeMappings    []OtlpAttributeMapping
 }
 
 // NewOpenInferenceConfig returns a config initialized with sensible defaults.
@@ -2062,6 +2121,16 @@ func NewOpenInferenceSubscriber(config OpenInferenceConfig) (*OpenInferenceSubsc
 	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
 	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
 
+	var cAttributeMappingsJSON *C.char
+	if config.AttributeMappings != nil {
+		attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
+		if err != nil {
+			return nil, err
+		}
+		cAttributeMappingsJSON = C.CString(string(attributeMappingsJSON))
+		defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
+	}
+
 	cServiceName := C.CString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 
@@ -2081,7 +2150,7 @@ func NewOpenInferenceSubscriber(config OpenInferenceConfig) (*OpenInferenceSubsc
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_openinference_subscriber_create(
+	status := C.nemo_relay_openinference_subscriber_create_with_attribute_mappings(
 		cTransport,
 		cEndpoint,
 		cHeadersJSON,
@@ -2091,6 +2160,7 @@ func NewOpenInferenceSubscriber(config OpenInferenceConfig) (*OpenInferenceSubsc
 		cServiceVersion,
 		cInstrumentationScope,
 		C.uint64_t(config.Timeout/time.Millisecond),
+		cAttributeMappingsJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {

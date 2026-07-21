@@ -12,6 +12,10 @@ import (
 )
 
 func TestWithScopeCleanupNoopsWhenPushFails(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeCleanupNoopsWhenPushFails)
+}
+
+func testWithScopeCleanupNoopsWhenPushFails(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		opt  nemo_relay.ScopeOption

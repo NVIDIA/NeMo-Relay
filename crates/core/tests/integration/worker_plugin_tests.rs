@@ -13,7 +13,7 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
-use nemo_relay::api::runtime::{TASK_SCOPE_STACK, create_scope_stack};
+use nemo_relay::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
@@ -23,10 +23,12 @@ use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::dynamic::{
-    WorkerPluginActivation, WorkerPluginLoadSpec, load_worker_plugins,
+    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
+    WorkerPluginLoadSpec, load_worker_plugins,
 };
 use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    list_plugin_kinds,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -35,12 +37,99 @@ use uuid::Uuid;
 
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn enable_operational_logs() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
+}
+
 #[test]
 fn worker_activation_with_no_specs_is_empty() {
     let activation = load_worker_plugins(Vec::<WorkerPluginLoadSpec>::new())
         .expect("empty worker activation should succeed");
     assert!(activation.is_empty());
     activation.clear();
+}
+
+#[tokio::test]
+async fn plugin_host_activation_owns_worker_lifecycle() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, report) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    assert!(activation.is_active());
+    assert!(!report.has_errors());
+    assert!(
+        list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_worker")
+    );
+    let rewritten = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .expect("worker host intercept should run");
+    assert_eq!(rewritten["worker_plugin"], true);
+
+    activation.clear().expect("worker plugin host should clear");
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_worker")
+    );
+    let unchanged = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .expect("cleared worker intercept chain should be empty");
+    assert_eq!(unchanged, json!({ "input": true }));
+}
+
+#[tokio::test]
+async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_owner() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("exit_in_tool_request".into(), json!(true))]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    tool_request_intercepts("terminate-worker", json!({ "input": true }))
+        .expect_err("fixture worker should terminate during callback");
+    let error = activation
+        .clear()
+        .expect_err("worker shutdown failure should be surfaced")
+        .to_string();
+    assert!(error.contains("fixture_worker"), "{error}");
+    assert!(error.contains("shutdown"), "{error}");
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+    )
+    .await
+    .expect("a stopped worker process should permit owner release");
+    activation.clear().expect("recovered host should clear");
 }
 
 #[tokio::test]
@@ -254,7 +343,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
                         "chunk": 1,
                         "request": request.content,
                     });
-                    Ok(Box::pin(tokio_stream::iter(vec![Ok(first)])) as _)
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(first)])))
                 })
             }))
             .collector(Box::new(|_chunk| Ok(())))
@@ -506,7 +595,7 @@ async fn worker_llm_stream_open_error_surfaces_to_host() {
             .func(Arc::new(|request| {
                 Box::pin(async move {
                     let chunk = json!({ "request": request.content });
-                    Ok(Box::pin(tokio_stream::iter(vec![Ok(chunk)])) as _)
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(chunk)])))
                 })
             }))
             .collector(Box::new(|_chunk| Ok(())))
@@ -1151,6 +1240,7 @@ impl BuiltWorkerFixture {
 }
 
 fn build_fixture_worker() -> BuiltWorkerFixture {
+    enable_operational_logs();
     static FIXTURE_BINARY: OnceLock<PathBuf> = OnceLock::new();
     let binary_path = FIXTURE_BINARY.get_or_init(|| {
         let fixture_dir = fixture_root();

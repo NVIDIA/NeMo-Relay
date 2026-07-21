@@ -1083,7 +1083,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             nemo_relay_observability_default_config_json(&mut out_json),
             NemoRelayStatus::Ok
         );
-        assert_eq!(returned_json(out_json)["version"], json!(1));
+        assert_eq!(returned_json(out_json)["version"], json!(2));
         assert_eq!(
             nemo_relay_observability_default_config_json(ptr::null_mut()),
             NemoRelayStatus::NullPointer

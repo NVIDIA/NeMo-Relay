@@ -52,10 +52,13 @@ use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin, register_plugin,
+    deregister_plugin_registration_checked, register_plugin_tracked,
 };
 
-use super::{DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad};
+use super::{
+    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
+    DynamicPluginTeardownOutcome, deregister_tracked_registrations_checked,
+};
 
 /// Native plugin load request derived from host dynamic-plugin state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +76,7 @@ pub struct NativePluginLoadSpec {
 /// runtime callbacks cannot outlive their code.
 pub struct NativePluginActivation {
     plugins: Vec<Arc<NativePluginInstance>>,
-    plugin_kinds: Vec<String>,
+    plugin_registrations: Vec<(String, u64)>,
 }
 
 impl NativePluginActivation {
@@ -84,12 +87,24 @@ impl NativePluginActivation {
 
     /// Consumes the activation and deregisters loaded plugin kinds.
     pub fn clear(self) {}
+
+    pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        deregister_tracked_registrations_checked(&mut self.plugin_registrations, "native")
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_plugin_kind_for_test(plugin_kind: impl Into<String>) -> Self {
+        Self {
+            plugins: Vec::new(),
+            plugin_registrations: vec![(plugin_kind.into(), 0)],
+        }
+    }
 }
 
 impl Drop for NativePluginActivation {
     fn drop(&mut self) {
-        for plugin_kind in self.plugin_kinds.iter().rev() {
-            let _ = deregister_plugin(plugin_kind);
+        for (plugin_kind, registration_id) in self.plugin_registrations.iter().rev() {
+            let _ = deregister_plugin_registration_checked(plugin_kind, *registration_id);
         }
     }
 }
@@ -104,18 +119,20 @@ where
 {
     let mut activation = NativePluginActivation {
         plugins: Vec::new(),
-        plugin_kinds: Vec::new(),
+        plugin_registrations: Vec::new(),
     };
     for spec in specs {
         let instance = load_one_native_plugin(&spec)?;
         let plugin_kind = instance.plugin_kind.clone();
-        register_plugin(Arc::new(NativePluginAdapter {
+        let registration_id = register_plugin_tracked(Arc::new(NativePluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
             instance: instance.clone(),
         }))?;
         activation.plugins.push(instance);
-        activation.plugin_kinds.push(plugin_kind);
+        activation
+            .plugin_registrations
+            .push((plugin_kind, registration_id));
     }
     Ok(activation)
 }
@@ -1480,8 +1497,7 @@ fn wrap_event_sanitize_fn(
 ) -> EventSanitizeFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |event, fields| {
-        let fallback = fields.clone();
-        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or(fallback)
+        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or_default()
     })
 }
 
@@ -2142,11 +2158,11 @@ fn native_stream_to_relay_stream(
     next_ctx: Option<NativeStreamNextContext>,
     callback_user_data: Option<Arc<NativeCallbackUserData>>,
 ) -> FlowResult<LlmJsonStream> {
-    Ok(Box::pin(NativeRelayLlmStream::from_raw(
+    Ok(LlmJsonStream::new(NativeRelayLlmStream::from_raw(
         raw,
         next_ctx,
         callback_user_data,
-    )?) as LlmJsonStream)
+    )?))
 }
 
 fn drop_native_stream(mut raw: NemoRelayNativeLlmStreamV1) {

@@ -11,6 +11,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use tokio_stream::Stream;
 
@@ -240,7 +241,85 @@ pub type LlmExecutionFn = Arc<
         + Sync,
 >;
 /// Stream of JSON chunks produced by the managed streaming LLM pipeline.
-pub type LlmJsonStream = Pin<Box<dyn Stream<Item = Result<Json>> + Send>>;
+///
+/// In addition to ordinary stream polling, managed streams provide an explicit
+/// asynchronous close operation. A successful close means the producer has
+/// released its resources; subsequent polls return no more chunks.
+pub struct LlmJsonStream {
+    inner: Pin<Box<dyn LlmStreamInner>>,
+}
+
+impl LlmJsonStream {
+    /// Wrap a stream whose producer has no asynchronous teardown work.
+    pub fn new<S>(stream: S) -> Self
+    where
+        S: Stream<Item = Result<Json>> + Send + 'static,
+    {
+        Self {
+            inner: Box::pin(DefaultLlmStream {
+                stream: Some(Box::pin(stream)),
+            }),
+        }
+    }
+
+    /// Wrap a stream that implements explicit asynchronous teardown.
+    pub fn from_closeable<S>(stream: S) -> Self
+    where
+        S: LlmStreamInner + 'static,
+    {
+        Self {
+            inner: Box::pin(stream),
+        }
+    }
+
+    /// Stop the producer and wait for its cleanup to complete.
+    pub async fn close(&mut self) -> Result<()> {
+        self.inner.as_mut().close().await
+    }
+}
+
+impl Stream for LlmJsonStream {
+    type Item = Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().inner.as_mut().poll_next(cx)
+    }
+}
+
+/// Internal close-aware stream implementation.
+pub trait LlmStreamInner: Stream<Item = Result<Json>> + Send {
+    /// Stop the producer and wait for cleanup. Implementations must be idempotent.
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+}
+
+struct DefaultLlmStream<S> {
+    stream: Option<Pin<Box<S>>>,
+}
+
+impl<S> Stream for DefaultLlmStream<S>
+where
+    S: Stream<Item = Result<Json>> + Send,
+{
+    type Item = Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match this.stream.as_mut() {
+            Some(stream) => stream.as_mut().poll_next(cx),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+impl<S> LlmStreamInner for DefaultLlmStream<S>
+where
+    S: Stream<Item = Result<Json>> + Send,
+{
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        self.get_mut().stream.take();
+        Box::pin(async { Ok(()) })
+    }
+}
 /// Per-chunk collector used by the streaming LLM runtime.
 ///
 /// # Parameters

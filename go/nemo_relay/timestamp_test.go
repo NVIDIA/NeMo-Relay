@@ -17,6 +17,10 @@ type capturedTimestampEvent struct {
 }
 
 func TestManualLifecycleTimestamps(t *testing.T) {
+	runTestWithScopeStack(t, testManualLifecycleTimestamps)
+}
+
+func testManualLifecycleTimestamps(t *testing.T) {
 	var (
 		events []capturedTimestampEvent
 		mu     sync.Mutex

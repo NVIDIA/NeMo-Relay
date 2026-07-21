@@ -100,6 +100,8 @@ tokio-tungstenite = { version = "0.27", default-features = false, features = ["c
 tower = { version = "0.5", features = ["util"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 shell-words = "1"
+log = { version = "0.4", features = ["kv"] }
+spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
@@ -120,6 +122,10 @@ path = "tests/integration/context_isolation_tests.rs"
 [[test]]
 name = "native_plugin_integration"
 path = "tests/integration/native_plugin_tests.rs"
+
+[[test]]
+name = "plugin_host_builtin_ownership"
+path = "tests/integration/plugin_host_builtin_ownership_tests.rs"
 
 [[test]]
 name = "worker_plugin_integration"

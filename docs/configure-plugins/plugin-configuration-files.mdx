@@ -39,10 +39,13 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "append"
@@ -97,10 +100,13 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "append"
@@ -254,20 +260,29 @@ When more than one `plugins.toml` file is discovered, later files have higher
 precedence. User config overrides project config, and project config overrides
 system config.
 
-TOML tables merge recursively:
+TOML tables merge recursively, while a higher-precedence array replaces the
+lower-precedence array. For example, the following system configuration enables
+one ATOF file sink:
 
 ```toml
 # system plugins.toml
 [[components]]
 kind = "observability"
 
+[components.config]
+version = 2
+
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "/var/log/nemo-relay"
 mode = "append"
 ```
 
-The following user configuration overrides only the exporter mode:
+To change the file mode at user scope, repeat the complete sink because
+`sinks` is an array:
 
 ```toml
 # user plugins.toml
@@ -275,12 +290,16 @@ The following user configuration overrides only the exporter mode:
 kind = "observability"
 
 [components.config.atof]
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "/var/log/nemo-relay"
 mode = "overwrite"
 ```
 
-The effective Agent Trajectory Observability Format (ATOF) config keeps
-`enabled` and `output_directory` from the system file and uses
-`mode = "overwrite"` from the user file.
+The effective Agent Trajectory Observability Format (ATOF) configuration keeps
+`version` and `enabled` from the system file. The user file replaces the
+complete `sinks` array with the file sink that uses `mode = "overwrite"`.
 
 The top-level `components` array is special. Relay matches components by `kind`
 across files. A higher-precedence component with the same `kind` merges into the
@@ -344,16 +363,15 @@ kind = "observability"
 
 [components.config.atof]
 enabled = false
-mode = "append"
 ```
 
-The merged config can still contain inherited ATOF sibling fields, such as
-`output_directory`, but the runtime ignores the section because `enabled =
-false`.
+The merged configuration can still contain an inherited ATOF `sinks` array, but
+the runtime ignores the section because `enabled = false`.
 
 To override an inherited non-default field with its default value, write the
-default explicitly in the higher-precedence file. For example, use
-`mode = "append"` to override a lower-precedence `mode = "overwrite"`.
+default explicitly in the higher-precedence file. For a field inside an array,
+repeat the complete array entry. For example, repeat an inherited file sink and
+set its `mode` to `append`.
 
 There is no tombstone syntax for deleting an inherited nested field while
 keeping the rest of the lower-precedence component. To remove inherited settings
@@ -382,7 +400,7 @@ Common validation failures include:
 Use `nemo-relay doctor` to inspect the resolved gateway configuration and
 plugin diagnostics. For Observability, doctor also reports enabled exporter
 sections, checks writable file exporter directories, probes configured ATOF
-streaming endpoints, and checks reachable OTLP endpoints when those settings
+stream sinks, and checks reachable OTLP endpoints when those settings
 are present. For model pricing, doctor validates enabled file and inline
 sources and fails when a source is unreadable or the catalog schema is invalid.
 For dynamic-plugin validation, lifecycle state, and trust diagnostics, use

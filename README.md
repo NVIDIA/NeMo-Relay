@@ -42,7 +42,7 @@ trajectory file, you have concrete data to inspect, debug, and build on.
 ### Local Agent Trajectory
 
 This walkthrough shows an end-to-end quick success setup. Install the
-`nemo-relay-cli`, turn on local exporters, run either Codex or Claude Code
+`nemo-relay-cli`, turn on local exporters, run Codex, Claude Code, or Hermes
 through Relay, and check that Relay wrote both raw events and normalized
 trajectories.
 
@@ -83,13 +83,12 @@ The editor creates or updates the nearest project plugin file at
 then configure these sections:
 
 1. Toggle the Observability component on.
-2. Open `ATOF`. Toggle the section `[on]`.
+2. Open **ATOF**. Toggle the section **[on]**.
 
-   Optionally set:
-   - `output_directory` to `.nemo-relay/atof`
-   - `filename` to `events.jsonl`
-   - `mode` to `overwrite`
-3. Open `ATIF`. Toggle the section `[on]`.
+   Add a file sink. You can set its `output_directory` to
+   `.nemo-relay/atof`, `filename` to `events.jsonl`, and `mode` to
+   `overwrite`. Add stream sinks to send the same events to remote collectors.
+3. Open **ATIF**. Toggle the section **[on]**.
 
    Optionally set:
    - `output_directory` to `.nemo-relay/atif`
@@ -101,7 +100,7 @@ then configure these sections:
 > Run `nemo-relay plugins edit` without `--project` only when you want
 > user-level exporter settings that apply across projects.
 
-#### 3. Run Codex or Claude Code Through Relay
+#### 3. Run a Coding Agent Through Relay
 
 Run the Relay wrapper for the host CLI installed on your machine. For example:
 
@@ -109,8 +108,16 @@ Run the Relay wrapper for the host CLI installed on your machine. For example:
 nemo-relay codex -- exec "Summarize this repository."
 ```
 
+For Claude Code, run:
+
 ```bash
 nemo-relay claude -- "Summarize this repository."
+```
+
+For Hermes, run:
+
+```bash
+nemo-relay hermes -- -z "Summarize this repository."
 ```
 
 Refer to the full [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for more options.
@@ -120,10 +127,18 @@ and provider settings for that launched process, then shuts the gateway down
 when the agent exits.
 
 > [!WARNING]
-> If generated hooks are inactive, Codex users must review and activate them
-> before events appear. The Codex Desktop App has additional limitations.
-> Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
-> current hook activation caveat and troubleshooting steps.
+> The transparent wrapper trusts only the Codex hooks that it generates for the
+> launched process. A persistent `nemo-relay install codex` trusts only the
+> hooks owned by `nemo-relay-plugin@nemo-relay-local`; manual and source
+> marketplace installs can still require review. Restart an open Codex app after
+> persistent installation.
+>
+> On Windows, a restrictive host Job Object can keep the shared Relay gateway
+> within the host process lifetime. If the host also rejects the required nested
+> assignment, persistent bootstrap stops and explains the conflict. The Codex
+> desktop app has additional limitations. Refer to the
+> [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for
+> lifecycle, startup, and troubleshooting details.
 
 #### 4. Verify the Run
 
@@ -287,8 +302,8 @@ coverage.
 | Agent | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
-| Codex | Yes | Yes | Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
-| Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
+| Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; the supported generated schema does not install `SessionEnd`. |
+| Hermes Agent | Yes | Yes | Partial | User config installs the shared native MCP gateway lifecycle plus exact trusted hooks; gateway-routed or hook-backed LLM observability is supported. |
 
 ### Public API Integrations
 

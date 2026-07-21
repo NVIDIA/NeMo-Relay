@@ -28,7 +28,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atif]
 enabled = true
@@ -45,8 +45,15 @@ coding-agent turn scope.
 
 ATIF contains agent interaction steps, tool calls, and observations. Relay mark
 events are point-in-time telemetry rather than trajectory steps, so the ATIF
-exporter omits them. Use ATOF to retain the canonical mark event stream, or an
-OTLP exporter when marks must remain correlated with trace data.
+exporter omits them from `steps`. Plugin-managed files retain raw events that
+were associated with the trajectory under `extra.observed_events`.
+
+Plugin-managed files also expose selected correlation fields under
+`extra.nemo_relay`: `session_id` is the logical harness session ID,
+`session_instance_id` is Relay's root scope UUID, and `user_id` is present when
+session metadata contains a top-level string value. The top-level ATIF
+`session_id`, `trajectory_id`, `{session_id}` filename expansion, and remote
+session header remain trajectory-unique artifact identities for compatibility.
 
 ## Fields
 
@@ -293,7 +300,7 @@ void (async () => {
   version: 1,
   components: [
     observability.ComponentSpec({
-      version: 1,
+      version: 2,
       atif: observability.atifConfig({
         enabled: true,
         agent_name: "Planner",

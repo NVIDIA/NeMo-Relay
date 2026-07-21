@@ -3,21 +3,80 @@
 
 //! Unit tests for the Switchyard Relay plugin component.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 
-use axum::{Json as AxumJson, Router, extract::State, routing::post};
+use axum::{
+    Json as AxumJson, Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
+use futures_util::{Stream, stream as futures_stream};
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, LlmStreamInner};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::optimization::LlmOptimizationSummaryStatus;
 use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
 use nemo_relay::plugin::rollback_registrations;
 
 use super::*;
+
+struct CloseTrackingStream {
+    close_calls: Arc<AtomicUsize>,
+    closed: bool,
+}
+
+impl Stream for CloseTrackingStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(None)
+    }
+}
+
+impl LlmStreamInner for CloseTrackingStream {
+    fn close(
+        mut self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        self.closed = true;
+        self.close_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn close_tracking_stream(close_calls: Arc<AtomicUsize>) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(CloseTrackingStream {
+        close_calls,
+        closed: false,
+    })
+}
+
+fn prefixed_adapter(upstream: LlmJsonStream) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(PrefixedStream {
+        first: Some(Ok(json!({"first": true}))),
+        upstream,
+    })
+}
+
+fn terminal_adapter(upstream: LlmJsonStream) -> LlmJsonStream {
+    mark_terminal_stream(upstream, "test", "enforce", json!({"route": "test"}))
+}
+
+fn translated_adapter(upstream: LlmJsonStream) -> LlmJsonStream {
+    translated_stream(
+        WireProtocol::OpenaiChat,
+        WireProtocol::AnthropicMessages,
+        "selected".into(),
+        upstream,
+    )
+}
 
 fn binding(protocol: WireProtocol, model: &str) -> TargetBinding {
     TargetBinding {
@@ -210,8 +269,41 @@ fn wire_protocol_and_plugin_lifecycle_contracts_are_stable() {
 #[tokio::test]
 async fn plugin_registration_installs_and_rolls_back_both_execution_intercepts() {
     let plugin = SwitchyardPlugin;
-    let component: PluginComponentSpec =
-        config("http://127.0.0.1:1/v1/routing/decision".into()).into();
+    let decision_api_url = health_server(StatusCode::OK, r#"{"status":"ok"}"#).await;
+    for (mode, profile_id) in [
+        (RoutingMode::Enforce, "random"),
+        (RoutingMode::Enforce, "llm"),
+        (RoutingMode::Enforce, "stage_router"),
+        (RoutingMode::ObserveOnly, "random"),
+        (RoutingMode::ObserveOnly, "llm"),
+        (RoutingMode::ObserveOnly, "stage_router"),
+    ] {
+        let mut candidate = config(decision_api_url.clone());
+        candidate.mode = mode;
+        candidate.decision_profile_id = profile_id.into();
+        let component: PluginComponentSpec = candidate.into();
+        let mut context = PluginRegistrationContext::with_namespace(format!(
+            "switchyard-test-{}-",
+            Uuid::now_v7()
+        ));
+
+        plugin
+            .register(&component.config, &mut context)
+            .await
+            .unwrap();
+
+        let mut registrations = context.into_registrations();
+        assert_eq!(registrations.len(), 2);
+        rollback_registrations(&mut registrations);
+        assert!(registrations.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn plugin_registration_retries_transient_sidecar_health_failures() {
+    let (decision_api_url, attempts) = recovering_health_server(2).await;
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec = config(decision_api_url).into();
     let mut context =
         PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
 
@@ -220,10 +312,86 @@ async fn plugin_registration_installs_and_rolls_back_both_execution_intercepts()
         .await
         .unwrap();
 
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
     let mut registrations = context.into_registrations();
     assert_eq!(registrations.len(), 2);
     rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
+}
+
+#[tokio::test]
+async fn plugin_registration_returns_the_final_health_failure_after_retry_exhaustion() {
+    let (decision_api_url, attempts) = recovering_health_server(usize::MAX).await;
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec = config(decision_api_url).into();
+    let mut context =
+        PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
+
+    let error = plugin
+        .register(&component.config, &mut context)
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(
+        error
+            .to_string()
+            .contains("returned HTTP 503 Service Unavailable")
+    );
+    assert!(context.into_registrations().is_empty());
+}
+
+#[tokio::test]
+async fn plugin_registration_rejects_unhealthy_or_invalid_sidecars() {
+    for (status, body, expected) in [
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"status":"starting"}"#,
+            "returned HTTP 503 Service Unavailable",
+        ),
+        (StatusCode::OK, "not-json", "returned invalid JSON"),
+        (
+            StatusCode::OK,
+            r#"{"status":"starting"}"#,
+            "did not report status=ok",
+        ),
+    ] {
+        let plugin = SwitchyardPlugin;
+        let component: PluginComponentSpec = config(health_server(status, body).await).into();
+        let mut context = PluginRegistrationContext::with_namespace(format!(
+            "switchyard-test-{}-",
+            Uuid::now_v7()
+        ));
+        let error = plugin
+            .register(&component.config, &mut context)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{error:?} did not contain {expected:?}"
+        );
+        assert!(context.into_registrations().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn plugin_registration_rejects_an_unreachable_sidecar() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec =
+        config(format!("http://{address}/v1/routing/decision")).into();
+    let mut context =
+        PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
+    let error = plugin
+        .register(&component.config, &mut context)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Switchyard service is required"));
+    assert!(error.to_string().contains("/health"));
+    assert!(context.into_registrations().is_empty());
 }
 
 #[test]
@@ -254,6 +422,12 @@ fn configuration_validation_rejects_unsafe_or_ambiguous_bindings() {
     let mut candidate = config(url.clone());
     candidate.recent_message_count = 0;
     assert_invalid(candidate, "recent_message_count");
+    let mut candidate = config(url.clone());
+    candidate.context_mode = ContextMode::AtofRequired;
+    assert_invalid(candidate, "atof_endpoint_name");
+    let mut candidate = config(url.clone());
+    candidate.atof_endpoint_name = Some(" switchyard ".into());
+    assert_invalid(candidate, "leading or trailing whitespace");
     let candidate = config("file:///tmp/decision".into());
     assert_invalid(candidate, "must use http or https");
     let mut candidate = config(url.clone());
@@ -293,11 +467,30 @@ fn configuration_validation_rejects_unsafe_or_ambiguous_bindings() {
         .insert("x-test".into(), "bad\nvalue".into());
     assert_invalid(candidate, "invalid header value");
     let mut candidate = config(url.clone());
+    candidate
+        .decision_headers
+        .insert("Authorization".into(), "Bearer static".into());
+    candidate.decision_header_env.insert(
+        "authorization".into(),
+        "SWITCHYARD_TEST_MISSING_DECISION_SECRET".into(),
+    );
+    assert_invalid(candidate, "cannot appear in both headers and header_env");
+    let mut candidate = config(url.clone());
     candidate.decision_header_env.insert(
         "authorization".into(),
         "SWITCHYARD_TEST_MISSING_DECISION_SECRET".into(),
     );
     assert_invalid(candidate, "is not set");
+    let mut candidate = config(url.clone());
+    let target = candidate.targets.get_mut("selected-chat").unwrap();
+    target
+        .headers
+        .insert("Authorization".into(), "Bearer static".into());
+    target.header_env.insert(
+        "authorization".into(),
+        "SWITCHYARD_TEST_MISSING_TARGET_SECRET".into(),
+    );
+    assert_invalid(candidate, "cannot appear in both headers and header_env");
     let mut candidate = config(url);
     candidate
         .targets
@@ -329,6 +522,30 @@ fn disabled_protocol_defaults_are_optional() {
 }
 
 #[test]
+fn atof_cross_component_validation_rejects_invalid_endpoint_names_before_lookup() {
+    for (name, expected) in [
+        (" ", "atof_endpoint_name must be non-empty when configured"),
+        (
+            " switchyard ",
+            "atof_endpoint_name must not have leading or trailing whitespace",
+        ),
+    ] {
+        let mut switchyard = config("http://switchyard.test/v1/routing/decision".into());
+        switchyard.context_mode = ContextMode::AtofRequired;
+        switchyard.atof_endpoint_name = Some(name.into());
+        let plugin_config = PluginConfig {
+            components: vec![switchyard.into()],
+            ..PluginConfig::default()
+        };
+
+        assert_eq!(
+            validate_switchyard_atof_configuration(&plugin_config).unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn atof_cross_component_validation_reports_each_activation_mismatch() {
     assert!(validate_switchyard_atof_configuration(&PluginConfig::default()).is_ok());
 
@@ -340,7 +557,7 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
 
     let mut switchyard = config("http://switchyard.test/v1/routing/decision".into());
     switchyard.context_mode = ContextMode::AtofRequired;
-    switchyard.atof_endpoint_url = Some("http://events.test/v1/atof/events".into());
+    switchyard.atof_endpoint_name = Some("switchyard".into());
     let mut plugin_config = PluginConfig {
         components: vec![switchyard.into()],
         ..PluginConfig::default()
@@ -348,8 +565,10 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
     plugin_config.components.push(PluginComponentSpec {
         kind: "observability".into(),
         enabled: true,
-        config: json!({"atof": {"enabled": true, "endpoints": [{
-            "url": "http://wrong.test/v1/atof/events",
+        config: json!({"atof": {"enabled": true, "sinks": [{
+            "type": "stream",
+            "name": "other",
+            "url": "http://events.test/v1/atof/events",
             "header_env": {"authorization": "TOKEN"}
         }]}})
         .as_object()
@@ -359,19 +578,40 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
     assert!(
         validate_switchyard_atof_configuration(&plugin_config)
             .unwrap_err()
-            .contains("requires HTTP ATOF endpoint")
+            .contains("requires named ATOF endpoint")
     );
 
-    plugin_config.components[1].config["atof"]["endpoints"][0]["url"] =
-        json!("http://events.test/v1/atof/events");
-    plugin_config.components[1].config["atof"]["endpoints"][0]["field_name_policy"] =
+    plugin_config.components[1].config["atof"]["sinks"][0]["name"] = json!("switchyard");
+    assert!(validate_switchyard_atof_configuration(&plugin_config).is_ok());
+    plugin_config.components[1].config["atof"]["sinks"][0]["transport"] = json!("websocket");
+    assert!(
+        validate_switchyard_atof_configuration(&plugin_config)
+            .unwrap_err()
+            .contains("transport = http_post")
+    );
+    plugin_config.components[1].config["atof"]["sinks"][0]["transport"] = json!("http_post");
+    let duplicate = plugin_config.components[1].config["atof"]["sinks"][0].clone();
+    plugin_config.components[1].config["atof"]["sinks"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    assert!(
+        validate_switchyard_atof_configuration(&plugin_config)
+            .unwrap_err()
+            .contains("exactly one endpoint")
+    );
+    plugin_config.components[1].config["atof"]["sinks"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    plugin_config.components[1].config["atof"]["sinks"][0]["field_name_policy"] =
         json!("snake_case");
     assert!(
         validate_switchyard_atof_configuration(&plugin_config)
             .unwrap_err()
             .contains("field_name_policy = preserve")
     );
-    let endpoint = &mut plugin_config.components[1].config["atof"]["endpoints"][0];
+    let endpoint = &mut plugin_config.components[1].config["atof"]["sinks"][0];
     endpoint["field_name_policy"] = json!("preserve");
     endpoint.as_object_mut().unwrap().remove("header_env");
     assert!(
@@ -451,10 +691,9 @@ async fn stream_setup_retries_and_empty_streams_have_one_bounded_fallback() {
                     class: UpstreamFailureClass::Connection,
                 }));
             }
-            Ok(Box::pin(futures_stream::iter(vec![Ok(chat_chunk(
-                "ok",
-                json!("stop"),
-            ))])) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(vec![Ok(
+                chat_chunk("ok", json!("stop")),
+            )])))
         })
     });
     let output = runtime
@@ -481,7 +720,7 @@ async fn stream_setup_retries_and_empty_streams_have_one_bounded_fallback() {
                 assert_eq!(request.content["model"], "fallback");
                 vec![Ok(chat_chunk("fallback", json!("stop")))]
             };
-            Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(items)))
         })
     });
     let output = runtime
@@ -520,10 +759,10 @@ async fn fallback_setup_failures_preserve_the_provider_error() {
 
 #[tokio::test]
 async fn translated_stream_preserves_success_and_propagates_both_error_sources() {
-    let source = Box::pin(futures_stream::iter(vec![
+    let source = LlmJsonStream::new(futures_stream::iter(vec![
         Ok(chat_chunk("hello", Json::Null)),
         Ok(chat_chunk("", json!("stop"))),
-    ])) as LlmJsonStream;
+    ]));
     let output = translated_stream(
         WireProtocol::OpenaiChat,
         WireProtocol::AnthropicMessages,
@@ -539,7 +778,7 @@ async fn translated_stream_preserves_success_and_propagates_both_error_sources()
     }));
 
     let upstream_error = FlowError::Internal("upstream stream failed".into());
-    let source = Box::pin(futures_stream::iter(vec![Err(upstream_error)])) as LlmJsonStream;
+    let source = LlmJsonStream::new(futures_stream::iter(vec![Err(upstream_error)]));
     let output = translated_stream(
         WireProtocol::OpenaiChat,
         WireProtocol::AnthropicMessages,
@@ -550,9 +789,9 @@ async fn translated_stream_preserves_success_and_propagates_both_error_sources()
     .await;
     assert!(output[0].is_err());
 
-    let malformed = Box::pin(futures_stream::iter(vec![Ok(json!({
+    let malformed = LlmJsonStream::new(futures_stream::iter(vec![Ok(json!({
         "choices": [{"delta": {"reasoning_content": "private"}}]
-    }))])) as LlmJsonStream;
+    }))]));
     let output = translated_stream(
         WireProtocol::OpenaiChat,
         WireProtocol::AnthropicMessages,
@@ -562,6 +801,23 @@ async fn translated_stream_preserves_success_and_propagates_both_error_sources()
     .collect::<Vec<_>>()
     .await;
     assert!(output[0].is_err());
+}
+
+#[tokio::test]
+async fn stream_adapters_forward_explicit_close_to_the_upstream_stream() {
+    for make_adapter in [
+        prefixed_adapter as fn(LlmJsonStream) -> LlmJsonStream,
+        terminal_adapter,
+        translated_adapter,
+    ] {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let mut stream = make_adapter(close_tracking_stream(Arc::clone(&close_calls)));
+
+        stream.close().await.unwrap();
+
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+        assert!(stream.next().await.is_none());
+    }
 }
 
 #[test]
@@ -677,6 +933,7 @@ fn identity_policy_requires_stable_request_scope_only_for_atof_profiles() {
     assert_eq!(synthetic.identity.quality, "synthetic");
 
     config.context_mode = ContextMode::AtofRequired;
+    config.atof_endpoint_name = Some("switchyard".into());
     let atof_runtime = SwitchyardRuntime::new(config).unwrap();
     assert!(
         atof_runtime
@@ -808,6 +1065,7 @@ fn routing_decision_mark_has_canonical_shape_and_mirrored_identity() {
 fn atof_required_cross_component_validation_is_context_sensitive() {
     let mut switchyard = config("http://switchyard.test:8080/v1/routing/decision".into());
     switchyard.context_mode = ContextMode::AtofRequired;
+    switchyard.atof_endpoint_name = Some("switchyard".into());
     let mut plugin_config = PluginConfig {
         components: vec![switchyard.into()],
         ..PluginConfig::default()
@@ -818,7 +1076,9 @@ fn atof_required_cross_component_validation_is_context_sensitive() {
         enabled: true,
         config: json!({"atof": {
             "enabled": true,
-            "endpoints": [{
+            "sinks": [{
+                "type": "stream",
+                "name": "switchyard",
                 "url": "http://switchyard.test:8080/v1/atof/events",
                 "transport": "http_post",
                 "field_name_policy": "preserve",
@@ -871,6 +1131,54 @@ async fn decision_server_for(
         .unwrap();
     });
     (format!("http://{address}/v1/routing/decision"), requests)
+}
+
+async fn health_server(status: StatusCode, body: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/health",
+                get(move || async move { (status, [("content-type", "application/json")], body) }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    format!("http://{address}/nested/v1/routing/decision?source=test#ignored")
+}
+
+async fn recovering_health_server(failures_before_ready: usize) -> (String, Arc<AtomicUsize>) {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&attempts);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/health",
+                get(move || {
+                    let attempts = Arc::clone(&captured);
+                    async move {
+                        if attempts.fetch_add(1, Ordering::SeqCst) < failures_before_ready {
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                AxumJson(json!({"status": "starting"})),
+                            )
+                        } else {
+                            (StatusCode::OK, AxumJson(json!({"status": "ok"})))
+                        }
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    (format!("http://{address}/v1/routing/decision"), attempts)
 }
 
 async fn managed_buffered_events(
@@ -1190,10 +1498,9 @@ async fn streaming_accounting_commits_on_the_first_successful_item_only() {
         SwitchyardRuntime::new(config(url)).unwrap(),
         Arc::new(|_| {
             Box::pin(async {
-                Ok(Box::pin(futures_stream::iter(vec![Ok(chat_chunk(
-                    "ok",
-                    json!("stop"),
-                ))])) as LlmJsonStream)
+                Ok(LlmJsonStream::new(futures_stream::iter(vec![Ok(
+                    chat_chunk("ok", json!("stop")),
+                )])))
             })
         }),
     )
@@ -1224,7 +1531,7 @@ async fn streaming_accounting_commits_on_the_first_successful_item_only() {
                 } else {
                     vec![Ok(chat_chunk("fallback", json!("stop")))]
                 };
-                Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+                Ok(LlmJsonStream::new(futures_stream::iter(items)))
             })
         }),
     )
@@ -1248,7 +1555,7 @@ async fn committed_stream_error_keeps_one_route_and_never_redispatches() {
             let seen = Arc::clone(&seen);
             Box::pin(async move {
                 seen.fetch_add(1, Ordering::SeqCst);
-                Ok(Box::pin(futures_stream::iter(vec![
+                Ok(LlmJsonStream::new(futures_stream::iter(vec![
                     Ok(chat_chunk("partial", Json::Null)),
                     Err(FlowError::Upstream(UpstreamFailure {
                         status: None,
@@ -1256,7 +1563,7 @@ async fn committed_stream_error_keeps_one_route_and_never_redispatches() {
                         headers: BTreeMap::new(),
                         class: UpstreamFailureClass::Connection,
                     })),
-                ])) as LlmJsonStream)
+                ])))
             })
         }),
     )
@@ -1399,7 +1706,7 @@ async fn streaming_retries_before_first_item() {
             } else {
                 vec![Ok(chat_chunk("ok", json!("stop")))]
             };
-            Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(items)))
         })
     });
     let stream = runtime
@@ -1432,7 +1739,7 @@ async fn streaming_never_retries_after_first_item() {
                     class: UpstreamFailureClass::Connection,
                 })),
             ];
-            Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(items)))
         })
     });
     let stream = runtime
@@ -1444,5 +1751,77 @@ async fn streaming_never_retries_after_first_item() {
     assert!(output[0].is_ok());
     assert!(output[1].is_err());
     assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+    assert_eq!(decisions.lock().unwrap().len(), 1);
+}
+
+fn responses_config(decision_api_url: String) -> SwitchyardConfig {
+    let targets = BTreeMap::from([
+        (
+            "resp-a".into(),
+            binding(WireProtocol::OpenaiResponses, "model-a"),
+        ),
+        (
+            "resp-b".into(),
+            binding(WireProtocol::OpenaiResponses, "model-b"),
+        ),
+    ]);
+    SwitchyardConfig {
+        decision_api_url,
+        decision_profile_id: "stage_router".into(),
+        request_materialization: RequestMaterialization::SummaryOnly,
+        context_mode: ContextMode::PayloadOnly,
+        decision_timeout_millis: 1_000,
+        targets,
+        default_targets: ProtocolDefaults {
+            openai_chat: String::new(),
+            openai_responses: "resp-a".into(),
+            anthropic_messages: String::new(),
+        },
+        enabled_inbound_profiles: BTreeSet::from([WireProtocol::OpenaiResponses]),
+        ..SwitchyardConfig::default()
+    }
+}
+
+fn responses_decision() -> RoutingDecision {
+    RoutingDecision {
+        route: crate::contract::RoutingTarget {
+            tier: "efficient".into(),
+            target_model: "model-b".into(),
+            backend_id: "resp-b".into(),
+            target_protocol_profile: "openai_responses".into(),
+            target_endpoint: "/v1/responses".into(),
+        },
+        baseline_route: None,
+        ..decision()
+    }
+}
+
+// When every configured target shares the inbound protocol, no cross-protocol translation can
+// occur, so the portability guard is skipped: a non-portable Responses request (real Codex
+// extensions) is routed through the Decision API with its provider-specific fields preserved.
+#[tokio::test]
+async fn same_protocol_targets_route_nonportable_streaming_requests() {
+    let (url, decisions) = decision_server_for(responses_decision()).await;
+    let runtime = SwitchyardRuntime::new(responses_config(url)).unwrap();
+    let mut nonportable = request(WireProtocol::OpenaiResponses);
+    nonportable.content["reasoning"] = json!({"effort": "high"});
+    nonportable.content["store"] = json!(true);
+    let next: LlmStreamExecutionNextFn = Arc::new(|request| {
+        Box::pin(async move {
+            assert_eq!(request.content["model"], "model-b");
+            assert_eq!(request.content["store"], true);
+            assert_eq!(request.content["reasoning"]["effort"], "high");
+            Ok(LlmJsonStream::new(futures_stream::iter(vec![Ok(
+                json!({"type": "response.output_text.delta", "delta": "ok"}),
+            )])))
+        })
+    });
+    let output = runtime
+        .execute_stream("openai.responses", nonportable, next)
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert_eq!(output.len(), 1);
     assert_eq!(decisions.lock().unwrap().len(), 1);
 }

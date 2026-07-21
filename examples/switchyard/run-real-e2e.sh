@@ -6,6 +6,11 @@ set -euo pipefail
 
 relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$relay_root/examples/switchyard/e2e-common.sh"
+relay_toolchain=""
+if command -v rustup >/dev/null 2>&1; then
+  relay_toolchain="$(cd "$relay_root" && rustup show active-toolchain)"
+  relay_toolchain="${relay_toolchain%% *}"
+fi
 switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-topic-nemo-relay-integration}"
 switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8}"
 work_dir="$(mktemp -d)"
@@ -38,17 +43,22 @@ e2e_add_pid "$!"
 ) >"$work_dir/switchyard.log" 2>&1 &
 e2e_add_pid "$!"
 
+e2e_wait_for http://127.0.0.1:4000/health
+
 (
+  if [[ -n "$relay_toolchain" ]]; then
+    export RUSTUP_TOOLCHAIN="$relay_toolchain"
+  fi
   cd "$work_dir"
   SWITCHYARD_AUTHORIZATION="Bearer $token" cargo run \
     --manifest-path "$relay_root/Cargo.toml" -p nemo-relay-cli --features switchyard -- \
     --plugin-config-path "$relay_root/examples/switchyard/real-e2e-plugins.toml" \
     --bind 127.0.0.1:4041
 ) >"$work_dir/relay.log" 2>&1 &
-e2e_add_pid "$!"
+relay_pid="$!"
+e2e_add_pid "$relay_pid"
 
-e2e_wait_for http://127.0.0.1:4000/health
-e2e_wait_for http://127.0.0.1:4041/healthz
+e2e_wait_for http://127.0.0.1:4041/healthz 120 0.25 "$relay_pid"
 
 request() {
   local request_id="$1"

@@ -10,6 +10,7 @@ metadata:
 
 Guide a new user to visible Relay value with the least complicated applicable
 trial. Do not begin with production deployment or Relay's full architecture.
+Keep the first run focused on one observable success path.
 
 ## Choose A Try-Now Path
 
@@ -89,8 +90,9 @@ proof, ask what outcome matters next and recommend exactly one plugin:
 - PII Redaction -> sanitization of sensitive observability payloads
 - Model Pricing -> cost estimates for managed LLM responses
 
-Use the [plugin overview](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/about)
-to select the next component. Preview its smallest configuration, obtain
+Use the
+[plugin overview](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/about) to
+select the next component. Preview its smallest configuration, obtain
 confirmation, and verify its behavior before layering in another plugin.
 
 Use another handoff only after the user accepts or declines plugin progression,

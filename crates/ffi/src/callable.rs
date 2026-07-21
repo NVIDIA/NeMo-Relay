@@ -23,12 +23,12 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
     ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
-use tokio_stream::{Stream, StreamExt};
+use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
@@ -493,12 +493,8 @@ pub fn wrap_llm_stream_exec_intercept_fn(
             &str,
             LlmRequest,
             LlmStreamExecutionNextFn,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>>>
-                    + Send,
-            >,
-        > + Send
+        ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
+        + Send
         + Sync,
 > {
     let ud = make_user_data(user_data, free_fn);
@@ -558,7 +554,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                 )?;
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
                 let stream = tokio_stream::once(Ok(result));
-                Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+                Ok(LlmJsonStream::new(stream))
             })
         },
     )
@@ -752,15 +748,7 @@ pub fn wrap_llm_stream_exec_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> Box<
-    dyn Fn(
-            LlmRequest,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>>>
-                    + Send,
-            >,
-        > + Send
-        + Sync,
+    dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>> + Send + Sync,
 > {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |request: LlmRequest| {
@@ -775,7 +763,7 @@ pub fn wrap_llm_stream_exec_fn(
             // The C callback returns the full response as a single JSON value for stream
             // We emit it as a single-item stream
             let stream = tokio_stream::once(Ok(result));
-            Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            Ok(LlmJsonStream::new(stream))
         })
     })
 }
@@ -846,7 +834,7 @@ pub fn wrap_event_sanitize_fn(
         let fields_json = json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
         let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
         unsafe { nemo_relay_string_free_internal(fields_json) };
-        let result = serde_json::from_value(ptr_to_json(result_ptr)).unwrap_or(fields);
+        let result = serde_json::from_value(ptr_to_json(result_ptr)).unwrap_or_default();
         unsafe { nemo_relay_string_free_internal(result_ptr) };
         result
     })

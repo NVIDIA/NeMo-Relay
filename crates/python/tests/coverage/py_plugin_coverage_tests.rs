@@ -77,8 +77,10 @@ fn register_adds_plugin_management_bindings() {
 
         for name in [
             "PluginContext",
+            "_PluginHostActivation",
             "validate_plugin_config",
             "initialize_plugins",
+            "initialize_with_dynamic_plugins",
             "clear_plugin_configuration",
             "active_plugin_report",
             "list_plugin_kinds",
@@ -107,6 +109,23 @@ fn register_adds_plugin_management_bindings() {
         let report = validate_plugin_config_py(py, &config).unwrap();
         let report_json = crate::convert::py_to_json(report.bind(py)).unwrap();
         assert!(report_json.get("diagnostics").unwrap().is_array());
+
+        assert!(
+            plugin_error_to_py_err(PluginError::InvalidConfig("bad".into()))
+                .is_instance_of::<pyo3::exceptions::PyValueError>(py)
+        );
+        assert!(
+            plugin_error_to_py_err(PluginError::NotFound("missing".into()))
+                .is_instance_of::<pyo3::exceptions::PyFileNotFoundError>(py)
+        );
+        assert!(
+            plugin_error_to_py_err(PluginError::Conflict("busy".into()))
+                .is_instance_of::<pyo3::exceptions::PyRuntimeError>(py)
+        );
+        assert!(
+            plugin_error_to_py_err(PluginError::RegistrationFailed("teardown".into()))
+                .is_instance_of::<pyo3::exceptions::PyRuntimeError>(py)
+        );
     });
 }
 
@@ -558,7 +577,7 @@ async def initialize_plugins(module, config):
 
             let active = active_plugin_report_py(py).unwrap();
             assert!(!active.bind(py).is_none());
-            clear_plugin_configuration_py().unwrap();
+            clear_plugin_configuration_py(py).unwrap();
             assert!(active_plugin_report_py(py).unwrap().bind(py).is_none());
 
             let failing_config = crate::convert::json_to_py(

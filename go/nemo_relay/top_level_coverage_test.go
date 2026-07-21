@@ -31,7 +31,9 @@ func (p coveragePlugin) Register(pluginConfig map[string]any, ctx *PluginContext
 }
 
 func TestTopLevelNemoRelayCoverage(t *testing.T) {
-	assertScopeInputOutputCoverage(t)
+	runWithTestScopeStack(t, func() {
+		assertScopeInputOutputCoverage(t)
+	})
 	assertLlmStreamExecutionCoverage(t)
 	assertCheckedValueFailureCoverage(t)
 	assertCheckedJSONStringFailureCoverage(t)

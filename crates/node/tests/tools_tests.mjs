@@ -27,6 +27,8 @@ const {
   deregisterToolRequestIntercept,
   registerToolExecutionIntercept,
   deregisterToolExecutionIntercept,
+  clearLastCallbackError,
+  getLastCallbackError,
   registerSubscriber,
   deregisterSubscriber,
   flushSubscribers,
@@ -294,21 +296,22 @@ describe('Tool execute', () => {
         /tool status failure/,
       );
 
-      await waitForSubscriberCallbacks(() =>
-        events.some(
-          (e) =>
-            e.name === 'exec_status_ok_tool' &&
-            e.kind === 'scope' &&
-            e.category === 'tool' &&
-            e.scope_category === 'end',
-        ) &&
-        events.some(
-          (e) =>
-            e.name === 'exec_status_error_tool' &&
-            e.kind === 'scope' &&
-            e.category === 'tool' &&
-            e.scope_category === 'end',
-        ),
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some(
+            (e) =>
+              e.name === 'exec_status_ok_tool' &&
+              e.kind === 'scope' &&
+              e.category === 'tool' &&
+              e.scope_category === 'end',
+          ) &&
+          events.some(
+            (e) =>
+              e.name === 'exec_status_error_tool' &&
+              e.kind === 'scope' &&
+              e.category === 'tool' &&
+              e.scope_category === 'end',
+          ),
       );
       const okEnd = events.find(
         (e) =>
@@ -520,6 +523,72 @@ describe('Tool guardrails', () => {
     }
   });
 
+  it('conditional guardrail throws a catchable error without terminating Node', async () => {
+    let executed = false;
+    registerToolConditionalExecutionGuardrail('node_tool_cond_throw', 10, () => {
+      throw new Error('guardrail boom');
+    });
+    try {
+      await assert.rejects(
+        () =>
+          toolCallExecute(
+            'tool_cond_throw',
+            {},
+            () => {
+              executed = true;
+              return {};
+            },
+            null,
+            null,
+            null,
+            null,
+          ),
+        /guardrail boom/i,
+      );
+      assert.equal(executed, false);
+      deregisterToolConditionalExecutionGuardrail('node_tool_cond_throw');
+
+      const result = await toolCallExecute(
+        'tool_after_guardrail_throw',
+        {},
+        () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      deregisterToolConditionalExecutionGuardrail('node_tool_cond_throw');
+    }
+  });
+
+  it('sanitize guardrail failures preserve the observable payload', async () => {
+    clearLastCallbackError();
+    const events = [];
+    registerSubscriber('node_tool_san_throw_sub', (event) => events.push(event));
+    registerToolSanitizeRequestGuardrail('node_tool_san_throw', 10, () => {
+      throw new Error('sanitize boom');
+    });
+    try {
+      await toolCallExecute('tool_sanitize_throw', { original: true }, (args) => args, null, null, null, null);
+      await waitForSubscriberCallbacks(() => events.some((event) => event.name === 'tool_sanitize_throw'));
+      const start = events.find(
+        (event) =>
+          event.name === 'tool_sanitize_throw' &&
+          event.kind === 'scope' &&
+          event.category === 'tool' &&
+          event.scope_category === 'start',
+      );
+      assert.deepEqual(start.data, { original: true });
+      assert.match(getLastCallbackError() ?? '', /sanitize boom/i);
+    } finally {
+      deregisterToolSanitizeRequestGuardrail('node_tool_san_throw');
+      deregisterSubscriber('node_tool_san_throw_sub');
+      clearLastCallbackError();
+    }
+  });
+
   it('conditional guardrail (block)', () => {
     registerToolConditionalExecutionGuardrail('node_tool_block', 10, (name, args) => 'blocked');
     deregisterToolConditionalExecutionGuardrail('node_tool_block');
@@ -606,6 +675,31 @@ describe('Tool intercepts', () => {
     deregisterToolRequestIntercept('node_tool_req_mod');
   });
 
+  it('request intercept throws a catchable error without terminating Node', async () => {
+    registerToolRequestIntercept('node_tool_req_throw', 10, false, () => {
+      throw new Error('tool request intercept boom');
+    });
+    try {
+      await assert.rejects(
+        () => toolCallExecute('tool_req_throw', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        /tool request intercept boom/i,
+      );
+      deregisterToolRequestIntercept('node_tool_req_throw');
+      const result = await toolCallExecute(
+        'tool_after_request_intercept_throw',
+        {},
+        () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      deregisterToolRequestIntercept('node_tool_req_throw');
+    }
+  });
+
   it('request intercept can return null JSON', async () => {
     registerToolRequestIntercept('node_tool_req_bad', 10, false, () => null);
     try {
@@ -659,8 +753,7 @@ describe('Tool intercepts', () => {
       await waitForSubscriberCallbacks(
         () =>
           events.some(
-            (event) =>
-              event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
+            (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
           ) && events.some((event) => event.name === 'node.tool.execution'),
       );
       const start = events.find(

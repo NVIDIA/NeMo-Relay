@@ -33,6 +33,8 @@ use crate::json::Json;
 use crate::{codec::optimization::LlmOptimizationContribution, codec::response::PricingResolver};
 
 fn reset_global() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
@@ -279,10 +281,9 @@ fn managed_and_streaming_calls_cull_event_inputs_and_annotations_with_real_codec
                     .func(Arc::new(|request| {
                         Box::pin(async move {
                             assert_eq!(request.content["messages"].as_array().unwrap().len(), 4);
-                            Ok(
-                                Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                    as LlmJsonStream,
-                            )
+                            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                                "chunk": true
+                            }))])))
                         })
                     }))
                     .collector(Box::new(|_| Ok(())))
@@ -382,10 +383,9 @@ fn projection_encode_failures_do_not_block_managed_or_streaming_calls() {
                     .func(Arc::new(|request| {
                         Box::pin(async move {
                             assert_eq!(request.content["messages"].as_array().unwrap().len(), 4);
-                            Ok(
-                                Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                    as LlmJsonStream,
-                            )
+                            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                                "chunk": true
+                            }))])))
                         })
                     }))
                     .collector(Box::new(|_| Ok(())))
@@ -651,6 +651,36 @@ fn rejected_optimization_mark_queue_keeps_cursor_and_summary_evidence() {
 }
 
 #[test]
+fn unavailable_runtime_owner_skips_optimization_mark_delivery() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    crate::shared_runtime::initialize_shared_runtime_binding("python").unwrap();
+    let owner = format!(
+        "pid={};binding=rust;version={}",
+        std::process::id(),
+        env!("CARGO_PKG_VERSION").split('.').next().unwrap()
+    );
+    // SAFETY: The runtime-owner test mutex serializes this process-global test variable.
+    unsafe { std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", owner) };
+
+    let handle = LlmHandle::builder().name("owner-unavailable").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new(
+                "test",
+                "owner_unavailable"
+            ))
+    );
+    emit_optimization_marks_with(&handle, &[], Some, |_event, _subscribers| {
+        panic!("an unavailable runtime owner must skip mark delivery")
+    });
+    assert_eq!(handle.optimization_recorder.unemitted().len(), 1);
+
+    reset_global();
+}
+
+#[test]
 fn unavailable_mark_sanitizer_does_not_acknowledge_the_delivery_cursor() {
     let _guard = lock_global_runtime();
     reset_global();
@@ -823,10 +853,9 @@ fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
                 .request(request())
                 .func(Arc::new(|_request| {
                     Box::pin(async {
-                        Ok(
-                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                as LlmJsonStream,
-                        )
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                            "chunk": true
+                        }))])))
                     })
                 }))
                 .collector(Box::new(|_chunk| Ok(())))
@@ -884,9 +913,9 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
                 .request(request())
                 .func(Arc::new(|_request| {
                     Box::pin(async {
-                        Ok(Box::pin(tokio_stream::iter(vec![Err(FlowError::Internal(
-                            "stream boom".to_string(),
-                        ))])) as LlmJsonStream)
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
+                            FlowError::Internal("stream boom".to_string()),
+                        )])))
                     })
                 }))
                 .collector(Box::new(|_chunk| Ok(())))
@@ -907,10 +936,9 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
                 .request(request())
                 .func(Arc::new(|_request| {
                     Box::pin(async {
-                        Ok(
-                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                as LlmJsonStream,
-                        )
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                            "chunk": true
+                        }))])))
                     })
                 }))
                 .collector(Box::new(|_chunk| {

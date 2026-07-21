@@ -435,7 +435,7 @@ async fn remote_initialization_installs_stream_execution_intercept() {
         called.store(true, Ordering::SeqCst);
         Box::pin(async move {
             let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
-            Ok(Box::pin(stream) as LlmJsonStream)
+            Ok(LlmJsonStream::new(stream))
         })
     });
 
@@ -616,7 +616,7 @@ async fn remote_streaming_http_errors_are_reported_and_marked() {
         called.store(true, Ordering::SeqCst);
         Box::pin(async move {
             let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
-            Ok(Box::pin(stream) as LlmJsonStream)
+            Ok(LlmJsonStream::new(stream))
         })
     });
 
@@ -773,7 +773,7 @@ async fn remote_streaming_malformed_chunk_is_reported_and_marked() {
     let func: LlmStreamExecutionNextFn = Arc::new(move |_req| {
         Box::pin(async move {
             let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
-            Ok(Box::pin(stream) as LlmJsonStream)
+            Ok(LlmJsonStream::new(stream))
         })
     });
 

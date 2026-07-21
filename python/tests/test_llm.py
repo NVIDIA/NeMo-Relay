@@ -3,6 +3,7 @@
 
 """Tests for NeMo Relay LLM lifecycle, guardrails, intercepts, and streaming."""
 
+import asyncio
 from typing import NoReturn, cast
 
 import pytest
@@ -511,6 +512,32 @@ class TestLLMStreaming:
         assert len(chunks) >= 2
         # Collector should have received all chunks
         assert len(collected) == len(chunks)
+
+    async def test_stream_execute_aclose_stops_partially_consumed_stream(self):
+        producer_closed = asyncio.Event()
+        wait_for_more_chunks = asyncio.Event()
+
+        async def stream_func(request):
+            try:
+                yield {"token": "first"}
+                await wait_for_more_chunks.wait()
+            finally:
+                producer_closed.set()
+
+        stream = await llm.stream_execute(
+            "stream_aclose_llm",
+            make_request(),
+            stream_func,
+            lambda chunk: None,
+            lambda: {},
+        )
+        assert await anext(stream) == {"token": "first"}
+
+        await asyncio.wait_for(stream.aclose(), timeout=1)
+        assert producer_closed.is_set()
+        await asyncio.wait_for(stream.aclose(), timeout=1)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(stream), timeout=1)
 
     async def test_stream_execute_propagates_generator_error(self):
         def stream_func(request):

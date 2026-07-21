@@ -4,7 +4,7 @@
 //! Integration tests for runtime integration in the NeMo Relay adaptive crate.
 
 use std::pin::Pin;
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, Once, RwLock};
 
 use chrono::Utc;
 use nemo_relay::api::event::Event;
@@ -15,7 +15,9 @@ use nemo_relay::api::llm::{
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -48,12 +50,23 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
+static TEST_LOGGING: Once = Once::new();
+
+fn enable_operational_logs() {
+    TEST_LOGGING.call_once(|| {
+        let runtime =
+            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+                .expect("test logging should initialize");
+        Box::leak(Box::new(runtime));
+    });
+}
 
 fn short_hash(value: &str) -> &str {
     value.get(..16).unwrap_or(value)
 }
 
 fn reset_global() {
+    enable_operational_logs();
     let _ = clear_plugin_configuration();
     let _ = deregister_plugin("test.header_plugin");
     let _ = deregister_plugin("test.failing_plugin");
@@ -764,9 +777,7 @@ impl Plugin for HeaderPlugin {
                             }
                             chunks.push(Ok(chunk));
                         }
-                        let stream = Box::pin(tokio_stream::iter(chunks))
-                            as Pin<Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>>;
-                        Ok(stream)
+                        Ok(LlmJsonStream::new(tokio_stream::iter(chunks)))
                     })
                 }),
             )?;
@@ -842,10 +853,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
     let llm_stream_func: LlmStreamExecutionNextFn = Arc::new(|_req: LlmRequest| {
         Box::pin(async move {
             let chunks = vec![Ok(json!({"streamed": true}))];
-            Ok(Box::pin(tokio_stream::iter(chunks))
-                as Pin<
-                    Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>,
-                >)
+            Ok(LlmJsonStream::new(tokio_stream::iter(chunks)))
         })
     });
     let collected = Arc::new(StdMutex::new(Vec::new()));

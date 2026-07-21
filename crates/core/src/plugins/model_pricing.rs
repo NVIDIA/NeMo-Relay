@@ -14,7 +14,7 @@ use crate::codec::response::{
 };
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration,
-    PluginRegistrationContext, Result, register_plugin,
+    PluginRegistrationContext, Result, register_builtin_plugin,
 };
 
 /// Plugin kind used by the model pricing component.
@@ -22,15 +22,7 @@ pub const PRICING_PLUGIN_KIND: &str = "pricing";
 
 /// Registers the built-in model pricing component.
 pub fn register_pricing_component() -> Result<()> {
-    match register_plugin(Arc::new(PricingPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message))
-            if message.contains("plugin 'pricing' is already registered") =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    register_builtin_plugin(Arc::new(PricingPlugin))
 }
 
 struct PricingPlugin;
@@ -82,6 +74,13 @@ impl Plugin for PricingPlugin {
                 .map_err(|error| PluginError::InvalidConfig(error.to_string()))?;
             set_active_pricing_resolver(resolver)
                 .map_err(|error| PluginError::RegistrationFailed(error.to_string()))?;
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_resource_validation_completed",
+                plugin_kind = PRICING_PLUGIN_KIND,
+                resource_count = 0;
+                "Plugin resource validation completed"
+            );
             ctx.add_registration(PluginRegistration::new(
                 "plugin",
                 ctx.qualify_name("pricing"),

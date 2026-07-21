@@ -8,7 +8,7 @@
 
 #![cfg(feature = "redis-backend")]
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Once, RwLock};
 
 use chrono::Utc;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -29,6 +29,7 @@ use nemo_relay_adaptive::types::plan::ExecutionPlan;
 use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
 
 const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
+static TEST_LOGGING: Once = Once::new();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,9 +42,19 @@ fn env_value_is_truthy(value: Option<&str>) -> bool {
     )
 }
 
+fn enable_operational_logs() {
+    TEST_LOGGING.call_once(|| {
+        let runtime =
+            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+                .expect("test logging should initialize");
+        Box::leak(Box::new(runtime));
+    });
+}
+
 /// Attempt to connect to a local Redis instance. Returns `None` (skip) if
 /// Redis tests were not explicitly enabled or Redis is unavailable.
 async fn get_test_redis() -> Option<RedisBackend> {
+    enable_operational_logs();
     let redis_test_env =
         std::env::var_os(REDIS_TEST_ENV).map(|value| value.to_string_lossy().into_owned());
     if !env_value_is_truthy(redis_test_env.as_deref()) {
@@ -65,6 +76,7 @@ async fn get_test_redis() -> Option<RedisBackend> {
 }
 
 async fn get_test_redis_with_prefix() -> Option<(RedisBackend, String)> {
+    enable_operational_logs();
     let prefix = format!("test:{}:", Uuid::now_v7());
     match RedisBackend::new("redis://127.0.0.1/", prefix.clone()).await {
         Ok(backend) => Some((backend, prefix)),

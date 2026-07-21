@@ -1,20 +1,19 @@
 ---
 title: "Agent Trajectory Observability Format (ATOF)"
-description: "Configure raw ATOF event export to JSONL files and streaming endpoints."
+description: "Configure raw ATOF event export to JSONL files and stream sinks."
 position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use the `atof` section when you want the raw Agent Trajectory Observability
-Format (ATOF) `0.1` event stream written as JSONL or streamed to raw-event
-collectors.
+Use the `atof` section to write raw Agent Trajectory Observability Format (ATOF)
+`0.1` events to JSONL files, send them to raw-event collectors, or do both.
 
-ATOF JSONL export is useful for local debugging, offline inspection, and
-preserving the canonical event stream before it is translated into another
-format. Streaming endpoints are useful when a collector wants the same raw
-event shape in near real time.
+File sinks are useful for local debugging, offline inspection, and preserving
+the canonical event stream before another exporter translates it. Stream sinks
+send the same events to collectors in near real time. They can also transform
+dotted object keys before delivery.
 
 ## `plugins.toml` Example
 
@@ -28,24 +27,37 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "overwrite"
 
-[[components.config.atof.endpoints]]
+[[components.config.atof.sinks]]
+type = "stream"
+name = "archive"
 url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
 field_name_policy = "replace_dots"
+
+[components.config.atof.sinks.header_env]
+authorization = "NEMO_RELAY_ATOF_AUTH_HEADER"
 ```
 
+Before you validate or activate this example, set
+`NEMO_RELAY_ATOF_AUTH_HEADER` to the complete authorization header value, such
+as `Bearer <token>`. NeMo Relay rejects a missing or blank value.
+
 This configuration registers the plugin-managed ATOF exporter and writes one
-JSON object per lifecycle event to `logs/events.jsonl`. It also sends each raw
-ATOF event to the configured endpoint.
+JSON object per lifecycle event to `logs/events.jsonl`. It also applies the
+`replace_dots` field-name policy and sends each raw event to the named `archive`
+stream sink.
 
 ## Fields
 
@@ -53,33 +65,52 @@ The following table describes the top-level ATOF settings:
 
 | Field | Default | Notes |
 |---|---|---|
-| `enabled` | `false` | Must be `true` to write events. |
-| `output_directory` | Current working directory | Directory containing the JSONL file. |
-| `filename` | Timestamped `nemo-relay-events-*.jsonl` | Explicit output filename. |
-| `mode` | `append` | `append` or `overwrite`. |
-| `endpoints` | `[]` | Optional streaming destinations. File output remains active when endpoints are configured. |
+| `enabled` | `false` | Must be `true` to export events. |
+| `sinks` | `[]` | File and stream destinations. An enabled ATOF section requires at least one sink, and every sink receives each event. |
 
-## Streaming Endpoints
+## File Sinks
 
-Each endpoint receives the same raw ATOF JSON object that the file exporter
-writes as one JSONL line. Endpoints are independent: a failed endpoint is
-skipped or retried without blocking file output or other endpoints.
-
-The following table describes each streaming endpoint:
+Each file sink writes the raw event stream to one JSONL file. The following
+table describes each file sink:
 
 | Field | Default | Notes |
 |---|---|---|
-| `url` | Required | Endpoint URL. |
+| `type` | Required | Sink variant. Must be `file`. |
+| `output_directory` | Current working directory | Directory containing the JSONL file. |
+| `filename` | Timestamped `nemo-relay-events-*.jsonl` | Output filename. |
+| `mode` | `append` | `append` or `overwrite`. |
+
+## Stream Sinks
+
+Each stream sink receives the same canonical ATOF event that file sinks write.
+Before sending it, NeMo Relay applies the configured field-name policy and then
+uses the transport-specific encoding. WebSocket sends a JSON text message,
+while the HTTP transports send a JSONL record. Each stream runs independently,
+so a failed connection does not block file output or other streams.
+
+The following table describes each stream sink:
+
+| Field | Default | Notes |
+|---|---|---|
+| `type` | Required | Sink variant. Must be `stream`. |
+| `name` | Omitted | Optional stable name for cross-component references. Stream sink names must be unique, non-empty, and have no leading or trailing whitespace. |
+| `url` | Required | Stream URL. Use `http` or `https` for `http_post` and `ndjson`, and `ws` or `wss` for `websocket`. |
 | `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
 | `headers` | `{}` | String-to-string headers for requests or handshakes. |
-| `timeout_millis` | `3000` | Per-endpoint timeout. Must be greater than `0`. |
-| `field_name_policy` | `preserve` | Field-name handling before Relay sends endpoint events. Accepted values are `preserve` and `replace_dots`. |
+| `header_env` | `{}` | Maps each header name to an environment variable that contains the full header value. Each variable must be set and nonblank, and the same header cannot also appear in `headers`. |
+| `timeout_millis` | `3000` | Per-sink timeout. Must be greater than `0`. |
+| `field_name_policy` | `preserve` | Field-name handling before Relay sends stream events. Accepted values are `preserve` and `replace_dots`. |
+
+Use `header_env` for secrets so the configuration stores the environment
+variable name instead of the secret value.
 
 `preserve` sends canonical ATOF field names unchanged. `replace_dots` replaces
-dots in JSON object keys with underscores recursively. If replacement produces
-a collision, Relay keeps both values and deterministically appends `_2`, `_3`,
-and later suffixes as needed. Validation rejects any other
-`endpoints[i].field_name_policy` value.
+dots in JSON object keys with underscores recursively. If that creates a
+duplicate key, NeMo Relay keeps both values and appends `_2`, `_3`, and later
+suffixes in a deterministic order. Validation rejects any other
+`sinks[i].field_name_policy` value for a stream sink.
+
+The following transports are supported:
 
 - `http_post` sends each event as one JSONL record in an HTTP `POST` request
   with `Content-Type: application/x-ndjson`. Any `2xx` response is treated as
@@ -89,28 +120,59 @@ and later suffixes as needed. Validation rejects any other
 - `ndjson` opens one long-lived HTTP upload and writes each event as one
   newline-delimited JSON record.
 
-`force_flush()` flushes file output and drains queued endpoint events without
-closing streaming connections. `shutdown()` is terminal: it flushes pending
-work, closes streaming connections, and makes later events no-op.
+`force_flush()` flushes file output and drains queued stream events while
+keeping stream connections open. `shutdown()` is terminal: it flushes pending
+work, closes the connections, and ignores events that arrive later.
+
+## Migrate From Version 1
+
+Observability component configuration now requires `version = 2`. NeMo Relay
+does not translate the removed ATOF fields from version 1.
+
+Make the following changes when you migrate a plugin configuration:
+
+- Move `output_directory`, `filename`, and `mode` from
+  `[components.config.atof]` into a sink with `type = "file"`.
+- Replace each `[[components.config.atof.endpoints]]` entry with a
+  `[[components.config.atof.sinks]]` entry that has `type = "stream"`.
+- Keep static request headers in `headers`, or use `header_env` to read complete
+  header values from environment variables at activation time.
+
+The plugin sends every event to every configured sink. The manual
+`AtofExporter` API is different: each exporter owns one file or stream sink.
 
 ## Expected Output
 
-Each emitted scope, tool, LLM, middleware, or mark event is written as one ATOF
-JSON object per line. For event field semantics, refer to
+Each file sink writes an emitted scope, tool, LLM, middleware, or mark event as
+one ATOF JSON object per line. Stream sinks encode the event as described in
+[Stream Sinks](#stream-sinks). For event field semantics, refer to
 [Events](/about-nemo-relay/concepts/events).
+
+Coding-agent sessions emit a `session.start` mark with the logical
+`metadata.session_id`, a Relay-owned UUIDv7 `metadata.session_instance_id`, and
+optional session metadata such as `metadata.user_id`. Later trace exporters
+use these identities for correlation, but ATOF preserves them as raw event
+metadata.
 
 ATOF is the raw-event export path. It preserves the canonical event shape; it
 does not add semantic extraction, replay policy, scope-owner resolution, or
-exporter projection rules.
+exporter projection rules. Each owning agent scope starts fresh, and a
+`compaction` mark refreshes it. The first subsequent LLM start annotation
+retains complete history. Later starts retain system instructions, the latest
+user message, and every following assistant or tool message. With a request
+codec annotation, the emitted event input uses the same projection. If that
+event-only encoding fails, Relay retains the complete event input and
+annotation. The request used for provider execution remains unchanged. Refer to
+[Events](/about-nemo-relay/concepts/events) for the complete freshness contract.
 
-Register the plugin before instrumented work starts and clear it during
-shutdown so file handles flush.
+Register the plugin before instrumented work starts. Clear it during shutdown
+so every sink flushes pending events and stream connections close cleanly.
 
 ## Plugin Configuration
 
-Use plugin configuration when the application should let NeMo Relay own the ATOF
-exporter lifecycle. The following examples configure and activate the ATOF
-exporter through each supported language binding.
+Use plugin configuration when you want NeMo Relay to manage the ATOF exporter
+lifecycle. The following examples configure and activate the exporter through
+each supported language binding.
 
 `validate()` checks only the supplied in-memory object. `initialize()` also
 layers discovered `plugins.toml` configuration. For effective file-backed
@@ -125,7 +187,8 @@ import asyncio
 from nemo_relay import plugin
 from nemo_relay.observability import (
     AtofConfig,
-    AtofEndpointConfig,
+    AtofFileSinkConfig,
+    AtofStreamSinkConfig,
     ComponentSpec,
     ObservabilityConfig,
 )
@@ -136,14 +199,16 @@ config = plugin.PluginConfig(
             ObservabilityConfig(
                 atof=AtofConfig(
                     enabled=True,
-                    output_directory="logs",
-                    filename="events.jsonl",
-                    mode="overwrite",
-                    endpoints=[
-                        AtofEndpointConfig(
+                    sinks=[
+                        AtofFileSinkConfig(
+                            output_directory="logs",
+                            filename="events.jsonl",
+                            mode="overwrite",
+                        ),
+                        AtofStreamSinkConfig(
                             url="http://localhost:8080/events",
                             transport="http_post",
-                        )
+                        ),
                     ],
                 )
             )
@@ -175,24 +240,28 @@ const observability = require("nemo-relay-node/observability");
 
 void (async () => {
   await plugin.initialize({
-  version: 1,
-  components: [
-    observability.ComponentSpec({
-      version: 1,
-      atof: observability.atofConfig({
-        enabled: true,
-        output_directory: "logs",
-        filename: "events.jsonl",
-        mode: "overwrite",
-        endpoints: [
-          {
-            url: "http://localhost:8080/events",
-            transport: "http_post",
-          },
-        ],
+    version: 1,
+    components: [
+      observability.ComponentSpec({
+        version: 2,
+        atof: observability.atofConfig({
+          enabled: true,
+          sinks: [
+            {
+              type: "file",
+              output_directory: "logs",
+              filename: "events.jsonl",
+              mode: "overwrite",
+            },
+            {
+              type: "stream",
+              url: "http://localhost:8080/events",
+              transport: "http_post",
+            },
+          ],
+        }),
       }),
-    }),
-  ],
+    ],
   });
 
   try {
@@ -210,47 +279,54 @@ void (async () => {
 
 <Tab title="Rust" language="rust">
 ```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
-    AtofEndpointSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,
+    AtofFileSinkSectionConfig, AtofSectionConfig, AtofSinkSectionConfig,
+    AtofStreamSinkSectionConfig, ComponentSpec, ObservabilityConfig,
 };
 use nemo_relay::plugin::{
     clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
 };
 
-let component = ComponentSpec::new(ObservabilityConfig {
-    atof: Some(AtofSectionConfig {
-        enabled: true,
-        output_directory: Some("logs".into()),
-        filename: Some("events.jsonl".into()),
-        mode: "overwrite".into(),
-        endpoints: vec![AtofEndpointSectionConfig {
-            url: "http://localhost:8080/events".into(),
-            transport: "http_post".into(),
-            headers: Default::default(),
-            timeout_millis: 3000,
-            field_name_policy: "replace_dots".into(),
-        }],
-    }),
-    ..ObservabilityConfig::default()
-});
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let component = ComponentSpec::new(ObservabilityConfig {
+        atof: Some(AtofSectionConfig {
+            enabled: true,
+            sinks: vec![
+                AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
+                    output_directory: Some("logs".into()),
+                    filename: Some("events.jsonl".into()),
+                    mode: "overwrite".into(),
+                }),
+                AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                    url: "http://localhost:8080/events".into(),
+                    transport: "http_post".into(),
+                    headers: Default::default(),
+                    header_env: Default::default(),
+                    timeout_millis: 3000,
+                    field_name_policy: "replace_dots".into(),
+                    name: Some("archive".into()),
+                }),
+            ],
+        }),
+        ..ObservabilityConfig::default()
+    });
 
-let config = PluginConfig {
-    version: 1,
-    components: vec![component.into()],
-    policy: Default::default(),
-};
+    let config = PluginConfig {
+        version: 1,
+        components: vec![component.into()],
+        policy: Default::default(),
+    };
 
-let report = validate_plugin_config(&config);
-assert!(!report.has_errors());
+    let report = validate_plugin_config(&config);
+    assert!(!report.has_errors());
 
-let _active = initialize_plugins(config).await?;
+    let _active = initialize_plugins(config).await?;
 
-// Run instrumented application work here.
+    // Run instrumented application work here.
 
-clear_plugin_configuration()?;
-Ok(())
+    clear_plugin_configuration()?;
+    Ok(())
 }
 ```
 
@@ -261,20 +337,19 @@ Ok(())
 ## Manual API
 
 Use the manual `AtofExporter` API when a test or script needs a custom
-subscriber name or explicit registration window.
+subscriber name or explicit registration window. A manual exporter owns one
+sink. To send the same events to several destinations, create and register one
+exporter for each sink or use the observability plugin.
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-from nemo_relay import AtofEndpointConfig, AtofExporter, AtofExporterConfig, AtofExporterMode
+from nemo_relay import AtofExporter, AtofExporterConfig
 
 config = AtofExporterConfig()
-config.output_directory = "logs"
-config.filename = "events.jsonl"
-config.mode = AtofExporterMode.Overwrite
-config.endpoints = [
-    AtofEndpointConfig("http://localhost:8080/events", transport="http_post")
-]
+config.sink_type = "stream"
+config.url = "http://localhost:8080/events"
+config.transport = "http_post"
 
 exporter = AtofExporter(config)
 exporter.register("atof-exporter")
@@ -293,10 +368,9 @@ exporter.shutdown()
 const { AtofExporter } = require("nemo-relay-node");
 
 const exporter = new AtofExporter({
-  outputDirectory: "logs",
-  filename: "events.jsonl",
-  mode: "overwrite",
-  endpoints: [{ url: "http://localhost:8080/events", transport: "http_post" }],
+  type: "stream",
+  url: "http://localhost:8080/events",
+  transport: "http_post",
 });
 exporter.register("atof-exporter");
 
@@ -315,18 +389,14 @@ try {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::atof::{
-    AtofEndpointConfig, AtofEndpointTransport, AtofExporter, AtofExporterConfig, AtofExporterMode,
+    AtofEndpointTransport, AtofExporter, AtofExporterConfig, AtofStreamSinkConfig,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = AtofExporterConfig::new()
-        .with_output_directory("logs")
-        .with_filename("events.jsonl")
-        .with_mode(AtofExporterMode::Overwrite)
-        .with_endpoint(AtofEndpointConfig::new(
-            "http://localhost:8080/events",
-            AtofEndpointTransport::HttpPost,
-        ));
+    let config = AtofExporterConfig::new().with_stream_sink(AtofStreamSinkConfig::new(
+        "http://localhost:8080/events",
+        AtofEndpointTransport::HttpPost,
+    ));
     let exporter = AtofExporter::new(config)?;
     exporter.register("atof-exporter")?;
 
@@ -345,10 +415,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Common Configuration and Runtime Issues
 
-- `mode` is not `append` or `overwrite`.
-- `endpoints[i].url` is empty, `endpoints[i].transport` is not supported, or
-  `endpoints[i].timeout_millis` is `0`.
+Common configuration and runtime issues include:
+
+- ATOF is enabled without at least one plugin-configured sink.
+- A file sink's `mode` is not `append` or `overwrite`.
+- A stream sink has an empty `url`, an unsupported `transport`, or a
+  `timeout_millis` value of `0`.
 - The output directory is not writable at runtime.
 - `nemo-relay doctor` cannot deliver its synthetic ATOF mark probe to a
-  configured endpoint.
-- ATOF is enabled in a target that cannot access the native filesystem.
+  configured stream sink.
+- A file sink is configured in a target that cannot access the native
+  filesystem.

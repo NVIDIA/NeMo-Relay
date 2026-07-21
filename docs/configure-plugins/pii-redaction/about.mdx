@@ -8,8 +8,8 @@ position: 1
 SPDX-License-Identifier: Apache-2.0 */}
 
 Use the PII redaction plugin when you want first-party privacy controls for
-managed NeMo Relay LLM and tool observability surfaces through the shared
-plugin system.
+managed NeMo Relay LLM, tool, mark, and generic scope observability surfaces
+through the shared plugin system.
 
 The built-in plugin component uses `kind = "pii_redaction"` and is available as
 a first-party NeMo Relay plugin.
@@ -30,7 +30,8 @@ The plugin supports these backend modes:
 
 Start here when you need to:
 
-- Remove sensitive fields from emitted tool or LLM payloads.
+- Remove sensitive fields from emitted tool, LLM, mark, or generic scope
+  payloads.
 - Replace sensitive text with a deterministic marker such as `[REDACTED]`.
 - Hash matching values before observability exporters or subscribers receive
   them.
@@ -66,12 +67,17 @@ The difference between middleware and `pii_redaction` is that middleware is the
 
 ## Current Scope
 
-The built-in plugin currently exposes four managed sanitize surfaces:
+The built-in plugin exposes five managed sanitize surfaces:
 
 - `input`
 - `output`
+- `mark`
 - `tool_input`
 - `tool_output`
+
+Legacy single-policy configuration can toggle these surfaces independently.
+When `profiles` is used, every enabled profile covers all five surfaces and
+the associated LLM/tool scope metadata automatically.
 
 The current built-in backend supports five actions:
 
@@ -88,6 +94,12 @@ The current backend boundary is intentional:
 - Managed LLM surfaces use the selected built-in codec so redaction can target
   normalized Relay request and response shapes such as `/messages/0/content`
   and `/message`.
+- `mark` sanitizes `data`, `category_profile`, and `metadata` independently on
+  every mark event. It defaults to `true`; set `mark = false` to opt out.
+- `input`, `output`, `tool_input`, and `tool_output` sanitize scope metadata on
+  their corresponding lifecycle events. Tool and LLM primary data and typed
+  profiles remain on their specialized sanitizer paths to avoid applying the
+  same mask or hash twice.
 
 ## Observability Boundary
 

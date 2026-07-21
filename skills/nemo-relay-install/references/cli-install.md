@@ -27,22 +27,43 @@ Confirm these prerequisites before selecting an installation command:
 
 ## Install
 
+Use the installer on a supported platform when a prebuilt release asset is
+available. Resolve a specific stable version from the NeMo Relay GitHub
+Releases page. Download that version's installer, review it, and run it as a
+separate step. Do not execute a response directly from the repository's `main`
+branch.
+
 For a supported Unix-like shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+RELAY_VERSION="<release-version>"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  "https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/${RELAY_VERSION}/install.sh" \
+  --output nemo-relay-install.sh
+less nemo-relay-install.sh
+NEMO_RELAY_VERSION="${RELAY_VERSION}" sh nemo-relay-install.sh
 ```
 
 For Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+$RelayVersion = "<release-version>"
+$Installer = "nemo-relay-install.ps1"
+Invoke-WebRequest `
+  -Uri "https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/$RelayVersion/install.ps1" `
+  -OutFile $Installer
+Get-Content -LiteralPath $Installer
+$env:NEMO_RELAY_VERSION = $RelayVersion
+& ".\$Installer"
 ```
 
-The published installer verifies the checksum before replacing an existing
-binary and does not invoke `sudo`.
+The reviewed installer downloads the selected release binary and its published
+SHA-256 checksum, verifies them before replacing an existing binary, and does
+not invoke `sudo`. Remove the downloaded installer only after verification if
+the user does not want to retain it for audit.
 
-To compile and install the published Cargo package:
+Use Cargo on an unsupported platform or when the user prefers to build from
+source:
 
 ```bash
 cargo install nemo-relay-cli
@@ -84,6 +105,11 @@ appear missing after restart. This is a visibility bug, not session deletion.
 
 Before changing persistent configuration:
 
+> **WARNING:** Persistent Codex installation changes global application
+> configuration and can make existing Desktop threads appear missing after
+> restart. Complete the recovery-file steps and obtain explicit confirmation
+> before making this change.
+
 1. Explain the difference between temporary `nemo-relay codex` and persistent
    `nemo-relay install codex`. Recommend temporary mode for evaluation.
 2. Preview the persistent change without writing it:
@@ -111,8 +137,11 @@ The recovery file must include both supported exits:
   quitting Desktop and running `nemo-relay codex -- resume --all` or
   `nemo-relay codex -- resume <thread-id>`.
 
-Avoid `resume --last` when crossing providers. Never copy or rewrite
-`~/.codex/sessions` or Codex SQLite state as a migration workaround.
+Avoid `resume --last` when crossing providers. Never directly inspect, copy,
+delete, edit, or rewrite Codex session storage, private application
+configuration, or SQLite state as a migration workaround. Supported
+`nemo-relay` commands may manage Relay-generated provider and hook
+configuration.
 
 Use these references for the supported installation and host-integration paths:
 

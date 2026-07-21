@@ -21,23 +21,23 @@ exclude = [".tmp", ".uv-cache"]
 resolver = "2"
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/NVIDIA/NeMo-Relay"
 
 [workspace.dependencies]
-nemo-relay = { version = "0.6.0", path = "crates/core", default-features = false }
-nemo-relay-types = { version = "0.6.0", path = "crates/types" }
-nemo-relay-plugin = { version = "0.6.0", path = "crates/plugin" }
-nemo-relay-worker-proto = { version = "0.6.0", path = "crates/worker-proto" }
-nemo-relay-worker = { version = "0.6.0", path = "crates/worker" }
-nemo-relay-adaptive = { version = "0.6.0", path = "crates/adaptive" }
-nemo-relay-pii-redaction = { version = "0.6.0", path = "crates/pii-redaction" }
-nemo-relay-switchyard = { version = "0.6.0", path = "crates/switchyard" }
-switchyard-translation = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8" }
-nemo-relay-ffi = { version = "0.6.0", path = "crates/ffi" }
-nemo-relay-cli = { version = "0.6.0", path = "crates/cli" }
+nemo-relay = { version = "0.7.0", path = "crates/core", default-features = false }
+nemo-relay-types = { version = "0.7.0", path = "crates/types" }
+nemo-relay-plugin = { version = "0.7.0", path = "crates/plugin" }
+nemo-relay-worker-proto = { version = "0.7.0", path = "crates/worker-proto" }
+nemo-relay-worker = { version = "0.7.0", path = "crates/worker" }
+nemo-relay-adaptive = { version = "0.7.0", path = "crates/adaptive" }
+nemo-relay-pii-redaction = { version = "0.7.0", path = "crates/pii-redaction" }
+nemo-relay-switchyard = { version = "0.7.0", path = "crates/switchyard" }
+switchyard-translation = "0.1.0"
+nemo-relay-ffi = { version = "0.7.0", path = "crates/ffi" }
+nemo-relay-cli = { version = "0.7.0", path = "crates/cli" }
 opentelemetry = { version = "0.31", default-features = false }
 opentelemetry_sdk = { version = "0.31", default-features = false }
 uuid = "=1.18.1"

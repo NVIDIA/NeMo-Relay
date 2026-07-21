@@ -51,5 +51,5 @@ fn should_treat_target_as_path(target: &str) -> bool {
         || target.contains('\\')
 }
 #[cfg(test)]
-#[path = "../../../tests/coverage/plugins_lifecycle_target_tests.rs"]
+#[path = "../../../tests/coverage/shared/plugins_lifecycle_target_tests.rs"]
 mod tests;

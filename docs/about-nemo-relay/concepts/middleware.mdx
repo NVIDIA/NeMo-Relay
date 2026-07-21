@@ -8,13 +8,13 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This page explains the runtime behavior that runs around managed tool and LLM calls.
+This page explains the runtime behavior that runs around managed tool and LLM
+calls and sanitizes emitted mark and scope events.
 
 ## What Middleware Is
 
-Middleware is the runtime behavior that runs around tool and LLM execution.
-NeMo Relay uses middleware to control, transform, or observe work at specific
-lifecycle points.
+Middleware controls or transforms tool and LLM execution and sanitizes emitted
+events. NeMo Relay applies each surface at a specific lifecycle point.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
@@ -106,6 +106,22 @@ Sanitize-response guardrails rewrite the payload recorded on emitted end events.
 
 Use them when the event stream should hide or reduce sensitive response data.
 
+### Sanitize Mark and Scope Events
+
+Event sanitizers cover observability fields that are outside the specialized
+tool and LLM payload APIs. Separate registries apply to marks, scope starts,
+and scope ends. They can rewrite `data`, `category_profile`, and `metadata`
+while receiving the complete event as immutable context.
+
+Scope event sanitizers run for every category. On tool and LLM scope events,
+they run after the specialized request or response sanitizer. Mark sanitizers
+cover explicit marks and marks materialized by middleware, plugins, and
+streaming lifecycle helpers.
+
+Register event sanitizers globally, on an owning scope, or through a plugin
+context. For the callback contract and binding APIs, refer to
+[Event Sanitizers](/reference/event-sanitizers).
+
 Sanitize guardrails are observability-oriented. They do not rewrite the real
 arguments passed to the callback or the real value returned to the caller.
 
@@ -123,44 +139,51 @@ sequenceDiagram
     participant Req as Request Intercepts
     participant Exec as Execution Intercepts
     participant Callback as Real Callback
-    participant San as Sanitize Guardrails
+    participant San as Tool / LLM Sanitizers
+    participant EventSan as Mark / Scope Event Sanitizers
     participant Dispatch as Async Subscriber Dispatcher
-    participant Subs as Subscribers
+    participant Consumers as Subscribers / Exporters
 
     Caller->>Runtime: managed tool or LLM call
     Runtime->>Cond: decide whether work may proceed
 
     alt blocked
+        Runtime->>EventSan: sanitize guardrail scopes and rejection mark
         Cond-->>Caller: reject execution
     else allowed
         Runtime->>Req: rewrite the real request
         Runtime->>San: sanitize emitted start payload
+        Runtime->>EventSan: sanitize start event fields
         Runtime->>Dispatch: enqueue start event before execution
-        Dispatch-->>Subs: deliver start event later
+        Dispatch-->>Consumers: deliver start event later
         Runtime->>Exec: wrap execution
         Exec->>Callback: invoke callback
         Callback-->>Exec: return real result
         Exec-->>Runtime: continue
         Runtime->>San: sanitize emitted end payload
+        Runtime->>EventSan: sanitize end event fields
         Runtime->>Dispatch: enqueue end event
-        Dispatch-->>Subs: deliver end event later
+        Dispatch-->>Consumers: deliver end event later
         Runtime-->>Caller: return real result
     end
 ```
 
 1. Conditional-execution guardrails
 2. Request intercepts
-3. Sanitize-request guardrails and emit the start event
-4. Execution intercepts
-5. The real callback, unless an execution intercept replaces it
-6. Sanitize-response guardrails and emit the end event
+3. Tool or LLM sanitize-request guardrails
+4. Scope-start event sanitizers and start-event emission
+5. Execution intercepts
+6. The real callback, unless an execution intercept replaces it
+7. Tool or LLM sanitize-response guardrails
+8. Scope-end event sanitizers and end-event emission
 
 For streaming LLM flows, the same pre-execution order applies: the runtime
 applies `sanitize-request` guardrails and emits the LLM start event before the
 stream execution intercept chain runs. Stream execution intercepts are the
 execution family for streaming provider callbacks. The runtime then collects
 chunks and finalizes the stream before `sanitize-response` guardrails rewrite
-the emitted end-event payload at item 6.
+the emitted end-event payload and scope-end event sanitizers run at items 7 and
+8.
 
 This ordering is what makes the semantic split between intercepts and
 guardrails important:
@@ -204,10 +227,13 @@ flowchart TB
             direction TB
             SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
             SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
+            MarkSanitizers[/Mark Event Sanitizers/]
+            ScopeStartSanitizers[/Scope-Start Event Sanitizers/]
+            ScopeEndSanitizers[/Scope-End Event Sanitizers/]
             StartEvent[Emit Start Event]
             EndEvent[Emit End Event]
             Dispatcher[["Async Subscriber Dispatcher"]]
-            EventSubscribers[["Event Subscribers"]]
+            EventConsumers[["Subscribers / Exporters"]]
         end
     end
 
@@ -215,12 +241,14 @@ flowchart TB
 
     Request --> ConditionalExecutionGuardrails
     RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
-    ConditionalExecutionGuardrails -->|"(rejected event)"| Dispatcher
+    ConditionalExecutionGuardrails -->|"(rejection mark)"| MarkSanitizers
+    MarkSanitizers -->|Sanitized Mark Fields| Dispatcher
     ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException
     ConditionalExecutionGuardrails -->|"(passed)"| RequestIntercepts
-    SanitizeRequestGuardrails -->|Sanitized Start Payload| StartEvent
+    SanitizeRequestGuardrails -->|Sanitized Start Payload| ScopeStartSanitizers
+    ScopeStartSanitizers -->|Sanitized Event Fields| StartEvent
     StartEvent --> Dispatcher
-    Dispatcher --> EventSubscribers
+    Dispatcher --> EventConsumers
     StartEvent -->|Before Execution Intercepts| HasExecutionIntercept
     RequestIntercepts -.->|Real Request| HasExecutionIntercept
 
@@ -239,13 +267,14 @@ flowchart TB
     Finalizer -.->|Aggregated Response| SanitizeResponseGuardrails
     Finalizer o--o|shared state| Collector
 
-    SanitizeResponseGuardrails -->|Sanitized End Payload| EndEvent
+    SanitizeResponseGuardrails -->|Sanitized End Payload| ScopeEndSanitizers
+    ScopeEndSanitizers -->|Sanitized Event Fields| EndEvent
     EndEvent --> Dispatcher
 
     class Execution,Invocation,Streaming,Observability,Request,Response grey-lightest;
-    class Dispatcher,EventSubscribers,StartEvent,EndEvent teal-lightest;
+    class Dispatcher,EventConsumers,StartEvent,EndEvent teal-lightest;
     class RequestIntercepts,HasExecutionIntercept,ExecutionIntercepts yellow-lightest;
-    class ConditionalExecutionGuardrails,SanitizeRequestGuardrails,SanitizeResponseGuardrails green-lightest;
+    class ConditionalExecutionGuardrails,SanitizeRequestGuardrails,SanitizeResponseGuardrails,MarkSanitizers,ScopeStartSanitizers,ScopeEndSanitizers green-lightest;
     class RaiseException red-lightest;
     class DefaultCallable,InterceptResult,Collector,Finalizer magenta-lightest;
 ```
@@ -261,6 +290,9 @@ Use these comparisons to pick the middleware surface that matches the behavior y
   boundary.
 - Use a **sanitize guardrail** when only subscribers and exporters should see
   rewritten data.
+- Use a **mark or scope event sanitizer** when the sensitive fields are in
+  `data`, `category_profile`, or `metadata` rather than the managed tool or LLM
+  request/response payload.
 - Use a **stream execution intercept** when you need streaming-specific
   behavior applied across the lifecycle of a long-lived or chunked response,
   such as per-chunk transformation, incremental authorization, logging or

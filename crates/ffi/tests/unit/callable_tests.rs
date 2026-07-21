@@ -471,10 +471,9 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         wrap_llm_stream_exec_intercept_fn(llm_exec_short_circuit_cb, std::ptr::null_mut(), None);
     let next_stream: LlmStreamExecutionNextFn = Arc::new(|_request| {
         Box::pin(async {
-            Ok(
-                Box::pin(tokio_stream::iter(vec![Ok(json!({"ignored": true}))]))
-                    as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
-            )
+            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                tokio_stream::iter(vec![Ok(json!({"ignored": true}))]),
+            ))
         })
     });
     let mut intercepted_stream = runtime
@@ -487,10 +486,11 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         wrap_llm_stream_exec_intercept_fn(llm_exec_intercept_cb, std::ptr::null_mut(), None);
     let next_stream: LlmStreamExecutionNextFn = Arc::new(|request| {
         Box::pin(async move {
-            Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({
-                "model": request.content["model"].clone()
-            }))]))
-                as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                tokio_stream::iter(vec![Ok(json!({
+                    "model": request.content["model"].clone()
+                }))]),
+            ))
         })
     });
     let mut intercepted_stream = runtime
@@ -553,9 +553,15 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
     assert_eq!(sanitize_calls.load(Ordering::SeqCst), 2);
 
     let invalid = wrap_event_sanitize_fn(invalid_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(invalid(&event, original_fields.clone()), original_fields);
+    assert_eq!(
+        invalid(&event, original_fields.clone()),
+        EventSanitizeFields::default()
+    );
     let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(null(&event, original_fields.clone()), original_fields);
+    assert_eq!(
+        null(&event, original_fields.clone()),
+        EventSanitizeFields::default()
+    );
 
     let handle = LlmHandle::builder()
         .name("llm")

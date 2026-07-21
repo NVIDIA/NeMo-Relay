@@ -4,22 +4,27 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::future::Future;
 use std::io::{BufRead, BufReader, Write};
+use std::pin::Pin;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::task::{Context, Poll};
 use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::api::llm::LlmRequest;
-use crate::api::runtime::{LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn, ToolExecutionFn};
+use crate::api::runtime::{
+    LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn, LlmStreamInner, ToolExecutionFn,
+};
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::resolve::{ProviderSurface, request_codec, response_codec};
 use crate::error::{FlowError, Result as FlowResult};
@@ -279,6 +284,8 @@ impl LocalGuardrailsRuntime {
             .spawn_stream_monitor(messages, text_rx, Arc::clone(&blocked))?;
         let codec = *self.codec()?;
 
+        let (cancel, cancel_rx) = watch::channel(false);
+        let (closed, closed_rx) = watch::channel(None);
         tokio::spawn(async move {
             forward_guarded_provider_stream(
                 provider_stream,
@@ -287,11 +294,17 @@ impl LocalGuardrailsRuntime {
                 chunk_tx,
                 monitor,
                 blocked,
+                cancel_rx,
+                closed,
             )
             .await;
         });
 
-        Ok(Box::pin(ReceiverStream::new(chunk_rx)) as LlmJsonStream)
+        Ok(LlmJsonStream::from_closeable(GuardedProviderStream {
+            receiver: ReceiverStream::new(chunk_rx),
+            cancel,
+            closed: closed_rx,
+        }))
     }
 
     fn codec(&self) -> FlowResult<&LocalGuardrailsCodec> {
@@ -368,10 +381,17 @@ struct LocalGuardrailsWorker {
     waiters: Arc<Mutex<HashMap<String, std_mpsc::Sender<WorkerEnvelope>>>>,
     stream_events: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<WorkerEnvelope>>>>,
     next_id: AtomicU64,
+    shutdown_started: AtomicBool,
 }
 
 impl LocalGuardrailsWorker {
     fn start(config: &NeMoGuardrailsConfig) -> PluginResult<Arc<Self>> {
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_starting",
+            plugin_id = "nemo_guardrails";
+            "NeMo Guardrails local worker is starting"
+        );
         let python = python_executable(config);
         let mut command = Command::new(&python);
         command
@@ -407,9 +427,24 @@ impl LocalGuardrailsWorker {
             waiters: Arc::new(Mutex::new(HashMap::new())),
             stream_events: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
+            shutdown_started: AtomicBool::new(false),
         });
         worker.spawn_reader(stdout);
         worker.initialize(config)?;
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_validated",
+            plugin_kind = "nemo_guardrails",
+            resource_kind = "python_worker",
+            permission = "execute";
+            "Plugin resource access validated"
+        );
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_connected",
+            plugin_id = "nemo_guardrails";
+            "NeMo Guardrails local worker connected"
+        );
         Ok(worker)
     }
 
@@ -467,20 +502,31 @@ impl LocalGuardrailsWorker {
         }
     }
 
-    async fn request(&self, mut payload: Json) -> FlowResult<Json> {
+    async fn request(&self, payload: Json) -> FlowResult<Json> {
+        self.request_with_timeout(payload, WORKER_RPC_TIMEOUT).await
+    }
+
+    async fn request_with_timeout(&self, mut payload: Json, timeout: Duration) -> FlowResult<Json> {
         let receiver = self.send_request(&mut payload)?;
         let response_task = tokio::task::spawn_blocking(move || receiver.recv());
-        let envelope = match tokio::time::timeout(WORKER_RPC_TIMEOUT, response_task).await {
+        let envelope = match tokio::time::timeout(timeout, response_task).await {
             Ok(result) => result
                 .map_err(|err| FlowError::Internal(format!("worker response task failed: {err}")))?
                 .map_err(|err| {
                     FlowError::Internal(format!("worker response channel closed: {err}"))
                 })?,
             Err(_) => {
+                log::error!(
+                    target: "nemo_relay.worker",
+                    event = "worker_failed",
+                    plugin_id = "nemo_guardrails",
+                    reason = "request_timeout";
+                    "NeMo Guardrails local worker request timed out"
+                );
                 self.shutdown();
                 return Err(FlowError::Internal(format!(
                     "worker request timed out after {} seconds",
-                    WORKER_RPC_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 )));
             }
         };
@@ -572,13 +618,49 @@ impl LocalGuardrailsWorker {
     }
 
     fn shutdown(&self) {
+        if self.shutdown_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_stopping",
+            plugin_id = "nemo_guardrails";
+            "NeMo Guardrails local worker is stopping"
+        );
         let writer = self.writer.lock().ok().and_then(|mut writer| writer.take());
+        let mut cleanup_succeeded = true;
         if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+            if child.kill().is_err() {
+                cleanup_succeeded = false;
+                log::warn!(
+                    target: "nemo_relay.worker",
+                    event = "worker_cleanup_failed",
+                    plugin_id = "nemo_guardrails",
+                    operation = "kill";
+                    "NeMo Guardrails local worker cleanup failed"
+                );
+            }
+            if child.wait().is_err() {
+                cleanup_succeeded = false;
+                log::warn!(
+                    target: "nemo_relay.worker",
+                    event = "worker_cleanup_failed",
+                    plugin_id = "nemo_guardrails",
+                    operation = "wait";
+                    "NeMo Guardrails local worker cleanup failed"
+                );
+            }
         }
         if let Some(writer) = writer {
             writer.join();
+        }
+        if cleanup_succeeded {
+            log::info!(
+                target: "nemo_relay.worker",
+                event = "worker_stopped",
+                plugin_id = "nemo_guardrails";
+                "NeMo Guardrails local worker stopped"
+            );
         }
     }
 }
@@ -987,6 +1069,45 @@ fn local_violation(message: impl Into<String>) -> FlowError {
     FlowError::Internal(message.into())
 }
 
+struct GuardedProviderStream {
+    receiver: ReceiverStream<FlowResult<Json>>,
+    cancel: watch::Sender<bool>,
+    closed: watch::Receiver<Option<FlowResult<()>>>,
+}
+
+impl tokio_stream::Stream for GuardedProviderStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.receiver).poll_next(cx)
+    }
+}
+
+impl Drop for GuardedProviderStream {
+    fn drop(&mut self) {
+        self.cancel.send_replace(true);
+    }
+}
+
+impl LlmStreamInner for GuardedProviderStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.cancel.send_replace(true);
+        this.receiver.close();
+        while this.receiver.as_mut().try_recv().is_ok() {}
+        let mut closed = this.closed.clone();
+        Box::pin(async move {
+            while closed.borrow().is_none() {
+                closed.changed().await.map_err(|_| {
+                    FlowError::Internal("guarded stream cleanup task ended early".into())
+                })?;
+            }
+            closed.borrow().clone().expect("close state checked above")
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn forward_guarded_provider_stream(
     mut provider_stream: LlmJsonStream,
     codec: LocalGuardrailsCodec,
@@ -994,39 +1115,68 @@ async fn forward_guarded_provider_stream(
     chunk_tx: mpsc::Sender<FlowResult<Json>>,
     monitor: JoinHandle<FlowResult<()>>,
     blocked: Arc<Mutex<Option<String>>>,
+    mut cancel: watch::Receiver<bool>,
+    closed: watch::Sender<Option<FlowResult<()>>>,
 ) {
-    while let Some(item) = provider_stream.next().await {
+    let mut monitor = Some(monitor);
+    loop {
+        if *cancel.borrow() {
+            break;
+        }
+        let item = tokio::select! {
+            _ = cancel.changed() => break,
+            item = provider_stream.next() => item,
+        };
+        let Some(item) = item else {
+            break;
+        };
         let chunk = match item {
             Ok(chunk) => chunk,
             Err(err) => {
                 let _ = chunk_tx.send(Err(err)).await;
                 let _ = text_tx.send(None).await;
-                let _ = monitor.await;
-                return;
+                let _ = monitor.take().expect("monitor available").await;
+                break;
             }
         };
 
         if let Some(message) = blocked_message(&blocked) {
             let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
             let _ = text_tx.send(None).await;
-            let _ = monitor.await;
-            return;
+            let _ = monitor.take().expect("monitor available").await;
+            break;
         }
         if let Some(text) = extract_stream_text(codec, &chunk)
             && text_tx.send(Some(text)).await.is_err()
         {
-            send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
-            return;
+            send_stream_monitor_error(
+                monitor.take().expect("monitor available"),
+                &chunk_tx,
+                &blocked,
+            )
+            .await;
+            break;
         }
 
-        if chunk_tx.send(Ok(chunk)).await.is_err() {
+        let sent = tokio::select! {
+            _ = cancel.changed() => break,
+            sent = chunk_tx.send(Ok(chunk)) => sent,
+        };
+        if sent.is_err() {
             let _ = text_tx.send(None).await;
-            let _ = monitor.await;
-            return;
+            let _ = monitor.take().expect("monitor available").await;
+            break;
         }
     }
     let _ = text_tx.send(None).await;
-    let _ = send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
+    if *cancel.borrow() {
+        if let Some(monitor) = monitor.take() {
+            monitor.abort();
+        }
+    } else if let Some(monitor) = monitor.take() {
+        let _ = send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
+    }
+    closed.send_replace(Some(provider_stream.close().await));
 }
 
 async fn send_stream_monitor_error(

@@ -72,6 +72,8 @@ fn lock_runtime_owner() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn reset_global() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     {
         let ctx = global_context();
@@ -144,6 +146,23 @@ fn test_resolve_parent_uuid_snapshot_and_runtime_owner_helpers() {
             .build(),
     )
     .unwrap();
+    reset_global();
+}
+
+#[test]
+fn stale_process_runtime_owner_is_reclaimed() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let stale_owner = format!(
+        "pid={};binding=rust;version={}",
+        std::process::id().saturating_add(1),
+        env!("CARGO_PKG_VERSION").split('.').next().unwrap()
+    );
+    // SAFETY: The runtime-owner test mutex serializes this process-global test variable.
+    unsafe { std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", stale_owner) };
+
+    ensure_runtime_owner().unwrap();
+
     reset_global();
 }
 

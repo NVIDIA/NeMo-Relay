@@ -8,6 +8,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -66,10 +67,13 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin, register_plugin,
+    deregister_plugin_registration_checked, register_plugin_tracked,
 };
 
-use super::{DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad, WorkerRuntime};
+use super::{
+    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
+    DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
+};
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
@@ -118,7 +122,7 @@ pub struct WorkerPluginLoadSpec {
 /// callbacks cannot outlive the worker activation.
 pub struct WorkerPluginActivation {
     plugins: Vec<Arc<WorkerPluginInstance>>,
-    plugin_kinds: Vec<String>,
+    plugin_registrations: Vec<(String, u64)>,
 }
 
 impl WorkerPluginActivation {
@@ -129,12 +133,24 @@ impl WorkerPluginActivation {
 
     /// Consumes the activation; deregistration runs from `Drop`.
     pub fn clear(self) {}
+
+    pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        deregister_tracked_registrations_checked(&mut self.plugin_registrations, "worker")
+    }
+
+    pub(crate) fn shutdown_plugins_checked(&self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        for plugin in self.plugins.iter().rev() {
+            outcome.merge(plugin.shutdown_checked());
+        }
+        outcome
+    }
 }
 
 impl Drop for WorkerPluginActivation {
     fn drop(&mut self) {
-        for plugin_kind in self.plugin_kinds.iter().rev() {
-            let _ = deregister_plugin(plugin_kind);
+        for (plugin_kind, registration_id) in self.plugin_registrations.iter().rev() {
+            let _ = deregister_plugin_registration_checked(plugin_kind, *registration_id);
         }
     }
 }
@@ -149,18 +165,20 @@ where
 {
     let mut activation = WorkerPluginActivation {
         plugins: Vec::new(),
-        plugin_kinds: Vec::new(),
+        plugin_registrations: Vec::new(),
     };
     for spec in specs {
         let instance = load_one_worker_plugin(&spec)?;
         let plugin_kind = instance.plugin_kind.clone();
-        register_plugin(Arc::new(WorkerPluginAdapter {
+        let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
             instance: instance.clone(),
         }))?;
         activation.plugins.push(instance);
-        activation.plugin_kinds.push(plugin_kind);
+        activation
+            .plugin_registrations
+            .push((plugin_kind, registration_id));
     }
     Ok(activation)
 }
@@ -221,37 +239,201 @@ struct WorkerPluginInstance {
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
     process: Mutex<Option<Child>>,
     activation_dir: PathBuf,
+    teardown_started: AtomicBool,
 }
 
 impl Drop for WorkerPluginInstance {
     fn drop(&mut self) {
+        let outcome = self.shutdown_checked();
+        if !outcome.errors.is_empty() {
+            log::error!(
+                target: "nemo_relay.worker",
+                event = "worker_cleanup_failed",
+                plugin_id = self.plugin_kind.as_str(),
+                failure_count = outcome.errors.len(),
+                safe_to_unload = outcome.safe_to_unload;
+                "Worker plugin cleanup failed during drop"
+            );
+        }
+    }
+}
+
+impl WorkerPluginInstance {
+    fn shutdown_checked(&self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        if self.teardown_started.swap(true, Ordering::AcqRel) {
+            return outcome;
+        }
+
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_stopping",
+            plugin_id = self.plugin_kind.as_str();
+            "Worker plugin is stopping"
+        );
+
         let mut client = self.client.clone();
         let request = ShutdownRequest {
             activation_id: self.host_state.activation_id.clone(),
             auth_token: self.host_state.auth_token.clone(),
-            reason: "plugin activation dropped".into(),
+            reason: "plugin activation cleared".into(),
         };
-        let _ = block_on_runtime(self.runtime.runtime(), async move {
-            worker_rpc(client.shutdown(worker_rpc_request(request))).await
-        });
-        if let Ok(mut shutdown) = self.shutdown.lock()
-            && let Some(sender) = shutdown.take()
-        {
-            let _ = sender.send(());
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            block_on_runtime(self.runtime.runtime(), async move {
+                worker_rpc(client.shutdown(worker_rpc_request(request))).await
+            })
+        })) {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' shutdown RPC failed: {error}",
+                    self.plugin_kind
+                ),
+                true,
+            ),
+            Err(payload) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' shutdown RPC panicked: {}",
+                    self.plugin_kind,
+                    panic_payload_message(payload.as_ref())
+                ),
+                true,
+            ),
         }
-        if let Ok(mut process) = self.process.lock()
-            && let Some(mut child) = process.take()
-        {
-            let _ = child.kill();
-            let _ = child.wait();
+
+        match self.shutdown.lock() {
+            Ok(mut shutdown) => {
+                if let Some(sender) = shutdown.take()
+                    && sender.send(()).is_err()
+                {
+                    outcome.record_error(
+                        format!(
+                            "worker plugin '{}' host runtime shutdown channel was closed",
+                            self.plugin_kind
+                        ),
+                        true,
+                    );
+                }
+            }
+            Err(error) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' host runtime shutdown lock poisoned: {error}",
+                    self.plugin_kind
+                ),
+                true,
+            ),
         }
-        let _ = std::fs::remove_dir_all(&self.activation_dir);
+
+        self.stop_process_checked(&mut outcome);
+        if outcome.safe_to_unload
+            && let Err(error) = std::fs::remove_dir_all(&self.activation_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            outcome.record_error(
+                format!(
+                    "worker plugin '{}' activation directory cleanup failed for '{}': {error}",
+                    self.plugin_kind,
+                    self.activation_dir.display()
+                ),
+                true,
+            );
+        }
+        if outcome.errors.is_empty() {
+            log::info!(
+                target: "nemo_relay.worker",
+                event = "worker_stopped",
+                plugin_id = self.plugin_kind.as_str();
+                "Worker plugin stopped"
+            );
+        }
+        outcome
     }
+
+    fn stop_process_checked(&self, outcome: &mut DynamicPluginTeardownOutcome) {
+        let mut process = match self.process.lock() {
+            Ok(process) => process,
+            Err(error) => {
+                outcome.record_error(
+                    format!(
+                        "worker plugin '{}' process lock poisoned: {error}",
+                        self.plugin_kind
+                    ),
+                    false,
+                );
+                return;
+            }
+        };
+        let Some(child) = process.as_mut() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                process.take();
+            }
+            Ok(None) => {
+                if let Err(kill_error) = child.kill() {
+                    match child.try_wait() {
+                        Ok(Some(_)) => {
+                            process.take();
+                            outcome.record_error(
+                                format!(
+                                    "worker plugin '{}' process kill failed after exit: {kill_error}",
+                                    self.plugin_kind
+                                ),
+                                true,
+                            );
+                        }
+                        Ok(None) | Err(_) => outcome.record_error(
+                            format!(
+                                "worker plugin '{}' process kill failed: {kill_error}",
+                                self.plugin_kind
+                            ),
+                            false,
+                        ),
+                    }
+                    return;
+                }
+                match child.wait() {
+                    Ok(_) => {
+                        process.take();
+                    }
+                    Err(error) => outcome.record_error(
+                        format!(
+                            "worker plugin '{}' process wait failed after kill: {error}",
+                            self.plugin_kind
+                        ),
+                        false,
+                    ),
+                }
+            }
+            Err(error) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' process status check failed: {error}",
+                    self.plugin_kind
+                ),
+                false,
+            ),
+        }
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic payload")
 }
 
 fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
 ) -> crate::plugin::Result<Arc<WorkerPluginInstance>> {
+    log::info!(
+        target: "nemo_relay.worker",
+        event = "worker_starting",
+        plugin_id = spec.plugin_id.as_str();
+        "Worker plugin is starting"
+    );
     let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&spec.manifest_ref)?;
     if manifest.plugin.id.trim() != spec.plugin_id {
         return Err(PluginError::InvalidConfig(format!(
@@ -322,9 +504,20 @@ fn load_one_worker_plugin(
         worker_endpoint: &worker_advertise,
         worker_endpoint_file: worker_endpoint_file.as_deref(),
     })?);
+    log::info!(
+        target: "nemo_relay.worker",
+        event = "worker_started",
+        plugin_id = spec.plugin_id.as_str(),
+        pid = child
+            .child
+            .as_ref()
+            .expect("worker child should remain guarded")
+            .id();
+        "Worker plugin process started"
+    );
     let mut client = block_on_runtime(
         runtime_handle.runtime(),
-        connect_worker_with_retry(&worker_connect),
+        connect_worker_with_retry(&worker_connect, &spec.plugin_id),
     )?;
 
     let health = block_on_runtime(
@@ -414,6 +607,12 @@ fn load_one_worker_plugin(
         register.registrations
     };
 
+    log::info!(
+        target: "nemo_relay.worker",
+        event = "worker_connected",
+        plugin_id = spec.plugin_id.as_str();
+        "Worker plugin connected and registered"
+    );
     Ok(Arc::new(WorkerPluginInstance {
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
@@ -426,6 +625,7 @@ fn load_one_worker_plugin(
         shutdown: Mutex::new(Some(shutdown_tx)),
         process: Mutex::new(Some(child.take())),
         activation_dir: activation_dir_guard.keep(),
+        teardown_started: AtomicBool::new(false),
     }))
 }
 
@@ -511,8 +711,13 @@ async fn serve_host_runtime(
         HostRuntimeServer::Unix(listener) => {
             let listener = match UnixListener::from_std(listener) {
                 Ok(listener) => listener,
-                Err(err) => {
-                    eprintln!("failed to attach worker host runtime socket: {err}");
+                Err(_) => {
+                    log::error!(
+                        target: "nemo_relay.worker",
+                        event = "worker_host_runtime_failed",
+                        transport = "unix";
+                        "Worker host runtime failed to attach its socket"
+                    );
                     return;
                 }
             };
@@ -527,8 +732,13 @@ async fn serve_host_runtime(
         HostRuntimeServer::Tcp(listener) => {
             let listener = match TokioTcpListener::from_std(listener) {
                 Ok(listener) => listener,
-                Err(err) => {
-                    eprintln!("failed to attach worker host runtime endpoint: {err}");
+                Err(_) => {
+                    log::error!(
+                        target: "nemo_relay.worker",
+                        event = "worker_host_runtime_failed",
+                        transport = "tcp";
+                        "Worker host runtime failed to attach its endpoint"
+                    );
                     return;
                 }
             };
@@ -540,15 +750,23 @@ async fn serve_host_runtime(
                 .await
         }
     };
-    if let Err(err) = result {
-        eprintln!("worker host runtime server failed: {err}");
+    if result.is_err() {
+        log::error!(
+            target: "nemo_relay.worker",
+            event = "worker_host_runtime_failed",
+            reason = "server_stopped";
+            "Worker host runtime server failed"
+        );
     }
 }
 
 async fn connect_worker_with_retry(
     endpoint: &WorkerConnectEndpoint,
+    plugin_id: &str,
 ) -> crate::plugin::Result<PluginWorkerClient<Channel>> {
     let start = std::time::Instant::now();
+    let mut attempts = 0_u64;
+    let mut retry_logged = false;
     loop {
         let connect_endpoint = match resolve_worker_connect_endpoint(endpoint) {
             Ok(Some(endpoint)) => endpoint,
@@ -566,9 +784,29 @@ async fn connect_worker_with_retry(
             Err(err) => return Err(err),
         };
         match connect_worker(&connect_endpoint).await {
-            Ok(client) => return Ok(client),
-            Err(err) if start.elapsed() < WORKER_STARTUP_TIMEOUT => {
-                let _ = err;
+            Ok(client) => {
+                if attempts > 0 {
+                    log::info!(
+                        target: "nemo_relay.worker",
+                        event = "worker_connection_recovered",
+                        plugin_id = plugin_id,
+                        attempt_count = attempts + 1;
+                        "Worker plugin connection recovered"
+                    );
+                }
+                return Ok(client);
+            }
+            Err(_) if start.elapsed() < WORKER_STARTUP_TIMEOUT => {
+                attempts = attempts.saturating_add(1);
+                if !retry_logged {
+                    log::warn!(
+                        target: "nemo_relay.worker",
+                        event = "worker_connection_retrying",
+                        plugin_id = plugin_id;
+                        "Worker plugin connection failed; retrying"
+                    );
+                    retry_logged = true;
+                }
                 tokio::time::sleep(WORKER_CONNECT_RETRY).await;
             }
             Err(err) => {
@@ -808,7 +1046,12 @@ impl WorkerPluginInstance {
                     ctx.register_subscriber(
                         &name,
                         Arc::new(move |event| {
-                            let _ = instance.invoke_subscriber(&callback_name, event);
+                            if instance.invoke_subscriber(&callback_name, event).is_err() {
+                                instance.log_callback_fallback(
+                                    &callback_name,
+                                    RegistrationSurface::Subscriber,
+                                );
+                            }
                         }),
                     )?;
                 }
@@ -817,10 +1060,13 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::ScopeSanitizeEndGuardrail => {
                     let instance = Arc::new(self.clone_for_callback());
                     let callback_name = name.clone();
-                    let callback = Arc::new(move |event: &Event, fields: EventSanitizeFields| {
+                    let callback = Arc::new(move |event: &Event, _fields: EventSanitizeFields| {
                         instance
                             .invoke_event_sanitize(&callback_name, surface, event)
-                            .unwrap_or(fields)
+                            .unwrap_or_else(|_| {
+                                instance.log_callback_fallback(&callback_name, surface);
+                                EventSanitizeFields::default()
+                            })
                     });
                     match surface {
                         RegistrationSurface::MarkSanitizeGuardrail => {
@@ -850,7 +1096,13 @@ impl WorkerPluginInstance {
                                     value.clone(),
                                     None,
                                 )
-                                .unwrap_or(value)
+                                .unwrap_or_else(|_| {
+                                    instance.log_callback_fallback(
+                                        &callback_name,
+                                        RegistrationSurface::ToolSanitizeRequestGuardrail,
+                                    );
+                                    value
+                                })
                         }),
                     )?;
                 }
@@ -869,7 +1121,13 @@ impl WorkerPluginInstance {
                                     value.clone(),
                                     None,
                                 )
-                                .unwrap_or(value)
+                                .unwrap_or_else(|_| {
+                                    instance.log_callback_fallback(
+                                        &callback_name,
+                                        RegistrationSurface::ToolSanitizeResponseGuardrail,
+                                    );
+                                    value
+                                })
                         }),
                     )?;
                 }
@@ -936,7 +1194,13 @@ impl WorkerPluginInstance {
                                     None,
                                     None,
                                 )
-                                .unwrap_or(request)
+                                .unwrap_or_else(|_| {
+                                    instance.log_callback_fallback(
+                                        &callback_name,
+                                        RegistrationSurface::LlmSanitizeRequestGuardrail,
+                                    );
+                                    request
+                                })
                         }),
                     )?;
                 }
@@ -954,7 +1218,13 @@ impl WorkerPluginInstance {
                                     "",
                                     value.clone(),
                                 )
-                                .unwrap_or(value)
+                                .unwrap_or_else(|_| {
+                                    instance.log_callback_fallback(
+                                        &callback_name,
+                                        RegistrationSurface::LlmSanitizeResponseGuardrail,
+                                    );
+                                    value
+                                })
                         }),
                     )?;
                 }
@@ -1035,6 +1305,7 @@ impl WorkerPluginInstance {
 
     fn clone_for_callback(&self) -> WorkerPluginCallback {
         WorkerPluginCallback {
+            plugin_kind: self.plugin_kind.clone(),
             activation_id: self.host_state.activation_id.clone(),
             runtime: self.runtime.handle(),
             client: self.client.clone(),
@@ -1065,10 +1336,24 @@ fn bind_loopback_listener() -> crate::plugin::Result<(TcpListener, SocketAddr)> 
 
 #[derive(Clone)]
 struct WorkerPluginCallback {
+    plugin_kind: String,
     activation_id: String,
     runtime: tokio::runtime::Handle,
     client: PluginWorkerClient<Channel>,
     host_state: Arc<WorkerHostRuntimeState>,
+}
+
+impl WorkerPluginCallback {
+    fn log_callback_fallback(&self, callback_name: &str, surface: RegistrationSurface) {
+        log::warn!(
+            target: "nemo_relay.worker",
+            event = "worker_callback_fallback",
+            plugin_id = self.plugin_kind.as_str(),
+            callback = callback_name,
+            surface = surface.as_str_name();
+            "Worker plugin callback failed; Relay used the safe fallback"
+        );
+    }
 }
 
 struct WorkerInvocationGuard {
@@ -1460,7 +1745,9 @@ impl WorkerPluginCallback {
             }
             guard.finish();
         });
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(LlmJsonStream::new(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
     }
 
     fn base_request(

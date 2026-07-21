@@ -14,8 +14,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
     ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
@@ -37,7 +38,7 @@ use nemo_relay::error::{FlowError, Result};
 
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
-use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_js};
+use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
 
 /// JavaScript-facing pending mark DTO.
 #[derive(Debug, Deserialize, Serialize)]
@@ -84,6 +85,93 @@ pub(crate) fn js_pending_marks(marks: Vec<PendingMarkSpec>) -> Vec<JsPendingMark
     marks.into_iter().map(Into::into).collect()
 }
 
+#[derive(Deserialize)]
+struct MiddlewareCallbackResult {
+    ok: bool,
+    #[serde(default)]
+    value: Json,
+    #[serde(default)]
+    error: String,
+}
+
+/// Wrap a middleware callback so exceptions cross the N-API boundary as data.
+///
+/// A raw `ThreadsafeFunction::call_with_return_value` aborts the Node process when
+/// a JavaScript callback throws. This wrapper preserves the callback signature and
+/// returns a JSON envelope that the Rust middleware adapters can decode safely.
+pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    let factory: JsFunction = env.run_script(
+        r#"((fn) => function __nemo_relay_middleware_wrapper(...args) {
+  try {
+    const value = fn(...args);
+    return { ok: true, value: value === undefined ? null : value };
+  } catch (error) {
+    let message = 'JavaScript callback threw';
+    try {
+      message = String(error?.message ?? error);
+    } catch {}
+    return { ok: false, error: message };
+  }
+})"#,
+    )?;
+    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
+    let wrapper_unknown = factory.call(None, &[func_unknown])?;
+    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
+}
+
+pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Result<Json> {
+    let result: MiddlewareCallbackResult = serde_json::from_value(value).map_err(|error| {
+        FlowError::Internal(format!(
+            "{error_prefix}: invalid middleware callback result: {error}"
+        ))
+    })?;
+    if result.ok {
+        Ok(result.value)
+    } else {
+        Err(FlowError::Internal(format!(
+            "{error_prefix}: {}",
+            result.error
+        )))
+    }
+}
+
+fn recv_middleware_json_result(
+    rx: std::sync::mpsc::Receiver<Json>,
+    error_prefix: &str,
+) -> Result<Json> {
+    let value = rx
+        .recv()
+        .map_err(|error| FlowError::Internal(format!("{error_prefix}: {error}")))?;
+    unwrap_middleware_result(value, error_prefix)
+}
+
+fn recv_middleware_json_or_value(
+    rx: std::sync::mpsc::Receiver<Json>,
+    error_prefix: &str,
+    fallback: Json,
+) -> Json {
+    match recv_middleware_json_result(rx, error_prefix) {
+        Ok(value) => value,
+        Err(error) => {
+            record_callback_error(error.to_string());
+            fallback
+        }
+    }
+}
+
+fn recv_middleware_option_string_result(
+    rx: std::sync::mpsc::Receiver<Json>,
+    error_prefix: &str,
+) -> Result<Option<String>> {
+    match recv_middleware_json_result(rx, error_prefix)? {
+        Json::Null => Ok(None),
+        Json::String(value) => Ok(Some(value)),
+        other => Err(FlowError::Internal(format!(
+            "{error_prefix}: expected string or null, got {other:?}",
+        ))),
+    }
+}
+
 fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Json {
     rx.recv().unwrap_or_else(|e| {
         record_callback_error(format!("{error_prefix}: {e}"));
@@ -94,17 +182,6 @@ fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) ->
 fn recv_json_result(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Result<Json> {
     rx.recv()
         .map_err(|e| FlowError::Internal(format!("{error_prefix}: {e}")))
-}
-
-fn recv_json_or_value(
-    rx: std::sync::mpsc::Receiver<Json>,
-    error_prefix: &str,
-    fallback: Json,
-) -> Json {
-    rx.recv().unwrap_or_else(|e| {
-        record_callback_error(format!("{error_prefix}: {e}"));
-        fallback
-    })
 }
 
 fn recv_option_string_result(
@@ -118,20 +195,6 @@ fn recv_option_string_result(
             "{error_prefix}: expected string or null, got {other:?}",
         ))),
     }
-}
-
-fn recv_llm_request_or_value(
-    rx: std::sync::mpsc::Receiver<Json>,
-    error_prefix: &str,
-    fallback: LlmRequest,
-) -> LlmRequest {
-    let result = recv_json_or_null(rx, error_prefix);
-    serde_json::from_value(result).unwrap_or_else(|e| {
-        record_callback_error(format!(
-            "{error_prefix}: failed to deserialize LlmRequest: {e}"
-        ));
-        fallback
-    })
 }
 
 fn recv_llm_request_result(
@@ -154,6 +217,7 @@ pub fn wrap_js_tool_fn(
     Arc::new(move |name: &str, args: Json| {
         let func = func.clone();
         let name = name.to_string();
+        let fallback = args.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let status = func.call_with_return_value(
             (name, args),
@@ -167,11 +231,11 @@ pub fn wrap_js_tool_fn(
             record_callback_error(format!(
                 "nemo_relay: failed to queue JS tool callback: {status:?}"
             ));
-            return Json::Null;
+            return fallback;
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        recv_json_or_null(rx, "nemo_relay: JS tool callback failed")
+        recv_middleware_json_or_value(rx, "nemo_relay: JS tool callback failed", fallback)
     })
 }
 
@@ -198,7 +262,7 @@ pub fn wrap_js_tool_conditional_fn(
                 "failed to queue JS tool conditional callback: {status:?}",
             )));
         }
-        recv_option_string_result(rx, "JS tool conditional callback failed")
+        recv_middleware_option_string_result(rx, "JS tool conditional callback failed")
     })
 }
 
@@ -224,7 +288,7 @@ pub fn wrap_js_tool_request_intercept_fn(
                 "failed to queue JS tool callback: {status:?}",
             )));
         }
-        recv_json_result(rx, "JS tool callback failed")
+        recv_middleware_json_result(rx, "JS tool callback failed")
     })
 }
 
@@ -296,7 +360,8 @@ pub fn wrap_js_llm_request_intercept_fn(
                     "failed to queue JS LLM request intercept callback: {status:?}",
                 )));
             }
-            let result = recv_json_result(rx, "JS LLM request intercept callback failed")?;
+            let result =
+                recv_middleware_json_result(rx, "JS LLM request intercept callback failed")?;
 
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -348,11 +413,17 @@ pub fn wrap_js_llm_sanitize_request_fn(
         }
         // TODO: This closure returns LlmRequest (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        recv_llm_request_or_value(
+        let result = recv_middleware_json_or_value(
             rx,
             "nemo_relay: JS LLM sanitize request callback failed",
-            request,
-        )
+            serde_json::to_value(&request).unwrap_or(Json::Null),
+        );
+        serde_json::from_value(result).unwrap_or_else(|error| {
+            record_callback_error(format!(
+                "nemo_relay: JS LLM sanitize request callback failed: failed to deserialize LlmRequest: {error}"
+            ));
+            request
+        })
     })
 }
 
@@ -380,7 +451,7 @@ pub fn wrap_js_llm_response_fn(
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error and fall back to original response.
-        recv_json_or_value(rx, "nemo_relay: JS LLM response callback failed", response)
+        recv_middleware_json_or_value(rx, "nemo_relay: JS LLM response callback failed", response)
     })
 }
 
@@ -406,7 +477,7 @@ pub fn wrap_js_llm_conditional_fn(
                 "failed to queue JS LLM conditional callback: {status:?}",
             )));
         }
-        recv_option_string_result(rx, "JS LLM conditional callback failed")
+        recv_middleware_option_string_result(rx, "JS LLM conditional callback failed")
     })
 }
 
@@ -529,7 +600,7 @@ pub fn wrap_js_event_sanitize_fn(
                 record_callback_error(format!(
                     "nemo_relay: failed to serialize JS event sanitizer context: {error}"
                 ));
-                return fields.clone();
+                return CoreEventSanitizeFields::default();
             }
         };
         let js_fields = EventSanitizeFields {
@@ -547,8 +618,8 @@ pub fn wrap_js_event_sanitize_fn(
                 serde_json::to_value(js_fields).unwrap_or(Json::Null),
             ),
             ThreadsafeFunctionCallMode::Blocking,
-            move |value: napi::JsUnknown| {
-                let _ = tx.send(event_sanitize_fields_from_js(value));
+            move |value: Option<Json>| {
+                let _ = tx.send(callback_json(value));
                 Ok(())
             },
         );
@@ -556,32 +627,38 @@ pub fn wrap_js_event_sanitize_fn(
             record_callback_error(format!(
                 "nemo_relay: failed to queue JS event sanitizer callback: {status:?}"
             ));
-            return fields.clone();
+            return CoreEventSanitizeFields::default();
         }
-        rx.recv()
-            .map_err(|error| {
-                record_callback_error(format!(
-                    "nemo_relay: JS event sanitizer callback failed: {error}"
-                ));
+        let sanitized = (|| -> Result<_> {
+            let result =
+                recv_middleware_json_result(rx, "nemo_relay: JS event sanitizer callback failed")?;
+            let result = event_sanitize_fields_from_json(result).map_err(|error| {
+                FlowError::Internal(format!(
+                    "nemo_relay: invalid JS event sanitizer result: {error}"
+                ))
+            })?;
+            let category_profile = result
+                .category_profile
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| {
+                    FlowError::Internal(format!(
+                        "nemo_relay: invalid JS event sanitizer result: {error}"
+                    ))
+                })?;
+            Ok(CoreEventSanitizeFields {
+                data: result.data,
+                category_profile,
+                metadata: result.metadata,
             })
-            .ok()
-            .and_then(|result| result.ok())
-            .and_then(|result| {
-                let category_profile = result
-                    .category_profile
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .ok()?;
-                Some(CoreEventSanitizeFields {
-                    data: result.data,
-                    category_profile,
-                    metadata: result.metadata,
-                })
-            })
-            .unwrap_or_else(|| {
-                record_callback_error("nemo_relay: invalid JS event sanitizer result".to_string());
-                fields.clone()
-            })
+        })();
+        match sanitized {
+            Ok(sanitized) => sanitized,
+            Err(error) => {
+                record_callback_error(error.to_string());
+                CoreEventSanitizeFields::default()
+            }
+        }
     })
 }
 
@@ -781,15 +858,8 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
             &str,
             LlmRequest,
             LlmStreamExecutionNextFn,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<
-                            Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>,
-                        >,
-                    > + Send,
-            >,
-        > + Send
+        ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
+        + Send
         + Sync,
 > {
     Arc::new(
@@ -818,10 +888,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                     value => vec![Ok(value)],
                 };
                 let stream = tokio_stream::iter(chunks);
-                Ok(Box::pin(stream)
-                    as Pin<
-                        Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>,
-                    >)
+                Ok(LlmJsonStream::new(stream))
             })
         },
     )

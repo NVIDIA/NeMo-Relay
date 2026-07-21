@@ -5,6 +5,8 @@
 
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::api::event::DataSchema;
@@ -728,6 +730,32 @@ fn concurrent_finish_is_an_atomic_acceptance_boundary() {
         .count();
     assert_eq!(accepted, finished.contributions.len());
     assert!(!recorder.record(LlmOptimizationContribution::new("late", "custom")));
+}
+
+#[test]
+fn finalization_waits_for_reserved_record_attempts() {
+    let recorder = LlmOptimizationRecorder::default();
+    let attempt = recorder.reserve_record_attempt_for_test().unwrap();
+    let finalizer = recorder.clone();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        sender.send(finalizer.finish()).unwrap();
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !recorder.is_closed_for_test() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(recorder.is_closed_for_test());
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+
+    drop(attempt);
+    let finished = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(finished.contributions.is_empty());
+    assert!(finished.limitations.is_empty());
 }
 
 #[tokio::test]

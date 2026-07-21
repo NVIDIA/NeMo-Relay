@@ -11,7 +11,8 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 ## Default Path
 
 - Build the binding-specific `OpenTelemetryConfig`
-- Set endpoint, service name, and any required headers
+- Set endpoint and service identity; add authentication only when the collector
+  requires it
 - Construct the subscriber
 - Register it before running scoped work
 - Deregister, flush, and shut down when the process or subsystem is done
@@ -20,24 +21,39 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 
 - OpenTelemetry export maps NeMo Relay runtime events into OTLP traces for
   tracing backends and collectors.
-- Configure `transport`, `endpoint`, `service_name`, optional namespace and
-  version, instrumentation scope, headers, resource attributes, and timeout.
+- Set `transport`, `endpoint`, and `service_name`, then add a namespace, version,
+  instrumentation scope, headers, resource attributes, timeout, or
+  `attribute_mappings` when needed.
+- NeMo Relay projects start, end, handle, and mark payload fields to typed OTLP
+  attributes with dotted names. Start and end metadata use
+  `nemo_relay.start.metadata` and `nemo_relay.end.metadata`.
+- NeMo Relay emits a top-level object or array field as a JSON string, omits a
+  top-level `null` field, and no longer emits the old aggregate `*_json` payload
+  attributes.
+- Use `attribute_mappings` to copy a fully qualified projected attribute to a
+  backend-specific alias without changing its OTLP type.
 - Start with `http_binary` transport and an OTLP traces endpoint such as a local
   collector on port `4318` unless deployment requirements differ.
 - `grpc` transport is available when a Tokio runtime is active.
-- Use explicit config objects in application code; environment variables may be
-  honored by the underlying exporter but should not be the only source of
-  application behavior.
+- Use explicit config objects for non-secret application behavior. Load
+  credentials at runtime through the deployment's secret-injection mechanism,
+  construct authentication headers in memory, and pass them directly to the
+  exporter. Never place resolved credential values in source code, committed
+  configuration, command-line arguments, prompts, examples, or diagnostics.
+- Prefer an unauthenticated loopback collector for the first local proof. For a
+  remote collector, require TLS certificate verification and reject endpoints
+  that embed credentials in URL user information or query parameters.
 - Register before the first instrumented request, use stable service identity,
-  keep auth and endpoints out of source code, flush during graceful shutdown,
-  and redact sensitive payloads before production export.
+  flush during graceful shutdown, and redact sensitive payloads before
+  production export.
 - Validate export by checking subscriber construction, collector requests,
-  backend spans for scopes/tools/LLMs, and span grouping by root scope.
+  backend spans for synthetic scopes/tools/LLMs, and span grouping by root
+  scope. Report header names and response status only; never print header values.
 
 ## Things To Confirm
 
 - Transport: `http_binary` vs `grpc`
-- Endpoint and auth headers
+- Endpoint, TLS verification, and required authentication header names
 - Service naming and resource attributes
 - Whether deterministic flush-before-exit is required
 - Whether the chosen binding and target support the desired transport
@@ -45,7 +61,8 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 ## Troubleshooting Focus
 
 - No spans visible
-- Wrong endpoint or auth headers
+- Wrong endpoint or authentication: inspect response status and redacted header
+  names without logging credential values
 - Events emitted outside active scopes
 - `grpc` selected without a Tokio runtime
 - Forgetting register/deregister or flush/shutdown steps

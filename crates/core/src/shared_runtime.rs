@@ -207,6 +207,13 @@ pub(crate) fn ensure_process_runtime_owner() -> Result<()> {
         Some(existing) if existing.same_owner(&current) => Ok(()),
         Some(existing) if existing.pid != current.pid => {
             publish_process_runtime_owner(&current);
+            log::info!(
+                target: "nemo_relay.runtime",
+                event = "runtime_owner_claimed",
+                binding = current.binding_kind.as_str(),
+                pid = current.pid;
+                "Relay runtime ownership claimed"
+            );
             Ok(())
         }
         Some(existing) => Err(FlowError::InvalidArgument(format!(
@@ -215,6 +222,13 @@ pub(crate) fn ensure_process_runtime_owner() -> Result<()> {
         ))),
         None => {
             publish_process_runtime_owner(&current);
+            log::info!(
+                target: "nemo_relay.runtime",
+                event = "runtime_owner_claimed",
+                binding = current.binding_kind.as_str(),
+                pid = current.pid;
+                "Relay runtime ownership claimed"
+            );
             Ok(())
         }
     }

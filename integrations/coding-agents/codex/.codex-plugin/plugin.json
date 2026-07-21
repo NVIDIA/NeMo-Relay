@@ -1,7 +1,7 @@
 {
   "name": "nemo-relay-plugin",
-  "version": "0.6.0",
-  "description": "Codex hooks that forward canonical lifecycle payloads to nemo-relay.",
+  "version": "0.7.0",
+  "description": "Native Relay gateway lifecycle and Codex hooks for complete local observability.",
   "author": {
     "name": "NVIDIA Corporation and Affiliates",
     "url": "https://github.com/NVIDIA/NeMo-Relay"
@@ -9,6 +9,7 @@
   "homepage": "https://github.com/NVIDIA/NeMo-Relay",
   "repository": "https://github.com/NVIDIA/NeMo-Relay",
   "license": "Apache-2.0",
+  "mcpServers": "./.mcp.json",
   "keywords": [
     "nemo-relay",
     "codex",
@@ -17,8 +18,8 @@
   ],
   "interface": {
     "displayName": "NeMo Relay Plugin",
-    "shortDescription": "Forward Codex lifecycle hooks to a local NeMo Relay sidecar.",
-    "longDescription": "Installs command hooks that preserve Codex hook payloads and forward them to nemo-relay for agent, subagent, tool, and lifecycle observability. Full LLM capture also requires sidecar provider routing.",
+    "shortDescription": "Run the native Relay gateway and capture Codex lifecycle events.",
+    "longDescription": "Starts the native nemo-relay gateway through a required lifecycle-bound MCP server, routes model traffic through it, and installs command hooks that preserve canonical Codex lifecycle payloads.",
     "developerName": "NVIDIA",
     "category": "Coding",
     "capabilities": [
