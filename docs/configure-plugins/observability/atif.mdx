@@ -378,11 +378,12 @@ Ok(())
 ## Manual API
 
 Use the manual `AtifExporter` API when you need explicit collection boundaries
-or one exporter object per run. `export()` and `export_json()` wait for queued
-subscriber callbacks before taking a snapshot of the collected event history,
-so a separate subscriber flush immediately before export is unnecessary. The
-returned trajectory includes events that the exporter observed before the
-barrier completed. It does not include events emitted concurrently afterward.
+or one exporter object per run. `export()` and `export_json()` first wait for
+subscriber callbacks queued before the call, then take a snapshot of the
+collected event history. A separate subscriber flush immediately before export
+is unnecessary. The snapshot can also include events delivered after the
+internal flush returns but before the snapshot is taken. Events delivered after
+the snapshot are not included.
 
 <Tabs>
 <Tab title="Python" language="python">
