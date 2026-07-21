@@ -1322,6 +1322,47 @@ fn request_schema_fixture_round_trips_and_preserves_adjacent_native_messages() {
 }
 
 #[test]
+fn chat_tool_edits_preserve_nested_unknown_fields_and_explicit_nulls() {
+    let codec = OpenAIChatCodec;
+    let original = make_request(json!({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "lookup_before",
+                "description": null,
+                "parameters": {"type": "object"},
+                "strict": null,
+                "future_function": {"mode": "keep"}
+            },
+            "future_wrapper": null
+        }],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "lookup_before", "future_nested": null},
+            "future_choice": {"mode": "keep"}
+        }
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    let ToolDefinition::Function { function, .. } = &mut annotated.tools.as_mut().unwrap()[0]
+    else {
+        panic!("expected portable function tool");
+    };
+    function.name = "lookup_after".into();
+    let Some(ToolChoice::Specific(choice)) = &mut annotated.tool_choice else {
+        panic!("expected specific tool choice");
+    };
+    choice.function.name = "lookup_after".into();
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let mut expected = original;
+    expected.content["tools"][0]["function"]["name"] = json!("lookup_after");
+    expected.content["tool_choice"]["function"]["name"] = json!("lookup_after");
+    assert_eq!(encoded, expected);
+}
+
+#[test]
 fn native_chat_tool_choices_round_trip_without_fallback_loss() {
     let codec = OpenAIChatCodec;
     for tool_choice in [

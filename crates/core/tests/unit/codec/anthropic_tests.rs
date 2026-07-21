@@ -738,6 +738,41 @@ fn request_schema_fixture_round_trips_and_issue_501_edit_is_surgical() {
 }
 
 #[test]
+fn anthropic_tool_edits_preserve_nested_unknown_fields_and_explicit_nulls() {
+    let codec = AnthropicMessagesCodec;
+    let original = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{
+            "name": "lookup_before",
+            "description": null,
+            "input_schema": {"type": "object"},
+            "strict": null,
+            "future_tool": {"mode": "keep"}
+        }],
+        "tool_choice": {
+            "type": "auto",
+            "disable_parallel_tool_use": false,
+            "future_choice": null
+        }
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    let ToolDefinition::Function { function, .. } = &mut annotated.tools.as_mut().unwrap()[0]
+    else {
+        panic!("expected portable function tool");
+    };
+    function.name = "lookup_after".into();
+    annotated.parallel_tool_calls = Some(false);
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let mut expected = original;
+    expected.content["tools"][0]["name"] = json!("lookup_after");
+    expected.content["tool_choice"]["disable_parallel_tool_use"] = json!(true);
+    assert_eq!(encoded, expected);
+}
+
+#[test]
 fn request_schema_rejects_malformed_known_anthropic_components() {
     let codec = AnthropicMessagesCodec;
     for content in [
@@ -1202,7 +1237,7 @@ fn anthropic_request_component_branch_matrix() {
         extra: serde_json::Map::from_iter([("cache_control".into(), json!({"type": "ephemeral"}))]),
     };
     assert_eq!(
-        encode_anthropic_tools(&[rich_tool]).unwrap()[0]["strict"],
+        encode_anthropic_tool(&rich_tool).unwrap()["strict"],
         json!(true)
     );
     let native_tool = ToolDefinition::ProviderNative {
@@ -1210,13 +1245,16 @@ fn anthropic_request_component_branch_matrix() {
         kind: "web_search".into(),
         value: json!({"type": "web_search", "name": "search"}),
     };
-    assert_eq!(encode_anthropic_tools(&[native_tool]).unwrap().len(), 1);
+    assert_eq!(
+        encode_anthropic_tool(&native_tool).unwrap()["type"],
+        json!("web_search")
+    );
     let mismatched_tool = ToolDefinition::ProviderNative {
         provider: "openai_chat".into(),
         kind: "custom".into(),
         value: json!({"type": "custom"}),
     };
-    assert!(encode_anthropic_tools(&[mismatched_tool]).is_err());
+    assert!(encode_anthropic_tool(&mismatched_tool).is_err());
 }
 
 #[test]

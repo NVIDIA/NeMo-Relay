@@ -775,6 +775,44 @@ fn request_schema_fixture_round_trips_ordered_native_items_and_surgical_edits() 
 }
 
 #[test]
+fn responses_tool_edits_preserve_unknown_fields_and_explicit_nulls() {
+    let codec = OpenAIResponsesCodec;
+    let original = make_request(json!({
+        "model": "gpt-5",
+        "input": "hello",
+        "tools": [{
+            "type": "function",
+            "name": "lookup_before",
+            "description": null,
+            "parameters": {"type": "object"},
+            "strict": null,
+            "future_tool": {"mode": "keep"}
+        }],
+        "tool_choice": {
+            "type": "function",
+            "name": "lookup_before",
+            "future_choice": null
+        }
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    let ToolDefinition::Function { function, .. } = &mut annotated.tools.as_mut().unwrap()[0]
+    else {
+        panic!("expected portable function tool");
+    };
+    function.name = "lookup_after".into();
+    let Some(ToolChoice::Specific(choice)) = &mut annotated.tool_choice else {
+        panic!("expected specific tool choice");
+    };
+    choice.function.name = "lookup_after".into();
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let mut expected = original;
+    expected.content["tools"][0]["name"] = json!("lookup_after");
+    expected.content["tool_choice"]["name"] = json!("lookup_after");
+    assert_eq!(encoded, expected);
+}
+
+#[test]
 fn responses_string_input_and_native_surface_mismatch_are_explicit() {
     let codec = OpenAIResponsesCodec;
     let original = make_request(json!({

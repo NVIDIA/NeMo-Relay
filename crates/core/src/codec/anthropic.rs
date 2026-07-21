@@ -486,33 +486,30 @@ fn encode_anthropic_message(message: &Message) -> Result<Json> {
     }
 }
 
-fn encode_anthropic_tools(tools: &[ToolDefinition]) -> Result<Vec<Json>> {
-    tools
-        .iter()
-        .map(|tool| match tool {
-            ToolDefinition::Function { function, extra } => {
-                let mut obj = extra.clone();
-                obj.insert("name".into(), Json::String(function.name.clone()));
-                if let Some(description) = &function.description {
-                    obj.insert("description".into(), Json::String(description.clone()));
-                }
-                if let Some(parameters) = &function.parameters {
-                    obj.insert("input_schema".into(), parameters.clone());
-                }
-                if let Some(strict) = function.strict {
-                    obj.insert("strict".into(), Json::Bool(strict));
-                }
-                obj.extend(function.extra.clone());
-                Ok(Json::Object(obj))
+fn encode_anthropic_tool(tool: &ToolDefinition) -> Result<Json> {
+    match tool {
+        ToolDefinition::Function { function, extra } => {
+            let mut obj = extra.clone();
+            obj.insert("name".into(), Json::String(function.name.clone()));
+            if let Some(description) = &function.description {
+                obj.insert("description".into(), Json::String(description.clone()));
             }
-            ToolDefinition::ProviderNative {
-                provider, value, ..
-            } if provider == "anthropic_messages" => Ok(value.clone()),
-            other => Err(FlowError::InvalidArgument(format!(
-                "tool {other:?} cannot be encoded for Anthropic Messages"
-            ))),
-        })
-        .collect()
+            if let Some(parameters) = &function.parameters {
+                obj.insert("input_schema".into(), parameters.clone());
+            }
+            if let Some(strict) = function.strict {
+                obj.insert("strict".into(), Json::Bool(strict));
+            }
+            obj.extend(function.extra.clone());
+            Ok(Json::Object(obj))
+        }
+        ToolDefinition::ProviderNative {
+            provider, value, ..
+        } if provider == "anthropic_messages" => Ok(value.clone()),
+        other => Err(FlowError::InvalidArgument(format!(
+            "tool {other:?} cannot be encoded for Anthropic Messages"
+        ))),
+    }
 }
 
 fn decode_anthropic_tool(value: &Json) -> Result<ToolDefinition> {
@@ -882,31 +879,46 @@ impl LlmCodec for AnthropicMessagesCodec {
             }
         }
         if annotated.tools != baseline.tools {
-            set_or_remove_json(
-                obj,
-                "tools",
-                annotated
-                    .tools
-                    .as_deref()
-                    .map(encode_anthropic_tools)
-                    .transpose()?
-                    .map(Json::Array),
-            );
+            let tools = annotated
+                .tools
+                .as_deref()
+                .map(|tools| {
+                    super::encode_changed_items(
+                        tools,
+                        baseline.tools.as_deref().unwrap_or(&[]),
+                        obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
+                        encode_anthropic_tool,
+                    )
+                })
+                .transpose()?
+                .map(Json::Array);
+            set_or_remove_json(obj, "tools", tools);
         }
         if annotated.tool_choice != baseline.tool_choice
             || annotated.parallel_tool_calls != baseline.parallel_tool_calls
         {
-            set_or_remove_json(
-                obj,
-                "tool_choice",
-                annotated
-                    .tool_choice
-                    .as_ref()
-                    .map(|choice| {
-                        encode_tool_choice_with_parallel_hint(choice, annotated.parallel_tool_calls)
+            let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
+                (Some(edited), Some(before)) => {
+                    let edited = encode_tool_choice_with_parallel_hint(
+                        edited,
+                        annotated.parallel_tool_calls,
+                    )?;
+                    let before = encode_tool_choice_with_parallel_hint(
+                        before,
+                        baseline.parallel_tool_calls,
+                    )?;
+                    Some(match obj.get("tool_choice") {
+                        Some(original) => super::patch_changed_json(original, &before, &edited),
+                        None => edited,
                     })
-                    .transpose()?,
-            );
+                }
+                (Some(edited), None) => Some(encode_tool_choice_with_parallel_hint(
+                    edited,
+                    annotated.parallel_tool_calls,
+                )?),
+                (None, _) => None,
+            };
+            set_or_remove_json(obj, "tool_choice", tool_choice);
         }
         for (key, edited, before) in [("metadata", &annotated.metadata, &baseline.metadata)] {
             if edited != before {

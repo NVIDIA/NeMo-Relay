@@ -1017,32 +1017,35 @@ impl LlmCodec for OpenAIChatCodec {
             }
         }
         if annotated.tools != baseline.tools {
-            set_or_remove_json(
-                obj,
-                "tools",
-                annotated
-                    .tools
-                    .as_deref()
-                    .map(|tools| {
-                        tools
-                            .iter()
-                            .map(encode_chat_tool)
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .map(Json::Array),
-            );
+            let tools = annotated
+                .tools
+                .as_deref()
+                .map(|tools| {
+                    super::encode_changed_items(
+                        tools,
+                        baseline.tools.as_deref().unwrap_or(&[]),
+                        obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
+                        encode_chat_tool,
+                    )
+                })
+                .transpose()?
+                .map(Json::Array);
+            set_or_remove_json(obj, "tools", tools);
         }
         if annotated.tool_choice != baseline.tool_choice {
-            set_or_remove_json(
-                obj,
-                "tool_choice",
-                annotated
-                    .tool_choice
-                    .as_ref()
-                    .map(encode_chat_tool_choice)
-                    .transpose()?,
-            );
+            let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
+                (Some(edited), Some(before)) => {
+                    let edited = encode_chat_tool_choice(edited)?;
+                    let before = encode_chat_tool_choice(before)?;
+                    Some(match obj.get("tool_choice") {
+                        Some(original) => super::patch_changed_json(original, &before, &edited),
+                        None => edited,
+                    })
+                }
+                (Some(edited), None) => Some(encode_chat_tool_choice(edited)?),
+                (None, _) => None,
+            };
+            set_or_remove_json(obj, "tool_choice", tool_choice);
         }
         for (key, edited, before) in [("metadata", &annotated.metadata, &baseline.metadata)] {
             if edited != before {
