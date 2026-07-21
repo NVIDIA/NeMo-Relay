@@ -310,6 +310,14 @@ fn typed_editor_model_contains_pii_redaction_options() {
     );
 
     let builtin = schema.field("builtin").unwrap().schema().unwrap();
+    assert_eq!(builtin.field("preset").unwrap().kind, EditorFieldKind::Enum);
+    assert!(
+        builtin
+            .field("preset")
+            .unwrap()
+            .enum_values
+            .contains(&"trajectory_context")
+    );
     assert_eq!(builtin.field("action").unwrap().kind, EditorFieldKind::Enum);
     assert!(
         builtin
@@ -321,6 +329,17 @@ fn typed_editor_model_contains_pii_redaction_options() {
     assert_eq!(
         builtin.field("target_paths").unwrap().kind,
         EditorFieldKind::List
+    );
+    assert_eq!(
+        builtin.field("custom_mark_payload_policy").unwrap().kind,
+        EditorFieldKind::Enum
+    );
+    assert!(
+        builtin
+            .field("custom_mark_payload_policy")
+            .unwrap()
+            .enum_values
+            .contains(&"redact_all_leaves")
     );
     assert_eq!(
         builtin.field("detector").unwrap().kind,
