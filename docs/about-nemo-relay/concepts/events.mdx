@@ -172,7 +172,7 @@ For a reader request, all of the following conditions must be true:
 - The request reads the entire file. Relay ignores requests that use partial or
   range controls, unsupported transformations, metadata-only operations,
   pipelines, redirections, command substitutions, or compound commands.
-  Output-formatting flags that don't truncate the file remain supported.
+  Relay also ignores output-transforming and unreviewed reader options.
 
 Relay checks the request before tool execution. The mark records an attempted
 load even if execution later fails. If Relay doesn't emit a mark, that doesn't
@@ -228,14 +228,26 @@ PowerShell wrappers support `Get-Content`. Relay treats unknown tool names,
 argument fields, wrapper forms, Windows `type`, and PowerShell aliases as
 unsupported until an integration explicitly adds them to the registry.
 
+The shell reader option registry is deliberately narrow:
+
+- `cat` supports no options or the exact content-preserving `-u` option. Other
+  options, including bundled short options, are unsupported.
+- `bat` and `batcat` require one exact plain-output option: `-p` or `--plain`.
+  Relay rejects every additional option.
+- `Get-Content` supports positional paths and the exact `-Path`,
+  `-LiteralPath`, `-Raw`, `-Encoding`, `-ReadCount`, `-AsByteStream`, and
+  `-Force` options. PowerShell abbreviations and other options are unsupported.
+
 For a reader request, the final path component must equal `SKILL.md` under an
 ASCII case-insensitive comparison. Relay uses the immediate parent directory as
 the skill name. Relay doesn't emit a mark when a structured request has a
 `offset` other than the integer `0`, a `limit`, or a range control. It also
 doesn't emit a mark for shell commands that use pipelines, redirections,
 compound commands, or range-limited readers, or help, version, listing, or
-diagnostic operations. An explicit structured `offset` of `0` still represents
-a complete read. Relay omits the full path and shell command from the mark.
+diagnostic operations. It also doesn't emit a mark for output-transforming or
+unreviewed reader options. An explicit structured `offset` of `0` still
+represents a complete read. Relay omits the full path and shell command from
+the mark.
 
 The mark has these lifecycle semantics:
 
