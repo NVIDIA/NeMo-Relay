@@ -212,10 +212,6 @@ fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Result<Vec
         for index in unmatched_edited {
             alignment[index] = Some(index);
         }
-    } else if let ([edited_index], [baseline_index]) =
-        (unmatched_edited.as_slice(), unmatched_baseline.as_slice())
-    {
-        alignment[*edited_index] = Some(*baseline_index);
     }
 
     Ok(alignment)

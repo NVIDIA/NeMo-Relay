@@ -740,7 +740,7 @@ fn baseline_patching_keeps_raw_array_fields_with_reordered_logical_items() {
         {"type": "text", "text": "c"}
     ]);
     let edited = json!([
-        {"type": "text", "text": "b2"},
+        {"type": "text", "text": "b"},
         {"type": "text", "text": "a"},
         {"type": "text", "text": "c"}
     ]);
@@ -748,9 +748,33 @@ fn baseline_patching_keeps_raw_array_fields_with_reordered_logical_items() {
     assert_eq!(
         super::patch_changed_json(&original, &baseline, &edited).unwrap(),
         json!([
-            {"type": "text", "text": "b2", "provider_marker": "B"},
+            {"type": "text", "text": "b", "provider_marker": "B"},
             {"type": "text", "text": "a", "provider_marker": "A"},
             {"type": "text", "text": "c", "provider_marker": "C"}
+        ])
+    );
+}
+
+#[test]
+fn baseline_patching_does_not_pair_reordered_deletion_with_unrelated_insertion() {
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A"},
+        {"type": "text", "text": "b", "provider_marker": "B"}
+    ]);
+    let baseline = json!([
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"}
+    ]);
+    let edited = json!([
+        {"type": "text", "text": "new"},
+        {"type": "text", "text": "a"}
+    ]);
+
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
+        json!([
+            {"type": "text", "text": "new"},
+            {"type": "text", "text": "a", "provider_marker": "A"}
         ])
     );
 }
