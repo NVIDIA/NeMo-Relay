@@ -35,7 +35,10 @@ pub(crate) fn detect(tool_name: &str, args: &Value) -> Vec<SkillLoad> {
             structured_skill_names(args),
         )
     } else if is_shell_tool(&normalized_tool) {
-        (SkillLoadSource::ShellRead, shell_skill_names(args))
+        (
+            SkillLoadSource::ShellRead,
+            shell_skill_names(&normalized_tool, args),
+        )
     } else {
         return Vec::new();
     };
@@ -92,7 +95,7 @@ fn structured_skill_names(args: &Value) -> Vec<String> {
     visit_named_values(args, |key, value| {
         if matches!(
             key.as_str(),
-            "path" | "filepath" | "filename" | "file" | "paths"
+            "path" | "filepath" | "filename" | "file" | "paths" | "uri" | "absolutepath"
         ) {
             collect_path_skill_names(value, &mut names);
         }
@@ -100,7 +103,7 @@ fn structured_skill_names(args: &Value) -> Vec<String> {
     names
 }
 
-fn shell_skill_names(args: &Value) -> Vec<String> {
+fn shell_skill_names(tool_name: &str, args: &Value) -> Vec<String> {
     let mut commands = Vec::new();
     visit_named_values(args, |key, value| {
         if matches!(key.as_str(), "command" | "cmd")
@@ -109,20 +112,24 @@ fn shell_skill_names(args: &Value) -> Vec<String> {
             commands.push(value.to_string());
         }
     });
+    let allow_direct_cat = !matches!(tool_name, "powershell" | "pwsh");
     commands
         .into_iter()
-        .flat_map(|command| complete_reader_paths(&command))
+        .flat_map(|command| complete_reader_paths(&command, allow_direct_cat))
         .filter_map(|path| skill_name_from_path(&path))
         .collect()
 }
 
 fn is_structured_reader(tool_name: &str) -> bool {
-    const READERS: [&str; 5] = [
+    const READERS: [&str; 8] = [
         "read",
         "readfile",
         "readtextfile",
         "readmultiplefiles",
         "fileread",
+        "readresource",
+        "getfilecontents",
+        "readfilecontent",
     ];
     let segments = tool_name
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -136,7 +143,9 @@ fn is_structured_reader(tool_name: &str) -> bool {
 fn is_shell_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "bash"
+        "sh" | "bash"
+            | "zsh"
+            | "fish"
             | "shell"
             | "shellcommand"
             | "exec"
@@ -147,6 +156,7 @@ fn is_shell_tool(tool_name: &str) -> bool {
             | "runshellcommand"
             | "shellexec"
             | "powershell"
+            | "pwsh"
     )
 }
 
@@ -214,15 +224,20 @@ fn skill_name_from_path(path: &str) -> Option<String> {
     Some((*parent).to_string())
 }
 
-fn complete_reader_paths(command: &str) -> Vec<String> {
-    if command.contains(['\n', '\r']) {
+fn complete_reader_paths(command: &str, allow_direct_cat: bool) -> Vec<String> {
+    let Some(words) = standalone_command_words(command) else {
         return Vec::new();
+    };
+    complete_reader_word_paths(&words, allow_direct_cat)
+}
+
+fn standalone_command_words(command: &str) -> Option<Vec<String>> {
+    if command.contains(['\n', '\r']) {
+        return None;
     }
     // Preserve Windows separators: shell-words treats a lone backslash as an escape.
     let escaped_windows_paths = command.replace('\\', "\\\\");
-    let Ok(words) = shell_words::split(&escaped_windows_paths) else {
-        return Vec::new();
-    };
+    let words = shell_words::split(&escaped_windows_paths).ok()?;
     if words.is_empty()
         || words.iter().any(|word| {
             matches!(
@@ -232,17 +247,89 @@ fn complete_reader_paths(command: &str) -> Vec<String> {
                 || word.contains('`')
         })
     {
+        return None;
+    }
+    Some(words)
+}
+
+fn complete_reader_word_paths(words: &[String], allow_direct_cat: bool) -> Vec<String> {
+    let Some(executable) = words.first().and_then(|word| executable_name(word)) else {
+        return Vec::new();
+    };
+    match executable.as_str() {
+        "cat" if allow_direct_cat => positional_paths(&words[1..], &[]),
+        "bat" | "batcat" => positional_paths(&words[1..], &["-r", "--line-range"]),
+        "get-content" => powershell_content_paths(&words[1..]),
+        "sh" | "bash" | "zsh" => posix_shell_wrapper_paths(&executable, &words[1..]),
+        "fish" => fish_shell_wrapper_paths(&words[1..]),
+        "powershell" | "pwsh" => powershell_wrapper_paths(&words[1..]),
+        _ => Vec::new(),
+    }
+}
+
+fn posix_shell_wrapper_paths(executable: &str, words: &[String]) -> Vec<String> {
+    let [flag, command] = words else {
+        return Vec::new();
+    };
+    if !matches!(
+        (executable, flag.as_str()),
+        ("sh", "-c") | ("bash" | "zsh", "-c" | "-lc")
+    ) {
         return Vec::new();
     }
+    let Some(command_words) = standalone_command_words(command) else {
+        return Vec::new();
+    };
+    posix_reader_word_paths(&command_words)
+}
+
+fn fish_shell_wrapper_paths(words: &[String]) -> Vec<String> {
+    let command = match words {
+        [flag, command] if flag == "-c" => command.as_str(),
+        [argument] => argument.strip_prefix("--command=").unwrap_or_default(),
+        _ => return Vec::new(),
+    };
+    let Some(command_words) = standalone_command_words(command) else {
+        return Vec::new();
+    };
+    posix_reader_word_paths(&command_words)
+}
+
+fn powershell_wrapper_paths(words: &[String]) -> Vec<String> {
+    let [flag, command @ ..] = words else {
+        return Vec::new();
+    };
+    if !flag.eq_ignore_ascii_case("-command") || command.is_empty() {
+        return Vec::new();
+    }
+    if let [command] = command {
+        let Some(command_words) = standalone_command_words(command) else {
+            return Vec::new();
+        };
+        return powershell_reader_word_paths(&command_words);
+    }
+    powershell_reader_word_paths(command)
+}
+
+fn posix_reader_word_paths(words: &[String]) -> Vec<String> {
     let Some(executable) = words.first().and_then(|word| executable_name(word)) else {
         return Vec::new();
     };
     match executable.as_str() {
         "cat" => positional_paths(&words[1..], &[]),
         "bat" | "batcat" => positional_paths(&words[1..], &["-r", "--line-range"]),
-        "get-content" => powershell_content_paths(&words[1..]),
         _ => Vec::new(),
     }
+}
+
+fn powershell_reader_word_paths(words: &[String]) -> Vec<String> {
+    let Some(executable) = words.first().and_then(|word| executable_name(word)) else {
+        return Vec::new();
+    };
+    if executable != "get-content" {
+        return Vec::new();
+    }
+    powershell_content_paths(&words[1..])
 }
 
 fn positional_paths(words: &[String], rejected_flags: &[&str]) -> Vec<String> {
