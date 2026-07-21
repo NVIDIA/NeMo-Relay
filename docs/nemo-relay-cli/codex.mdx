@@ -343,9 +343,19 @@ discover exactly one enabled, trusted handler for every generated event.
 `PostToolUseFailure`, `Notification`, and `SessionEnd` are not in the Codex 0.143
 plugin hook schema, so Relay does not generate undiscoverable handlers for them.
 Relay maps delivered events to agent, turn, subagent, tool, and mark lifecycle
-events; prompt and stop payloads also provide LLM correlation context. Complete
-standalone `cat`, `bat`, `batcat`, or PowerShell `Get-Content` reads of
-`SKILL.md` emit observed `skill.load` marks.
+events; prompt and stop payloads also provide LLM correlation context.
+
+Relay emits an observed `skill.load` mark when it sees a complete file read
+through `cat`, `bat`, `batcat`, or PowerShell `Get-Content`. The final path
+component must equal `SKILL.md` under an ASCII case-insensitive comparison.
+Relay also recognizes one supported wrapper around that reader: `sh -c`,
+`bash -c`, `bash -lc`, `zsh -c`, `zsh -lc`, `fish -c`,
+`fish --command=...`, `powershell -Command`, or `pwsh -Command`. Skill-load
+detection is best effort. Relay must be able to observe a supported request
+shape. If Relay doesn't emit a mark, that doesn't prove that the skill wasn't
+loaded. Refer to
+[Automatic Skill-Load Marks](/about-nemo-relay/concepts/events#automatic-skill-load-marks)
+for the complete criteria.
 
 The transparent wrapper passes hook entries as Codex CLI config overrides and
 sets `features.hooks=true` for that launched process. It also disables the known

@@ -149,6 +149,36 @@ read. The following payload excerpt shows the stable skill-load fields.
 Standard fields from the [shared envelope](#shared-envelope), such as
 `atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
 
+<Warning>
+Automatic skill-load extraction is best effort. Relay emits `skill.load` only
+through one of the following detection paths:
+
+- An integration supplies a precomputed detection with a nonempty skill name
+  and supported source before removing the original tool arguments.
+- Relay sees a recognized first-class skill tool with a nonempty `skill`,
+  `skill_name`, or `name` argument.
+- Relay sees the original arguments for a supported reader request that meets
+  all of the reader criteria below.
+
+For a reader request, all of the following conditions must be true:
+
+- The tool name matches a supported reader, either directly or through one
+  supported shell wrapper.
+- A recognized argument field or parsed command contains a path or URI. Its
+  final path component equals `SKILL.md` under an ASCII case-insensitive
+  comparison.
+- The path's immediate parent directory has a nonempty name, which Relay uses
+  as the skill name.
+- The request reads the entire file. Relay ignores requests that use partial or
+  range controls, unsupported transformations, metadata-only operations,
+  pipelines, redirections, command substitutions, or compound commands.
+  Relay also ignores output-transforming and unreviewed reader options.
+
+Relay checks the request before tool execution. The mark records an attempted
+load even if execution later fails. If Relay doesn't emit a mark, that doesn't
+prove that the skill wasn't loaded.
+</Warning>
+
 ```json
 {
   "kind": "mark",
@@ -167,23 +197,67 @@ Relay uses these `skill_load_source` values:
 | --- | --- |
 | `skill_tool` | A first-class skill tool, such as `Skill` or `skill_view` |
 | `structured_read` | A structured request for a whole-file read |
-| `shell_read` | A standalone, complete `cat`, `bat`, `batcat`, or PowerShell `Get-Content` command |
+| `shell_read` | A complete `cat`, `bat`, `batcat`, or PowerShell `Get-Content` command, either direct or within one supported wrapper |
 
-For reader detections, the path must end in `SKILL.md`; the skill name is its
-immediate parent directory. A nonzero structured offset, any structured limit
-or range control, shell pipelines, redirections, compound commands, and
-range-limited shell readers do not count. An explicit structured `offset` of
-`0` still represents a complete read. Relay omits the full path and shell
-command from the mark.
+For structured reads, Relay recognizes only the following reviewed tool-name
+suffixes and argument fields:
+
+- Tool suffixes: `read`, `read_file`, `read_text_file`,
+  `read_multiple_files`, `file_read`, `read_resource`, `get_file_contents`,
+  and `read_file_content`.
+- Argument fields: `path`, `file_path`, `filepath`, `filename`, `file`,
+  `paths`, `uri`, and `absolute_path`.
+
+For shell reads, Relay recognizes the following direct shell tool names after
+normalizing case and nonalphanumeric separators:
+
+- Tool names: `sh`, `bash`, `zsh`, `fish`, `shell`, `shell_command`, `exec`,
+  `exec_command`, `execute`, `terminal`, `run_command`, `run_shell_command`,
+  `shell_exec`, `powershell`, and `pwsh`.
+- Argument fields: `command` and `cmd`.
+
+Relay also recognizes a single wrapper layer inside a direct shell tool. Each
+wrapper must use one of the following forms:
+
+- POSIX shells: `sh -c`, `bash -c`, `bash -lc`, `zsh -c`, or `zsh -lc`.
+- Fish: `fish -c` or `fish --command=...`.
+- PowerShell: `powershell -Command` or `pwsh -Command`.
+
+The `sh`, `bash`, `zsh`, and `fish` wrappers support `cat`, `bat`, and `batcat`.
+PowerShell wrappers support `Get-Content`. Relay treats unknown tool names,
+argument fields, wrapper forms, Windows `type`, and PowerShell aliases as
+unsupported until an integration explicitly adds them to the registry.
+
+The shell reader option registry is deliberately narrow:
+
+- `cat` supports no options or the exact content-preserving `-u` option. Other
+  options, including bundled short options, are unsupported.
+- `bat` and `batcat` require one exact plain-output option: `-p` or `--plain`.
+  Relay rejects every additional option.
+- `Get-Content` supports positional paths and the exact `-Path`,
+  `-LiteralPath`, `-Raw`, `-Encoding`, `-ReadCount`, `-AsByteStream`, and
+  `-Force` options. PowerShell abbreviations and other options are unsupported.
+
+For a reader request, the final path component must equal `SKILL.md` under an
+ASCII case-insensitive comparison. Relay uses the immediate parent directory as
+the skill name. Relay doesn't emit a mark when a structured request has a
+`offset` other than the integer `0`, a `limit`, or a range control. It also
+doesn't emit a mark for shell commands that use pipelines, redirections,
+compound commands, or range-limited readers, or help, version, listing, or
+diagnostic operations. It also doesn't emit a mark for output-transforming or
+unreviewed reader options. An explicit structured `offset` of `0` still
+represents a complete read. Relay omits the full path and shell command from
+the mark.
 
 The mark has these lifecycle semantics:
 
 - Relay emits it immediately after the tool-start event and before execution,
   with the tool span as its parent.
-- It records an eager load attempt and remains present if the tool later fails.
-- A blocked call that never starts does not emit the mark.
-- Relay emits each skill once per tool call. A later call that attempts the
-  same load emits another mark.
+- The mark records an eager load attempt and remains in the event stream if the
+  tool later fails.
+- Relay doesn't emit the mark for a blocked call that never starts.
+- Relay emits at most one mark for each skill in a tool call. A later tool call
+  that attempts the same load emits another mark.
 
 Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`, and
 tool calls made through the Rust, Python, Node.js, Go/FFI, LangChain, LangGraph,

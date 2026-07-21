@@ -11,6 +11,30 @@ use strum::{EnumString, IntoStaticStr};
 pub(crate) const HANDLED_METADATA_KEY: &str = "nemo_relay.skill_load_handled";
 pub(crate) const PRECOMPUTED_METADATA_KEY: &str = "nemo_relay.skill_loads";
 
+const CAT_REJECTED_OPTIONS: &[&str] = &[
+    "-h",
+    "--help",
+    "--version",
+    "--show-all",
+    "--number-nonblank",
+    "--show-ends",
+    "--number",
+    "--squeeze-blank",
+    "--show-tabs",
+    "--show-nonprinting",
+];
+const CAT_REJECTED_SHORT_OPTIONS: &[char] = &['A', 'b', 'e', 'E', 'n', 's', 't', 'T', 'v'];
+const BAT_ALLOWED_OPTIONS: &[&str] = &["-p", "--plain"];
+const POWERSHELL_ALLOWED_OPTIONS: &[&str] = &[
+    "asbytestream",
+    "encoding",
+    "force",
+    "literalpath",
+    "path",
+    "raw",
+    "readcount",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub(crate) enum SkillLoadSource {
@@ -35,7 +59,10 @@ pub(crate) fn detect(tool_name: &str, args: &Value) -> Vec<SkillLoad> {
             structured_skill_names(args),
         )
     } else if is_shell_tool(&normalized_tool) {
-        (SkillLoadSource::ShellRead, shell_skill_names(args))
+        (
+            SkillLoadSource::ShellRead,
+            shell_skill_names(&normalized_tool, args),
+        )
     } else {
         return Vec::new();
     };
@@ -92,7 +119,7 @@ fn structured_skill_names(args: &Value) -> Vec<String> {
     visit_named_values(args, |key, value| {
         if matches!(
             key.as_str(),
-            "path" | "filepath" | "filename" | "file" | "paths"
+            "path" | "filepath" | "filename" | "file" | "paths" | "uri" | "absolutepath"
         ) {
             collect_path_skill_names(value, &mut names);
         }
@@ -100,7 +127,7 @@ fn structured_skill_names(args: &Value) -> Vec<String> {
     names
 }
 
-fn shell_skill_names(args: &Value) -> Vec<String> {
+fn shell_skill_names(tool_name: &str, args: &Value) -> Vec<String> {
     let mut commands = Vec::new();
     visit_named_values(args, |key, value| {
         if matches!(key.as_str(), "command" | "cmd")
@@ -109,20 +136,24 @@ fn shell_skill_names(args: &Value) -> Vec<String> {
             commands.push(value.to_string());
         }
     });
+    let allow_direct_cat = !matches!(tool_name, "powershell" | "pwsh");
     commands
         .into_iter()
-        .flat_map(|command| complete_reader_paths(&command))
+        .flat_map(|command| complete_reader_paths(&command, allow_direct_cat))
         .filter_map(|path| skill_name_from_path(&path))
         .collect()
 }
 
 fn is_structured_reader(tool_name: &str) -> bool {
-    const READERS: [&str; 5] = [
+    const READERS: [&str; 8] = [
         "read",
         "readfile",
         "readtextfile",
         "readmultiplefiles",
         "fileread",
+        "readresource",
+        "getfilecontents",
+        "readfilecontent",
     ];
     let segments = tool_name
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -136,7 +167,9 @@ fn is_structured_reader(tool_name: &str) -> bool {
 fn is_shell_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "bash"
+        "sh" | "bash"
+            | "zsh"
+            | "fish"
             | "shell"
             | "shellcommand"
             | "exec"
@@ -147,6 +180,7 @@ fn is_shell_tool(tool_name: &str) -> bool {
             | "runshellcommand"
             | "shellexec"
             | "powershell"
+            | "pwsh"
     )
 }
 
@@ -156,7 +190,7 @@ fn has_partial_read_controls(value: &Value) -> bool {
         if !partial {
             let key = normalize_identifier(&key);
             partial = match key.as_str() {
-                "offset" => value.as_i64().is_some_and(|offset| offset != 0),
+                "offset" => value.as_i64() != Some(0),
                 "limit" | "range" | "head" | "tail" | "startline" | "endline" | "linestart"
                 | "lineend" => !value.is_null(),
                 _ => false,
@@ -197,7 +231,12 @@ fn visit_named_values(value: &Value, mut visit: impl FnMut(String, &Value)) {
 }
 
 fn skill_name_from_path(path: &str) -> Option<String> {
-    let path = path.trim().trim_matches(['\'', '"']);
+    if path.trim() != path
+        || path.starts_with(['\'', '"'])
+        || path.ends_with(['\'', '"', '/', '\\'])
+    {
+        return None;
+    }
     let components = path
         .split(['/', '\\'])
         .filter(|component| !component.is_empty())
@@ -214,45 +253,162 @@ fn skill_name_from_path(path: &str) -> Option<String> {
     Some((*parent).to_string())
 }
 
-fn complete_reader_paths(command: &str) -> Vec<String> {
-    if command.contains(['\n', '\r']) {
+fn complete_reader_paths(command: &str, allow_direct_cat: bool) -> Vec<String> {
+    let Some(words) = standalone_command_words(command) else {
         return Vec::new();
+    };
+    complete_reader_word_paths(&words, allow_direct_cat)
+}
+
+fn standalone_command_words(command: &str) -> Option<Vec<String>> {
+    if command.contains(['\n', '\r']) {
+        return None;
     }
     // Preserve Windows separators: shell-words treats a lone backslash as an escape.
     let escaped_windows_paths = command.replace('\\', "\\\\");
-    let Ok(words) = shell_words::split(&escaped_windows_paths) else {
-        return Vec::new();
-    };
+    let words = shell_words::split(&escaped_windows_paths).ok()?;
     if words.is_empty()
         || words.iter().any(|word| {
-            matches!(
-                word.as_str(),
-                "|" | "||" | "&" | "&&" | ";" | "<" | ">" | "<<" | ">>"
-            ) || word.contains("$(")
-                || word.contains('`')
+            word.contains(['|', '&', ';', '<', '>']) || word.contains("$(") || word.contains('`')
         })
     {
-        return Vec::new();
+        return None;
     }
+    Some(words)
+}
+
+fn complete_reader_word_paths(words: &[String], allow_direct_cat: bool) -> Vec<String> {
     let Some(executable) = words.first().and_then(|word| executable_name(word)) else {
         return Vec::new();
     };
     match executable.as_str() {
-        "cat" => positional_paths(&words[1..], &[]),
-        "bat" | "batcat" => positional_paths(&words[1..], &["-r", "--line-range"]),
+        "cat" if allow_direct_cat => cat_paths(&words[1..]),
+        "bat" | "batcat" => bat_paths(&words[1..]),
         "get-content" => powershell_content_paths(&words[1..]),
+        "sh" | "bash" | "zsh" => posix_shell_wrapper_paths(&executable, &words[1..]),
+        "fish" => fish_shell_wrapper_paths(&words[1..]),
+        "powershell" | "pwsh" => powershell_wrapper_paths(&words[1..]),
         _ => Vec::new(),
     }
 }
 
-fn positional_paths(words: &[String], rejected_flags: &[&str]) -> Vec<String> {
+fn posix_shell_wrapper_paths(executable: &str, words: &[String]) -> Vec<String> {
+    let [flag, command] = words else {
+        return Vec::new();
+    };
+    if !matches!(
+        (executable, flag.as_str()),
+        ("sh", "-c") | ("bash" | "zsh", "-c" | "-lc")
+    ) {
+        return Vec::new();
+    }
+    let Some(command_words) = standalone_command_words(command) else {
+        return Vec::new();
+    };
+    posix_reader_word_paths(&command_words)
+}
+
+fn fish_shell_wrapper_paths(words: &[String]) -> Vec<String> {
+    let command = match words {
+        [flag, command] if flag == "-c" => command.as_str(),
+        [argument] => argument.strip_prefix("--command=").unwrap_or_default(),
+        _ => return Vec::new(),
+    };
+    let Some(command_words) = standalone_command_words(command) else {
+        return Vec::new();
+    };
+    posix_reader_word_paths(&command_words)
+}
+
+fn powershell_wrapper_paths(words: &[String]) -> Vec<String> {
+    let [flag, command @ ..] = words else {
+        return Vec::new();
+    };
+    if !flag.eq_ignore_ascii_case("-command") || command.is_empty() {
+        return Vec::new();
+    }
+    if let [command] = command {
+        let Some(command_words) = standalone_command_words(command) else {
+            return Vec::new();
+        };
+        return powershell_reader_word_paths(&command_words);
+    }
+    powershell_reader_word_paths(command)
+}
+
+fn posix_reader_word_paths(words: &[String]) -> Vec<String> {
+    let Some(executable) = words.first().and_then(|word| executable_name(word)) else {
+        return Vec::new();
+    };
+    match executable.as_str() {
+        "cat" => cat_paths(&words[1..]),
+        "bat" | "batcat" => bat_paths(&words[1..]),
+        _ => Vec::new(),
+    }
+}
+
+fn powershell_reader_word_paths(words: &[String]) -> Vec<String> {
+    let Some(executable) = words.first().and_then(|word| executable_name(word)) else {
+        return Vec::new();
+    };
+    if executable != "get-content" {
+        return Vec::new();
+    }
+    powershell_content_paths(&words[1..])
+}
+
+fn cat_paths(words: &[String]) -> Vec<String> {
     if words.iter().any(|word| {
-        rejected_flags
-            .iter()
-            .any(|flag| word.eq_ignore_ascii_case(flag) || word.starts_with(&format!("{flag}=")))
+        is_rejected_option(word, CAT_REJECTED_OPTIONS, CAT_REJECTED_SHORT_OPTIONS)
+            || (word.starts_with('-') && word != "--" && !word.eq_ignore_ascii_case("-u"))
     }) {
         return Vec::new();
     }
+    positional_paths(words)
+}
+
+fn bat_paths(words: &[String]) -> Vec<String> {
+    if words
+        .iter()
+        .filter(|word| {
+            BAT_ALLOWED_OPTIONS
+                .iter()
+                .any(|option| word.eq_ignore_ascii_case(option))
+        })
+        .count()
+        != 1
+        || words.iter().any(|word| {
+            word.starts_with('-')
+                && word != "--"
+                && !BAT_ALLOWED_OPTIONS
+                    .iter()
+                    .any(|option| word.eq_ignore_ascii_case(option))
+        })
+    {
+        return Vec::new();
+    }
+    positional_paths(words)
+}
+
+fn is_rejected_option(
+    word: &str,
+    rejected_options: &[&str],
+    rejected_short_options: &[char],
+) -> bool {
+    rejected_options
+        .iter()
+        .any(|option| word.eq_ignore_ascii_case(option) || word.starts_with(&format!("{option}=")))
+        || word
+            .strip_prefix('-')
+            .filter(|options| !options.starts_with('-'))
+            .is_some_and(|options| {
+                options
+                    .chars()
+                    .any(|option| rejected_short_options.contains(&option))
+            })
+}
+
+fn positional_paths(words: &[String]) -> Vec<String> {
     words
         .iter()
         .filter(|word| !word.starts_with('-'))
@@ -262,9 +418,12 @@ fn positional_paths(words: &[String], rejected_flags: &[&str]) -> Vec<String> {
 
 fn powershell_content_paths(words: &[String]) -> Vec<String> {
     if words.iter().any(|word| {
-        ["-totalcount", "-tail", "-head", "-first", "-last"]
-            .iter()
-            .any(|flag| word.eq_ignore_ascii_case(flag) || word.starts_with(&format!("{flag}:")))
+        word.starts_with('-')
+            && !powershell_option_name(word).is_some_and(|option| {
+                POWERSHELL_ALLOWED_OPTIONS
+                    .iter()
+                    .any(|allowed| option.eq_ignore_ascii_case(allowed))
+            })
     }) {
         return Vec::new();
     }
@@ -273,10 +432,21 @@ fn powershell_content_paths(words: &[String]) -> Vec<String> {
     let mut index = 0;
     while index < words.len() {
         let word = &words[index];
-        if word.eq_ignore_ascii_case("-path") || word.eq_ignore_ascii_case("-literalpath") {
-            if let Some(path) = words.get(index + 1) {
+        let option = powershell_option_name(word);
+        if option.is_some_and(|option| {
+            option.eq_ignore_ascii_case("path") || option.eq_ignore_ascii_case("literalpath")
+        }) {
+            if let Some(path) = powershell_option_value(word) {
+                paths.push(path.to_string());
+            } else if let Some(path) = words.get(index + 1) {
                 paths.push(path.clone());
+                index += 2;
+                continue;
             }
+        } else if option.is_some_and(|option| {
+            option.eq_ignore_ascii_case("encoding") || option.eq_ignore_ascii_case("readcount")
+        }) && powershell_option_value(word).is_none()
+        {
             index += 2;
             continue;
         }
@@ -286,6 +456,16 @@ fn powershell_content_paths(words: &[String]) -> Vec<String> {
         index += 1;
     }
     paths
+}
+
+fn powershell_option_name(word: &str) -> Option<&str> {
+    word.strip_prefix('-')?.split([':', '=']).next()
+}
+
+fn powershell_option_value(word: &str) -> Option<&str> {
+    word.split_once([':', '='])
+        .map(|(_, value)| value)
+        .filter(|value| !value.is_empty())
 }
 
 fn executable_name(executable: &str) -> Option<String> {
