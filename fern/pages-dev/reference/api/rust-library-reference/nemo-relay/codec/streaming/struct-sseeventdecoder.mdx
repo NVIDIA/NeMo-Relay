@@ -41,6 +41,14 @@ Bytes are interpreted as UTF-8 with replacement characters for invalid sequences
 
 Returns `Ok(events)` containing zero or more events whose `data:` payloads parsed successfully. Frames whose `data:` line is non-empty but does not parse as JSON are surfaced as [`FlowError::Internal`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) so the caller can decide whether to abort the stream or skip the frame; frames with no `data:` line at all (e.g. SSE heartbeats) are silently dropped.
 
+#### `push_bytes_results`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_bytes_results(&amp;mut self, bytes: &amp;[<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>]) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
+
+Appends `bytes` and returns each completed frame's result in wire order.
+
+Unlike [`Self::push_bytes`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/struct-sseeventdecoder), this preserves successful events that precede a malformed frame in the same byte batch. Decoding stops after the first error so callers can emit the preceding events, surface the error, and terminate the stream.
+
 #### `finish`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn finish(self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
