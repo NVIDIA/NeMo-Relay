@@ -532,15 +532,13 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
         while let Some(chunk) = bytes.next().await {
             match chunk {
                 Ok(buffer) => {
-                    match decoder.push_bytes(&buffer) {
-                        Ok(events) => {
-                            for event in events {
-                                yield Ok(event.data);
+                    for result in decoder.push_bytes_results(&buffer) {
+                        match result {
+                            Ok(event) => yield Ok(event.data),
+                            Err(error) => {
+                                yield Err(error);
+                                return;
                             }
-                        }
-                        Err(error) => {
-                            yield Err(error);
-                            return;
                         }
                     }
                 }

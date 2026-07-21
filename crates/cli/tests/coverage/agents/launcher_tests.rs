@@ -972,6 +972,10 @@ fn prepares_hermes_hook_environment() {
     ));
     assert!(overlay.join("state.db").exists());
     assert_eq!(
+        std::fs::read_to_string(overlay.join("state.db")).unwrap(),
+        "state"
+    );
+    assert_eq!(
         std::fs::read_to_string(overlay.join("cache/entry")).unwrap(),
         "cached"
     );
@@ -989,6 +993,128 @@ fn prepares_hermes_hook_environment() {
     prepared.restore().unwrap();
     assert!(hooks_path.exists());
     assert!(!overlay.exists());
+}
+
+#[test]
+fn sequential_hermes_runs_preserve_state_from_a_fresh_home() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let source_home = temp.path().join("hermes-home");
+    let hooks_path = source_home.join("config.yaml");
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs {
+            hermes: AgentCommandConfig {
+                command: None,
+                hooks_path: Some(hooks_path),
+            },
+            ..AgentConfigs::default()
+        },
+        dynamic_plugins: Vec::new(),
+        ..ResolvedConfig::default()
+    };
+    let prepare = || {
+        PreparedAgentLaunch::new(
+            CodingAgent::Hermes,
+            vec!["hermes".into(), "chat".into()],
+            "http://127.0.0.1:1234",
+            &resolved,
+            false,
+        )
+        .unwrap()
+    };
+    let overlay = |prepared: &PreparedAgentLaunch| {
+        prepared
+            .env
+            .iter()
+            .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
+            .expect("Hermes overlay path")
+    };
+
+    let first = prepare();
+    let first_overlay = overlay(&first);
+    std::fs::write(first_overlay.join("state.db"), "session state").unwrap();
+    std::fs::create_dir_all(first_overlay.join("sessions")).unwrap();
+    std::fs::write(
+        first_overlay.join("sessions/session.json"),
+        "session details",
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(source_home.join("state.db"))
+            .expect("state.db should be linked to the caller's Hermes home"),
+        "session state"
+    );
+    assert_eq!(
+        std::fs::read_to_string(source_home.join("sessions/session.json"))
+            .expect("sessions should be linked to the caller's Hermes home"),
+        "session details"
+    );
+
+    first.restore().unwrap();
+    assert!(!first_overlay.exists());
+
+    let second = prepare();
+    let second_overlay = overlay(&second);
+    assert_eq!(
+        std::fs::read_to_string(second_overlay.join("state.db")).unwrap(),
+        "session state"
+    );
+    assert_eq!(
+        std::fs::read_to_string(second_overlay.join("sessions/session.json")).unwrap(),
+        "session details"
+    );
+
+    second.restore().unwrap();
+    assert!(!second_overlay.exists());
+    assert!(source_home.join("state.db").exists());
+    assert!(source_home.join("sessions/session.json").exists());
+}
+
+#[test]
+fn rejects_state_db_directory_before_populating_hermes_overlay() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_home = temp.path().join("hermes-home");
+    let state_db = source_home.join("state.db");
+    let hooks_path = source_home.join("config.yaml");
+    std::fs::create_dir_all(&state_db).unwrap();
+    let resolved = ResolvedConfig {
+        agents: AgentConfigs {
+            hermes: AgentCommandConfig {
+                hooks_path: Some(hooks_path.clone()),
+                ..AgentCommandConfig::default()
+            },
+            ..AgentConfigs::default()
+        },
+        ..ResolvedConfig::default()
+    };
+
+    let result = PreparedAgentLaunch::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into(), "chat".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    );
+    let error = match result {
+        Ok(prepared) => {
+            prepared.restore().unwrap();
+            panic!("state.db directories must be rejected")
+        }
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, CliError::Io(_)));
+    assert!(state_db.is_dir());
+    assert!(!hooks_path.exists());
+    assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".nemo-relay-hermes-home")
+    }));
 }
 
 #[cfg(unix)]
