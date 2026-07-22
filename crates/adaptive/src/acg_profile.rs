@@ -76,26 +76,47 @@ fn derive_key_parts(annotated_request: &AnnotatedLlmRequest) -> AcgKeyParts<'_> 
 fn message_role_tag(message: &Message) -> &'static str {
     match message {
         Message::System { .. } => "system",
+        Message::Developer { .. } => "developer",
         Message::User { .. } => "user",
         Message::Assistant { .. } => "assistant",
         Message::Tool { .. } => "tool",
+        Message::Function { .. } => "function",
+        Message::ToolCallItem { .. } => "tool_call",
+        Message::ToolResultItem { .. } => "tool_result",
+        Message::ProviderNative { .. } => "provider_native",
     }
 }
 
 fn system_prompt_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String {
-    let system_content = annotated_request
-        .messages
-        .iter()
-        .filter_map(|message| match message {
-            Message::System { content, .. } => Some(extract_text(content)),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut system_content = Vec::new();
+    if let Some(instructions) = &annotated_request.instructions {
+        system_content.push(serde_json::json!({
+            "source": "instructions",
+            "content": instructions,
+        }));
+    }
+    system_content.extend(
+        annotated_request
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::System { content, .. } => Some(serde_json::json!({
+                    "source": "message",
+                    "role": "system",
+                    "content": content,
+                })),
+                Message::Developer { content, .. } => Some(serde_json::json!({
+                    "source": "message",
+                    "role": "developer",
+                    "content": content,
+                })),
+                _ => None,
+            }),
+    );
     if system_content.is_empty() {
         "no-system".to_string()
     } else {
-        sha256_hex(&system_content)
+        hash_canonical_json(&serde_json::Value::Array(system_content))
     }
 }
 
@@ -148,7 +169,7 @@ fn learning_seed_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String 
         .messages
         .iter()
         .find_map(|message| match message {
-            Message::System { .. } => None,
+            Message::System { .. } | Message::Developer { .. } => None,
             Message::User { content, .. } => {
                 Some(format!("user:{}", sha256_hex(&extract_text(content))))
             }
@@ -160,8 +181,44 @@ fn learning_seed_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String 
             Message::Tool { content, .. } => {
                 Some(format!("tool:{}", sha256_hex(&extract_text(content))))
             }
+            Message::Function { content, name } => Some(format!(
+                "function:{}",
+                hash_canonical_json(&serde_json::json!({
+                    "name": name,
+                    "content": content,
+                }))
+            )),
+            Message::ToolCallItem {
+                name, arguments, ..
+            } => Some(format!(
+                "tool-call:{}",
+                hash_canonical_json(&serde_json::json!({
+                    "name": name,
+                    "arguments": arguments,
+                }))
+            )),
+            Message::ToolResultItem { output, .. } => {
+                Some(format!("tool-result:{}", sha256_hex(&output.to_string())))
+            }
+            Message::ProviderNative {
+                provider,
+                kind,
+                value,
+            } => Some(format!(
+                "native:{}",
+                hash_canonical_json(&serde_json::json!({
+                    "provider": provider,
+                    "kind": kind,
+                    "value": value,
+                }))
+            )),
         })
         .unwrap_or_else(|| "no-seed".to_string())
+}
+
+fn hash_canonical_json(value: &serde_json::Value) -> String {
+    let canonical = canonicalize_value(value).unwrap_or_else(|_| value.to_string());
+    sha256_hex(&canonical)
 }
 
 fn tool_schema_fingerprint(tools: Option<&[ToolDefinition]>) -> String {
@@ -189,12 +246,21 @@ fn extract_text(content: &MessageContent) -> String {
         MessageContent::Parts(parts) => parts
             .iter()
             .map(|part| match part {
-                ContentPart::Text { text } => text.clone(),
-                ContentPart::ImageUrl { image_url } => format!(
+                ContentPart::Text { text, .. } => text.clone(),
+                ContentPart::Refusal { refusal, .. } => refusal.clone(),
+                ContentPart::ImageUrl { image_url, .. } => format!(
                     "[image:{}:{}]",
                     image_url.detail.as_deref().unwrap_or("none"),
                     sha256_hex(&image_url.url)
                 ),
+                ContentPart::Image { .. }
+                | ContentPart::Audio { .. }
+                | ContentPart::File { .. }
+                | ContentPart::ToolUse { .. }
+                | ContentPart::ToolResult { .. }
+                | ContentPart::ProviderNative { .. } => {
+                    serde_json::to_string(part).unwrap_or_default()
+                }
             })
             .collect::<Vec<_>>()
             .join("\n"),

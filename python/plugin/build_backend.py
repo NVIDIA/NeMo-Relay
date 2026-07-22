@@ -14,10 +14,19 @@ from pathlib import Path
 from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _project_file(relative_path: str) -> Path:
+    candidate = (_PROJECT_ROOT / relative_path).resolve()
+    if candidate.parent != _PROJECT_ROOT:
+        raise ValueError(f"path must be a direct child of {_PROJECT_ROOT}")
+    return candidate
+
+
 _REPOSITORY_PROTO = _PROJECT_ROOT.parents[1] / "crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto"
 _SDIST_PROTO = _PROJECT_ROOT / "proto/plugin_worker.proto"
 _GENERATED_DIR = _PROJECT_ROOT / "src/nemo_relay_plugin/_proto"
-_MANIFEST = _PROJECT_ROOT / "MANIFEST.in"
+_MANIFEST = _project_file("MANIFEST.in")
 
 
 def generate_worker_proto(output_dir: Path = _GENERATED_DIR) -> None:

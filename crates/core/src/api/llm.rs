@@ -36,7 +36,9 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 
-pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+pub use nemo_relay_types::api::llm::{
+    LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
+};
 
 #[derive(Clone)]
 struct CapturedLlmScopeStack(ScopeStackHandle);

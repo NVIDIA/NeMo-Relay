@@ -13,7 +13,7 @@ Use this guide when a framework integration needs NeMo Relay middleware, interce
 
 You will attach request and response codecs to a managed LLM wrapper so that:
 
-- Request intercepts can work with normalized messages, model names, tools, generation parameters, and provider-specific extras
+- Request intercepts can work with normalized instructions, messages, model names, tools, generation parameters, and tagged provider-specific fields
 - The provider callback still receives the provider payload that the framework expects
 - Response subscribers can receive normalized response annotations without changing the caller-visible provider response
 
@@ -52,9 +52,37 @@ annotation, Relay rejects the outcome before creating the LLM lifecycle. When
 no request codec is active, the raw request remains fully writable and is the
 provider-visible source of truth.
 
+Gateway interceptors must preserve the request's effective `stream` mode. The
+gateway chooses buffered or streaming response handling before request
+intercepts run and rejects changes between those modes before contacting the
+provider.
+
 When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
 
-Codec implementations should preserve fields they do not understand. Treat `encode` as a merge operation over the original provider payload, not as a full replacement.
+The built-in codecs guarantee
+`encode(decode(original), original) == original` at the JSON-value level. Their
+encoders compare an edited annotation with a decoded baseline and patch only
+changed fields. As a result, unchanged string-versus-block content, explicit
+nulls, legacy field names, ordered input items, metadata, and unknown fields
+remain untouched. Removing an unknown top-level key from `extra` removes it
+from the provider payload; adding or changing a key overlays it.
+
+Use the annotated request surfaces according to their ownership:
+
+- `instructions` for Anthropic `system` or OpenAI Responses `instructions`.
+- Portable `messages`, content parts, function calls and results, `tools`, and
+  `tool_choice` when the component has shared semantics.
+- Tagged `api_specific` fields for modeled controls that belong to Anthropic
+  Messages, OpenAI Chat Completions, or OpenAI Responses.
+- `{ provider, kind, value }` native components for provider-only input items,
+  blocks, tools, tool choices, and future union members. `value` is the exact
+  provider JSON.
+- Top-level `extra` only for unknown future fields.
+
+Provider-native components are intentionally surface-bound. If an intercept
+places an Anthropic native block in an OpenAI request, or makes a portable edit
+that the target API cannot encode, Relay returns an explicit error before the
+provider callback.
 
 ## Built-in Provider Codecs
 
@@ -80,6 +108,11 @@ The built-in provider codecs expose the same core methods:
 | Anthropic Messages | `nemo_relay.codecs.AnthropicMessagesCodec` | `AnthropicMessagesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 
 Choose the provider codec that matches the payload shape the framework already sends to the provider. Do not translate to a different provider shape only to make the codec fit.
+
+The `nemo-relay` gateway selects these request codecs automatically for
+`/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, for both buffered
+and streaming calls. Count-token, model, probe, and non-LLM passthrough routes
+do not use request codecs.
 
 ## Example: Add a System Message with a Provider Codec
 
@@ -252,6 +285,44 @@ let response = llm_call_execute(
 
 </Tabs>
 
+## Example: Edit Provider-Specific and Native Data
+
+The tagged `api_specific` object is mutable. Python getters return JSON values,
+so retrieve, edit, and reassign the value. The same reassignment pattern works
+for a provider-native component inside `messages`.
+
+```python
+def tune_responses_request(_name, request, annotated):
+    if annotated is None:
+        return nemo_relay.LLMRequestInterceptOutcome(request)
+
+    api_specific = dict(annotated.api_specific or {})
+    if api_specific.get("api") == "openai_responses":
+        api_specific["background"] = True
+        api_specific["stream_options"] = {"include_obfuscation": False}
+        annotated.api_specific = api_specific
+
+    messages = list(annotated.messages)
+    for index, item in enumerate(messages):
+        if (
+            item.get("role") == "provider_native"
+            and item.get("provider") == "openai_responses"
+            and item.get("kind") == "reasoning"
+        ):
+            native_value = dict(item["value"])
+            native_value["encrypted_content"] = "updated-ciphertext"
+            messages[index] = {**item, "value": native_value}
+    annotated.messages = messages
+
+    # request.headers remains mutable; request.content is read-only here.
+    request.headers["x-request-policy"] = "codec-aware"
+    return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
+```
+
+Native values are not normalized across providers. Keep the `provider` tag
+unchanged unless you also replace the entire component with a representation
+that the target codec owns.
+
 ## Example: Write a Custom Framework Codec
 
 Use a custom codec when a framework uses a payload shape that does not directly match a built-in provider format. The codec decodes the framework shape into `AnnotatedLLMRequest`, and encodes edits back into the framework shape.
@@ -369,10 +440,32 @@ Use this checklist to confirm the implementation preserves the expected runtime
 contract.
 
 - Intercepts receive `annotated` only when the managed call supplies a request codec.
-- `encode` preserves provider fields that the annotated model does not represent.
+- An unchanged annotation encodes to the exact original JSON value.
+- Portable edits preserve adjacent provider-native components and unknown fields.
+- Provider-specific edits use `api_specific`; `extra` is limited to unknown future top-level fields.
+- Provider-mismatched native components fail before the provider callback.
 - Response codecs are used only for event annotations, not caller-visible response rewriting.
 - Codec implementations are pure data transforms and do not perform provider I/O.
 - Framework-owned clients, sockets, streams, callbacks, and file handles stay outside codec results.
+
+## Migrate Raw Gateway Body Mutation
+
+The 0.6 request annotation expansion uses
+`nemo.relay.AnnotatedLlmRequest@2` and
+`nemo.relay.LlmRequestInterceptOutcome@2` at dynamic plugin boundaries. Rebuild
+Rust native plugins and Rust `grpc-v1` workers against NeMo Relay 0.6, and
+update Python workers to the 0.6 worker SDK. A dynamic plugin that registers an
+LLM request intercept must set `compat.relay = ">=0.6,<1.0"`, or another range
+that excludes Relay 0.5. Relay enforces this floor when the intercept is
+registered.
+
+Gateway interceptors that mutate provider request bodies must now edit the
+annotation on the three generation routes. For example, replace
+`request.content["messages"] = messages` with
+`annotated.messages = messages`, and return the edited annotation with the raw
+request. Keep transport-only changes in `request.headers`. Relay rejects a raw
+body edit while the route codec is active, so the provider never receives an
+ambiguous mix of raw and annotated changes.
 
 ## Next Steps
 

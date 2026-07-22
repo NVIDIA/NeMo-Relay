@@ -1632,6 +1632,7 @@ fn test_response_text_extracts_first_text_from_parts() {
     let resp = AnnotatedLlmResponse {
         message: Some(MessageContent::Parts(vec![ContentPart::Text {
             text: "Part text".into(),
+            extra: serde_json::Map::new(),
         }])),
         ..minimal_response()
     };

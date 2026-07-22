@@ -42,6 +42,17 @@ Keep typed boundaries explicit so middleware still sees predictable JSON.
 - Request codecs run before LLM request intercepts. Intercepts receive both the
   raw `LLMRequest` and optional annotated request; `encode` merges annotated
   edits back before execution intercepts and the provider callback run.
+- Built-in request codecs guarantee JSON-value identity for an unchanged
+  annotation. They compare edits with a decoded baseline and patch only changed
+  fields, preserving native representation details and unknown fields.
+- Use `instructions`, portable messages and components, and the tagged
+  `api_specific` request surface for normalized edits. Provider-only union
+  members use explicit `{ provider, kind, value }` native components. Reserve
+  top-level `extra` for unknown future fields.
+- The `nemo-relay` gateway always supplies matching request codecs on Anthropic
+  Messages, OpenAI Chat Completions, and OpenAI Responses generation routes.
+  On those routes, treat raw `request.content` as read-only and return body
+  edits through the annotated request. Header edits still use the raw request.
 
 ## Key Rules
 
@@ -69,6 +80,8 @@ Keep typed boundaries explicit so middleware still sees predictable JSON.
 - [ ] Response codec failures do not break the underlying LLM call
 - [ ] Request codec `encode` preserves original provider fields unless an
   intercept intentionally changes them
+- [ ] Provider-native components belong to the codec's provider surface
+- [ ] Gateway generation intercepts do not mutate raw `request.content`
 
 ## Related Skills
 

@@ -149,8 +149,10 @@ discrete attributes. Refer to
 for the full mapping.
 
 Register the plugin before the first instrumented request, use stable service
-identity fields, keep credentials outside source code, and flush during
-graceful shutdown.
+identity fields, keep credentials outside source code, and clear the plugin
+during graceful shutdown. Calling subscriber flush delivers queued events to
+the tracing subscriber, but it does not necessarily drain the tracer provider's
+export processor.
 
 ## Plugin Configuration
 
@@ -303,7 +305,11 @@ Ok(())
 ## Manual API
 
 Use the manual subscriber API when you need an explicit subscriber name or
-direct `force_flush` control.
+direct control over when spans are exported. `force_flush()` first waits for
+shared subscriber delivery and then asks the tracer provider to export finished
+spans. `shutdown()` waits for shared subscriber work and then shuts down the
+provider. During plugin teardown, `plugin.clear()` or
+`clear_plugin_configuration()` invokes the owned subscriber shutdown path.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -384,3 +390,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - Headers or resource attributes are not string-to-string maps.
 - The exporter feature is unavailable in the current build or target.
 - The endpoint is unreachable at runtime.
+- Abrupt termination can discard events that are still in the shared dispatcher
+  or spans that are still in the provider queue. Backend visibility also
+  depends on transport success, timeouts, and backend processing.

@@ -431,7 +431,11 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_deregister(
     }
 }
 
-/// Flushes the ATOF exporter output file.
+/// Outside a native subscriber callback, waits for queued subscriber delivery, then flushes the
+/// configured file sink or asks the configured stream sink to drain for up to its timeout.
+///
+/// A re-entrant call does not establish the delivery barrier. A stream timeout is logged and does
+/// not by itself return an error.
 ///
 /// # Safety
 /// `exporter` must be a valid, non-null pointer.
@@ -450,7 +454,11 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_force_flush(
     }
 }
 
-/// Shuts down the ATOF exporter by flushing output.
+/// Outside a native subscriber callback, waits for queued subscriber delivery, then flushes the
+/// configured file sink or asks the configured stream sink to drain and close up to its timeout.
+///
+/// A re-entrant call does not establish the delivery barrier. A stream timeout is logged and does
+/// not by itself return an error.
 ///
 /// # Safety
 /// `exporter` must be a valid, non-null pointer.

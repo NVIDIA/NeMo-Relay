@@ -11,13 +11,15 @@ use nemo_relay_types::api::event::{
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
-use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Map, json};
 
 #[test]
 fn event_round_trips_with_annotated_llm_profiles() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hello".into()),
             name: None,
@@ -222,4 +224,100 @@ fn tool_execution_intercept_outcome_converts_from_json() {
     let result = json!({"value": 42});
     let outcome: ToolExecutionInterceptOutcome = result.clone().into();
     assert_eq!(outcome, ToolExecutionInterceptOutcome::new(result));
+}
+
+#[test]
+fn annotated_request_helpers_cover_portable_and_native_components() {
+    let mut request = AnnotatedLlmRequest {
+        instructions: Some(MessageContent::Parts(vec![ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "refusal".into(),
+            value: json!({"refusal": "instruction refusal"}),
+        }])),
+        ..AnnotatedLlmRequest::default()
+    };
+    assert_eq!(request.system_prompt(), Some("instruction refusal"));
+
+    request.instructions = None;
+    request.messages = vec![Message::Developer {
+        content: MessageContent::Parts(vec![ContentPart::Text {
+            text: "developer instruction".into(),
+            extra: Map::new(),
+        }]),
+        name: None,
+    }];
+    assert_eq!(request.system_prompt(), Some("developer instruction"));
+
+    for (content, expected) in [
+        (json!("native string"), Some("native string")),
+        (
+            json!([{"type": "input_text", "text": "native array"}]),
+            Some("native array"),
+        ),
+        (json!({"not": "content"}), None),
+    ] {
+        request.messages = vec![Message::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "message".into(),
+            value: json!({"role": "user", "content": content}),
+        }];
+        assert_eq!(request.last_user_message(), expected);
+    }
+
+    request.messages = vec![Message::Assistant {
+        content: Some(MessageContent::Parts(vec![ContentPart::ToolUse {
+            id: "call_1".into(),
+            name: "lookup".into(),
+            input: json!({}),
+            extra: Map::new(),
+        }])),
+        tool_calls: Some(vec![]),
+        name: None,
+    }];
+    assert!(request.has_tool_calls());
+
+    request.messages = vec![Message::Assistant {
+        content: Some(MessageContent::Parts(vec![ContentPart::ProviderNative {
+            provider: "anthropic_messages".into(),
+            kind: "server_tool_use".into(),
+            value: json!({"type": "server_tool_use"}),
+        }])),
+        tool_calls: None,
+        name: None,
+    }];
+    assert!(request.has_tool_calls());
+
+    request.messages = vec![Message::ToolCallItem {
+        id: None,
+        call_id: "call_2".into(),
+        name: "lookup".into(),
+        arguments: json!({}),
+        extra: Map::new(),
+    }];
+    assert!(request.has_tool_calls());
+
+    request.messages = vec![Message::ProviderNative {
+        provider: "openai_responses".into(),
+        kind: "function_call".into(),
+        value: json!({"type": "function_call"}),
+    }];
+    assert!(request.has_tool_calls());
+}
+
+#[test]
+fn annotated_response_text_reads_provider_native_text_and_refusal() {
+    for (value, expected) in [
+        (json!({"text": "native text"}), "native text"),
+        (json!({"refusal": "native refusal"}), "native refusal"),
+    ] {
+        let response = AnnotatedLlmResponse {
+            message: Some(MessageContent::Parts(vec![ContentPart::ProviderNative {
+                provider: "openai_responses".into(),
+                kind: "native".into(),
+                value,
+            }])),
+            ..AnnotatedLlmResponse::default()
+        };
+        assert_eq!(response.response_text(), Some(expected));
+    }
 }

@@ -1,0 +1,87 @@
+---
+title: "Support Matrix"
+description: "Supported NeMo Relay platforms, CLI agent hosts, and framework integrations."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This matrix describes the support scope for the current NVIDIA NeMo Relay
+release. It distinguishes published, prebuilt release artifacts from components
+that you build and package for the host yourself. CI coverage indicates where
+the repository runs validation; it does not by itself create a separate support
+commitment. For release-specific changes and known limitations, refer to
+[Release Notes](/about-nemo-relay/release-notes).
+
+## Platforms and Architectures
+
+| Surface | Linux x86_64 | Linux ARM64 | macOS x86_64 | macOS ARM64 | Windows x86_64 | Windows ARM64 | Limitations |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Core Library | Required CI coverage | Required CI coverage | Not in the current CI matrix | Required CI coverage | Non-blocking CI coverage | Non-blocking CI coverage | Rust is the source of truth. Python and Node.js packages require their supported runtimes; Go and raw C FFI remain experimental and source-first. |
+| CLI Application | Published `x86_64-unknown-linux-musl` asset | Published `aarch64-unknown-linux-musl` asset | No published release asset | Published `aarch64-apple-darwin` asset | Published `x86_64-pc-windows-msvc` asset | Published `aarch64-pc-windows-msvc` asset | Intel macOS has no prebuilt CLI asset. Use a source install on unsupported platforms. |
+| Native Plugins | Build for the host ABI | Build for the host ABI | Build and validate locally | Build for the host ABI | Build for the host ABI; CI is non-blocking | Build for the host ABI; CI is non-blocking | Native plugins run in-process and are not sandboxed. Rebuild for the host ABI and compatible Relay version. |
+| gRPC Worker Plugins | Depends on the selected worker runtime | Depends on the selected worker runtime | Build and validate locally | Depends on the selected worker runtime | Depends on the selected worker runtime | Depends on the selected worker runtime | Workers run as local child processes over `grpc-v1`, not as a security sandbox. Python workers are unsupported on Windows ARM64. Refer to the worker runtime matrix for runtime-specific requirements. |
+
+### Linux Distribution Notes
+
+The published Linux CLI binaries use musl targets and are not tied to a
+distribution-specific package manager. Linux CI uses Ubuntu runners. NeMo Relay
+does not publish distribution-specific DEB or RPM packages or certify individual
+Ubuntu, Debian, RHEL-compatible, or Fedora releases. On an unsupported CPU,
+unsupported operating system, or a system whose local requirements prevent the
+release asset from running, install from source with Cargo.
+
+## Worker Runtime Compatibility
+
+gRPC worker plugins run as local processes. Package and test each worker for
+its Relay host platform. This matrix does not make a compatibility claim for
+emulated or cross-architecture worker execution.
+
+| Worker runtime | Linux x86_64 | Linux ARM64 | macOS x86_64 | macOS ARM64 | Windows x86_64 | Windows ARM64 | Requirements and limitations |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Python | Worker E2E CI coverage | Not separately worker E2E validated | Build and validate locally | Worker E2E CI coverage | Worker E2E CI coverage; CI is non-blocking | Unsupported: no usable `grpcio` wheel | Use `runtime = "python"`, a `module:function` entrypoint, and `source.manifest_root`. `nemo-relay plugins add` creates and retains the managed Python environment. Package dependencies for the target host. |
+| Rust | Host-compatible executable; core CI coverage | Host-compatible executable; core CI coverage | Build and validate locally | Host-compatible executable; core CI coverage | Host-compatible executable; core CI is non-blocking | Host-compatible executable; core CI is non-blocking | Use `runtime = "rust"` and provide an executable that implements `grpc-v1`. |
+| Command | Host-compatible executable; core CI coverage | Host-compatible executable; core CI coverage | Build and validate locally | Host-compatible executable; core CI coverage | Host-compatible executable; core CI is non-blocking | Host-compatible executable; core CI is non-blocking | Use `runtime = "command"` for another local executable that implements `grpc-v1`. Its runtime, dependencies, and compatibility are the operator's responsibility. |
+
+The process boundary isolates crashes and dependencies, but it is not a security
+sandbox. Refer to [gRPC Worker Plugin
+Concepts](/build-plugins/dynamic-plugins/grpc-worker/about) for manifests,
+lifecycle, and trust requirements.
+
+## Coding Agents Supported by the CLI
+
+The CLI supports local coding-agent sessions where agent hooks and provider
+traffic can reach the local Relay gateway. It rejects prerelease, malformed,
+and older CLI versions during installation, diagnostics, and transparent runs.
+
+| Agent | Minimum version | Supported CLI capabilities | Current limitations |
+| --- | --- | --- | --- |
+| Claude Code | 2.1.121 | Persistent install, transparent run, lifecycle hooks, local gateway routing, and pre-tool security | Claude desktop, web, and application sessions are unsupported unless they expose the same local hook and gateway controls. Optimization requires gateway-routed LLM traffic and available hooks. |
+| Codex CLI | 0.143.0 | Persistent install, transparent run, 10 supported plugin hooks, local gateway routing, and pre-tool security | Cloud or remote tasks that bypass the local machine have partial or no LLM capture. The plugin hook schema has no `SessionEnd`; Relay finalizes the cumulative session snapshot at `Stop`. Encrypted Codex multi-agent v2 payloads cannot be decrypted or reliably linked. |
+| Hermes Agent | 0.18.2 | Persistent MCP integration, transparent run, lifecycle hooks, local gateway routing, and pre-tool security | Optimization depends on Hermes shell and API-request hook coverage. Hook-observed and gateway-observed LLM spans can both be present when both paths are enabled. |
+
+For installation, diagnostics, and host-specific behavior, refer to [Coding Agent
+Installation](/nemo-relay-cli/plugin-installation), [Claude
+Code](/nemo-relay-cli/claude-code), [Codex](/nemo-relay-cli/codex), and [Hermes
+Agent](/nemo-relay-cli/hermes).
+
+## Framework and Agent Harness Integrations
+
+| Integration | Observability | Security | Optimization | Notes |
+| --- | --- | --- | --- | --- |
+| LangChain | Yes | Yes | Yes | Wrapped tool and LLM calling. |
+| LangGraph | Yes | Yes | Yes | Wrapped tool and LLM calling. |
+| Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
+| OpenClaw | Yes | Partial | No | Public hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
+
+Install the maintained Python integrations with the `langchain`, `langgraph`,
+and `deepagents` extras. Install the OpenClaw integration as the
+`nemo-relay-openclaw` plugin. Refer to [Supported
+Integrations](/supported-integrations/about) for setup and guide links.
+
+## Related Information
+
+- [Installation](/getting-started/installation) lists published CLI assets and source-install options.
+- [Build Plugins](/build-plugins/about) explains native and worker plugin boundaries.
+- [Migration Guides](/reference/migration-guides) gives the current upgrade actions.
+- [Release Notes](/about-nemo-relay/release-notes) records release-specific compatibility notes and known issues.

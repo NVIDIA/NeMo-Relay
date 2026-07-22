@@ -58,6 +58,7 @@ use crate::plugin::{
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, deregister_tracked_registrations_checked,
+    validate_annotated_request_consumer_compatibility,
 };
 
 /// Native plugin load request derived from host dynamic-plugin state.
@@ -258,6 +259,7 @@ fn native_error_diagnostic(plugin_kind: &str, code: &str, message: &str) -> Conf
 
 struct NativePluginInstance {
     plugin_kind: String,
+    relay_compat: String,
     allows_multiple_components: bool,
     plugin: Mutex<NemoRelayNativePluginV1>,
     _library: Library,
@@ -302,6 +304,12 @@ fn load_one_native_plugin(
         )));
     }
     validate_relay_compatibility(manifest.compat.relay.as_deref())?;
+    let relay_compat = manifest
+        .compat
+        .relay
+        .as_deref()
+        .expect("validated native manifest must declare compat.relay")
+        .to_string();
     if manifest.compat.native_api.as_deref().map(str::trim) != Some("1") {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin '{}' declares unsupported compat.native_api '{}'; expected 1",
@@ -384,6 +392,7 @@ fn load_one_native_plugin(
     }
     Ok(Arc::new(NativePluginInstance {
         plugin_kind,
+        relay_compat,
         allows_multiple_components: plugin.allows_multiple_components,
         plugin: Mutex::new(plugin),
         _library: library,
@@ -1350,6 +1359,12 @@ unsafe extern "C" fn native_plugin_context_register_llm_request_intercept(
         Err(status) => return status,
     };
     let instance = host_ctx.instance.clone();
+    if let Err(error) = validate_annotated_request_consumer_compatibility(
+        &instance.relay_compat,
+        &instance.plugin_kind,
+    ) {
+        return status_from_plugin_error(error);
+    }
     let ctx = unsafe { &mut *host_ctx.ctx };
     let name = match read_name(name) {
         Ok(name) => name,

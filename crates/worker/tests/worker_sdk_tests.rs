@@ -19,9 +19,10 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext, PluginContext, PluginRuntime, Result,
-    ScopeType, ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError,
-    WorkerServerConfig, serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
+    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
+    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
+    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
+    serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -405,6 +406,9 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     .expect("cancelled stream should terminate");
     assert!(stream_ack.accepted);
     assert_eq!(stream_error.code, "worker.cancelled");
+    tokio::time::timeout(timeout, plugin.stream_cancelled_notified.notified())
+        .await
+        .expect("cancelled stream should be dropped");
     assert!(plugin.stream_cancelled.load(Ordering::SeqCst));
 
     handle.abort();
@@ -1262,6 +1266,16 @@ async fn worker_service_reports_missing_handlers_and_malformed_payloads() {
             .into_inner(),
         "EOF while parsing",
     );
+    assert_worker_error(
+        client
+            .invoke(Request::new(llm_invoke_with_legacy_annotation(
+                "llm-request",
+            )))
+            .await
+            .expect("legacy annotation schema returns structured error")
+            .into_inner(),
+        "expected \"nemo.relay.AnnotatedLlmRequest@2\"",
+    );
 
     let unknown_stream_surface = client
         .invoke_stream(Request::new(InvokeRequest {
@@ -1487,6 +1501,7 @@ struct CancellationPlugin {
     unary_cancelled: Arc<AtomicBool>,
     stream_started: Arc<tokio::sync::Notify>,
     stream_cancelled: Arc<AtomicBool>,
+    stream_cancelled_notified: Arc<tokio::sync::Notify>,
     stream_setup_started: Arc<tokio::sync::Notify>,
     stream_setup_cancelled: Arc<AtomicBool>,
 }
@@ -1519,13 +1534,16 @@ impl WorkerPlugin for CancellationPlugin {
 
         let stream_started = self.stream_started.clone();
         let stream_cancelled = self.stream_cancelled.clone();
+        let stream_cancelled_notified = self.stream_cancelled_notified.clone();
         ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _| {
             let stream_started = stream_started.clone();
             let stream_cancelled = stream_cancelled.clone();
+            let stream_cancelled_notified = stream_cancelled_notified.clone();
             async move {
                 Ok(Box::pin(FillThenPendingStream {
                     started: stream_started,
                     cancelled: stream_cancelled,
+                    cancelled_notified: stream_cancelled_notified,
                     yielded: 0,
                 }) as JsonStream)
             }
@@ -1549,6 +1567,7 @@ impl WorkerPlugin for CancellationPlugin {
 struct FillThenPendingStream {
     started: Arc<tokio::sync::Notify>,
     cancelled: Arc<AtomicBool>,
+    cancelled_notified: Arc<tokio::sync::Notify>,
     yielded: usize,
 }
 
@@ -1573,6 +1592,7 @@ impl Stream for FillThenPendingStream {
 impl Drop for FillThenPendingStream {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::SeqCst);
+        self.cancelled_notified.notify_one();
     }
 }
 
@@ -2337,8 +2357,27 @@ fn llm_invoke_with_bad_annotation(registration_name: &str) -> InvokeRequest {
         request.payload.as_mut()
     {
         payload.annotated_request = Some(JsonEnvelope {
-            schema: "nemo.relay.AnnotatedLlmRequest@1".into(),
+            schema: ANNOTATED_LLM_REQUEST_SCHEMA.into(),
             json: b"{".to_vec(),
+        });
+    }
+    request
+}
+
+fn llm_invoke_with_legacy_annotation(registration_name: &str) -> InvokeRequest {
+    let mut request = llm_invoke(
+        registration_name,
+        RegistrationSurface::LlmRequestIntercept,
+        llm_request(),
+        None,
+        None,
+    );
+    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(payload)) =
+        request.payload.as_mut()
+    {
+        payload.annotated_request = Some(JsonEnvelope {
+            schema: "nemo.relay.AnnotatedLlmRequest@1".into(),
+            json: br#"{"messages":[]}"#.to_vec(),
         });
     }
     request

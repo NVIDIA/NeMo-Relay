@@ -936,6 +936,28 @@ fn unsupported_worker_relay_requirement_reports_compatibility_error() {
 }
 
 #[test]
+fn worker_request_intercept_rejects_manifest_that_admits_relay_0_5() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) =
+        write_manifest_with_relay(fixture.binary_path(), ">=0.5,<1.0");
+
+    let error = match load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
+    }]) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("the request-intercept registration should reject Relay 0.5 compatibility");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains(">=0.6,<1.0"), "{error}");
+}
+
+#[test]
 fn invalid_worker_relay_requirement_reports_parse_error() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
     let missing_binary = std::env::temp_dir().join(format!("unused-worker-{}", Uuid::now_v7()));
@@ -1118,6 +1140,8 @@ struct FixtureCodec;
 impl LlmCodec for FixtureCodec {
     fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
         Ok(AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages: Vec::new(),
             model: Some("fixture-model".into()),
             params: None,

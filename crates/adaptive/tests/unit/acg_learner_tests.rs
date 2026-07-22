@@ -20,6 +20,8 @@ use crate::types::records::{CallRecord, RunRecord};
 
 fn sample_request(model: &str, system: &str, user: &str) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text(system.to_string()),

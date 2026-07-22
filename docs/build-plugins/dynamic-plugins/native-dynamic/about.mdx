@@ -55,6 +55,11 @@ Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"1"`, and
 from the manifest. The exported symbol must return a descriptor whose
 `plugin_kind` matches `plugin.id` exactly.
 
+If the plugin registers an LLM request intercept, set
+`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. Relay
+rejects the registration when the manifest admits a host that predates the
+version 2 request annotation envelope.
+
 ## Create a Native Plugin
 
 Create a Rust library project with the following `Cargo.toml` file:
