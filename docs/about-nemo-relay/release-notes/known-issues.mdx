@@ -56,6 +56,15 @@ The following limitations and migration steps apply to NVIDIA NeMo Relay 0.6.
   3.11 or newer and `nemoguardrails==0.22.0`.
 - The PII redaction plugin currently supports its deterministic local backend.
   Local-model backend configuration is reserved for future work.
+- The `trajectory_context` PII preset can replace string-valued classification
+  fields in generic scope metadata when those fields are not part of its
+  analytical allowlist. Affected fields include `nemo_relay_scope_role`,
+  `hook_event_name`, and harness-provided `agent_kind`. This can make explicit
+  agent-role or harness classification unavailable even though the event keys
+  and scope topology remain. `custom_mark_payload_policy` does not control
+  scope metadata, and profile-array mode cannot exclude generic scopes while
+  retaining both LLM and tool sanitization. Track the correction in
+  [GitHub issue #528](https://github.com/NVIDIA/NeMo-Relay/issues/528).
 - Pricing and optimization estimates are only as complete as the model name,
   token data, pricing source, and freshness evidence that Relay receives. When
   evidence is missing or inconsistent, cost fields remain partial or absent

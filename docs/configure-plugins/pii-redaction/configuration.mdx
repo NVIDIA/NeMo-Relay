@@ -173,6 +173,19 @@ surface flags. Profile-array configurations intentionally do not expose those
 flags: every enabled profile owns the complete pre-subscriber sanitization
 boundary.
 
+<Warning>
+The `trajectory_context` preset currently applies its analytical-field
+allowlist to generic scope metadata. String-valued classification fields that
+are not on that allowlist, including `nemo_relay_scope_role`,
+`hook_event_name`, and harness-provided `agent_kind`, can be replaced with the
+configured redaction token. `custom_mark_payload_policy` affects unknown
+custom Mark payloads, not Scope metadata.
+
+Profile-array mode does not currently provide a way to preserve generic scope
+metadata while retaining both LLM and tool sanitization. Track this limitation
+in [GitHub issue #528](https://github.com/NVIDIA/NeMo-Relay/issues/528).
+</Warning>
+
 ### CLI Editor Support
 
 The NeMo Relay CLI plugin editor now exposes `pii_redaction` directly through
