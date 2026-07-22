@@ -989,6 +989,206 @@ fn decode_openai_or_anthropic_parallel_tool_calls(
     .map(|disabled| !disabled))
 }
 
+fn patch_responses_messages(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+    original: &LlmRequest,
+) -> Result<()> {
+    if annotated.messages != baseline.messages {
+        let input = if original.content.get("input").is_some_and(Json::is_string)
+            && matches!(
+                annotated.messages.as_slice(),
+                [Message::User {
+                    content: MessageContent::Text(_),
+                    name: None
+                }]
+            ) {
+            match &annotated.messages[0] {
+                Message::User {
+                    content: MessageContent::Text(text),
+                    ..
+                } => Json::String(text.clone()),
+                _ => unreachable!(),
+            }
+        } else {
+            Json::Array(super::encode_changed_items(
+                &annotated.messages,
+                &baseline.messages,
+                original
+                    .content
+                    .get("input")
+                    .and_then(Json::as_array)
+                    .map(Vec::as_slice),
+                encode_responses_input_item,
+            )?)
+        };
+        obj.insert("input".into(), input);
+    }
+    if annotated.instructions != baseline.instructions {
+        let instructions = match &annotated.instructions {
+            Some(MessageContent::Text(text)) => Some(Json::String(text.clone())),
+            Some(MessageContent::Parts(_)) => {
+                return Err(FlowError::InvalidArgument(
+                    "OpenAI Responses instructions cannot contain content parts".into(),
+                ));
+            }
+            None => None,
+        };
+        set_or_remove_json(obj, "instructions", instructions);
+    }
+    Ok(())
+}
+
+fn patch_responses_model_and_params(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) -> Result<()> {
+    if annotated.model != baseline.model {
+        set_or_remove_json(obj, "model", annotated.model.clone().map(Json::String));
+    }
+    if annotated.params != baseline.params {
+        let edited = annotated.params.as_ref();
+        let before = baseline.params.as_ref();
+        let stop = edited.and_then(|params| params.stop.as_ref());
+        if stop != before.and_then(|params| params.stop.as_ref()) && stop.is_some() {
+            return Err(FlowError::InvalidArgument(
+                "OpenAI Responses does not support stop sequences".into(),
+            ));
+        }
+        for (key, value, old_value) in [
+            (
+                "temperature",
+                edited.and_then(|params| params.temperature),
+                before.and_then(|params| params.temperature),
+            ),
+            (
+                "top_p",
+                edited.and_then(|params| params.top_p),
+                before.and_then(|params| params.top_p),
+            ),
+        ] {
+            if value != old_value {
+                set_or_remove_json(obj, key, value.map(json_f64));
+            }
+        }
+        let max_tokens = edited.and_then(|params| params.max_tokens);
+        if max_tokens != before.and_then(|params| params.max_tokens) {
+            set_or_remove_json(obj, "max_output_tokens", max_tokens.map(Json::from));
+        }
+    }
+    Ok(())
+}
+
+fn patch_responses_tools(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) -> Result<()> {
+    if annotated.tools != baseline.tools {
+        let tools = annotated
+            .tools
+            .as_deref()
+            .map(|tools| {
+                super::encode_changed_items_with_patch(
+                    tools,
+                    baseline.tools.as_deref().unwrap_or(&[]),
+                    obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
+                    encode_responses_tool,
+                    patch_responses_tool,
+                )
+            })
+            .transpose()?
+            .map(Json::Array);
+        set_or_remove_json(obj, "tools", tools);
+    }
+    if annotated.tool_choice != baseline.tool_choice {
+        let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
+            (Some(edited), Some(before)) => {
+                let edited = encode_responses_tool_choice(edited)?;
+                let before = encode_responses_tool_choice(before)?;
+                Some(match obj.get("tool_choice") {
+                    Some(original) => super::patch_changed_json(original, &before, &edited)?,
+                    None => edited,
+                })
+            }
+            (Some(edited), None) => Some(encode_responses_tool_choice(edited)?),
+            (None, _) => None,
+        };
+        set_or_remove_json(obj, "tool_choice", tool_choice);
+    }
+    Ok(())
+}
+
+fn patch_responses_common_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) {
+    for (key, value, old_value) in [
+        ("truncation", &annotated.truncation, &baseline.truncation),
+        ("reasoning", &annotated.reasoning, &baseline.reasoning),
+        ("include", &annotated.include, &baseline.include),
+        ("metadata", &annotated.metadata, &baseline.metadata),
+    ] {
+        if value != old_value {
+            set_or_remove_json(obj, key, value.clone());
+        }
+    }
+    for (key, value, old_value) in [
+        (
+            "previous_response_id",
+            &annotated.previous_response_id,
+            &baseline.previous_response_id,
+        ),
+        ("user", &annotated.user, &baseline.user),
+        (
+            "service_tier",
+            &annotated.service_tier,
+            &baseline.service_tier,
+        ),
+    ] {
+        if value != old_value {
+            set_or_remove_json(obj, key, value.clone().map(Json::String));
+        }
+    }
+    for (key, value, old_value) in [
+        ("store", annotated.store, baseline.store),
+        (
+            "parallel_tool_calls",
+            annotated.parallel_tool_calls,
+            baseline.parallel_tool_calls,
+        ),
+        ("stream", annotated.stream, baseline.stream),
+    ] {
+        if value != old_value {
+            set_or_remove_json(obj, key, value.map(Json::Bool));
+        }
+    }
+    for (key, value, old_value) in [
+        (
+            "max_output_tokens",
+            annotated.max_output_tokens,
+            baseline.max_output_tokens,
+        ),
+        (
+            "max_tool_calls",
+            annotated.max_tool_calls,
+            baseline.max_tool_calls,
+        ),
+        (
+            "top_logprobs",
+            annotated.top_logprobs,
+            baseline.top_logprobs,
+        ),
+    ] {
+        if value != old_value {
+            set_or_remove_json(obj, key, value.map(Json::from));
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // LlmResponseCodec implementation
 // ---------------------------------------------------------------------------
@@ -1213,177 +1413,10 @@ impl LlmCodec for OpenAIResponsesCodec {
         let obj = content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-        if annotated.messages != baseline.messages {
-            let input = if original.content.get("input").is_some_and(Json::is_string)
-                && matches!(
-                    annotated.messages.as_slice(),
-                    [Message::User {
-                        content: MessageContent::Text(_),
-                        name: None
-                    }]
-                ) {
-                match &annotated.messages[0] {
-                    Message::User {
-                        content: MessageContent::Text(text),
-                        ..
-                    } => Json::String(text.clone()),
-                    _ => unreachable!(),
-                }
-            } else {
-                Json::Array(super::encode_changed_items(
-                    &annotated.messages,
-                    &baseline.messages,
-                    original
-                        .content
-                        .get("input")
-                        .and_then(Json::as_array)
-                        .map(Vec::as_slice),
-                    encode_responses_input_item,
-                )?)
-            };
-            obj.insert("input".into(), input);
-        }
-        if annotated.instructions != baseline.instructions {
-            let instructions = match &annotated.instructions {
-                Some(MessageContent::Text(text)) => Some(Json::String(text.clone())),
-                Some(MessageContent::Parts(_)) => {
-                    return Err(FlowError::InvalidArgument(
-                        "OpenAI Responses instructions cannot contain content parts".into(),
-                    ));
-                }
-                None => None,
-            };
-            set_or_remove_json(obj, "instructions", instructions);
-        }
-        if annotated.model != baseline.model {
-            set_or_remove_json(obj, "model", annotated.model.clone().map(Json::String));
-        }
-        if annotated.params != baseline.params {
-            let edited = annotated.params.as_ref();
-            let before = baseline.params.as_ref();
-            if edited.and_then(|params| params.stop.as_ref())
-                != before.and_then(|params| params.stop.as_ref())
-                && edited.and_then(|params| params.stop.as_ref()).is_some()
-            {
-                return Err(FlowError::InvalidArgument(
-                    "OpenAI Responses does not support stop sequences".into(),
-                ));
-            }
-            for (key, value, old_value) in [
-                (
-                    "temperature",
-                    edited.and_then(|params| params.temperature),
-                    before.and_then(|params| params.temperature),
-                ),
-                (
-                    "top_p",
-                    edited.and_then(|params| params.top_p),
-                    before.and_then(|params| params.top_p),
-                ),
-            ] {
-                if value != old_value {
-                    set_or_remove_json(obj, key, value.map(json_f64));
-                }
-            }
-            let max_tokens = edited.and_then(|params| params.max_tokens);
-            let old_max_tokens = before.and_then(|params| params.max_tokens);
-            if max_tokens != old_max_tokens {
-                set_or_remove_json(obj, "max_output_tokens", max_tokens.map(Json::from));
-            }
-        }
-        if annotated.tools != baseline.tools {
-            let tools = annotated
-                .tools
-                .as_deref()
-                .map(|tools| {
-                    super::encode_changed_items_with_patch(
-                        tools,
-                        baseline.tools.as_deref().unwrap_or(&[]),
-                        obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
-                        encode_responses_tool,
-                        patch_responses_tool,
-                    )
-                })
-                .transpose()?
-                .map(Json::Array);
-            set_or_remove_json(obj, "tools", tools);
-        }
-        if annotated.tool_choice != baseline.tool_choice {
-            let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
-                (Some(edited), Some(before)) => {
-                    let edited = encode_responses_tool_choice(edited)?;
-                    let before = encode_responses_tool_choice(before)?;
-                    Some(match obj.get("tool_choice") {
-                        Some(original) => super::patch_changed_json(original, &before, &edited)?,
-                        None => edited,
-                    })
-                }
-                (Some(edited), None) => Some(encode_responses_tool_choice(edited)?),
-                (None, _) => None,
-            };
-            set_or_remove_json(obj, "tool_choice", tool_choice);
-        }
-        for (key, value, old_value) in [
-            ("truncation", &annotated.truncation, &baseline.truncation),
-            ("reasoning", &annotated.reasoning, &baseline.reasoning),
-            ("include", &annotated.include, &baseline.include),
-            ("metadata", &annotated.metadata, &baseline.metadata),
-        ] {
-            if value != old_value {
-                set_or_remove_json(obj, key, value.clone());
-            }
-        }
-        for (key, value, old_value) in [
-            (
-                "previous_response_id",
-                &annotated.previous_response_id,
-                &baseline.previous_response_id,
-            ),
-            ("user", &annotated.user, &baseline.user),
-            (
-                "service_tier",
-                &annotated.service_tier,
-                &baseline.service_tier,
-            ),
-        ] {
-            if value != old_value {
-                set_or_remove_json(obj, key, value.clone().map(Json::String));
-            }
-        }
-        for (key, value, old_value) in [
-            ("store", annotated.store, baseline.store),
-            (
-                "parallel_tool_calls",
-                annotated.parallel_tool_calls,
-                baseline.parallel_tool_calls,
-            ),
-            ("stream", annotated.stream, baseline.stream),
-        ] {
-            if value != old_value {
-                set_or_remove_json(obj, key, value.map(Json::Bool));
-            }
-        }
-        for (key, value, old_value) in [
-            (
-                "max_output_tokens",
-                annotated.max_output_tokens,
-                baseline.max_output_tokens,
-            ),
-            (
-                "max_tool_calls",
-                annotated.max_tool_calls,
-                baseline.max_tool_calls,
-            ),
-            (
-                "top_logprobs",
-                annotated.top_logprobs,
-                baseline.top_logprobs,
-            ),
-        ] {
-            if value != old_value {
-                set_or_remove_json(obj, key, value.map(Json::from));
-            }
-        }
+        patch_responses_messages(obj, annotated, &baseline, original)?;
+        patch_responses_model_and_params(obj, annotated, &baseline)?;
+        patch_responses_tools(obj, annotated, &baseline)?;
+        patch_responses_common_fields(obj, annotated, &baseline);
         patch_responses_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
