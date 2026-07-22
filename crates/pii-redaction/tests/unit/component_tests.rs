@@ -26,9 +26,10 @@ use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, PluginError, PluginRegistrationContext,
-    clear_plugin_configuration, ensure_builtin_plugins_registered, initialize_plugins,
-    list_plugin_kinds, rollback_registrations, validate_plugin_config,
+    ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
+    PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
+    ensure_builtin_plugins_registered, initialize_plugins, list_plugin_kinds,
+    rollback_registrations, validate_plugin_config,
 };
 use futures::StreamExt;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
@@ -71,6 +72,67 @@ fn plugin_config(config: Json) -> PluginConfig {
         components: vec![component(config)],
         policy: Default::default(),
     }
+}
+
+#[test]
+fn top_level_policy_controls_component_diagnostics() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let component_config = json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "builtin": {
+            "action": "INVALID_ACTION",
+            "target_paths": ["/secret"]
+        }
+    });
+
+    let mut warn_config = plugin_config(component_config.clone());
+    warn_config.policy = ConfigPolicy {
+        unsupported_value: UnsupportedBehavior::Warn,
+        ..ConfigPolicy::default()
+    };
+    let warn_report = validate_plugin_config(&warn_config);
+    assert!(warn_report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "pii_redaction.unsupported_value"
+            && diagnostic.field.as_deref() == Some("builtin.action")
+            && diagnostic.level == DiagnosticLevel::Warning
+    }));
+
+    let mut ignored_config = plugin_config(component_config);
+    ignored_config.policy = ConfigPolicy {
+        unsupported_value: UnsupportedBehavior::Ignore,
+        ..ConfigPolicy::default()
+    };
+    let ignored_report = validate_plugin_config(&ignored_config);
+    assert!(
+        !ignored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "pii_redaction.unsupported_value")
+    );
+
+    let mut unknown_field_config = plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "builtin": {"action": "remove"},
+        "unexpected": true
+    }));
+    unknown_field_config.policy = ConfigPolicy {
+        unknown_field: UnsupportedBehavior::Error,
+        ..ConfigPolicy::default()
+    };
+    let unknown_field_report = validate_plugin_config(&unknown_field_config);
+    assert!(unknown_field_report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "pii_redaction.unknown_field"
+            && diagnostic.field.as_deref() == Some("unexpected")
+            && diagnostic.level == DiagnosticLevel::Error
+    }));
 }
 
 fn reset_runtime() {
