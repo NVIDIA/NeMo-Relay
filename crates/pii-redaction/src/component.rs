@@ -10,8 +10,8 @@ use std::sync::Arc;
 use nemo_relay::codec::resolve::supported_codec_names;
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
-    register_plugin,
+    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
+    apply_global_config_policy, deregister_plugin, register_plugin,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -417,6 +417,14 @@ impl Plugin for PiiRedactionPlugin {
         validate_pii_redaction_plugin_config(plugin_config)
     }
 
+    fn validate_with_policy(
+        &self,
+        plugin_config: &Map<String, Json>,
+        policy: &ConfigPolicy,
+    ) -> Vec<ConfigDiagnostic> {
+        validate_pii_redaction_plugin_config_with_policy(plugin_config, Some(policy))
+    }
+
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
@@ -582,7 +590,14 @@ fn parse_pii_redaction_config(
 fn validate_pii_redaction_plugin_config(
     plugin_config: &Map<String, Json>,
 ) -> Vec<ConfigDiagnostic> {
-    let config = match parse_pii_redaction_config(plugin_config) {
+    validate_pii_redaction_plugin_config_with_policy(plugin_config, None)
+}
+
+fn validate_pii_redaction_plugin_config_with_policy(
+    plugin_config: &Map<String, Json>,
+    policy: Option<&ConfigPolicy>,
+) -> Vec<ConfigDiagnostic> {
+    let mut config = match parse_pii_redaction_config(plugin_config) {
         Ok(config) => config,
         Err(err) => {
             return vec![ConfigDiagnostic {
@@ -594,6 +609,9 @@ fn validate_pii_redaction_plugin_config(
             }];
         }
     };
+    if let Some(policy) = policy {
+        config.policy = apply_global_config_policy(config.policy, policy);
+    }
 
     let mut diagnostics = vec![];
 

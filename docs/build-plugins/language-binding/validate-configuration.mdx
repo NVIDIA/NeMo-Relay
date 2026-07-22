@@ -29,9 +29,15 @@ Relay validates disabled components. This lets operators detect configuration
 problems before enabling a component in a later rollout.
 
 The top-level `policy` controls validation that Relay handles, including unknown
-plugin kinds and unsupported document versions. A custom plugin's `validate()`
-method controls how its own `config` fields handle unknown fields and
-unsupported values.
+plugin kinds and unsupported document versions. For built-in components,
+non-default `unknown_field` and `unsupported_value` settings also override the
+matching component policy during host validation. When a top-level setting uses
+its default value, an explicitly configured component policy remains in effect.
+
+A custom plugin's `validate()` method controls how its own `config` fields
+handle unknown fields and unsupported values. This includes in-process Python
+and Node.js plugins, native plugins, and gRPC worker plugins; their validation
+callbacks receive only component configuration.
 
 The following examples create the same configuration in each supported binding:
 

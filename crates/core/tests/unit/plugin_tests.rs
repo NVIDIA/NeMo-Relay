@@ -19,6 +19,7 @@ use crate::api::tool::tool_conditional_execution;
 use crate::error::FlowError;
 
 struct TestPlugin;
+struct PolicyAwarePlugin;
 
 struct SingletonPlugin;
 struct RecordingPlugin;
@@ -119,6 +120,48 @@ impl Plugin for TestPlugin {
                 }),
             )
         })
+    }
+}
+
+impl Plugin for PolicyAwarePlugin {
+    fn plugin_kind(&self) -> &str {
+        "policy-aware.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn validate_with_policy(
+        &self,
+        _plugin_config: &Map<String, Json>,
+        policy: &ConfigPolicy,
+    ) -> Vec<ConfigDiagnostic> {
+        match policy.unsupported_value {
+            UnsupportedBehavior::Ignore => vec![],
+            UnsupportedBehavior::Warn => vec![ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "policy-aware.unsupported_value".into(),
+                component: Some(self.plugin_kind().into()),
+                field: None,
+                message: "unsupported value".into(),
+            }],
+            UnsupportedBehavior::Error => vec![ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "policy-aware.unsupported_value".into(),
+                component: Some(self.plugin_kind().into()),
+                field: None,
+                message: "unsupported value".into(),
+            }],
+        }
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -707,6 +750,38 @@ fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
         policy: ConfigPolicy {
             unknown_component: UnsupportedBehavior::Ignore,
             ..PluginConfig::default().policy
+        },
+        ..PluginConfig::default()
+    });
+    assert!(ignored.diagnostics.is_empty());
+
+    reset_global();
+}
+
+#[test]
+fn test_validate_plugin_config_passes_top_level_policy_to_plugins() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(PolicyAwarePlugin)).unwrap();
+
+    let warning = validate_plugin_config(&PluginConfig {
+        components: vec![PluginComponentSpec::new("policy-aware.plugin")],
+        policy: ConfigPolicy {
+            unsupported_value: UnsupportedBehavior::Warn,
+            ..ConfigPolicy::default()
+        },
+        ..PluginConfig::default()
+    });
+    assert!(warning.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "policy-aware.unsupported_value"
+            && diagnostic.level == DiagnosticLevel::Warning
+    }));
+
+    let ignored = validate_plugin_config(&PluginConfig {
+        components: vec![PluginComponentSpec::new("policy-aware.plugin")],
+        policy: ConfigPolicy {
+            unsupported_value: UnsupportedBehavior::Ignore,
+            ..ConfigPolicy::default()
         },
         ..PluginConfig::default()
     });

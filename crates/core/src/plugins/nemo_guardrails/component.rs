@@ -14,8 +14,8 @@ use serde_json::{Map, Value as Json};
 use crate::codec::resolve::supported_codec_names;
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
-    register_builtin_plugin,
+    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
+    apply_global_config_policy, deregister_plugin, register_builtin_plugin,
 };
 
 #[path = "local.rs"]
@@ -383,6 +383,14 @@ impl Plugin for NeMoGuardrailsPlugin {
         validate_nemo_guardrails_plugin_config(plugin_config)
     }
 
+    fn validate_with_policy(
+        &self,
+        plugin_config: &Map<String, Json>,
+        policy: &ConfigPolicy,
+    ) -> Vec<ConfigDiagnostic> {
+        validate_nemo_guardrails_plugin_config_with_policy(plugin_config, Some(policy))
+    }
+
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
@@ -471,7 +479,14 @@ fn parse_nemo_guardrails_config(
 fn validate_nemo_guardrails_plugin_config(
     plugin_config: &Map<String, Json>,
 ) -> Vec<ConfigDiagnostic> {
-    let config = match parse_nemo_guardrails_config(plugin_config) {
+    validate_nemo_guardrails_plugin_config_with_policy(plugin_config, None)
+}
+
+fn validate_nemo_guardrails_plugin_config_with_policy(
+    plugin_config: &Map<String, Json>,
+    policy: Option<&ConfigPolicy>,
+) -> Vec<ConfigDiagnostic> {
+    let mut config = match parse_nemo_guardrails_config(plugin_config) {
         Ok(config) => config,
         Err(err) => {
             return vec![ConfigDiagnostic {
@@ -483,6 +498,9 @@ fn validate_nemo_guardrails_plugin_config(
             }];
         }
     };
+    if let Some(policy) = policy {
+        config.policy = apply_global_config_policy(config.policy, policy);
+    }
 
     let mut diagnostics = vec![];
 
