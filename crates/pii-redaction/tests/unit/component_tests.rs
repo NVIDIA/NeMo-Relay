@@ -600,6 +600,127 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
 }
 
 #[test]
+fn trajectory_preset_preserves_trusted_scope_metadata_only() {
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let metadata = json!({
+        "nemo_relay_scope_role": "turn",
+        "agent_kind": "codex",
+        "hook_event_name": "UserPromptSubmit",
+        "gateway_config_profile": "development",
+        "gateway_mode": "passthrough",
+        "turn_source": "user_prompt",
+        "harness": "codex",
+        "source": "hook",
+        "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
+        "private_note": "private context",
+        "nested": {"harness": "private nested context"}
+    });
+    let expected_metadata = json!({
+        "nemo_relay_scope_role": "turn",
+        "agent_kind": "codex",
+        "hook_event_name": "UserPromptSubmit",
+        "gateway_config_profile": "development",
+        "gateway_mode": "passthrough",
+        "turn_source": "user_prompt",
+        "harness": "codex",
+        "source": "hook",
+        "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
+        "private_note": "[REDACTED]",
+        "nested": {"harness": "[REDACTED]"}
+    });
+
+    for (scope_category, category) in [
+        (ScopeCategory::Start, EventCategory::agent()),
+        (ScopeCategory::End, EventCategory::agent()),
+        (ScopeCategory::Start, EventCategory::llm()),
+        (ScopeCategory::End, EventCategory::llm()),
+        (ScopeCategory::Start, EventCategory::tool()),
+        (ScopeCategory::End, EventCategory::tool()),
+    ] {
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().name("trusted-scope").build(),
+            scope_category,
+            Vec::new(),
+            category,
+            None,
+        ));
+        let sanitized = callback(
+            &event,
+            EventSanitizeFields {
+                data: None,
+                category_profile: None,
+                metadata: Some(metadata.clone()),
+            },
+        );
+        assert_eq!(sanitized.metadata, Some(expected_metadata.clone()));
+    }
+
+    let malformed = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("malformed-trusted-scope").build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let sanitized = callback(
+        &malformed,
+        EventSanitizeFields {
+            data: None,
+            category_profile: None,
+            metadata: Some(json!({
+                "harness": {"private": "private context"},
+                "source": 42,
+                "identity_quality": ["private context"],
+                "provider_payload_exact": "private context"
+            })),
+        },
+    );
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({
+            "harness": {"private": "[REDACTED]"},
+            "source": 0,
+            "identity_quality": ["[REDACTED]"],
+            "provider_payload_exact": "[REDACTED]"
+        }))
+    );
+
+    let mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("llm.chunk").build(),
+        Some(EventCategory::custom()),
+        Some(CategoryProfile::builder().subtype("llm.chunk").build()),
+    ));
+    let sanitized = callback(
+        &mark,
+        EventSanitizeFields {
+            data: None,
+            category_profile: mark.category_profile().cloned(),
+            metadata: Some(json!({"harness": "codex", "source": "hook"})),
+        },
+    );
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({"harness": "[REDACTED]", "source": "[REDACTED]"}))
+    );
+}
+
+#[test]
 fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder().name("neutral.plugin.evidence").build(),
@@ -1691,12 +1812,32 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
 
     let raw_pii = "person@example.com";
     let raw_context = "private trajectory context canary";
+    let trusted_scope_metadata = json!({
+        "nemo_relay_scope_role": "session",
+        "agent_kind": "hermes",
+        "hook_event_name": "SessionStart",
+        "gateway_config_profile": "development",
+        "gateway_mode": "passthrough",
+        "turn_source": "user_prompt",
+        "harness": "hermes",
+        "source": "hook",
+        "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
+        "session_owner": raw_pii
+    });
     let agent = push_scope(
         PushScopeParams::builder()
             .name("hermes-agent")
             .scope_type(ScopeType::Agent)
             .input(json!({"prompt": raw_context, "request_id": "request-1"}))
-            .metadata(json!({"session_owner": raw_pii}))
+            .metadata(trusted_scope_metadata.clone())
             .build(),
     )
     .unwrap();
@@ -1717,6 +1858,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     )
     .unwrap();
 
+    crate::api::subscriber::flush_subscribers().unwrap();
     atof.force_flush().unwrap();
     let trajectory = atif.export().unwrap();
     otel.force_flush().unwrap();
@@ -1727,12 +1869,12 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let atif_json = serde_json::to_string(&trajectory).unwrap();
     let otel_debug = format!("{:?}", otel_exporter.get_finished_spans().unwrap());
     let openinference_debug = format!("{:?}", openinference_exporter.get_finished_spans().unwrap());
-    for (surface, output) in [
-        ("subscriber", subscriber_json),
-        ("ATOF", atof_json),
-        ("ATIF", atif_json),
-        ("OpenTelemetry", otel_debug),
-        ("OpenInference", openinference_debug),
+    for (surface, output, retains_scope_metadata) in [
+        ("subscriber", subscriber_json, true),
+        ("ATOF", atof_json, true),
+        ("ATIF", atif_json, false),
+        ("OpenTelemetry", otel_debug, true),
+        ("OpenInference", openinference_debug, true),
     ] {
         assert!(
             !output.contains(raw_pii),
@@ -1742,6 +1884,19 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             !output.contains(raw_context),
             "trajectory context leaked through {surface}: {output}"
         );
+        if retains_scope_metadata {
+            for (key, value) in trusted_scope_metadata
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| *key != "session_owner")
+            {
+                assert!(
+                    output.contains(key) && output.contains(value.to_string().trim_matches('"')),
+                    "trusted scope metadata {key} was not retained in {surface}: {output}"
+                );
+            }
+        }
     }
 
     let captured = captured_events_snapshot(&captured);
@@ -1753,6 +1908,16 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         .unwrap();
     assert_eq!(agent_start.data().unwrap()["request_id"], "request-1");
     assert_eq!(agent_start.data().unwrap()["prompt"], "[REDACTED]");
+    let agent_metadata = agent_start.metadata().unwrap();
+    for (key, value) in trusted_scope_metadata
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(key, _)| *key != "session_owner")
+    {
+        assert_eq!(agent_metadata[key], *value, "{key}");
+    }
+    assert_eq!(agent_metadata["session_owner"], "[REDACTED]");
     let custom_mark = captured
         .iter()
         .find(|event| event.name() == "hermes.checkpoint")

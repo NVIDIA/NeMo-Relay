@@ -11,6 +11,27 @@ use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 
+const TRUSTED_STRING_SCOPE_METADATA_FIELDS: &[&str] = &[
+    "nemo_relay_scope_role",
+    "agent_kind",
+    "hook_event_name",
+    "gateway_config_profile",
+    "gateway_mode",
+    "turn_source",
+    "harness",
+    "source",
+    "identity_quality",
+    "gateway_path",
+    "llm_correlation_status",
+    "llm_correlation_source",
+    "tool_correlation_status",
+    "tool_correlation_source",
+    "otel.status_code",
+    "fidelity_source",
+];
+
+const TRUSTED_BOOLEAN_SCOPE_METADATA_FIELDS: &[&str] = &["provider_payload_exact"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CustomMarkPayloadPolicy {
     Preserve,
@@ -134,13 +155,44 @@ impl TrajectorySanitizer {
                 .data
                 .map(|value| redact_semantic_content(value, &self.replacement, None));
         }
-        fields.metadata = fields
-            .metadata
-            .map(|value| redact_semantic_content(value, &self.replacement, None));
+        fields.metadata = fields.metadata.map(|value| {
+            if matches!(event, Event::Scope(_)) {
+                sanitize_scope_metadata(value, &self.replacement)
+            } else {
+                redact_semantic_content(value, &self.replacement, None)
+            }
+        });
         fields.category_profile = fields
             .category_profile
             .and_then(|profile| sanitize_category_profile(profile, &self.replacement));
         fields
+    }
+}
+
+fn sanitize_scope_metadata(value: Json, replacement: &str) -> Json {
+    let Json::Object(values) = value else {
+        return redact_semantic_content(value, replacement, None);
+    };
+    Json::Object(
+        values
+            .into_iter()
+            .map(|(key, value)| {
+                let value = if is_trusted_scope_metadata_value(&key, &value) {
+                    value
+                } else {
+                    redact_semantic_content(value, replacement, Some(&key))
+                };
+                (key, value)
+            })
+            .collect(),
+    )
+}
+
+fn is_trusted_scope_metadata_value(key: &str, value: &Json) -> bool {
+    match value {
+        Json::String(_) => TRUSTED_STRING_SCOPE_METADATA_FIELDS.contains(&key),
+        Json::Bool(_) => TRUSTED_BOOLEAN_SCOPE_METADATA_FIELDS.contains(&key),
+        _ => false,
     }
 }
 
