@@ -163,15 +163,15 @@ the rest of the documentation can use them consistently.
   behavior belongs around the invocation boundary itself, such as retries,
   timing, routing, wrapper logic, or framework integration.
 
-**Explicit Lifecycle API**
-: An explicit lifecycle API is a manual start, end, or mark helper used when a
-  framework owns the real invocation internally. It preserves observability but
-  does not let execution intercepts wrap the real callback automatically.
-
 **Experimental Binding**
 : An experimental binding exposes runtime behavior for source-first users but
   is not the primary documentation path. Go and the raw C FFI surface are
   experimental unless a page says otherwise.
+
+**Explicit Lifecycle API**
+: An explicit lifecycle API is a manual start, end, or mark helper used when a
+  framework owns the real invocation internally. It preserves observability but
+  does not let execution intercepts wrap the real callback automatically.
 
 **Exporter**
 : An exporter is a subscriber-oriented component that translates NeMo Relay
@@ -314,12 +314,6 @@ the rest of the documentation can use them consistently.
 
 ## N
 
-**Next Function**
-: The next function is the continuation passed to an execution intercept. The
-  intercept calls `next` to run the next intercept or the original callback. An
-  intercept that does not call `next` intentionally replaces or short-circuits
-  the rest of the invocation.
-
 **Native Dynamic Plugin**
 : A native dynamic plugin is a Rust shared library loaded into the Relay
   process through the native plugin ABI. It must be rebuilt for the host ABI
@@ -330,6 +324,12 @@ the rest of the documentation can use them consistently.
 : NeMo Guardrails is the built-in `nemo_guardrails` plugin component for
   first-party guardrail policy around managed tool and LLM execution. It
   supports remote Guardrails-service and Python-backed local backends.
+
+**Next Function**
+: The next function is the continuation passed to an execution intercept. The
+  intercept calls `next` to run the next intercept or the original callback. An
+  intercept that does not call `next` intentionally replaces or short-circuits
+  the rest of the invocation.
 
 **Non-Serializable Data**
 : Non-serializable data is framework or SDK state that cannot be represented as
@@ -392,15 +392,15 @@ the rest of the documentation can use them consistently.
   plugin. It declares the plugin type, compatibility, capabilities, source,
   integrity evidence, and loading details.
 
-**Priority**
-: Priority is the ordering value attached to middleware registrations. NeMo
-  Relay runs visible middleware in priority order after merging global and
-  scope-local registrations.
-
 **Primary Binding**
 : A primary binding is one of the documented binding surfaces used for
   first-line examples and generated API references. The primary bindings are
   Rust, Python, and Node.js.
+
+**Priority**
+: Priority is the ordering value attached to middleware registrations. NeMo
+  Relay runs visible middleware in priority order after merging global and
+  scope-local registrations.
 
 **Projection**
 : A projection translates canonical NeMo Relay events into a downstream format
