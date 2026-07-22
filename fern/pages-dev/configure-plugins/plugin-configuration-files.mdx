@@ -123,7 +123,7 @@ The top-level fields are:
 |---|---|---|
 | `version` | `1` | Plugin configuration format version. Non-`1` versions fail validation by default. |
 | `components` | `[]` | Ordered plugin components to validate and activate. |
-| `policy` | warn unknown components and fields, error on unsupported values | Global validation policy. |
+| `policy` | warn unknown components and fields, error on unsupported values | Global host validation policy. Non-default field/value settings override the matching policy for built-in components. |
 
 Each built-in component has:
 
