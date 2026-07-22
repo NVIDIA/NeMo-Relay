@@ -11,7 +11,7 @@ use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 
-const TRUSTED_SCOPE_METADATA_FIELDS: &[&str] = &[
+const TRUSTED_STRING_SCOPE_METADATA_FIELDS: &[&str] = &[
     "nemo_relay_scope_role",
     "agent_kind",
     "hook_event_name",
@@ -21,7 +21,16 @@ const TRUSTED_SCOPE_METADATA_FIELDS: &[&str] = &[
     "harness",
     "source",
     "identity_quality",
+    "gateway_path",
+    "llm_correlation_status",
+    "llm_correlation_source",
+    "tool_correlation_status",
+    "tool_correlation_source",
+    "otel.status_code",
+    "fidelity_source",
 ];
+
+const TRUSTED_BOOLEAN_SCOPE_METADATA_FIELDS: &[&str] = &["provider_payload_exact"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CustomMarkPayloadPolicy {
@@ -168,7 +177,7 @@ fn sanitize_scope_metadata(value: Json, replacement: &str) -> Json {
         values
             .into_iter()
             .map(|(key, value)| {
-                let value = if is_trusted_scope_metadata_field(&key) && value.is_string() {
+                let value = if is_trusted_scope_metadata_value(&key, &value) {
                     value
                 } else {
                     redact_semantic_content(value, replacement, Some(&key))
@@ -179,8 +188,12 @@ fn sanitize_scope_metadata(value: Json, replacement: &str) -> Json {
     )
 }
 
-fn is_trusted_scope_metadata_field(key: &str) -> bool {
-    TRUSTED_SCOPE_METADATA_FIELDS.contains(&key)
+fn is_trusted_scope_metadata_value(key: &str, value: &Json) -> bool {
+    match value {
+        Json::String(_) => TRUSTED_STRING_SCOPE_METADATA_FIELDS.contains(&key),
+        Json::Bool(_) => TRUSTED_BOOLEAN_SCOPE_METADATA_FIELDS.contains(&key),
+        _ => false,
+    }
 }
 
 fn is_known_content_bearing_mark(name: &str) -> bool {

@@ -612,6 +612,14 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         "harness": "codex",
         "source": "hook",
         "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
         "private_note": "private context",
         "nested": {"harness": "private nested context"}
     });
@@ -625,6 +633,14 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         "harness": "codex",
         "source": "hook",
         "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
         "private_note": "[REDACTED]",
         "nested": {"harness": "[REDACTED]"}
     });
@@ -670,7 +686,8 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
             metadata: Some(json!({
                 "harness": {"private": "private context"},
                 "source": 42,
-                "identity_quality": ["private context"]
+                "identity_quality": ["private context"],
+                "provider_payload_exact": "private context"
             })),
         },
     );
@@ -679,7 +696,8 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         Some(json!({
             "harness": {"private": "[REDACTED]"},
             "source": 0,
-            "identity_quality": ["[REDACTED]"]
+            "identity_quality": ["[REDACTED]"],
+            "provider_payload_exact": "[REDACTED]"
         }))
     );
 
@@ -1804,6 +1822,14 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         "harness": "hermes",
         "source": "hook",
         "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
         "session_owner": raw_pii
     });
     let agent = push_scope(
@@ -1866,7 +1892,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
                 .filter(|(key, _)| *key != "session_owner")
             {
                 assert!(
-                    output.contains(key) && output.contains(value.as_str().unwrap()),
+                    output.contains(key) && output.contains(value.to_string().trim_matches('"')),
                     "trusted scope metadata {key} was not retained in {surface}: {output}"
                 );
             }
