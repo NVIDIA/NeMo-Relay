@@ -79,7 +79,7 @@ use super::{
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
-const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_RETRY: Duration = Duration::from_millis(25);
 const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";

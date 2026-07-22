@@ -28,6 +28,11 @@ use super::*;
 const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
 
+#[test]
+fn worker_startup_timeout_allows_slow_environment_initialization() {
+    assert!(WORKER_STARTUP_TIMEOUT >= std::time::Duration::from_secs(30));
+}
+
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
