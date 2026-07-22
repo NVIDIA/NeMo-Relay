@@ -21,6 +21,10 @@ redirects:
 # Release notes
 - source: /nemo/relay/about-nemo-relay/release-notes/related-topics
   destination: /nemo/relay/about-nemo-relay/release-notes
+- source: /nemo/relay/about-nemo-relay/release-notes/highlights
+  destination: /nemo/relay/about-nemo-relay/release-notes
+- source: /nemo/relay/about-nemo-relay/release-notes/known-issues
+  destination: /nemo/relay/about-nemo-relay/release-notes
 
 # Generated API references
 - source: /nemo/relay/reference/api/python-library-reference/pii-redaction
