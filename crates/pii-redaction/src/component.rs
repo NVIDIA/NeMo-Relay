@@ -908,52 +908,8 @@ fn validate_builtin_action_requirements(
         return;
     };
 
-    if let Some(preset) = builtin.preset.as_deref() {
-        if preset != "trajectory_context" {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "pii_redaction.unsupported_value",
-                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
-                Some("builtin.preset".to_string()),
-                "builtin.preset must be 'trajectory_context'".to_string(),
-            );
-        }
-        if !matches!(
-            builtin.custom_mark_payload_policy.as_str(),
-            "preserve" | "redact_all_leaves"
-        ) {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "pii_redaction.unsupported_value",
-                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
-                Some("builtin.custom_mark_payload_policy".to_string()),
-                "builtin.custom_mark_payload_policy must be 'preserve' or 'redact_all_leaves'"
-                    .to_string(),
-            );
-        }
-        let raw_builtin = plugin_config.get("builtin").and_then(Json::as_object);
-        for field in [
-            "action",
-            "detector",
-            "pattern",
-            "target_paths",
-            "mask_char",
-            "unmasked_prefix",
-            "unmasked_suffix",
-        ] {
-            if raw_builtin.is_some_and(|raw| raw.contains_key(field)) {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "pii_redaction.unsupported_value",
-                    Some(PII_REDACTION_PLUGIN_KIND.to_string()),
-                    Some(format!("builtin.{field}")),
-                    format!("builtin.{field} cannot be combined with builtin.preset"),
-                );
-            }
-        }
+    if builtin.preset.is_some() {
+        validate_builtin_preset_requirements(diagnostics, policy, plugin_config, builtin);
         return;
     }
 
@@ -1059,6 +1015,59 @@ fn validate_builtin_action_requirements(
             Some("builtin.mask_char".to_string()),
             "builtin.mask_char must not be empty when builtin.action = 'mask'".to_string(),
         );
+    }
+}
+
+fn validate_builtin_preset_requirements(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
+    builtin: &BuiltinBackendConfig,
+) {
+    if builtin.preset.as_deref() != Some("trajectory_context") {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.preset".to_string()),
+            "builtin.preset must be 'trajectory_context'".to_string(),
+        );
+    }
+    if !matches!(
+        builtin.custom_mark_payload_policy.as_str(),
+        "preserve" | "redact_all_leaves"
+    ) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.custom_mark_payload_policy".to_string()),
+            "builtin.custom_mark_payload_policy must be 'preserve' or 'redact_all_leaves'"
+                .to_string(),
+        );
+    }
+    let raw_builtin = plugin_config.get("builtin").and_then(Json::as_object);
+    for field in [
+        "action",
+        "detector",
+        "pattern",
+        "target_paths",
+        "mask_char",
+        "unmasked_prefix",
+        "unmasked_suffix",
+    ] {
+        if raw_builtin.is_some_and(|raw| raw.contains_key(field)) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some(format!("builtin.{field}")),
+                format!("builtin.{field} cannot be combined with builtin.preset"),
+            );
+        }
     }
 }
 

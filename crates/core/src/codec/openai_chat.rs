@@ -706,6 +706,411 @@ fn set_or_remove_json(obj: &mut serde_json::Map<String, Json>, key: &str, value:
     }
 }
 
+fn patch_chat_messages_and_validate(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) -> Result<()> {
+    if annotated.messages != baseline.messages {
+        let original_messages = obj.get("messages").and_then(Json::as_array);
+        obj.insert(
+            "messages".into(),
+            Json::Array(super::encode_changed_items(
+                &annotated.messages,
+                &baseline.messages,
+                original_messages.map(Vec::as_slice),
+                encode_chat_message,
+            )?),
+        );
+    }
+    let unsupported = [
+        annotated.instructions != baseline.instructions,
+        annotated.previous_response_id != baseline.previous_response_id,
+        annotated.truncation != baseline.truncation,
+        annotated.reasoning != baseline.reasoning,
+        annotated.include != baseline.include,
+        annotated.max_output_tokens != baseline.max_output_tokens,
+        annotated.max_tool_calls != baseline.max_tool_calls,
+    ]
+    .into_iter()
+    .any(|changed| changed);
+    if unsupported {
+        return Err(FlowError::InvalidArgument(
+            "request contains fields that cannot be encoded for OpenAI Chat".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn patch_chat_model_and_params(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) {
+    if annotated.model != baseline.model {
+        set_or_remove_json(obj, "model", annotated.model.clone().map(Json::String));
+    }
+    if annotated.params == baseline.params {
+        return;
+    }
+    let edited = annotated.params.as_ref();
+    let before = baseline.params.as_ref();
+    patch_chat_optional_params(obj, edited, before);
+    patch_chat_max_tokens(obj, edited, before);
+    patch_chat_stop_sequences(obj, edited, before);
+}
+
+fn patch_chat_optional_params(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: Option<&GenerationParams>,
+    before: Option<&GenerationParams>,
+) {
+    for (key, value, old_value) in [
+        (
+            "temperature",
+            edited.and_then(|params| params.temperature),
+            before.and_then(|params| params.temperature),
+        ),
+        (
+            "top_p",
+            edited.and_then(|params| params.top_p),
+            before.and_then(|params| params.top_p),
+        ),
+    ] {
+        if value != old_value {
+            set_or_remove_json(obj, key, value.map(json_f64));
+        }
+    }
+}
+
+fn patch_chat_max_tokens(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: Option<&GenerationParams>,
+    before: Option<&GenerationParams>,
+) {
+    let max_tokens = edited.and_then(|params| params.max_tokens);
+    if max_tokens == before.and_then(|params| params.max_tokens) {
+        return;
+    }
+    let max_tokens = max_tokens.map(Json::from);
+    if max_tokens.is_none() {
+        obj.remove("max_completion_tokens");
+        obj.remove("max_tokens");
+        return;
+    }
+    let key = if obj.contains_key("max_completion_tokens") || !obj.contains_key("max_tokens") {
+        "max_completion_tokens"
+    } else {
+        "max_tokens"
+    };
+    set_or_remove_json(obj, key, max_tokens);
+}
+
+fn patch_chat_stop_sequences(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: Option<&GenerationParams>,
+    before: Option<&GenerationParams>,
+) {
+    let stop = edited.and_then(|params| params.stop.as_ref());
+    if stop == before.and_then(|params| params.stop.as_ref()) {
+        return;
+    }
+    let stop = stop.map(|values| {
+        if obj.get("stop").is_some_and(Json::is_string) && values.len() == 1 {
+            Json::String(values[0].clone())
+        } else {
+            serde_json::json!(values)
+        }
+    });
+    set_or_remove_json(obj, "stop", stop);
+}
+
+fn patch_chat_tools(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) -> Result<()> {
+    if annotated.tools != baseline.tools {
+        let tools = annotated
+            .tools
+            .as_deref()
+            .map(|tools| {
+                super::encode_changed_items(
+                    tools,
+                    baseline.tools.as_deref().unwrap_or(&[]),
+                    obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
+                    encode_chat_tool,
+                )
+            })
+            .transpose()?
+            .map(Json::Array);
+        set_or_remove_json(obj, "tools", tools);
+    }
+    if annotated.tool_choice != baseline.tool_choice {
+        let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
+            (Some(edited), Some(before)) => {
+                let edited = encode_chat_tool_choice(edited)?;
+                let before = encode_chat_tool_choice(before)?;
+                Some(match obj.get("tool_choice") {
+                    Some(original) => super::patch_changed_json(original, &before, &edited)?,
+                    None => edited,
+                })
+            }
+            (Some(edited), None) => Some(encode_chat_tool_choice(edited)?),
+            (None, _) => None,
+        };
+        set_or_remove_json(obj, "tool_choice", tool_choice);
+    }
+    Ok(())
+}
+
+fn patch_chat_common_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) {
+    if annotated.metadata != baseline.metadata {
+        set_or_remove_json(obj, "metadata", annotated.metadata.clone());
+    }
+    for (key, edited, before) in [
+        ("store", annotated.store, baseline.store),
+        (
+            "parallel_tool_calls",
+            annotated.parallel_tool_calls,
+            baseline.parallel_tool_calls,
+        ),
+        ("stream", annotated.stream, baseline.stream),
+    ] {
+        if edited != before {
+            set_or_remove_json(obj, key, edited.map(Json::Bool));
+        }
+    }
+    for (key, edited, before) in [
+        ("user", &annotated.user, &baseline.user),
+        (
+            "service_tier",
+            &annotated.service_tier,
+            &baseline.service_tier,
+        ),
+    ] {
+        if edited != before {
+            set_or_remove_json(obj, key, edited.clone().map(Json::String));
+        }
+    }
+    if annotated.top_logprobs != baseline.top_logprobs {
+        set_or_remove_json(obj, "top_logprobs", annotated.top_logprobs.map(Json::from));
+    }
+}
+
+fn patch_optional_json_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    fields: &[(&str, &Option<Json>, &Option<Json>)],
+) {
+    for (key, edited, before) in fields {
+        if edited != before {
+            set_or_remove_json(obj, key, (*edited).clone());
+        }
+    }
+}
+
+fn patch_optional_string_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    fields: &[(&str, &Option<String>, &Option<String>)],
+) {
+    for (key, edited, before) in fields {
+        if edited != before {
+            set_or_remove_json(obj, key, (*edited).clone().map(Json::String));
+        }
+    }
+}
+
+fn patch_optional_f64_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    fields: &[(&str, &Option<f64>, &Option<f64>)],
+) {
+    for (key, edited, before) in fields {
+        if edited != before {
+            set_or_remove_json(obj, key, (*edited).map(json_f64));
+        }
+    }
+}
+
+fn patch_chat_api_specific(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: &Option<ApiSpecificRequest>,
+    baseline: &Option<ApiSpecificRequest>,
+) -> Result<()> {
+    match (edited, baseline) {
+        (
+            Some(edited @ ApiSpecificRequest::OpenAIChat { .. }),
+            Some(baseline @ ApiSpecificRequest::OpenAIChat { .. }),
+        ) => {
+            patch_chat_api_fields(obj, edited, baseline);
+            Ok(())
+        }
+        (None, Some(ApiSpecificRequest::OpenAIChat { .. })) => {
+            for key in [
+                "audio",
+                "frequency_penalty",
+                "function_call",
+                "functions",
+                "logit_bias",
+                "logprobs",
+                "modalities",
+                "moderation",
+                "n",
+                "prediction",
+                "presence_penalty",
+                "prompt_cache_key",
+                "prompt_cache_options",
+                "prompt_cache_retention",
+                "reasoning_effort",
+                "response_format",
+                "safety_identifier",
+                "seed",
+                "stream_options",
+                "verbosity",
+                "web_search_options",
+            ] {
+                obj.remove(key);
+            }
+            Ok(())
+        }
+        (Some(_), _) | (None, Some(_)) => Err(FlowError::InvalidArgument(
+            "api_specific provider does not match OpenAI Chat".into(),
+        )),
+        (None, None) => Ok(()),
+    }
+}
+
+fn patch_chat_api_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: &ApiSpecificRequest,
+    baseline: &ApiSpecificRequest,
+) {
+    let (
+        ApiSpecificRequest::OpenAIChat {
+            audio,
+            frequency_penalty,
+            function_call,
+            functions,
+            logit_bias,
+            logprobs,
+            modalities,
+            moderation,
+            n,
+            prediction,
+            presence_penalty,
+            prompt_cache_key,
+            prompt_cache_options,
+            prompt_cache_retention,
+            reasoning_effort,
+            response_format,
+            safety_identifier,
+            seed,
+            stream_options,
+            verbosity,
+            web_search_options,
+        },
+        ApiSpecificRequest::OpenAIChat {
+            audio: old_audio,
+            frequency_penalty: old_frequency_penalty,
+            function_call: old_function_call,
+            functions: old_functions,
+            logit_bias: old_logit_bias,
+            logprobs: old_logprobs,
+            modalities: old_modalities,
+            moderation: old_moderation,
+            n: old_n,
+            prediction: old_prediction,
+            presence_penalty: old_presence_penalty,
+            prompt_cache_key: old_prompt_cache_key,
+            prompt_cache_options: old_prompt_cache_options,
+            prompt_cache_retention: old_prompt_cache_retention,
+            reasoning_effort: old_reasoning_effort,
+            response_format: old_response_format,
+            safety_identifier: old_safety_identifier,
+            seed: old_seed,
+            stream_options: old_stream_options,
+            verbosity: old_verbosity,
+            web_search_options: old_web_search_options,
+        },
+    ) = (edited, baseline)
+    else {
+        unreachable!("OpenAI Chat variants checked by caller");
+    };
+    patch_optional_json_fields(
+        obj,
+        &[
+            ("audio", audio, old_audio),
+            ("function_call", function_call, old_function_call),
+            ("logit_bias", logit_bias, old_logit_bias),
+            ("moderation", moderation, old_moderation),
+            ("prediction", prediction, old_prediction),
+            (
+                "prompt_cache_options",
+                prompt_cache_options,
+                old_prompt_cache_options,
+            ),
+            ("response_format", response_format, old_response_format),
+            ("stream_options", stream_options, old_stream_options),
+            (
+                "web_search_options",
+                web_search_options,
+                old_web_search_options,
+            ),
+        ],
+    );
+    patch_optional_f64_fields(
+        obj,
+        &[
+            (
+                "frequency_penalty",
+                frequency_penalty,
+                old_frequency_penalty,
+            ),
+            ("presence_penalty", presence_penalty, old_presence_penalty),
+        ],
+    );
+    patch_optional_string_fields(
+        obj,
+        &[
+            ("prompt_cache_key", prompt_cache_key, old_prompt_cache_key),
+            (
+                "prompt_cache_retention",
+                prompt_cache_retention,
+                old_prompt_cache_retention,
+            ),
+            ("reasoning_effort", reasoning_effort, old_reasoning_effort),
+            (
+                "safety_identifier",
+                safety_identifier,
+                old_safety_identifier,
+            ),
+            ("verbosity", verbosity, old_verbosity),
+        ],
+    );
+    if functions != old_functions {
+        set_or_remove_json(obj, "functions", functions.clone().map(Json::Array));
+    }
+    if modalities != old_modalities {
+        set_or_remove_json(
+            obj,
+            "modalities",
+            modalities.as_ref().map(|value| serde_json::json!(value)),
+        );
+    }
+    if logprobs != old_logprobs {
+        set_or_remove_json(obj, "logprobs", logprobs.map(Json::Bool));
+    }
+    if n != old_n {
+        set_or_remove_json(obj, "n", n.map(Json::from));
+    }
+    if seed != old_seed {
+        set_or_remove_json(obj, "seed", seed.map(Json::from));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // LlmResponseCodec implementation
 // ---------------------------------------------------------------------------
@@ -962,299 +1367,11 @@ impl LlmCodec for OpenAIChatCodec {
         let obj = content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-        if annotated.messages != baseline.messages {
-            let original_messages = obj.get("messages").and_then(Json::as_array);
-            obj.insert(
-                "messages".into(),
-                Json::Array(super::encode_changed_items(
-                    &annotated.messages,
-                    &baseline.messages,
-                    original_messages.map(Vec::as_slice),
-                    encode_chat_message,
-                )?),
-            );
-        }
-        if annotated.instructions != baseline.instructions
-            || annotated.previous_response_id != baseline.previous_response_id
-            || annotated.truncation != baseline.truncation
-            || annotated.reasoning != baseline.reasoning
-            || annotated.include != baseline.include
-            || annotated.max_output_tokens != baseline.max_output_tokens
-            || annotated.max_tool_calls != baseline.max_tool_calls
-        {
-            return Err(FlowError::InvalidArgument(
-                "request contains fields that cannot be encoded for OpenAI Chat".into(),
-            ));
-        }
-        if annotated.model != baseline.model {
-            set_or_remove_json(obj, "model", annotated.model.clone().map(Json::String));
-        }
-        if annotated.params != baseline.params {
-            let edited = annotated.params.as_ref();
-            let before = baseline.params.as_ref();
-            if edited.and_then(|p| p.temperature) != before.and_then(|p| p.temperature) {
-                set_or_remove_json(
-                    obj,
-                    "temperature",
-                    edited.and_then(|p| p.temperature).map(json_f64),
-                );
-            }
-            if edited.and_then(|p| p.top_p) != before.and_then(|p| p.top_p) {
-                set_or_remove_json(obj, "top_p", edited.and_then(|p| p.top_p).map(json_f64));
-            }
-            if edited.and_then(|p| p.max_tokens) != before.and_then(|p| p.max_tokens) {
-                let max_tokens = edited.and_then(|p| p.max_tokens).map(Json::from);
-                if max_tokens.is_none() {
-                    obj.remove("max_completion_tokens");
-                    obj.remove("max_tokens");
-                } else {
-                    let key = if obj.contains_key("max_completion_tokens")
-                        || !obj.contains_key("max_tokens")
-                    {
-                        "max_completion_tokens"
-                    } else {
-                        "max_tokens"
-                    };
-                    set_or_remove_json(obj, key, max_tokens);
-                }
-            }
-            if edited.and_then(|p| p.stop.as_ref()) != before.and_then(|p| p.stop.as_ref()) {
-                let stop = edited.and_then(|p| p.stop.as_ref()).map(|values| {
-                    if obj.get("stop").is_some_and(Json::is_string) && values.len() == 1 {
-                        Json::String(values[0].clone())
-                    } else {
-                        serde_json::json!(values)
-                    }
-                });
-                set_or_remove_json(obj, "stop", stop);
-            }
-        }
-        if annotated.tools != baseline.tools {
-            let tools = annotated
-                .tools
-                .as_deref()
-                .map(|tools| {
-                    super::encode_changed_items(
-                        tools,
-                        baseline.tools.as_deref().unwrap_or(&[]),
-                        obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
-                        encode_chat_tool,
-                    )
-                })
-                .transpose()?
-                .map(Json::Array);
-            set_or_remove_json(obj, "tools", tools);
-        }
-        if annotated.tool_choice != baseline.tool_choice {
-            let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
-                (Some(edited), Some(before)) => {
-                    let edited = encode_chat_tool_choice(edited)?;
-                    let before = encode_chat_tool_choice(before)?;
-                    Some(match obj.get("tool_choice") {
-                        Some(original) => super::patch_changed_json(original, &before, &edited)?,
-                        None => edited,
-                    })
-                }
-                (Some(edited), None) => Some(encode_chat_tool_choice(edited)?),
-                (None, _) => None,
-            };
-            set_or_remove_json(obj, "tool_choice", tool_choice);
-        }
-        for (key, edited, before) in [("metadata", &annotated.metadata, &baseline.metadata)] {
-            if edited != before {
-                set_or_remove_json(obj, key, edited.clone());
-            }
-        }
-        for (key, edited, before) in [
-            ("store", annotated.store, baseline.store),
-            (
-                "parallel_tool_calls",
-                annotated.parallel_tool_calls,
-                baseline.parallel_tool_calls,
-            ),
-            ("stream", annotated.stream, baseline.stream),
-        ] {
-            if edited != before {
-                set_or_remove_json(obj, key, edited.map(Json::Bool));
-            }
-        }
-        for (key, edited, before) in [
-            ("user", &annotated.user, &baseline.user),
-            (
-                "service_tier",
-                &annotated.service_tier,
-                &baseline.service_tier,
-            ),
-        ] {
-            if edited != before {
-                set_or_remove_json(obj, key, edited.clone().map(Json::String));
-            }
-        }
-        if annotated.top_logprobs != baseline.top_logprobs {
-            set_or_remove_json(obj, "top_logprobs", annotated.top_logprobs.map(Json::from));
-        }
-        match (&annotated.api_specific, &baseline.api_specific) {
-            (
-                Some(ApiSpecificRequest::OpenAIChat {
-                    audio,
-                    frequency_penalty,
-                    function_call,
-                    functions,
-                    logit_bias,
-                    logprobs,
-                    modalities,
-                    moderation,
-                    n,
-                    prediction,
-                    presence_penalty,
-                    prompt_cache_key,
-                    prompt_cache_options,
-                    prompt_cache_retention,
-                    reasoning_effort,
-                    response_format,
-                    safety_identifier,
-                    seed,
-                    stream_options,
-                    verbosity,
-                    web_search_options,
-                }),
-                Some(ApiSpecificRequest::OpenAIChat {
-                    audio: old_audio,
-                    frequency_penalty: old_frequency_penalty,
-                    function_call: old_function_call,
-                    functions: old_functions,
-                    logit_bias: old_logit_bias,
-                    logprobs: old_logprobs,
-                    modalities: old_modalities,
-                    moderation: old_moderation,
-                    n: old_n,
-                    prediction: old_prediction,
-                    presence_penalty: old_presence_penalty,
-                    prompt_cache_key: old_prompt_cache_key,
-                    prompt_cache_options: old_prompt_cache_options,
-                    prompt_cache_retention: old_prompt_cache_retention,
-                    reasoning_effort: old_reasoning_effort,
-                    response_format: old_response_format,
-                    safety_identifier: old_safety_identifier,
-                    seed: old_seed,
-                    stream_options: old_stream_options,
-                    verbosity: old_verbosity,
-                    web_search_options: old_web_search_options,
-                }),
-            ) => {
-                for (key, edited, before) in [
-                    ("audio", audio, old_audio),
-                    ("function_call", function_call, old_function_call),
-                    ("logit_bias", logit_bias, old_logit_bias),
-                    ("moderation", moderation, old_moderation),
-                    ("prediction", prediction, old_prediction),
-                    (
-                        "prompt_cache_options",
-                        prompt_cache_options,
-                        old_prompt_cache_options,
-                    ),
-                    ("response_format", response_format, old_response_format),
-                    ("stream_options", stream_options, old_stream_options),
-                    (
-                        "web_search_options",
-                        web_search_options,
-                        old_web_search_options,
-                    ),
-                ] {
-                    if edited != before {
-                        set_or_remove_json(obj, key, edited.clone());
-                    }
-                }
-                for (key, edited, before) in [
-                    (
-                        "frequency_penalty",
-                        frequency_penalty,
-                        old_frequency_penalty,
-                    ),
-                    ("presence_penalty", presence_penalty, old_presence_penalty),
-                ] {
-                    if edited != before {
-                        set_or_remove_json(obj, key, edited.map(json_f64));
-                    }
-                }
-                if functions != old_functions {
-                    set_or_remove_json(obj, "functions", functions.clone().map(Json::Array));
-                }
-                if modalities != old_modalities {
-                    set_or_remove_json(
-                        obj,
-                        "modalities",
-                        modalities.as_ref().map(|v| serde_json::json!(v)),
-                    );
-                }
-                if logprobs != old_logprobs {
-                    set_or_remove_json(obj, "logprobs", logprobs.map(Json::Bool));
-                }
-                if n != old_n {
-                    set_or_remove_json(obj, "n", n.map(Json::from));
-                }
-                for (key, edited, before) in [
-                    ("prompt_cache_key", prompt_cache_key, old_prompt_cache_key),
-                    (
-                        "prompt_cache_retention",
-                        prompt_cache_retention,
-                        old_prompt_cache_retention,
-                    ),
-                    ("reasoning_effort", reasoning_effort, old_reasoning_effort),
-                    (
-                        "safety_identifier",
-                        safety_identifier,
-                        old_safety_identifier,
-                    ),
-                    ("verbosity", verbosity, old_verbosity),
-                ] {
-                    if edited != before {
-                        set_or_remove_json(obj, key, edited.clone().map(Json::String));
-                    }
-                }
-                if seed != old_seed {
-                    set_or_remove_json(obj, "seed", seed.map(Json::from));
-                }
-            }
-            (None, Some(ApiSpecificRequest::OpenAIChat { .. })) => {
-                for key in [
-                    "audio",
-                    "frequency_penalty",
-                    "function_call",
-                    "functions",
-                    "logit_bias",
-                    "logprobs",
-                    "modalities",
-                    "moderation",
-                    "n",
-                    "prediction",
-                    "presence_penalty",
-                    "prompt_cache_key",
-                    "prompt_cache_options",
-                    "prompt_cache_retention",
-                    "reasoning_effort",
-                    "response_format",
-                    "safety_identifier",
-                    "seed",
-                    "stream_options",
-                    "verbosity",
-                    "web_search_options",
-                ] {
-                    obj.remove(key);
-                }
-            }
-            (Some(_), _) => {
-                return Err(FlowError::InvalidArgument(
-                    "api_specific provider does not match OpenAI Chat".into(),
-                ));
-            }
-            (None, Some(_)) => {
-                return Err(FlowError::InvalidArgument(
-                    "api_specific provider does not match OpenAI Chat".into(),
-                ));
-            }
-            (None, None) => {}
-        }
+        patch_chat_messages_and_validate(obj, annotated, &baseline)?;
+        patch_chat_model_and_params(obj, annotated, &baseline);
+        patch_chat_tools(obj, annotated, &baseline)?;
+        patch_chat_common_fields(obj, annotated, &baseline);
+        patch_chat_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
         Ok(LlmRequest {
