@@ -299,6 +299,15 @@ pub(crate) fn push_session_identity_attributes(
     {
         attributes.push(KeyValue::new("user.id", user_id.to_string()));
     }
+    if let Some(agent_kind) = metadata
+        .and_then(|value| value.get("agent_kind"))
+        .and_then(crate::json::Json::as_str)
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.agent.kind",
+            agent_kind.to_string(),
+        ));
+    }
     if let Ok(stack) = crate::api::runtime::current_scope_stack().read() {
         attributes.push(KeyValue::new(
             "nemo_relay.session.instance_id",

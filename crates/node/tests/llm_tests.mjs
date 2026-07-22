@@ -63,6 +63,29 @@ function makeNative() {
   };
 }
 
+function sparseArray() {
+  const values = new Array(2);
+  values[1] = 1;
+  return values;
+}
+
+function unprintableError() {
+  const error = new Error('sanitize request guardrail failed');
+  Object.defineProperties(error, {
+    message: {
+      get() {
+        throw new Error('message getter boom');
+      },
+    },
+    toString: {
+      value() {
+        throw new Error('string conversion boom');
+      },
+    },
+  });
+  return error;
+}
+
 // ===========================================================================
 // LLM lifecycle
 // ===========================================================================
@@ -205,8 +228,11 @@ describe('LLM execute', () => {
     const cases = [
       ['sync_bigint', () => llmCallExecute('exec_llm_bigint', makeNative(), () => ({ value: 1n }))],
       ['async_bigint', () => llmCallExecuteAsync('exec_async_llm_bigint', makeNative(), async () => 1n)],
-      ['sync_sparse_array', () => llmCallExecute('exec_llm_sparse_array', makeNative(), () => [, 1])],
-      ['async_sparse_array', () => llmCallExecuteAsync('exec_async_llm_sparse_array', makeNative(), async () => [, 1])],
+      ['sync_sparse_array', () => llmCallExecute('exec_llm_sparse_array', makeNative(), sparseArray)],
+      [
+        'async_sparse_array',
+        () => llmCallExecuteAsync('exec_async_llm_sparse_array', makeNative(), async () => sparseArray()),
+      ],
     ];
 
     for (const [kind, execute] of cases) {
@@ -424,14 +450,7 @@ describe('LLM guardrails', () => {
     clearLastCallbackError();
     registerSubscriber('node_llm_san_req_throw_sub', (event) => events.push(event));
     registerLlmSanitizeRequestGuardrail('node_llm_san_req_throw', 10, () => {
-      throw {
-        get message() {
-          throw new Error('message getter boom');
-        },
-        toString() {
-          throw new Error('string conversion boom');
-        },
-      };
+      throw unprintableError();
     });
     try {
       const request = makeNative();

@@ -154,6 +154,16 @@ fields remain usable. This choice affects canonical event fields before
 subscriber fan-out; exporter-owned resource attributes are outside this
 boundary.
 
+For Scope events, the preset retains direct string values for the trusted
+low-cardinality classification fields `nemo_relay_scope_role`, `agent_kind`,
+`hook_event_name`, `gateway_config_profile`, `gateway_mode`, `turn_source`,
+`harness`, `source`, `identity_quality`, `gateway_path`,
+`llm_correlation_status`, `llm_correlation_source`, `tool_correlation_status`,
+`tool_correlation_source`, `otel.status_code`, and `fidelity_source`. It also
+retains the direct boolean `provider_payload_exact`. Do not place PII or
+conversational content in these fields. Arbitrary metadata and unexpected value
+types continue through the preset's normal semantic redaction.
+
 The preset defines its own action and therefore cannot be combined with
 `action`, `detector`, `pattern`, `target_paths`, or mask-specific fields. Its
 optional `replacement` defaults to `[REDACTED]`.

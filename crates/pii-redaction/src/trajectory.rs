@@ -11,6 +11,27 @@ use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 
+const TRUSTED_STRING_SCOPE_METADATA_FIELDS: &[&str] = &[
+    "nemo_relay_scope_role",
+    "agent_kind",
+    "hook_event_name",
+    "gateway_config_profile",
+    "gateway_mode",
+    "turn_source",
+    "harness",
+    "source",
+    "identity_quality",
+    "gateway_path",
+    "llm_correlation_status",
+    "llm_correlation_source",
+    "tool_correlation_status",
+    "tool_correlation_source",
+    "otel.status_code",
+    "fidelity_source",
+];
+
+const TRUSTED_BOOLEAN_SCOPE_METADATA_FIELDS: &[&str] = &["provider_payload_exact"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CustomMarkPayloadPolicy {
     Preserve,
@@ -134,13 +155,44 @@ impl TrajectorySanitizer {
                 .data
                 .map(|value| redact_semantic_content(value, &self.replacement, None));
         }
-        fields.metadata = fields
-            .metadata
-            .map(|value| redact_semantic_content(value, &self.replacement, None));
+        fields.metadata = fields.metadata.map(|value| {
+            if matches!(event, Event::Scope(_)) {
+                sanitize_scope_metadata(value, &self.replacement)
+            } else {
+                redact_semantic_content(value, &self.replacement, None)
+            }
+        });
         fields.category_profile = fields
             .category_profile
             .and_then(|profile| sanitize_category_profile(profile, &self.replacement));
         fields
+    }
+}
+
+fn sanitize_scope_metadata(value: Json, replacement: &str) -> Json {
+    let Json::Object(values) = value else {
+        return redact_semantic_content(value, replacement, None);
+    };
+    Json::Object(
+        values
+            .into_iter()
+            .map(|(key, value)| {
+                let value = if is_trusted_scope_metadata_value(&key, &value) {
+                    value
+                } else {
+                    redact_semantic_content(value, replacement, Some(&key))
+                };
+                (key, value)
+            })
+            .collect(),
+    )
+}
+
+fn is_trusted_scope_metadata_value(key: &str, value: &Json) -> bool {
+    match value {
+        Json::String(_) => TRUSTED_STRING_SCOPE_METADATA_FIELDS.contains(&key),
+        Json::Bool(_) => TRUSTED_BOOLEAN_SCOPE_METADATA_FIELDS.contains(&key),
+        _ => false,
     }
 }
 
@@ -277,28 +329,8 @@ pub(super) fn redact_all_leaves(value: Json, replacement: &str) -> Json {
 fn redact_semantic_content(value: Json, replacement: &str, field: Option<&str>) -> Json {
     match value {
         Json::Null => Json::Null,
-        Json::Bool(value) => {
-            if field.is_some_and(preserve_analytical_bool) {
-                Json::Bool(value)
-            } else {
-                Json::Bool(false)
-            }
-        }
-        Json::Number(value) => {
-            if field.is_some_and(preserve_analytical_number) {
-                Json::Number(value)
-            } else {
-                Json::from(0)
-            }
-        }
-        Json::String(value) => {
-            if field.is_some_and(preserve_analytical_string) {
-                Json::String(value)
-            } else if field == Some("arguments") {
-                redact_stringified_json(value, replacement)
-            } else {
-                Json::String(replacement.to_string())
-            }
+        value @ (Json::Bool(_) | Json::Number(_) | Json::String(_)) => {
+            redact_semantic_scalar(value, replacement, field)
         }
         Json::Array(values) => Json::Array(
             values
@@ -306,23 +338,44 @@ fn redact_semantic_content(value: Json, replacement: &str, field: Option<&str>) 
                 .map(|value| redact_semantic_content(value, replacement, field))
                 .collect(),
         ),
-        Json::Object(values) => {
-            let preserve_tool_name = preserves_tool_or_function_name(field, &values);
-            Json::Object(
-                values
-                    .into_iter()
-                    .map(|(key, value)| {
-                        let value = if key == "name" && preserve_tool_name && value.is_string() {
-                            value
-                        } else {
-                            redact_semantic_content(value, replacement, Some(&key))
-                        };
-                        (key, value)
-                    })
-                    .collect(),
-            )
-        }
+        Json::Object(values) => redact_semantic_object(values, replacement, field),
     }
+}
+
+fn redact_semantic_scalar(value: Json, replacement: &str, field: Option<&str>) -> Json {
+    match value {
+        Json::Bool(value) if field.is_some_and(preserve_analytical_bool) => Json::Bool(value),
+        Json::Bool(_) => Json::Bool(false),
+        Json::Number(value) if field.is_some_and(preserve_analytical_number) => Json::Number(value),
+        Json::Number(_) => Json::from(0),
+        Json::String(value) if field.is_some_and(preserve_analytical_string) => Json::String(value),
+        Json::String(value) if field == Some("arguments") => {
+            redact_stringified_json(value, replacement)
+        }
+        Json::String(_) => Json::String(replacement.to_string()),
+        _ => unreachable!("only scalar JSON values are passed to redact_semantic_scalar"),
+    }
+}
+
+fn redact_semantic_object(
+    values: serde_json::Map<String, Json>,
+    replacement: &str,
+    field: Option<&str>,
+) -> Json {
+    let preserve_tool_name = preserves_tool_or_function_name(field, &values);
+    Json::Object(
+        values
+            .into_iter()
+            .map(|(key, value)| {
+                let value = if key == "name" && preserve_tool_name && value.is_string() {
+                    value
+                } else {
+                    redact_semantic_content(value, replacement, Some(&key))
+                };
+                (key, value)
+            })
+            .collect(),
+    )
 }
 
 fn redact_stringified_json(value: String, replacement: &str) -> Json {

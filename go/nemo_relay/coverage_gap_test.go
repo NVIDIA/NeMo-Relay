@@ -13,59 +13,44 @@ import (
 func TestEventBaseNilPointerFallbacks(t *testing.T) {
 	event := eventBase{}
 
-	if got := event.UUID(); got != "" {
-		t.Fatalf("expected empty UUID, got %q", got)
+	assertEmptyEventString(t, "UUID", event.UUID())
+	assertEmptyEventString(t, "Name", event.Name())
+	assertEmptyEventString(t, "Kind", event.Kind())
+	assertEmptyEventString(t, "ATOFVersion", event.ATOFVersion())
+	assertEmptyEventString(t, "ScopeType", event.ScopeType())
+	assertZeroEventAttributes(t, event.Attributes())
+	assertNilEventJSON(t, "AttributesJSON", event.AttributesJSON())
+	assertNilEventJSON(t, "Data", event.Data())
+	assertNilEventJSON(t, "DataSchema", event.DataSchema())
+	assertNilEventJSON(t, "Metadata", event.Metadata())
+	assertEmptyEventString(t, "Timestamp", event.Timestamp())
+	assertNilEventJSON(t, "Input", event.Input())
+	assertNilEventJSON(t, "Output", event.Output())
+	assertEmptyEventString(t, "ModelName", event.ModelName())
+	assertEmptyEventString(t, "ToolCallID", event.ToolCallID())
+	assertEmptyEventString(t, "ParentUUID", event.ParentUUID())
+	assertNilEventJSON(t, "AnnotatedRequest", event.AnnotatedRequest())
+	assertNilEventJSON(t, "AnnotatedResponse", event.AnnotatedResponse())
+}
+
+func assertEmptyEventString(t *testing.T, name string, got string) {
+	t.Helper()
+	if got != "" {
+		t.Fatalf("expected empty %s, got %q", name, got)
 	}
-	if got := event.Name(); got != "" {
-		t.Fatalf("expected empty Name, got %q", got)
-	}
-	if got := event.Kind(); got != "" {
-		t.Fatalf("expected empty Kind, got %q", got)
-	}
-	if got := event.ATOFVersion(); got != "" {
-		t.Fatalf("expected empty ATOFVersion, got %q", got)
-	}
-	if got := event.ScopeType(); got != "" {
-		t.Fatalf("expected empty ScopeType, got %q", got)
-	}
-	if got := event.Attributes(); got != 0 {
+}
+
+func assertZeroEventAttributes(t *testing.T, got uint32) {
+	t.Helper()
+	if got != 0 {
 		t.Fatalf("expected zero Attributes, got %d", got)
 	}
-	if got := event.AttributesJSON(); got != nil {
-		t.Fatalf("expected nil AttributesJSON, got %s", got)
-	}
-	if got := event.Data(); got != nil {
-		t.Fatalf("expected nil Data, got %s", got)
-	}
-	if got := event.DataSchema(); got != nil {
-		t.Fatalf("expected nil DataSchema, got %s", got)
-	}
-	if got := event.Metadata(); got != nil {
-		t.Fatalf("expected nil Metadata, got %s", got)
-	}
-	if got := event.Timestamp(); got != "" {
-		t.Fatalf("expected empty Timestamp, got %q", got)
-	}
-	if got := event.Input(); got != nil {
-		t.Fatalf("expected nil Input, got %s", got)
-	}
-	if got := event.Output(); got != nil {
-		t.Fatalf("expected nil Output, got %s", got)
-	}
-	if got := event.ModelName(); got != "" {
-		t.Fatalf("expected empty ModelName, got %q", got)
-	}
-	if got := event.ToolCallID(); got != "" {
-		t.Fatalf("expected empty ToolCallID, got %q", got)
-	}
-	if got := event.ParentUUID(); got != "" {
-		t.Fatalf("expected empty ParentUUID, got %q", got)
-	}
-	if got := event.AnnotatedRequest(); got != nil {
-		t.Fatalf("expected nil AnnotatedRequest, got %s", got)
-	}
-	if got := event.AnnotatedResponse(); got != nil {
-		t.Fatalf("expected nil AnnotatedResponse, got %s", got)
+}
+
+func assertNilEventJSON(t *testing.T, name string, got []byte) {
+	t.Helper()
+	if got != nil {
+		t.Fatalf("expected nil %s, got %s", name, got)
 	}
 }
 
