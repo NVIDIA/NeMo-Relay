@@ -135,6 +135,8 @@ pub struct PluginConfig {
     #[serde(default)]
     pub components: Vec<PluginComponentSpec>,
     /// Plugin-level policy for unsupported plugin kinds, fields, and values.
+    ///
+    /// Non-default field values override the corresponding component policy.
     #[serde(default)]
     pub policy: ConfigPolicy,
 }
@@ -196,7 +198,7 @@ impl ConfigReport {
 }
 
 /// Policy for how unsupported plugin/runtime config is handled.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigPolicy {
     /// Policy applied when a component kind is unknown to the plugin registry.
@@ -217,6 +219,34 @@ impl Default for ConfigPolicy {
             unknown_field: default_warn(),
             unsupported_value: default_error(),
         }
+    }
+}
+
+/// Applies non-default global policy fields to a component policy.
+///
+/// Component-specific policy remains in effect when the corresponding global
+/// setting is left at its default value.
+pub fn apply_global_config_policy(
+    component_policy: ConfigPolicy,
+    global_policy: &ConfigPolicy,
+) -> ConfigPolicy {
+    let default_policy = ConfigPolicy::default();
+    ConfigPolicy {
+        unknown_component: if global_policy.unknown_component != default_policy.unknown_component {
+            global_policy.unknown_component
+        } else {
+            component_policy.unknown_component
+        },
+        unknown_field: if global_policy.unknown_field != default_policy.unknown_field {
+            global_policy.unknown_field
+        } else {
+            component_policy.unknown_field
+        },
+        unsupported_value: if global_policy.unsupported_value != default_policy.unsupported_value {
+            global_policy.unsupported_value
+        } else {
+            component_policy.unsupported_value
+        },
     }
 }
 
@@ -815,6 +845,20 @@ pub trait Plugin: Send + Sync + 'static {
     /// from activating the configuration.
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic>;
 
+    /// Validates one plugin component config using the host's global policy.
+    ///
+    /// The default preserves the validation behavior of existing custom
+    /// plugins. Plugins that emit policy-controlled diagnostics should
+    /// override this method so host validation honors non-default fields in
+    /// [`PluginConfig::policy`].
+    fn validate_with_policy(
+        &self,
+        plugin_config: &Map<String, Json>,
+        _policy: &ConfigPolicy,
+    ) -> Vec<ConfigDiagnostic> {
+        self.validate(plugin_config)
+    }
+
     /// Registers runtime middleware/subscribers for one plugin component.
     ///
     /// The provided [`PluginRegistrationContext`] is component-scoped. Any
@@ -1119,7 +1163,7 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
         };
         report
             .diagnostics
-            .extend(plugin.validate(&component.config));
+            .extend(plugin.validate_with_policy(&component.config, &config.policy));
     }
 
     report

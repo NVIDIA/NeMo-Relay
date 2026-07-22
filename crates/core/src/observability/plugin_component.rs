@@ -62,7 +62,7 @@ use crate::observability::{
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    deregister_plugin, register_builtin_plugin,
+    apply_global_config_policy, deregister_plugin, register_builtin_plugin,
 };
 
 /// The plugin kind registered by the core crate.
@@ -632,6 +632,14 @@ impl Plugin for ObservabilityPlugin {
 
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         validate_observability_plugin_config(plugin_config)
+    }
+
+    fn validate_with_policy(
+        &self,
+        plugin_config: &Map<String, Json>,
+        policy: &ConfigPolicy,
+    ) -> Vec<ConfigDiagnostic> {
+        validate_observability_plugin_config_with_policy(plugin_config, Some(policy))
     }
 
     fn register<'a>(
@@ -1704,7 +1712,14 @@ fn parse_observability_config(
 fn validate_observability_plugin_config(
     plugin_config: &Map<String, Json>,
 ) -> Vec<ConfigDiagnostic> {
-    let config = match parse_observability_config(plugin_config) {
+    validate_observability_plugin_config_with_policy(plugin_config, None)
+}
+
+fn validate_observability_plugin_config_with_policy(
+    plugin_config: &Map<String, Json>,
+    policy: Option<&ConfigPolicy>,
+) -> Vec<ConfigDiagnostic> {
+    let mut config = match parse_observability_config(plugin_config) {
         Ok(config) => config,
         Err(err) => {
             return vec![ConfigDiagnostic {
@@ -1716,6 +1731,9 @@ fn validate_observability_plugin_config(
             }];
         }
     };
+    if let Some(policy) = policy {
+        config.policy = apply_global_config_policy(config.policy, policy);
+    }
 
     let mut diagnostics = vec![];
     validate_top_level_observability_fields(&mut diagnostics, &config.policy, plugin_config);
