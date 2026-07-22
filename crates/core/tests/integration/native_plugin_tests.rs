@@ -844,6 +844,40 @@ fn native_activation_clear_deregisters_plugin_kind() {
     activation.clear();
 }
 
+#[tokio::test]
+async fn native_request_intercept_rejects_manifest_that_admits_relay_0_5() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_text(ManifestOptions {
+        manifest_dir: fixture.manifest_dir.path(),
+        plugin_id: "fixture_native",
+        relay: ">=0.5,<1.0",
+        library: &fixture.library_path.to_string_lossy(),
+        symbol: "nemo_relay_fixture_native_plugin",
+        integrity: None,
+    });
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("the host version is in the broad manifest range");
+
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    let error = initialize_plugins_exact(plugin_config)
+        .await
+        .expect_err("the request-intercept registration should reject Relay 0.5 compatibility")
+        .to_string();
+    assert!(
+        error.contains("llm request intercept failed: InvalidArg"),
+        "{error}"
+    );
+
+    clear_plugin_configuration().expect("failed initialization state should clear");
+    activation.clear();
+}
+
 #[test]
 fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();

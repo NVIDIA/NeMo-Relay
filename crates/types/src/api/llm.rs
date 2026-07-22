@@ -11,6 +11,11 @@ use crate::api::event::PendingMarkSpec;
 use crate::codec::optimization::LlmOptimizationContribution;
 use crate::codec::request::AnnotatedLlmRequest;
 
+/// Versioned JSON envelope schema for [`LlmRequestInterceptOutcome`].
+///
+/// Version 2 carries the version 2 annotated-request schema.
+pub const LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA: &str = "nemo.relay.LlmRequestInterceptOutcome@2";
+
 bitflags! {
     /// Bitflags that modify LLM-call behavior and observability.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

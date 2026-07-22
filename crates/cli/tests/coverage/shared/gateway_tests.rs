@@ -328,6 +328,90 @@ fn selects_provider_routes() {
 }
 
 #[test]
+fn generation_routes_have_request_codecs_and_passthrough_routes_do_not() {
+    for route in [
+        ProviderRoute::AnthropicMessages,
+        ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiResponses,
+    ] {
+        let codecs = codecs_for_route(route);
+        assert!(
+            codecs.request.is_some(),
+            "missing request codec for {route:?}"
+        );
+        assert!(
+            codecs.streaming.is_some(),
+            "missing stream codec for {route:?}"
+        );
+        assert!(
+            codecs.response.is_some(),
+            "missing response codec for {route:?}"
+        );
+    }
+
+    for route in [
+        ProviderRoute::AnthropicCountTokens,
+        ProviderRoute::OpenAiModels,
+    ] {
+        let codecs = codecs_for_route(route);
+        assert!(
+            codecs.request.is_none(),
+            "unexpected request codec for {route:?}"
+        );
+        assert!(
+            codecs.streaming.is_none(),
+            "unexpected stream codec for {route:?}"
+        );
+        assert!(
+            codecs.response.is_none(),
+            "unexpected response codec for {route:?}"
+        );
+    }
+}
+
+#[test]
+fn generation_route_codecs_reject_stream_mode_changes() {
+    for (route, content) in [
+        (
+            ProviderRoute::AnthropicMessages,
+            json!({
+                "model": "claude-test",
+                "max_tokens": 32,
+                "messages": [{"role": "user", "content": "hello"}],
+            }),
+        ),
+        (
+            ProviderRoute::OpenAiChatCompletions,
+            json!({
+                "model": "gpt-test",
+                "messages": [{"role": "user", "content": "hello"}],
+            }),
+        ),
+        (
+            ProviderRoute::OpenAiResponses,
+            json!({"model": "gpt-test", "input": "hello"}),
+        ),
+    ] {
+        let codec = codecs_for_route(route).request.unwrap();
+        for original_streaming in [false, true] {
+            let mut content = content.clone();
+            content["stream"] = json!(original_streaming);
+            let request = LlmRequest {
+                headers: Map::new(),
+                content,
+            };
+            let mut annotated = codec.decode(&request).unwrap();
+            annotated.stream = Some(!original_streaming);
+            let error = codec.encode(&annotated, &request).unwrap_err();
+            assert!(
+                error.to_string().contains("cannot change stream mode"),
+                "unexpected error for {route:?}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
 fn dispatch_override_routes_cover_models_and_count_tokens() {
     for alias in ["openai_models", "openai.models", "/models", "/v1/models"] {
         assert_eq!(

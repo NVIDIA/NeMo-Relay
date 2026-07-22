@@ -7,12 +7,85 @@
 //! the required/optional × to-json/from-json matrix used throughout the PyO3
 //! binding layer.
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
-use pyo3::prelude::*;
+use pyo3::types::{
+    PyByteArray, PyBytes, PyDict, PyFrozenSet, PyMapping, PySequence, PySet, PyString,
+};
+use pyo3::{intern, prelude::*};
 use serde_json::Value as Json;
+
+fn validate_acyclic(
+    value: &Bound<'_, PyAny>,
+    active_containers: &mut HashSet<usize>,
+) -> PyResult<()> {
+    if value.is_instance_of::<PyString>()
+        || value.is_instance_of::<PyBytes>()
+        || value.is_instance_of::<PyByteArray>()
+    {
+        return Ok(());
+    }
+
+    let dataclass_fields = value
+        .getattr_opt(intern!(value.py(), "__dataclass_fields__"))
+        .ok()
+        .flatten();
+    let is_container = value.cast::<PySet>().is_ok()
+        || value.cast::<PyFrozenSet>().is_ok()
+        || value.cast::<PySequence>().is_ok()
+        || value.cast::<PyMapping>().is_ok()
+        || dataclass_fields.is_some();
+    if !is_container {
+        return Ok(());
+    }
+
+    let identity = value.as_ptr() as usize;
+    if !active_containers.insert(identity) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Failed to convert to JSON: circular reference detected",
+        ));
+    }
+
+    let result = if let Ok(set) = value.cast::<PySet>() {
+        set.iter()
+            .try_for_each(|child| validate_acyclic(&child, active_containers))
+    } else if let Ok(set) = value.cast::<PyFrozenSet>() {
+        set.iter()
+            .try_for_each(|child| validate_acyclic(&child, active_containers))
+    } else if let Ok(sequence) = value.cast::<PySequence>() {
+        (0..sequence.len()?).try_for_each(|index| {
+            let child = sequence.get_item(index)?;
+            validate_acyclic(&child, active_containers)
+        })
+    } else if let Ok(mapping) = value.cast::<PyMapping>() {
+        let keys = mapping.keys()?;
+        let values = mapping.values()?;
+        keys.iter()
+            .chain(values.iter())
+            .try_for_each(|child| validate_acyclic(&child, active_containers))
+    } else if let Some(fields) = dataclass_fields {
+        let fields = fields.cast::<PyDict>()?.keys();
+        let attributes = value
+            .getattr(intern!(value.py(), "__dict__"))?
+            .cast_into::<PyDict>()?;
+        fields.iter().try_for_each(|field| {
+            if let Some(child) = attributes.get_item(&field)? {
+                validate_acyclic(&child, active_containers)?;
+            }
+            Ok(())
+        })
+    } else {
+        Ok(())
+    };
+
+    active_containers.remove(&identity);
+    result
+}
 
 /// Convert a Python object to serde_json::Value via pythonize.
 pub fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Json> {
+    validate_acyclic(obj, &mut HashSet::new())?;
     pythonize::depythonize(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to convert to JSON: {e}"))
     })

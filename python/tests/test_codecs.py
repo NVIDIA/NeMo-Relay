@@ -168,19 +168,30 @@ class TestAnnotatedLLMRequestConstruction:
 
         annotated = AnnotatedLLMRequest(
             messages,
+            instructions=[{"type": "text", "text": "Follow policy"}],
             model="gpt-4-turbo",
             params=params,
             tools=tools_list,
             tool_choice="auto",
+            api_specific={"api": "custom", "api_name": "test", "data": {"flag": True}},
             extra=extra,
         )
 
         assert annotated.messages == messages
+        assert annotated.instructions == [{"type": "text", "text": "Follow policy"}]
         assert annotated.model == "gpt-4-turbo"
         assert annotated.params == params
         assert annotated.tools == tools_list
         assert annotated.tool_choice == "auto"
+        assert annotated.api_specific == {"api": "custom", "api_name": "test", "data": {"flag": True}}
         assert annotated.extra == extra
+
+        annotated.instructions = "Updated policy"
+        annotated.api_specific = None
+        assert annotated.instructions == "Updated policy"
+        assert annotated.api_specific is None
+        annotated.instructions = None
+        assert annotated.instructions is None
 
 
 # ---------------------------------------------------------------------------

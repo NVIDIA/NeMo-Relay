@@ -23,8 +23,9 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 
 use super::request::{
-    AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent, ToolChoice,
-    ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
+    AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionDefinition, GenerationParams,
+    Message, MessageContent, ProviderNativeComponent, ToolChoice, ToolChoiceFunction,
+    ToolChoiceFunctionName, ToolDefinition,
 };
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
@@ -128,6 +129,14 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "tool_choice",
     "metadata",
     "service_tier",
+    "stream",
+    "cache_control",
+    "container",
+    "inference_geo",
+    "output_config",
+    "thinking",
+    "top_k",
+    "anthropic-user-profile-id",
 ];
 
 /// Decode the Anthropic `tool_choice` JSON value into a normalized [`ToolChoice`].
@@ -157,153 +166,422 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
 
 /// Extract Anthropic `disable_parallel_tool_use` from tool_choice and map
 /// to normalized `parallel_tool_calls` semantics.
-fn decode_parallel_tool_calls(val: &Json) -> Option<bool> {
-    let obj = val.as_object()?;
-    obj.get("disable_parallel_tool_use")
-        .and_then(|v| v.as_bool())
-        .map(|disabled| !disabled)
+fn decode_parallel_tool_calls(val: &Json) -> Result<Option<bool>> {
+    let Some(obj) = val.as_object() else {
+        return Ok(None);
+    };
+    Ok(super::optional_bool(
+        obj,
+        "disable_parallel_tool_use",
+        "Anthropic Messages tool_choice",
+    )?
+    .map(|disabled| !disabled))
 }
 
 /// Encode a normalized [`ToolChoice`] back into Anthropic JSON format.
-fn encode_anthropic_tool_choice(tc: &ToolChoice) -> Json {
+fn encode_anthropic_tool_choice(tc: &ToolChoice) -> Result<Json> {
     match tc {
-        ToolChoice::Auto => serde_json::json!({"type": "auto"}),
-        ToolChoice::Required => serde_json::json!({"type": "any"}),
-        ToolChoice::None => serde_json::json!({"type": "none"}),
+        ToolChoice::Auto => Ok(serde_json::json!({"type": "auto"})),
+        ToolChoice::Required => Ok(serde_json::json!({"type": "any"})),
+        ToolChoice::None => Ok(serde_json::json!({"type": "none"})),
         ToolChoice::Specific(func) => {
-            serde_json::json!({"type": "tool", "name": func.function.name})
+            Ok(serde_json::json!({"type": "tool", "name": func.function.name}))
         }
+        ToolChoice::ProviderNative(native) if native.provider == "anthropic_messages" => {
+            Ok(native.value.clone())
+        }
+        ToolChoice::ProviderNative(native) => Err(FlowError::InvalidArgument(format!(
+            "tool choice for {} cannot be encoded for Anthropic Messages",
+            native.provider
+        ))),
     }
 }
 
 fn encode_tool_choice_with_parallel_hint(
     tc: &ToolChoice,
     parallel_tool_calls: Option<bool>,
-) -> Json {
-    let mut value = encode_anthropic_tool_choice(tc);
+) -> Result<Json> {
+    let mut value = encode_anthropic_tool_choice(tc)?;
     if let (Some(parallel), Some(obj)) = (parallel_tool_calls, value.as_object_mut()) {
         obj.insert("disable_parallel_tool_use".into(), Json::Bool(!parallel));
     }
-    value
+    Ok(value)
 }
 
-/// Extract the system prompt from an Anthropic top-level `system` field.
-///
-/// Handles both string and array-of-content-blocks formats.
-fn extract_system_message(system_val: &Json) -> Option<Message> {
-    if let Some(s) = system_val.as_str() {
-        Some(Message::System {
-            content: MessageContent::Text(s.to_string()),
-            name: None,
-        })
-    } else if let Some(arr) = system_val.as_array() {
-        // Array of content blocks -- extract text from each "text" block.
-        let texts: Vec<&str> = arr
-            .iter()
-            .filter_map(|block| {
-                let block_type = block.get("type")?.as_str()?;
-                if block_type == "text" {
-                    block.get("text")?.as_str()
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if texts.is_empty() {
-            None
-        } else {
-            Some(Message::System {
-                content: MessageContent::Text(texts.join("\n")),
-                name: None,
-            })
-        }
-    } else {
-        None
+fn native_component(provider: &str, value: &Json) -> ProviderNativeComponent {
+    ProviderNativeComponent {
+        provider: provider.to_string(),
+        kind: value
+            .get("type")
+            .and_then(Json::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        value: value.clone(),
     }
 }
 
-/// Extract system text from a [`Message::System`] for encoding back to top-level.
-fn extract_system_text(msg: &Message) -> Option<String> {
-    match msg {
-        Message::System {
-            content: MessageContent::Text(s),
-            ..
-        } => Some(s.clone()),
-        Message::System {
-            content: MessageContent::Parts(parts),
-            ..
-        } => {
-            let texts: Vec<&str> = parts
-                .iter()
-                .filter_map(|p| match p {
-                    super::request::ContentPart::Text { text } => Some(text.as_str()),
-                    super::request::ContentPart::ImageUrl { .. } => None,
-                })
-                .collect();
-            if texts.is_empty() {
-                None
-            } else {
-                Some(texts.join("\n"))
-            }
-        }
-        _ => None,
+fn decode_anthropic_content(value: &Json) -> Result<MessageContent> {
+    if let Some(text) = value.as_str() {
+        return Ok(MessageContent::Text(text.to_string()));
     }
-}
-
-fn split_system_and_messages(messages: &[Message]) -> (Option<String>, Vec<&Message>) {
-    let mut system_text = None;
-    let mut non_system_messages = Vec::new();
-
-    for msg in messages {
-        if let Some(text) = extract_system_text(msg) {
-            system_text = Some(text);
-        } else {
-            non_system_messages.push(msg);
-        }
-    }
-
-    (system_text, non_system_messages)
-}
-
-fn insert_serialized<T: serde::Serialize>(
-    obj: &mut serde_json::Map<String, Json>,
-    key: &str,
-    value: &T,
-    context: &str,
-) -> Result<()> {
-    let json = serde_json::to_value(value)
-        .map_err(|e| FlowError::Internal(format!("Anthropic Messages {context} encode: {e}")))?;
-    obj.insert(key.into(), json);
-    Ok(())
-}
-
-fn overlay_generation_params(obj: &mut serde_json::Map<String, Json>, params: &GenerationParams) {
-    if let Some(temp) = params.temperature {
-        obj.insert("temperature".into(), json_f64(temp));
-    }
-    if let Some(top_p) = params.top_p {
-        obj.insert("top_p".into(), json_f64(top_p));
-    }
-    if let Some(max_tokens) = params.max_tokens {
-        obj.insert("max_tokens".into(), Json::from(max_tokens));
-    }
-}
-
-fn encode_anthropic_tools(tools: &[ToolDefinition]) -> Vec<Json> {
-    tools
+    let blocks = value.as_array().ok_or_else(|| {
+        FlowError::InvalidArgument("Anthropic Messages content must be a string or an array".into())
+    })?;
+    let parts = blocks
         .iter()
-        .map(|td| {
-            let mut tool = serde_json::Map::new();
-            tool.insert("name".into(), Json::String(td.function.name.clone()));
-            if let Some(ref desc) = td.function.description {
-                tool.insert("description".into(), Json::String(desc.clone()));
+        .map(decode_anthropic_content_part)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(MessageContent::Parts(parts))
+}
+
+fn decode_anthropic_content_part(value: &Json) -> Result<ContentPart> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("Anthropic Messages content block must be an object".into())
+    })?;
+    let kind = obj.get("type").and_then(Json::as_str).unwrap_or("unknown");
+    match kind {
+        "text" => {
+            let text = obj.get("text").and_then(Json::as_str).ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic text block is missing text".into())
+            })?;
+            Ok(ContentPart::Text {
+                text: text.to_string(),
+                extra: obj
+                    .iter()
+                    .filter(|(key, _)| !matches!(key.as_str(), "type" | "text"))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            })
+        }
+        "image" => Ok(ContentPart::Image {
+            image: Json::Object(
+                obj.iter()
+                    .filter(|(key, _)| key.as_str() != "type")
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            ),
+            extra: serde_json::Map::new(),
+        }),
+        "document" => Ok(ContentPart::File {
+            file: Json::Object(
+                obj.iter()
+                    .filter(|(key, _)| key.as_str() != "type")
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            ),
+            extra: serde_json::Map::new(),
+        }),
+        "tool_use" => {
+            let id = obj.get("id").and_then(Json::as_str).ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic tool_use block is missing id".into())
+            })?;
+            let name = obj.get("name").and_then(Json::as_str).ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic tool_use block is missing name".into())
+            })?;
+            let input = obj.get("input").ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic tool_use block is missing input".into())
+            })?;
+            let extra = obj
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "type" | "id" | "name" | "input"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            Ok(ContentPart::ToolUse {
+                id: id.to_string(),
+                name: name.to_string(),
+                input: input.clone(),
+                extra,
+            })
+        }
+        "tool_result" => {
+            let tool_use_id = obj
+                .get("tool_use_id")
+                .and_then(Json::as_str)
+                .ok_or_else(|| {
+                    FlowError::InvalidArgument(
+                        "Anthropic tool_result block is missing tool_use_id".into(),
+                    )
+                })?;
+            let content = obj.get("content").ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic tool_result block is missing content".into())
+            })?;
+            let is_error = match obj.get("is_error") {
+                Some(Json::Null) | None => None,
+                Some(value) => Some(value.as_bool().ok_or_else(|| {
+                    FlowError::InvalidArgument(
+                        "Anthropic tool_result is_error must be a boolean".into(),
+                    )
+                })?),
+            };
+            let extra = obj
+                .iter()
+                .filter(|(key, _)| {
+                    !matches!(
+                        key.as_str(),
+                        "type" | "tool_use_id" | "content" | "is_error"
+                    )
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            Ok(ContentPart::ToolResult {
+                tool_use_id: tool_use_id.to_string(),
+                content: content.clone(),
+                is_error,
+                extra,
+            })
+        }
+        _ => {
+            let native = native_component("anthropic_messages", value);
+            Ok(ContentPart::ProviderNative {
+                provider: native.provider,
+                kind: native.kind,
+                value: native.value,
+            })
+        }
+    }
+}
+
+fn decode_anthropic_message(value: &Json) -> Result<Message> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("Anthropic Messages message must be an object".into())
+    })?;
+    let role = obj.get("role").and_then(Json::as_str).ok_or_else(|| {
+        FlowError::InvalidArgument("Anthropic Messages message is missing role".into())
+    })?;
+    let content = obj.get("content").ok_or_else(|| {
+        FlowError::InvalidArgument("Anthropic Messages message is missing content".into())
+    })?;
+    if obj
+        .keys()
+        .any(|key| !matches!(key.as_str(), "role" | "content"))
+    {
+        return Ok(Message::ProviderNative {
+            provider: "anthropic_messages".into(),
+            kind: role.to_string(),
+            value: value.clone(),
+        });
+    }
+    let content = decode_anthropic_content(content)?;
+    match role {
+        "user" => Ok(Message::User {
+            content,
+            name: None,
+        }),
+        "assistant" => Ok(Message::Assistant {
+            content: Some(content),
+            tool_calls: None,
+            name: None,
+        }),
+        "system" => Ok(Message::System {
+            content,
+            name: None,
+        }),
+        _ => Ok(Message::ProviderNative {
+            provider: "anthropic_messages".into(),
+            kind: role.to_string(),
+            value: value.clone(),
+        }),
+    }
+}
+
+fn encode_anthropic_content(content: &MessageContent) -> Result<Json> {
+    match content {
+        MessageContent::Text(text) => Ok(Json::String(text.clone())),
+        MessageContent::Parts(parts) => Ok(Json::Array(
+            parts
+                .iter()
+                .map(encode_anthropic_content_part)
+                .collect::<Result<Vec<_>>>()?,
+        )),
+    }
+}
+
+fn encode_anthropic_content_part(part: &ContentPart) -> Result<Json> {
+    match part {
+        ContentPart::Text { text, extra } => {
+            let mut obj = extra.clone();
+            obj.insert("type".into(), Json::String("text".into()));
+            obj.insert("text".into(), Json::String(text.clone()));
+            Ok(Json::Object(obj))
+        }
+        ContentPart::Image { image, extra } => {
+            let mut obj = image.as_object().cloned().ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic image payload must be an object".into())
+            })?;
+            obj.extend(extra.clone());
+            obj.insert("type".into(), Json::String("image".into()));
+            Ok(Json::Object(obj))
+        }
+        ContentPart::File { file, extra } => {
+            let mut obj = file.as_object().cloned().ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic document payload must be an object".into())
+            })?;
+            obj.extend(extra.clone());
+            obj.insert("type".into(), Json::String("document".into()));
+            Ok(Json::Object(obj))
+        }
+        ContentPart::ToolUse {
+            id,
+            name,
+            input,
+            extra,
+        } => {
+            let mut obj = extra.clone();
+            obj.insert("type".into(), Json::String("tool_use".into()));
+            obj.insert("id".into(), Json::String(id.clone()));
+            obj.insert("name".into(), Json::String(name.clone()));
+            obj.insert("input".into(), input.clone());
+            Ok(Json::Object(obj))
+        }
+        ContentPart::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+            extra,
+        } => {
+            let mut obj = extra.clone();
+            obj.insert("type".into(), Json::String("tool_result".into()));
+            obj.insert("tool_use_id".into(), Json::String(tool_use_id.clone()));
+            obj.insert("content".into(), content.clone());
+            if let Some(is_error) = is_error {
+                obj.insert("is_error".into(), Json::Bool(*is_error));
             }
-            if let Some(ref params) = td.function.parameters {
-                tool.insert("input_schema".into(), params.clone());
+            Ok(Json::Object(obj))
+        }
+        ContentPart::ProviderNative {
+            provider, value, ..
+        } if provider == "anthropic_messages" => Ok(value.clone()),
+        other => Err(FlowError::InvalidArgument(format!(
+            "content part {other:?} cannot be encoded for Anthropic Messages"
+        ))),
+    }
+}
+
+fn encode_anthropic_message(message: &Message) -> Result<Json> {
+    match message {
+        Message::User { content, .. } | Message::System { content, .. } => {
+            let role = if matches!(message, Message::User { .. }) {
+                "user"
+            } else {
+                "system"
+            };
+            let mut obj = serde_json::Map::new();
+            obj.insert("role".into(), Json::String(role.into()));
+            obj.insert("content".into(), encode_anthropic_content(content)?);
+            Ok(Json::Object(obj))
+        }
+        Message::Assistant { content, .. } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("role".into(), Json::String("assistant".into()));
+            obj.insert(
+                "content".into(),
+                match content {
+                    Some(content) => encode_anthropic_content(content)?,
+                    None => Json::Array(Vec::new()),
+                },
+            );
+            Ok(Json::Object(obj))
+        }
+        Message::ProviderNative {
+            provider, value, ..
+        } if provider == "anthropic_messages" => Ok(value.clone()),
+        other => Err(FlowError::InvalidArgument(format!(
+            "message {other:?} cannot be encoded for Anthropic Messages"
+        ))),
+    }
+}
+
+fn encode_anthropic_tool(tool: &ToolDefinition) -> Result<Json> {
+    match tool {
+        ToolDefinition::Function { function, extra } => {
+            let mut obj = extra.clone();
+            obj.insert("name".into(), Json::String(function.name.clone()));
+            if let Some(description) = &function.description {
+                obj.insert("description".into(), Json::String(description.clone()));
             }
-            Json::Object(tool)
+            if let Some(parameters) = &function.parameters {
+                obj.insert("input_schema".into(), parameters.clone());
+            }
+            if let Some(strict) = function.strict {
+                obj.insert("strict".into(), Json::Bool(strict));
+            }
+            obj.extend(function.extra.clone());
+            Ok(Json::Object(obj))
+        }
+        ToolDefinition::ProviderNative {
+            provider, value, ..
+        } if provider == "anthropic_messages" => Ok(value.clone()),
+        other => Err(FlowError::InvalidArgument(format!(
+            "tool {other:?} cannot be encoded for Anthropic Messages"
+        ))),
+    }
+}
+
+fn decode_anthropic_tool(value: &Json) -> Result<ToolDefinition> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("Anthropic Messages tool must be an object".into())
+    })?;
+    let is_client_tool =
+        obj.get("type").is_none() && obj.contains_key("name") && obj.contains_key("input_schema");
+    if !is_client_tool {
+        let native = native_component("anthropic_messages", value);
+        return Ok(ToolDefinition::ProviderNative {
+            provider: native.provider,
+            kind: native.kind,
+            value: native.value,
+        });
+    }
+
+    let function_extra = serde_json::Map::new();
+    let wrapper_extra = obj
+        .iter()
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                "name" | "description" | "input_schema" | "strict"
+            )
         })
-        .collect()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let name =
+        super::optional_string(obj, "name", "Anthropic Messages tool")?.ok_or_else(|| {
+            FlowError::InvalidArgument("Anthropic Messages tool is missing name".into())
+        })?;
+    let description = super::optional_string(obj, "description", "Anthropic Messages tool")?;
+    let strict = super::optional_bool(obj, "strict", "Anthropic Messages tool")?;
+    Ok(ToolDefinition::Function {
+        function: FunctionDefinition {
+            name,
+            description,
+            parameters: obj.get("input_schema").cloned(),
+            strict,
+            extra: function_extra,
+        },
+        extra: wrapper_extra,
+    })
+}
+
+fn patch_extra_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    baseline: &serde_json::Map<String, Json>,
+    edited: &serde_json::Map<String, Json>,
+) {
+    for key in baseline.keys().filter(|key| !edited.contains_key(*key)) {
+        obj.remove(key);
+    }
+    for (key, value) in edited {
+        if baseline.get(key) != Some(value) {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn set_or_remove_json(obj: &mut serde_json::Map<String, Json>, key: &str, value: Option<Json>) {
+    if let Some(value) = value {
+        obj.insert(key.into(), value);
+    } else {
+        obj.remove(key);
+    }
 }
 
 fn anthropic_text_message(content_blocks: Option<&[Json]>) -> Option<MessageContent> {
@@ -431,33 +709,36 @@ impl LlmCodec for AnthropicMessagesCodec {
             .content
             .as_object()
             .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
-
-        // Extract system from top-level field.
-        let system_msg = obj.get("system").and_then(extract_system_message);
-
-        // Extract messages (default to empty vec if absent).
-        let mut messages: Vec<Message> = obj
-            .get("messages")
-            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
-            .unwrap_or_default();
-
-        // Prepend system message if present.
-        if let Some(sys) = system_msg {
-            messages.insert(0, sys);
-        }
-
-        // Extract model.
-        let model = obj.get("model").and_then(|v| v.as_str()).map(String::from);
-
-        // Extract generation params.
-        let temperature = obj.get("temperature").and_then(|v| v.as_f64());
-        let top_p = obj.get("top_p").and_then(|v| v.as_f64());
-        let max_tokens = obj.get("max_tokens").and_then(|v| v.as_u64());
-        // Anthropic uses stop_sequences (not stop).
+        let raw_messages = obj.get("messages").ok_or_else(|| {
+            FlowError::InvalidArgument("Anthropic Messages request is missing messages".into())
+        })?;
+        let messages = raw_messages
+            .as_array()
+            .ok_or_else(|| {
+                FlowError::InvalidArgument("Anthropic Messages messages must be an array".into())
+            })?
+            .iter()
+            .map(decode_anthropic_message)
+            .collect::<Result<Vec<_>>>()?;
+        let instructions = obj
+            .get("system")
+            .map(decode_anthropic_content)
+            .transpose()?;
+        let model = super::optional_string(obj, "model", "Anthropic Messages")?;
+        let temperature = super::optional_f64(obj, "temperature", "Anthropic Messages")?;
+        let top_p = super::optional_f64(obj, "top_p", "Anthropic Messages")?;
+        let max_tokens = super::optional_u64(obj, "max_tokens", "Anthropic Messages")?;
         let stop = obj
             .get("stop_sequences")
-            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok());
-
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                serde_json::from_value::<Vec<String>>(value.clone()).map_err(|error| {
+                    FlowError::InvalidArgument(format!(
+                        "invalid Anthropic stop_sequences value: {error}"
+                    ))
+                })
+            })
+            .transpose()?;
         let params =
             if temperature.is_some() || max_tokens.is_some() || top_p.is_some() || stop.is_some() {
                 Some(GenerationParams {
@@ -469,48 +750,50 @@ impl LlmCodec for AnthropicMessagesCodec {
             } else {
                 None
             };
-
-        // Extract tools: Anthropic uses flat structure (name, description, input_schema).
-        // Normalize to ToolDefinition { type: "function", function: { name, description, parameters } }.
-        let tools: Option<Vec<ToolDefinition>> = obj.get("tools").and_then(|v| {
-            let arr = v.as_array()?;
-            let defs: Vec<ToolDefinition> = arr
-                .iter()
-                .filter_map(|tool| {
-                    let name = tool.get("name")?.as_str()?.to_string();
-                    let description = tool
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .map(String::from);
-                    let parameters = tool.get("input_schema").cloned();
-                    Some(ToolDefinition {
-                        tool_type: "function".into(),
-                        function: FunctionDefinition {
-                            name,
-                            description,
-                            parameters,
-                        },
-                    })
-                })
-                .collect();
-            if defs.is_empty() { None } else { Some(defs) }
+        let tools = obj
+            .get("tools")
+            .map(|value| {
+                value
+                    .as_array()
+                    .ok_or_else(|| {
+                        FlowError::InvalidArgument(
+                            "Anthropic Messages tools must be an array".into(),
+                        )
+                    })?
+                    .iter()
+                    .map(decode_anthropic_tool)
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+        let tool_choice = obj.get("tool_choice").map(|value| {
+            decode_anthropic_tool_choice(value).unwrap_or_else(|| {
+                ToolChoice::ProviderNative(native_component("anthropic_messages", value))
+            })
         });
-
-        // Extract tool_choice: Anthropic format.
-        let tool_choice = obj
+        let parallel_tool_calls = obj
             .get("tool_choice")
-            .and_then(decode_anthropic_tool_choice);
-        let parallel_tool_calls = obj.get("tool_choice").and_then(decode_parallel_tool_calls);
-
-        // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
+            .map(decode_parallel_tool_calls)
+            .transpose()?
+            .flatten();
+        let service_tier = super::optional_string(obj, "service_tier", "Anthropic Messages")?;
+        let stream = super::optional_bool(obj, "stream", "Anthropic Messages")?;
+        let container = super::optional_string(obj, "container", "Anthropic Messages")?;
+        let inference_geo = super::optional_string(obj, "inference_geo", "Anthropic Messages")?;
+        let top_k = super::optional_u64(obj, "top_k", "Anthropic Messages")?;
+        let user_profile_id =
+            super::optional_string(obj, "anthropic-user-profile-id", "Anthropic Messages")?;
+        let metadata = super::optional_object(obj, "metadata", "Anthropic Messages")?;
+        let cache_control = super::optional_object(obj, "cache_control", "Anthropic Messages")?;
+        let output_config = super::optional_object(obj, "output_config", "Anthropic Messages")?;
+        let thinking = super::optional_object(obj, "thinking", "Anthropic Messages")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-
         Ok(AnnotatedLlmRequest {
             messages,
+            instructions,
             model,
             params,
             tools,
@@ -521,75 +804,239 @@ impl LlmCodec for AnthropicMessagesCodec {
             reasoning: None,
             include: None,
             user: None,
-            metadata: obj.get("metadata").cloned(),
-            service_tier: obj
-                .get("service_tier")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            metadata,
+            service_tier,
             parallel_tool_calls,
             max_output_tokens: None,
             max_tool_calls: None,
             top_logprobs: None,
-            stream: None,
+            stream,
+            api_specific: Some(ApiSpecificRequest::AnthropicMessages {
+                cache_control,
+                container,
+                inference_geo,
+                output_config,
+                thinking,
+                top_k,
+                user_profile_id,
+            }),
             extra,
         })
     }
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
+        let baseline = self.decode(original)?;
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-
-        let (system_text, non_system_messages) = split_system_and_messages(&annotated.messages);
-
-        if let Some(text) = system_text {
-            obj.insert("system".into(), Json::String(text));
+        if annotated.messages != baseline.messages {
+            let original_messages = obj.get("messages").and_then(Json::as_array);
+            let messages = super::encode_changed_items(
+                &annotated.messages,
+                &baseline.messages,
+                original_messages.map(Vec::as_slice),
+                encode_anthropic_message,
+            )?;
+            obj.insert("messages".into(), Json::Array(messages));
         }
-
-        // Overlay messages (non-system only).
-        insert_serialized(obj, "messages", &non_system_messages, "messages")?;
-
-        // Overlay model if present.
-        if let Some(ref model) = annotated.model {
-            obj.insert("model".into(), Json::String(model.clone()));
-        }
-
-        // Overlay generation params.
-        if let Some(ref params) = annotated.params {
-            overlay_generation_params(obj, params);
-            // Write stop_sequences (Anthropic key name, not "stop").
-            if let Some(ref stop) = params.stop {
-                insert_serialized(obj, "stop_sequences", stop, "stop_sequences")?;
-            }
-        }
-
-        // Overlay tools in Anthropic format: { name, description, input_schema }.
-        // Denormalize from ToolDefinition (drop type/function wrapper, rename parameters -> input_schema).
-        if let Some(ref tools) = annotated.tools {
-            let anthropic_tools = encode_anthropic_tools(tools);
-            insert_serialized(obj, "tools", &anthropic_tools, "tools")?;
-        }
-
-        // Overlay tool_choice in Anthropic format.
-        if let Some(ref tool_choice) = annotated.tool_choice {
-            obj.insert(
-                "tool_choice".into(),
-                encode_tool_choice_with_parallel_hint(tool_choice, annotated.parallel_tool_calls),
+        if annotated.instructions != baseline.instructions {
+            set_or_remove_json(
+                obj,
+                "system",
+                annotated
+                    .instructions
+                    .as_ref()
+                    .map(encode_anthropic_content)
+                    .transpose()?,
             );
         }
+        if annotated.model != baseline.model {
+            set_or_remove_json(obj, "model", annotated.model.clone().map(Json::String));
+        }
+        if annotated.params != baseline.params {
+            let edited = annotated.params.as_ref();
+            let before = baseline.params.as_ref();
+            if edited.and_then(|p| p.temperature) != before.and_then(|p| p.temperature) {
+                set_or_remove_json(
+                    obj,
+                    "temperature",
+                    edited.and_then(|p| p.temperature).map(json_f64),
+                );
+            }
+            if edited.and_then(|p| p.top_p) != before.and_then(|p| p.top_p) {
+                set_or_remove_json(obj, "top_p", edited.and_then(|p| p.top_p).map(json_f64));
+            }
+            if edited.and_then(|p| p.max_tokens) != before.and_then(|p| p.max_tokens) {
+                set_or_remove_json(
+                    obj,
+                    "max_tokens",
+                    edited.and_then(|p| p.max_tokens).map(Json::from),
+                );
+            }
+            if edited.and_then(|p| p.stop.as_ref()) != before.and_then(|p| p.stop.as_ref()) {
+                set_or_remove_json(
+                    obj,
+                    "stop_sequences",
+                    edited
+                        .and_then(|p| p.stop.as_ref())
+                        .map(|stop| serde_json::json!(stop)),
+                );
+            }
+        }
+        if annotated.tools != baseline.tools {
+            let tools = annotated
+                .tools
+                .as_deref()
+                .map(|tools| {
+                    super::encode_changed_items(
+                        tools,
+                        baseline.tools.as_deref().unwrap_or(&[]),
+                        obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
+                        encode_anthropic_tool,
+                    )
+                })
+                .transpose()?
+                .map(Json::Array);
+            set_or_remove_json(obj, "tools", tools);
+        }
+        if annotated.tool_choice != baseline.tool_choice
+            || annotated.parallel_tool_calls != baseline.parallel_tool_calls
+        {
+            let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
+                (Some(edited), Some(before)) => {
+                    let edited = encode_tool_choice_with_parallel_hint(
+                        edited,
+                        annotated.parallel_tool_calls,
+                    )?;
+                    let before = encode_tool_choice_with_parallel_hint(
+                        before,
+                        baseline.parallel_tool_calls,
+                    )?;
+                    Some(match obj.get("tool_choice") {
+                        Some(original) => super::patch_changed_json(original, &before, &edited)?,
+                        None => edited,
+                    })
+                }
+                (Some(edited), None) => Some(encode_tool_choice_with_parallel_hint(
+                    edited,
+                    annotated.parallel_tool_calls,
+                )?),
+                (None, _) => annotated
+                    .parallel_tool_calls
+                    .map(|parallel| {
+                        encode_tool_choice_with_parallel_hint(&ToolChoice::Auto, Some(parallel))
+                    })
+                    .transpose()?,
+            };
+            set_or_remove_json(obj, "tool_choice", tool_choice);
+        }
+        for (key, edited, before) in [("metadata", &annotated.metadata, &baseline.metadata)] {
+            if edited != before {
+                set_or_remove_json(obj, key, edited.clone());
+            }
+        }
+        if annotated.service_tier != baseline.service_tier {
+            set_or_remove_json(
+                obj,
+                "service_tier",
+                annotated.service_tier.clone().map(Json::String),
+            );
+        }
+        if annotated.stream != baseline.stream {
+            set_or_remove_json(obj, "stream", annotated.stream.map(Json::Bool));
+        }
 
-        if let Some(ref metadata) = annotated.metadata {
-            obj.insert("metadata".into(), metadata.clone());
-        }
-        if let Some(ref service_tier) = annotated.service_tier {
-            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
+        if annotated.store != baseline.store
+            || annotated.previous_response_id != baseline.previous_response_id
+            || annotated.truncation != baseline.truncation
+            || annotated.reasoning != baseline.reasoning
+            || annotated.include != baseline.include
+            || annotated.user != baseline.user
+            || annotated.max_output_tokens != baseline.max_output_tokens
+            || annotated.max_tool_calls != baseline.max_tool_calls
+            || annotated.top_logprobs != baseline.top_logprobs
+        {
+            return Err(FlowError::InvalidArgument(
+                "request contains fields that cannot be encoded for Anthropic Messages".into(),
+            ));
         }
 
-        // Merge extra fields back.
-        for (k, v) in &annotated.extra {
-            obj.insert(k.clone(), v.clone());
+        match (&annotated.api_specific, &baseline.api_specific) {
+            (
+                Some(ApiSpecificRequest::AnthropicMessages {
+                    cache_control,
+                    container,
+                    inference_geo,
+                    output_config,
+                    thinking,
+                    top_k,
+                    user_profile_id,
+                }),
+                Some(ApiSpecificRequest::AnthropicMessages {
+                    cache_control: old_cache_control,
+                    container: old_container,
+                    inference_geo: old_inference_geo,
+                    output_config: old_output_config,
+                    thinking: old_thinking,
+                    top_k: old_top_k,
+                    user_profile_id: old_user_profile_id,
+                }),
+            ) => {
+                if cache_control != old_cache_control {
+                    set_or_remove_json(obj, "cache_control", cache_control.clone());
+                }
+                for (key, edited, before) in [
+                    ("container", container, old_container),
+                    ("inference_geo", inference_geo, old_inference_geo),
+                    (
+                        "anthropic-user-profile-id",
+                        user_profile_id,
+                        old_user_profile_id,
+                    ),
+                ] {
+                    if edited != before {
+                        set_or_remove_json(obj, key, edited.clone().map(Json::String));
+                    }
+                }
+                for (key, edited, before) in [
+                    ("output_config", output_config, old_output_config),
+                    ("thinking", thinking, old_thinking),
+                ] {
+                    if edited != before {
+                        set_or_remove_json(obj, key, edited.clone());
+                    }
+                }
+                if top_k != old_top_k {
+                    set_or_remove_json(obj, "top_k", top_k.map(Json::from));
+                }
+            }
+            (None, Some(ApiSpecificRequest::AnthropicMessages { .. })) => {
+                for key in [
+                    "cache_control",
+                    "container",
+                    "inference_geo",
+                    "output_config",
+                    "thinking",
+                    "top_k",
+                    "anthropic-user-profile-id",
+                ] {
+                    obj.remove(key);
+                }
+            }
+            (Some(_), _) => {
+                return Err(FlowError::InvalidArgument(
+                    "api_specific provider does not match Anthropic Messages".into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(FlowError::InvalidArgument(
+                    "api_specific provider does not match Anthropic Messages".into(),
+                ));
+            }
+            (None, None) => {}
         }
+        patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
         Ok(LlmRequest {
             headers: original.headers.clone(),

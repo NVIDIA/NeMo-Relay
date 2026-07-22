@@ -23,6 +23,7 @@ use nemo_relay::plugin::{PluginError, Result as PluginResult};
 use super::component::BuiltinBackendConfig;
 use super::detectors::BuiltinDetector;
 use super::overlay::BuiltinCodecName;
+use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer};
 
 #[derive(Clone)]
 pub(super) struct CompiledBuiltinBackend {
@@ -31,6 +32,7 @@ pub(super) struct CompiledBuiltinBackend {
     request_codec: Option<Arc<dyn LlmCodec>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
     codec_name: Option<BuiltinCodecName>,
+    trajectory: Option<TrajectorySanitizer>,
 }
 
 #[derive(Clone)]
@@ -71,6 +73,48 @@ impl CompiledBuiltinBackend {
         config: BuiltinBackendConfig,
         codec_name: Option<String>,
     ) -> PluginResult<Self> {
+        let trajectory = match config.preset.as_deref() {
+            Some("trajectory_context") => {
+                if config.detector.is_some()
+                    || config.pattern.is_some()
+                    || !config.target_paths.is_empty()
+                    || config.mask_char.is_some()
+                    || config.unmasked_prefix.is_some()
+                    || config.unmasked_suffix.is_some()
+                {
+                    return Err(PluginError::InvalidConfig(
+                        "builtin.preset cannot be combined with matcher, target-path, or mask fields"
+                            .to_string(),
+                    ));
+                }
+                let policy = CustomMarkPayloadPolicy::parse(&config.custom_mark_payload_policy)
+                    .ok_or_else(|| {
+                        PluginError::InvalidConfig(format!(
+                            "unsupported custom-mark payload policy '{}'",
+                            config.custom_mark_payload_policy
+                        ))
+                    })?;
+                Some(TrajectorySanitizer::new(
+                    config
+                        .replacement
+                        .clone()
+                        .unwrap_or_else(|| "[REDACTED]".to_string()),
+                    policy,
+                ))
+            }
+            Some(other) => {
+                return Err(PluginError::InvalidConfig(format!(
+                    "unsupported builtin preset '{other}'"
+                )));
+            }
+            None => None,
+        };
+        if trajectory.is_none() && config.custom_mark_payload_policy != "preserve" {
+            return Err(PluginError::InvalidConfig(
+                "builtin.custom_mark_payload_policy requires builtin.preset = 'trajectory_context'"
+                    .to_string(),
+            ));
+        }
         let detector = config
             .detector
             .as_deref()
@@ -127,6 +171,7 @@ impl CompiledBuiltinBackend {
             request_codec: surface.map(build_request_codec),
             response_codec: surface.map(build_response_codec),
             codec_name: surface.map(BuiltinCodecName::from_provider_surface),
+            trajectory,
         })
     }
 
@@ -258,7 +303,12 @@ impl CompiledBuiltinBackend {
 }
 
 pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSanitizeFn {
-    Arc::new(move |_name: &str, payload: Json| backend.sanitize_json_preorder_dfs(payload))
+    Arc::new(
+        move |_name: &str, payload: Json| match backend.trajectory.as_ref() {
+            Some(trajectory) => trajectory.sanitize_tool_payload(payload),
+            None => backend.sanitize_json_preorder_dfs(payload),
+        },
+    )
 }
 
 pub(super) fn event_sanitize_callback(backend: CompiledBuiltinBackend) -> EventSanitizeFn {
@@ -291,6 +341,9 @@ fn event_sanitize_callback_with_scope_categories(
             return fields;
         }
 
+        if let Some(trajectory) = backend.trajectory.as_ref() {
+            return trajectory.sanitize_event_fields(event, fields);
+        }
         let specialized_scope = matches!(event, Event::Scope(_))
             && event
                 .category()
@@ -316,6 +369,10 @@ pub(super) fn llm_sanitize_request_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeRequestFn {
     Arc::new(move |mut request: LlmRequest| {
+        if let Some(trajectory) = backend.trajectory.as_ref() {
+            request.content = trajectory.sanitize_provider_payload(request.content);
+            return request;
+        }
         if let Some(encoded) = backend.sanitize_request_with_codec(&request) {
             return encoded;
         }
@@ -328,6 +385,9 @@ pub(super) fn llm_sanitize_response_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeResponseFn {
     Arc::new(move |payload: Json| {
+        if let Some(trajectory) = backend.trajectory.as_ref() {
+            return trajectory.sanitize_provider_payload(payload);
+        }
         if backend.target_paths.is_empty() {
             return backend.sanitize_json_preorder_dfs(payload);
         }

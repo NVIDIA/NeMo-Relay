@@ -12,8 +12,7 @@ use super::super::ir_builder::build_prompt_ir;
 use crate::acg::prompt_ir::{BlockContentType, PromptRole, ProvenanceLabel};
 
 fn sample_tool_definition(name: &str) -> ToolDefinition {
-    ToolDefinition {
-        tool_type: "function".to_string(),
+    ToolDefinition::Function {
         function: FunctionDefinition {
             name: name.to_string(),
             description: Some(format!("describe {name}")),
@@ -23,7 +22,10 @@ fn sample_tool_definition(name: &str) -> ToolDefinition {
                     "query": {"type": "string"}
                 }
             })),
+            strict: None,
+            extra: serde_json::Map::new(),
         },
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -41,6 +43,8 @@ fn sample_tool_call(name: &str) -> ToolCall {
 #[test]
 fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_all_message_kinds() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are helpful.".to_string()),
@@ -50,9 +54,11 @@ fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_a
                 content: MessageContent::Parts(vec![
                     ContentPart::Text {
                         text: "Hello".to_string(),
+                        extra: serde_json::Map::new(),
                     },
                     ContentPart::Text {
                         text: "World".to_string(),
+                        extra: serde_json::Map::new(),
                     },
                 ]),
                 name: None,
@@ -112,6 +118,8 @@ fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_a
 #[test]
 fn build_prompt_ir_appends_tool_blocks_when_request_contains_only_system_messages() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::System {
             content: MessageContent::Text("System only".to_string()),
             name: None,
@@ -157,6 +165,8 @@ fn build_prompt_ir_appends_tool_blocks_when_request_contains_only_system_message
 #[test]
 fn build_prompt_ir_omits_tool_schema_hashes_when_no_tools_are_present() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("No tools".to_string()),
             name: None,
@@ -186,4 +196,105 @@ fn build_prompt_ir_omits_tool_schema_hashes_when_no_tools_are_present() {
     assert_eq!(prompt_ir.blocks.len(), 1);
     assert!(prompt_ir.tool_schema_hashes.is_none());
     assert_eq!(prompt_ir.blocks[0].span_id.0, "user-0");
+}
+
+#[test]
+fn build_prompt_ir_covers_extended_request_messages_and_content_parts() {
+    let request = AnnotatedLlmRequest {
+        instructions: Some(MessageContent::Text("Top-level instructions".into())),
+        messages: vec![
+            Message::Developer {
+                content: MessageContent::Text("Developer guide".into()),
+                name: Some("developer".into()),
+            },
+            Message::User {
+                content: MessageContent::Parts(vec![
+                    ContentPart::Refusal {
+                        refusal: "refusal".into(),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::Image {
+                        image: serde_json::json!({"file_id": "image_1"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::Audio {
+                        audio: serde_json::json!({"data": "audio"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::File {
+                        file: serde_json::json!({"file_id": "file_1"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "call_1".into(),
+                        name: "lookup".into(),
+                        input: serde_json::json!({"q": "x"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::ToolResult {
+                        tool_use_id: "call_1".into(),
+                        content: serde_json::json!("ok"),
+                        is_error: Some(false),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::ProviderNative {
+                        provider: "openai_responses".into(),
+                        kind: "future".into(),
+                        value: serde_json::json!({"type": "future"}),
+                    },
+                ]),
+                name: None,
+            },
+            Message::Function {
+                content: None,
+                name: "legacy".into(),
+            },
+            Message::ToolCallItem {
+                id: Some("fc_1".into()),
+                call_id: "call_1".into(),
+                name: "lookup".into(),
+                arguments: serde_json::json!({"q": "x"}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ToolResultItem {
+                id: Some("fco_1".into()),
+                call_id: "call_1".into(),
+                output: serde_json::json!({"ok": true}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ProviderNative {
+                provider: "openai_responses".into(),
+                kind: "reasoning".into(),
+                value: serde_json::json!({"type": "reasoning", "summary": []}),
+            },
+        ],
+        tools: Some(vec![ToolDefinition::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "web_search_preview".into(),
+            value: serde_json::json!({"type": "web_search_preview"}),
+        }]),
+        model: Some("gpt-5".into()),
+        ..AnnotatedLlmRequest::default()
+    };
+
+    let prompt_ir = build_prompt_ir(&request).unwrap();
+    assert_eq!(prompt_ir.blocks[0].span_id.0, "system-0-instructions");
+    assert_eq!(prompt_ir.blocks[1].span_id.0, "system-1-developer");
+    assert_eq!(prompt_ir.blocks[2].span_id.0, "system-2-web_search_preview");
+    assert!(
+        prompt_ir
+            .blocks
+            .iter()
+            .any(|block| block.content_type == BlockContentType::ToolSchema)
+    );
+    assert!(
+        prompt_ir
+            .blocks
+            .iter()
+            .any(|block| block.span_id.0.ends_with("reasoning"))
+    );
+    assert_eq!(
+        prompt_ir.tool_schema_hashes.as_ref().unwrap()[0].tool_name,
+        "web_search_preview"
+    );
 }

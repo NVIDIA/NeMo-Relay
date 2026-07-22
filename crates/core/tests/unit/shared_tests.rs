@@ -26,6 +26,8 @@ struct SharedTestCodec;
 impl LlmCodec for SharedTestCodec {
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         Ok(AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages: vec![Message::User {
                 content: MessageContent::Text(
                     request.content["prompt"]

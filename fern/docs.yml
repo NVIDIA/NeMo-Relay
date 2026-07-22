@@ -112,6 +112,10 @@ redirects:
 - source: /nemo/relay/nemo-relay-cli/cursor
   destination: /nemo/relay/nemo-relay-cli/about
 
+# Getting started IA
+- source: /nemo/relay/getting-started/agent-runtime-primer
+  destination: /nemo/relay/about-nemo-relay/agent-runtime-primer
+
 experimental:
   mdx-components:
   - ./components

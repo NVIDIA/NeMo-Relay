@@ -1328,6 +1328,10 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
 }
 
 /// Wait for subscriber callbacks queued before this call to finish.
+///
+/// Call this function outside native subscriber callbacks. A re-entrant call returns without
+/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
+/// still run.
 #[pyfunction]
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
     py.detach(core_subscriber_api::flush_subscribers)

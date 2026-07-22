@@ -19,7 +19,8 @@ manual subscribers. A common first path is:
 1. Instrument one scope, tool call, or LLM call in your application.
 2. Enable the Observability plugin with only one exporter, such as ATOF JSONL.
 3. Run one request through the instrumented path.
-4. Confirm the emitted output before adding more exporters or sanitization rules.
+4. Clear the plugin, or call the manual exporter's documented barrier.
+5. Confirm the output before adding more exporters or sanitization rules.
 
 Observability in NeMo Relay starts with events. Scopes, marks, managed tool
 calls, managed LLM calls, middleware, and manual lifecycle APIs emit the
@@ -69,6 +70,28 @@ Both paths consume the same runtime event contract. Choose plugin-managed export
 for reusable process configuration, and choose manual APIs only when the caller
 needs direct control over registration or lifetime.
 
+## Delivery and Shutdown
+
+All built-in exporters begin with the same asynchronous native subscriber
+dispatcher. An event-producing API can return before the exporter subscriber
+runs. The subscriber flush API waits for callbacks queued before that barrier,
+but some exporters then hand work to their own stream worker, trajectory
+builder, batch processor, or remote backend.
+
+Use the barrier that matches how you manage the exporter lifecycle:
+
+- For a custom subscriber, call the subscriber flush API before inspecting
+  callback side effects.
+- For a manual exporter, call its documented `force_flush()`, `export()`, or
+  `shutdown()` operation.
+- For plugin-managed export, call `plugin.clear()` or
+  `clear_plugin_configuration()` during graceful shutdown.
+
+If the process terminates before those operations complete, the output can omit
+queued telemetry even when the instrumented application work completed
+successfully. Refer to [Subscribers](/about-nemo-relay/concepts/subscribers#waiting-for-delivery)
+for the complete delivery-barrier contract.
+
 ## Use Observability When
 
 Start here when you need to:
@@ -101,9 +124,13 @@ guardrails before exporters receive sensitive payloads.
 Your first exporter path works correctly when:
 
 - The instrumented request still completes successfully.
-- The chosen exporter receives scope data for that request, plus tool or LLM
-  lifecycle data when the request exercises those paths.
+- After the appropriate exporter or plugin barrier returns, the output contains
+  scope data for that request, plus tool or LLM lifecycle data when the request
+  exercises those paths.
 - The exported output shows the same NeMo Relay scope hierarchy you expect from that request.
+
+Application success alone does not prove telemetry delivery because exporter
+work is downstream from runtime execution.
 
 If that basic check fails, use the
 [Trace Incident Runbook](/resources/troubleshooting/trace-incident-runbook)

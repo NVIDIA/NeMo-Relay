@@ -42,8 +42,8 @@ func Deregister(name string) error {
 	return nemo_relay.DeregisterSubscriber(name)
 }
 
-// Flush waits for subscriber callbacks queued before this call to finish. This
-// is a shorthand for [nemo_relay.FlushSubscribers].
+// Flush has the same completion semantics and re-entrant limitation as
+// [nemo_relay.FlushSubscribers].
 func Flush() error {
 	return nemo_relay.FlushSubscribers()
 }

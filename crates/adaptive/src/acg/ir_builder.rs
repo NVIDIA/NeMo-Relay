@@ -37,6 +37,16 @@ pub fn build_prompt_ir(request: &AnnotatedLlmRequest) -> Result<PromptIR> {
     let mut sequence_index: u32 = 0;
     let mut inserted_tool_blocks = false;
 
+    if let Some(instructions) = &request.instructions {
+        blocks.push(build_text_block(
+            &mut sequence_index,
+            instructions,
+            PromptRole::System,
+            ProvenanceLabel::System,
+            Some("instructions"),
+        ));
+    }
+
     for message in &request.messages {
         if should_insert_tool_blocks_before_message(inserted_tool_blocks, request, message) {
             append_tool_schema_blocks(&mut blocks, &mut sequence_index, request.tools.as_deref())?;
@@ -71,7 +81,9 @@ fn should_insert_tool_blocks_before_message(
     request: &AnnotatedLlmRequest,
     message: &Message,
 ) -> bool {
-    !inserted_tool_blocks && !matches!(message, Message::System { .. }) && request.tools.is_some()
+    !inserted_tool_blocks
+        && !matches!(message, Message::System { .. } | Message::Developer { .. })
+        && request.tools.is_some()
 }
 
 fn append_message_blocks(
@@ -86,6 +98,13 @@ fn append_message_blocks(
             PromptRole::System,
             ProvenanceLabel::System,
             None,
+        )),
+        Message::Developer { content, .. } => blocks.push(build_text_block(
+            sequence_index,
+            content,
+            PromptRole::System,
+            ProvenanceLabel::Developer,
+            Some("developer"),
         )),
         Message::User { content, .. } => blocks.push(build_text_block(
             sequence_index,
@@ -112,6 +131,37 @@ fn append_message_blocks(
             content,
             tool_call_id,
         )),
+        Message::Function { content, name } => {
+            let content = MessageContent::Text(content.clone().unwrap_or_default());
+            blocks.push(build_text_block(
+                sequence_index,
+                &content,
+                PromptRole::Tool,
+                ProvenanceLabel::Tool,
+                Some(name),
+            ));
+        }
+        Message::ToolCallItem { name, .. } => blocks.push(build_serialized_message_block(
+            sequence_index,
+            message,
+            PromptRole::Assistant,
+            ProvenanceLabel::Developer,
+            Some(name),
+        )?),
+        Message::ToolResultItem { call_id, .. } => blocks.push(build_serialized_message_block(
+            sequence_index,
+            message,
+            PromptRole::Tool,
+            ProvenanceLabel::Tool,
+            Some(call_id),
+        )?),
+        Message::ProviderNative { kind, .. } => blocks.push(build_serialized_message_block(
+            sequence_index,
+            message,
+            PromptRole::User,
+            ProvenanceLabel::Developer,
+            Some(kind),
+        )?),
     }
 
     Ok(())
@@ -147,13 +197,34 @@ fn extract_text(content: &MessageContent) -> String {
         MessageContent::Text(text) => text.clone(),
         MessageContent::Parts(parts) => parts
             .iter()
-            .filter_map(|part| match part {
-                ContentPart::Text { text } => Some(text.as_str()),
-                ContentPart::ImageUrl { .. } => None,
+            .map(|part| match part {
+                ContentPart::Text { text, .. } => text.clone(),
+                ContentPart::Refusal { refusal, .. } => refusal.clone(),
+                ContentPart::ImageUrl { .. } | ContentPart::Image { .. } => String::new(),
+                ContentPart::Audio { .. }
+                | ContentPart::File { .. }
+                | ContentPart::ToolUse { .. }
+                | ContentPart::ToolResult { .. }
+                | ContentPart::ProviderNative { .. } => {
+                    serde_json::to_string(part).unwrap_or_default()
+                }
             })
+            .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n"),
     }
+}
+
+fn build_serialized_message_block(
+    seq: &mut u32,
+    message: &Message,
+    role: PromptRole,
+    provenance: ProvenanceLabel,
+    suffix: Option<&str>,
+) -> Result<PromptBlock> {
+    let value = serde_json::to_value(message)?;
+    let content = MessageContent::Text(canonicalize_value(&value)?);
+    Ok(build_text_block(seq, &content, role, provenance, suffix))
 }
 
 fn generate_span_id(role: PromptRole, index: u32, suffix: Option<&str>) -> SpanId {
@@ -257,7 +328,7 @@ fn build_tool_schema_block(seq: &mut u32, tool: &ToolDefinition) -> Result<Promp
     let canonical = canonicalize_value(&tool_value)?;
     let content = normalize_whitespace(&canonical);
     let index = *seq;
-    let span_id = generate_span_id(PromptRole::System, index, Some(&tool.function.name));
+    let span_id = generate_span_id(PromptRole::System, index, Some(tool_definition_name(tool)));
     *seq += 1;
 
     Ok(PromptBlock {
@@ -279,11 +350,18 @@ fn build_tool_schema_hashes(tools: &[ToolDefinition]) -> Result<Vec<ToolSchemaHa
             let value = serde_json::to_value(tool_definition)?;
             let canonical = canonicalize_value(&value)?;
             Ok(ToolSchemaHash {
-                tool_name: tool_definition.function.name.clone(),
+                tool_name: tool_definition_name(tool_definition).to_string(),
                 schema_hash: sha256_hex(&canonical),
             })
         })
         .collect()
+}
+
+fn tool_definition_name(tool: &ToolDefinition) -> &str {
+    match tool {
+        ToolDefinition::Function { function, .. } => &function.name,
+        ToolDefinition::ProviderNative { kind, .. } => kind,
+    }
 }
 
 fn compute_request_hash(request: &AnnotatedLlmRequest) -> Result<String> {

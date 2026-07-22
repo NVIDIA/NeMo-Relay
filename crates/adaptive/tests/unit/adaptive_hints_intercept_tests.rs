@@ -171,6 +171,8 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
     crate::context_helpers::set_latency_sensitivity(5).unwrap();
 
     let annotated = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hello".into()),
             name: None,
