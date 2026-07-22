@@ -717,7 +717,11 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
         .unwrap()
         .root_uuid()
         .to_string();
-    let identity = json!({"session_id": "logical-session", "user_id": "alice"});
+    let identity = json!({
+        "session_id": "logical-session",
+        "user_id": "alice",
+        "agent_kind": "claude-code"
+    });
 
     callback(&make_start_event_with_metadata(
         root_uuid,
@@ -786,6 +790,7 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     let root_attributes = attr_map(&root.attributes);
     assert_eq!(root_attributes["session.id"], "logical-session");
     assert_eq!(root_attributes["user.id"], "alice");
+    assert_eq!(root_attributes["nemo_relay.agent.kind"], "claude-code");
     assert_eq!(
         root_attributes["nemo_relay.session.instance_id"],
         instance_id
@@ -801,6 +806,7 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     assert!(!child_attributes.contains_key("session.id"));
     assert!(!child_attributes.contains_key("user.id"));
     assert!(!child_attributes.contains_key("nemo_relay.session.instance_id"));
+    assert!(!child_attributes.contains_key("nemo_relay.agent.kind"));
     assert_eq!(
         child_attributes["nemo_relay.start.metadata.user_id"],
         "alice"
@@ -824,6 +830,7 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     let mark_attributes = attr_map(&root.events.events[0].attributes);
     assert_eq!(mark_attributes["session.id"], "logical-session");
     assert_eq!(mark_attributes["user.id"], "alice");
+    assert_eq!(mark_attributes["nemo_relay.agent.kind"], "claude-code");
     assert_eq!(
         mark_attributes["nemo_relay.session.instance_id"],
         root_attributes["nemo_relay.session.instance_id"]
@@ -831,6 +838,7 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     let orphan_attributes = attr_map(&orphan_mark.attributes);
     assert_eq!(orphan_attributes["session.id"], "logical-session");
     assert_eq!(orphan_attributes["user.id"], "alice");
+    assert_eq!(orphan_attributes["nemo_relay.agent.kind"], "claude-code");
     assert_eq!(
         orphan_attributes["nemo_relay.session.instance_id"],
         root_attributes["nemo_relay.session.instance_id"]
