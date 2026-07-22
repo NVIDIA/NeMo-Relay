@@ -226,6 +226,54 @@ async fn close_async_iter(async_iter: &Arc<Py<PyAny>>) -> FlowResult<()> {
     Ok(())
 }
 
+async fn send_async_iter_value(
+    tx: &tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    value: FlowResult<Json>,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    async_iter: &Arc<Py<PyAny>>,
+) -> FlowResult<bool> {
+    let sent = tokio::select! {
+        _ = cancel.changed() => {
+            close_async_iter(async_iter).await?;
+            return Ok(false);
+        }
+        sent = tx.send(value) => sent,
+    };
+    if sent.is_err() {
+        close_async_iter(async_iter).await?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+async fn forward_async_iter_result(
+    next_value: FlowResult<AsyncIterTaskResult>,
+    tx: &tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    async_iter: &Arc<Py<PyAny>>,
+) -> Option<FlowResult<()>> {
+    match next_value {
+        Ok(AsyncIterTaskResult::Item(value)) => {
+            match send_async_iter_value(tx, Ok(value), cancel, async_iter).await {
+                Ok(true) => None,
+                Ok(false) => Some(Ok(())),
+                Err(error) => Some(Err(error)),
+            }
+        }
+        Ok(AsyncIterTaskResult::End) => Some(Ok(())),
+        Ok(AsyncIterTaskResult::Cancelled) => Some(close_async_iter(async_iter).await.and(Err(
+            FlowError::Internal("async iterator task was cancelled".into()),
+        ))),
+        Err(error) => Some(
+            match send_async_iter_value(tx, Err(error), cancel, async_iter).await {
+                Ok(true) => close_async_iter(async_iter).await,
+                Ok(false) => Ok(()),
+                Err(error) => Err(error),
+            },
+        ),
+    }
+}
+
 async fn forward_async_iter(
     async_iter: Arc<Py<PyAny>>,
     tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
@@ -260,35 +308,10 @@ async fn forward_async_iter(
             Err(error) => Err(error),
         };
 
-        match next_value {
-            Ok(AsyncIterTaskResult::Item(value)) => {
-                let sent = tokio::select! {
-                    _ = cancel.changed() => {
-                        break close_async_iter(&async_iter).await;
-                    }
-                    sent = tx.send(Ok(value)) => sent,
-                };
-                if sent.is_err() {
-                    break close_async_iter(&async_iter).await;
-                }
-            }
-            Ok(AsyncIterTaskResult::End) => break Ok(()),
-            Ok(AsyncIterTaskResult::Cancelled) => {
-                let close_result = close_async_iter(&async_iter).await;
-                break close_result.and(Err(FlowError::Internal(
-                    "async iterator task was cancelled".into(),
-                )));
-            }
-            Err(error) => {
-                let sent = tokio::select! {
-                    _ = cancel.changed() => break close_async_iter(&async_iter).await,
-                    sent = tx.send(Err(error)) => sent,
-                };
-                if sent.is_err() {
-                    break close_async_iter(&async_iter).await;
-                }
-                break close_async_iter(&async_iter).await;
-            }
+        if let Some(result) =
+            forward_async_iter_result(next_value, &tx, &mut cancel, &async_iter).await
+        {
+            break result;
         }
     };
     closed.send_replace(Some(result));

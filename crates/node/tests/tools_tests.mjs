@@ -41,6 +41,12 @@ function rejectWithPrimitive(value) {
   return Promise.reject(value);
 }
 
+function sparseArray() {
+  const values = new Array(2);
+  values[1] = 1;
+  return values;
+}
+
 async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
   flushSubscribers();
   // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
@@ -261,8 +267,8 @@ describe('Tool execute', () => {
       ['async_bigint', () => toolCallExecuteAsync('exec_async_tool_bigint', {}, async () => ({ value: 1n }))],
       ['sync_date', () => toolCallExecute('exec_tool_date', {}, () => new Date())],
       ['async_map', () => toolCallExecuteAsync('exec_async_tool_map', {}, async () => new Map([['value', 1]]))],
-      ['sync_sparse_array', () => toolCallExecute('exec_tool_sparse_array', {}, () => [, 1])],
-      ['async_sparse_array', () => toolCallExecuteAsync('exec_async_tool_sparse_array', {}, async () => [, 1])],
+      ['sync_sparse_array', () => toolCallExecute('exec_tool_sparse_array', {}, sparseArray)],
+      ['async_sparse_array', () => toolCallExecuteAsync('exec_async_tool_sparse_array', {}, async () => sparseArray())],
     ];
 
     for (const [kind, execute] of cases) {
