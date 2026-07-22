@@ -1,7 +1,7 @@
 ---
 title: "Ecosystem"
 description: "Understand how NeMo Relay fits with agent frameworks, providers, and the NVIDIA NeMo ecosystem."
-position: 3
+position: 4
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
 
@@ -41,6 +41,22 @@ In practical terms, NeMo Relay answers a different question than higher-level
 agent products. A framework asks, "What should the agent do next?" NeMo Relay
 asks, "When the agent does work, which scope owns it, which middleware applies,
 what events are emitted, and which subscribers can consume the result?"
+
+## How NeMo Relay Relates to Other Tooling
+
+NeMo Relay is an execution-time runtime contract. It captures work at the
+scope, tool, and LLM boundaries, and can apply middleware before or around that
+work. Telemetry conventions and observability or evaluation products serve
+different roles and can be used alongside Relay.
+
+| Tooling | Primary Role | Relationship to NeMo Relay |
+|---|---|---|
+| OpenTelemetry GenAI conventions | Define a common representation for AI telemetry. | Relay owns runtime capture and control, then can export its lifecycle events as generic OTLP spans for an existing OpenTelemetry tracing pipeline. |
+| Langfuse, LangSmith, and Arize Phoenix | Store, explore, and evaluate traces and agent runs. | These products are outside Relay's execution control loop. Use Relay to establish consistent execution boundaries and event data, then send data through the configured subscriber or export path that fits your backend. |
+
+Relay is not a replacement for a telemetry standard or an observability backend.
+Its role is to make the real execution path observable and controllable before
+the resulting lifecycle data is stored, visualized, or evaluated elsewhere.
 
 <MermaidStyles />
 

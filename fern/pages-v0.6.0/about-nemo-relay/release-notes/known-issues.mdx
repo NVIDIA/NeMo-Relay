@@ -81,6 +81,56 @@ The following limitations and migration steps apply to NVIDIA NeMo Relay 0.6.
 
 ### Compatibility and Migration Notes
 
+#### Migrate Composable PII Redaction Configuration
+
+<Warning>
+If your Rust code constructs `PiiRedactionConfig` with a struct literal,
+initialize the new `profiles` field or use `..Default::default()`. Serialization
+now omits the default-valued legacy fields (`mode`, `input`, `output`, `mark`,
+`tool_input`, `tool_output`, and `priority`). Update any code that depends on
+the previous exact serialized shape.
+
+Existing TOML and JSON files still work. You can continue to use the legacy
+single-policy form, but don't combine its fields with `profiles`. Relay runs
+profiles in ascending priority and uses array order to break ties. Profiles can
+apply to marks, LLM input/output, tool input/output, and scope metadata.
+Existing PII redaction configurations now also sanitize LLM and tool scope
+metadata, so downstream telemetry can change even when its schema does not.
+
+For profile examples and migration guidance, refer to the
+[PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
+guide. PR
+[#512](https://github.com/NVIDIA/NeMo-Relay/pull/512) introduced the composable
+configuration API.
+</Warning>
+
+#### Configure Structure-Preserving Trajectory Redaction
+
+<Warning>
+If your Rust code constructs `BuiltinBackendConfig` with a struct literal,
+initialize the new `preset` and `custom_mark_payload_policy` fields or use
+`..Default::default()`. Serialization now omits the default `action = "remove"`
+value. Update any code that depends on the previous exact serialized shape.
+
+The `trajectory_context` preset is opt-in. If you leave `preset` unset, existing
+runtime behavior stays the same. With the preset enabled, Relay removes request
+and response content from buffered and streaming events for OpenAI Chat
+Completions, OpenAI Responses, and Anthropic Messages. It preserves conversation
+topology, tool-call relationships, agent hierarchy, routing, usage, cost, and
+optimization fields. Relay preserves opaque custom marks by default; set
+`custom_mark_payload_policy = "redact_all_leaves"` to redact their scalar
+values recursively. If retained metadata or custom marks can contain email
+addresses, apply an email-redaction profile later in the profile list.
+
+The policy affects observability data only. It doesn't change the provider
+request or the client-visible provider response. For the full configuration
+options, refer to the
+[PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
+guide. PR
+[#513](https://github.com/NVIDIA/NeMo-Relay/pull/513) added trajectory-context
+redaction on top of [PR #512](https://github.com/NVIDIA/NeMo-Relay/pull/512).
+</Warning>
+
 #### Update Plugins and Workers That Consume Request Annotations
 
 <Warning>
@@ -300,7 +350,7 @@ name. Use `nemo-relay-install` and `nemo-relay-get-started` for setup;
 `nemo-relay-plugin-observability` and `nemo-relay-plugin-adaptive-tuning`
 skills for exporter and adaptive workflows.
 
-The [NeMo Relay User Skills](https://github.com/NVIDIA/NeMo-Relay/blob/0.6.0-rc.3/skills/README.md)
+The [NeMo Relay User Skills](https://github.com/NVIDIA/NeMo-Relay/blob/0.6.0-rc.4/skills/README.md)
 catalog lists the current paths and task routing. PR
 [#407](https://github.com/NVIDIA/NeMo-Relay/pull/407) reorganized the catalog.
 </Warning>
