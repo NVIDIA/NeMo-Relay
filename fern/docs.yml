@@ -94,6 +94,8 @@ redirects:
   destination: /nemo/relay/build-plugins/language-binding/about
 - source: /nemo/relay/nemo-relay-cli/cursor
   destination: /nemo/relay/nemo-relay-cli/about
+- source: /nemo/relay/getting-started/agent-runtime-primer
+  destination: /nemo/relay/about-nemo-relay/agent-runtime-primer
 experimental:
   mdx-components:
   - ./components

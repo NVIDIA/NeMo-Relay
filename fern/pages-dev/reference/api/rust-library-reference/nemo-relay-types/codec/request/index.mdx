@@ -20,14 +20,20 @@ This module defines the [`AnnotatedLlmRequest`] type system for structured LLM r
 - [FunctionDefinition](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-functiondefinition): A function definition within a tool definition.
 - [GenerationParams](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-generationparams): Normalized generation parameters across providers.
 - [OpenAiImageUrl](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-openaiimageurl): OpenAI image URL payload.
+- [ProviderNativeComponent](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-providernativecomponent): Lossless provider-native component embedded in the annotated request.
 - [ToolCall](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-toolcall): A tool call requested by the assistant.
 - [ToolChoiceFunction](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-toolchoicefunction): A specific tool choice that forces a named function.
 - [ToolChoiceFunctionName](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-toolchoicefunctionname): The name component of a specific tool choice.
-- [ToolDefinition](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-tooldefinition): A tool definition (function schema) available to the model.
 
 ## Enums
 
+- [ApiSpecificRequest](/reference/api/rust-library-reference/nemo-relay-types/codec/request/enum-apispecificrequest): API-specific request fields that do not have portable semantics.
 - [ContentPart](/reference/api/rust-library-reference/nemo-relay-types/codec/request/enum-contentpart): A single content part within a multimodal message.
 - [Message](/reference/api/rust-library-reference/nemo-relay-types/codec/request/enum-message): A single message in a conversation, tagged by role.
 - [MessageContent](/reference/api/rust-library-reference/nemo-relay-types/codec/request/enum-messagecontent): Message content: either a plain string or multimodal parts array.
 - [ToolChoice](/reference/api/rust-library-reference/nemo-relay-types/codec/request/enum-toolchoice): Tool choice control: how the model should use available tools.
+- [ToolDefinition](/reference/api/rust-library-reference/nemo-relay-types/codec/request/enum-tooldefinition): A tool definition available to the model.
+
+## Constants
+
+- [ANNOTATED_LLM_REQUEST_SCHEMA](/reference/api/rust-library-reference/nemo-relay-types/codec/request/constant-annotated-llm-request-schema): Versioned JSON envelope schema for [`AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay-types/codec/request/struct-annotatedllmrequest).

@@ -1,7 +1,7 @@
 ---
 title: "Release Notes"
 description: "Read NeMo Relay release notes and find the official release history."
-position: 5
+position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -31,8 +31,11 @@ If you're upgrading from 0.5, plan for these changes:
   LLM event contains the full request history, ATIF contains marks, or
   `step.model_name` always matches the requested model.
 - Update Rust code that exhaustively matches public enums or directly
-  constructs mark types, ATOF sink types, or editor metadata types. The
-  provided builders and constructors are the safest migration path.
+  constructs `AnnotatedLlmRequest`, message/content/tool variants, mark types,
+  ATOF sink types, or editor metadata types. Rebuild Rust native plugins and
+  `grpc-v1` workers that consume request annotations against 0.6, and declare
+  `compat.relay = ">=0.6,<1.0"` for those artifacts. The provided builders and
+  constructors are the safest migration path.
 - Update managed LLM stream consumers that construct `LlmJsonStream` directly
   or ignore Go `LlmStream.Close` results. Use the stream constructors and
   explicit close methods described in the compatibility notes when exiting a
@@ -56,14 +59,20 @@ Here's what changed across the main product surfaces:
   and Hermes can share that gateway, coordinate a single recovery attempt, and
   let it shut down after it becomes idle.
 - **Events and security:** Mark, scope-start, and scope-end sanitizers now work
-  at global, scope-local, and plugin levels. The PII plugin sanitizes those
-  surfaces, later LLM events can omit stale history, and Relay records
-  skill-load attempts with `skill.load` marks.
+  at global, scope-local, and plugin levels. The PII plugin sanitizes these
+  surfaces and supports ordered, composable profiles plus an opt-in
+  `trajectory_context` preset. Later LLM events can omit stale history, and
+  Relay records skill-load attempts with `skill.load` marks.
 - **Observability and optimization:** ATOF can send every event to multiple
   file and stream sinks. OTLP exporters use typed attributes, trace exporters
   can show marks as tool spans, session identifiers correlate across formats,
   ATIF reports the effective response model, and plugins can contribute
   optimization evidence.
+- **Provider request codecs:** The coding-agent gateway now enables lossless
+  request annotations for Anthropic Messages, OpenAI Chat Completions, and
+  OpenAI Responses generation routes. Interceptors edit `annotated_request`,
+  while no-op round trips retain provider-native fields, explicit nulls, and
+  wire representations.
 - **Plugins and configuration:** Rust, Python, and Node.js embedding hosts can
   own native and worker dynamic plugin lifecycles. Experimental C and Go entry
   points expose the same lifecycle, and the CLI can edit nested lists, maps, and
@@ -99,6 +108,7 @@ Use these guides to explore the main 0.6 capabilities:
 - [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
 - [Instrument an LLM Call](/instrument-applications/instrument-llm-call)
 - [Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs)
+- [Codecs](/about-nemo-relay/concepts/codecs)
 - [Observability Configuration](/configure-plugins/observability/configuration)
 - [ATOF Export](/configure-plugins/observability/atof)
 - [OpenTelemetry Export](/configure-plugins/observability/opentelemetry)
