@@ -390,6 +390,10 @@ pub unsafe extern "C" fn nemo_relay_deregister_subscriber(name: *const c_char) -
 }
 
 /// Wait for subscriber callbacks queued before this call to finish.
+///
+/// Call this function outside native subscriber callbacks. A re-entrant call returns without
+/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
+/// still run.
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_flush_subscribers() -> NemoRelayStatus {
     clear_last_error();

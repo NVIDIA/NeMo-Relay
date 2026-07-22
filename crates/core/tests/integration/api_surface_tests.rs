@@ -389,6 +389,47 @@ fn tool_start_eagerly_emits_deduplicated_skill_load_marks() {
 }
 
 #[test]
+fn mcp_resource_read_emits_minimal_tool_parented_skill_load_mark() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("mcp-resource-skill-load-api-events");
+    let tool_handle = tool_call(
+        nemo_relay::api::tool::ToolCallParams::builder()
+            .name("mcp__resources__read_resource")
+            .args(json!({"uri": "file:///skills/review/SKILL.md"}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        nemo_relay::api::tool::ToolCallEndParams::builder()
+            .handle(&tool_handle)
+            .result(json!({"ok": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured.len(), 3);
+    assert_eq!(captured[0].name(), "mcp__resources__read_resource");
+    assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(captured[1].name(), "skill.load");
+    assert_eq!(captured[1].parent_uuid(), Some(tool_handle.uuid));
+    assert_eq!(captured[1].data(), Some(&json!({"skill_name": "review"})));
+    assert_eq!(
+        captured[1].metadata(),
+        Some(&json!({
+            "skill_load_source": "structured_read",
+            "tool_name": "mcp__resources__read_resource"
+        }))
+    );
+    assert_eq!(captured[2].scope_category(), Some(ScopeCategory::End));
+
+    deregister_subscriber("mcp-resource-skill-load-api-events").unwrap();
+}
+
+#[test]
 fn integration_owned_skill_load_metadata_suppresses_core_detection() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

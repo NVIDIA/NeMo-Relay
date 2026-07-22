@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::Json;
 
+/// Versioned JSON envelope schema for [`AnnotatedLlmRequest`].
+///
+/// Version 2 adds tagged request components that older exhaustive Rust
+/// consumers cannot deserialize safely.
+pub const ANNOTATED_LLM_REQUEST_SCHEMA: &str = "nemo.relay.AnnotatedLlmRequest@2";
+
 // ---------------------------------------------------------------------------
 // AnnotatedLlmRequest type hierarchy
 // ---------------------------------------------------------------------------
@@ -19,12 +25,18 @@ use crate::Json;
 /// Structured view of an LLM request, produced by a Codec from opaque
 /// [`LlmRequest`](crate::api::llm::LlmRequest) content.
 ///
-/// The `extra` field captures any provider-specific keys not modeled by the
-/// known fields, ensuring lossless round-trip through `decode`/`encode`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// The `extra` field captures unknown future top-level keys. Modeled
+/// provider-specific controls belong in [`AnnotatedLlmRequest::api_specific`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AnnotatedLlmRequest {
     /// Parsed conversation messages.
+    #[serde(default)]
     pub messages: Vec<Message>,
+    /// Provider-level instructions that are not part of the conversation array.
+    ///
+    /// Anthropic encodes this as `system`; OpenAI Responses uses `instructions`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<MessageContent>,
     /// Model identifier (e.g., `"gpt-4"`, `"claude-sonnet-4-20250514"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -76,8 +88,13 @@ pub struct AnnotatedLlmRequest {
     /// OpenAI streaming toggle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
-    /// Extensible key-value pairs for unmodeled provider-specific fields.
-    /// Merged back into the request body during encode via `serde(flatten)`.
+    /// API-specific request data that does not have portable semantics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_specific: Option<ApiSpecificRequest>,
+    /// Unknown future top-level fields.
+    ///
+    /// Baseline-aware codecs remove deleted keys and overlay changed or added
+    /// keys without rebuilding untouched provider JSON.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Json>,
 }
@@ -96,6 +113,14 @@ pub enum Message {
     },
     /// A user message.
     User {
+        /// The message content.
+        content: MessageContent,
+        /// Optional sender name.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// A developer instruction message used by OpenAI APIs.
+    Developer {
         /// The message content.
         content: MessageContent,
         /// Optional sender name.
@@ -121,6 +146,53 @@ pub enum Message {
         /// The ID of the tool call this result corresponds to.
         tool_call_id: String,
     },
+    /// A legacy OpenAI function-result message.
+    Function {
+        /// The function result. OpenAI permits an explicit null value.
+        content: Option<String>,
+        /// Function name.
+        name: String,
+    },
+    /// A portable top-level tool-call item, primarily used by OpenAI Responses.
+    #[serde(rename = "tool_call")]
+    ToolCallItem {
+        /// Optional provider item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Provider call ID used to correlate the result.
+        call_id: String,
+        /// Tool/function name.
+        name: String,
+        /// Parsed tool arguments.
+        arguments: Json,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// A portable top-level tool-result item, primarily used by OpenAI Responses.
+    #[serde(rename = "tool_result")]
+    ToolResultItem {
+        /// Optional provider item ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Provider call ID used to correlate the result.
+        call_id: String,
+        /// Provider result payload.
+        output: Json,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Lossless provider-native request item.
+    #[serde(rename = "provider_native")]
+    ProviderNative {
+        /// Provider surface that owns the value.
+        provider: String,
+        /// Native discriminator or a descriptive fallback.
+        kind: String,
+        /// Exact provider JSON value.
+        value: Json,
+    },
 }
 
 /// Message content: either a plain string or multimodal parts array.
@@ -143,11 +215,83 @@ pub enum ContentPart {
     Text {
         /// The text content.
         text: String,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
     },
     /// An image URL content part.
     ImageUrl {
         /// Image URL payload.
         image_url: OpenAiImageUrl,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Portable image input payload.
+    Image {
+        /// Provider-neutral image data object.
+        image: Json,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Portable audio input payload.
+    Audio {
+        /// Provider-neutral audio data object.
+        audio: Json,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Portable file or document input payload.
+    File {
+        /// Provider-neutral file data object.
+        file: Json,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Assistant refusal content.
+    Refusal {
+        /// Refusal text.
+        refusal: String,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Tool call embedded in a provider content-block array.
+    ToolUse {
+        /// Tool call identifier.
+        id: String,
+        /// Tool name.
+        name: String,
+        /// Parsed arguments.
+        input: Json,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Tool result embedded in a provider content-block array.
+    ToolResult {
+        /// Tool call identifier.
+        tool_use_id: String,
+        /// Tool result payload.
+        content: Json,
+        /// Whether the tool failed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+        /// Provider fields without portable semantics.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Lossless provider-native content block.
+    ProviderNative {
+        /// Provider surface that owns the value.
+        provider: String,
+        /// Native block discriminator or a descriptive fallback.
+        kind: String,
+        /// Exact provider JSON value.
+        value: Json,
     },
 }
 
@@ -182,14 +326,27 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
-/// A tool definition (function schema) available to the model.
+/// A tool definition available to the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    /// The type of tool (typically `"function"`).
-    #[serde(rename = "type")]
-    pub tool_type: String,
-    /// The function definition.
-    pub function: FunctionDefinition,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolDefinition {
+    /// Portable function tool.
+    Function {
+        /// The function definition.
+        function: FunctionDefinition,
+        /// Provider fields on the function-tool wrapper.
+        #[serde(default, flatten)]
+        extra: serde_json::Map<String, Json>,
+    },
+    /// Lossless provider-native tool definition.
+    ProviderNative {
+        /// Provider surface that owns the value.
+        provider: String,
+        /// Native tool discriminator or a descriptive fallback.
+        kind: String,
+        /// Exact provider JSON value.
+        value: Json,
+    },
 }
 
 /// A function definition within a tool definition.
@@ -203,6 +360,12 @@ pub struct FunctionDefinition {
     /// The JSON Schema for the function parameters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Json>,
+    /// Whether the provider should enforce the parameter schema strictly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
+    /// Provider fields without portable semantics.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, Json>,
 }
 
 /// Tool choice control: how the model should use available tools.
@@ -218,6 +381,167 @@ pub enum ToolChoice {
     /// Force a specific function by name.
     #[serde(untagged)]
     Specific(ToolChoiceFunction),
+    /// Lossless provider-native tool choice.
+    #[serde(untagged)]
+    ProviderNative(ProviderNativeComponent),
+}
+
+/// Lossless provider-native component embedded in the annotated request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderNativeComponent {
+    /// Provider surface that owns the value.
+    pub provider: String,
+    /// Native discriminator or a descriptive fallback.
+    pub kind: String,
+    /// Exact provider JSON value.
+    pub value: Json,
+}
+
+/// API-specific request fields that do not have portable semantics.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "provider wire-schema fields stay directly mutable on each public variant"
+)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "api")]
+pub enum ApiSpecificRequest {
+    /// Anthropic Messages-specific request fields.
+    #[serde(rename = "anthropic_messages")]
+    AnthropicMessages {
+        /// Top-level prompt cache control.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<Json>,
+        /// Reusable container identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        container: Option<String>,
+        /// Requested inference geography.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        inference_geo: Option<String>,
+        /// Provider output configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_config: Option<Json>,
+        /// Extended-thinking configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thinking: Option<Json>,
+        /// Top-k sampling limit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        top_k: Option<u64>,
+        /// User profile attribution identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_profile_id: Option<String>,
+    },
+    /// OpenAI Chat Completions-specific request fields.
+    #[serde(rename = "openai_chat")]
+    OpenAIChat {
+        /// Audio output configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        audio: Option<Json>,
+        /// Frequency penalty.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frequency_penalty: Option<f64>,
+        /// Deprecated function-call control.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        function_call: Option<Json>,
+        /// Deprecated function definitions.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        functions: Option<Vec<Json>>,
+        /// Token logit bias map.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        logit_bias: Option<Json>,
+        /// Whether token log probabilities are requested.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        logprobs: Option<bool>,
+        /// Requested output modalities.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        modalities: Option<Vec<String>>,
+        /// Request moderation configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        moderation: Option<Json>,
+        /// Number of completion choices.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        n: Option<u64>,
+        /// Predicted output content.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prediction: Option<Json>,
+        /// Presence penalty.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        presence_penalty: Option<f64>,
+        /// Prompt cache routing key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_key: Option<String>,
+        /// Prompt cache configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_options: Option<Json>,
+        /// Deprecated prompt cache retention policy.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_retention: Option<String>,
+        /// Requested reasoning effort.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<String>,
+        /// Structured response format configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        response_format: Option<Json>,
+        /// Stable safety identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        safety_identifier: Option<String>,
+        /// Best-effort deterministic sampling seed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seed: Option<i64>,
+        /// Streaming response configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stream_options: Option<Json>,
+        /// Requested response verbosity.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        verbosity: Option<String>,
+        /// Web-search configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        web_search_options: Option<Json>,
+    },
+    /// OpenAI Responses-specific request fields.
+    #[serde(rename = "openai_responses")]
+    OpenAIResponses {
+        /// Whether the response should run in the background.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        background: Option<bool>,
+        /// Context-management entries.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        context_management: Option<Json>,
+        /// Conversation identifier or object.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation: Option<Json>,
+        /// Request moderation configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        moderation: Option<Json>,
+        /// Reusable prompt template reference.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt: Option<Json>,
+        /// Prompt cache routing key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_key: Option<String>,
+        /// Prompt cache configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_options: Option<Json>,
+        /// Deprecated prompt cache retention policy.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_retention: Option<String>,
+        /// Stable safety identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        safety_identifier: Option<String>,
+        /// Streaming response configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stream_options: Option<Json>,
+        /// Text output configuration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<Json>,
+    },
+    /// Custom provider request fields.
+    #[serde(rename = "custom")]
+    Custom {
+        /// Custom API identifier.
+        api_name: String,
+        /// Opaque custom API data.
+        data: Json,
+    },
 }
 
 /// A specific tool choice that forces a named function.
@@ -265,14 +589,13 @@ impl AnnotatedLlmRequest {
     /// For [`MessageContent::Parts`], returns the text of the first
     /// [`ContentPart::Text`] part.
     pub fn system_prompt(&self) -> Option<&str> {
+        if let Some(text) = self.instructions.as_ref().and_then(first_content_text) {
+            return Some(text);
+        }
         self.messages.iter().find_map(|m| match m {
-            Message::System { content, .. } => match content {
-                MessageContent::Text(s) => Some(s.as_str()),
-                MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
-                    ContentPart::Text { text } => Some(text.as_str()),
-                    ContentPart::ImageUrl { .. } => None,
-                }),
-            },
+            Message::System { content, .. } | Message::Developer { content, .. } => {
+                first_content_text(content)
+            }
             _ => None,
         })
     }
@@ -284,13 +607,14 @@ impl AnnotatedLlmRequest {
     /// the first [`ContentPart::Text`] part.
     pub fn last_user_message(&self) -> Option<&str> {
         self.messages.iter().rev().find_map(|m| match m {
-            Message::User { content, .. } => match content {
-                MessageContent::Text(s) => Some(s.as_str()),
-                MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
-                    ContentPart::Text { text } => Some(text.as_str()),
-                    ContentPart::ImageUrl { .. } => None,
-                }),
-            },
+            Message::User { content, .. } => first_content_text(content),
+            Message::ProviderNative {
+                provider, value, ..
+            } if provider == "openai_responses"
+                && value.get("role").and_then(Json::as_str) == Some("user") =>
+            {
+                native_message_text(value)
+            }
             _ => None,
         })
     }
@@ -300,11 +624,68 @@ impl AnnotatedLlmRequest {
     /// Returns `true` if at least one [`Message::Assistant`] variant has a
     /// non-empty `tool_calls` field.
     pub fn has_tool_calls(&self) -> bool {
-        self.messages.iter().any(|m| {
-            matches!(
-                m,
-                Message::Assistant { tool_calls: Some(calls), .. } if !calls.is_empty()
-            )
+        self.messages.iter().any(|m| match m {
+            Message::Assistant {
+                tool_calls: Some(calls),
+                content,
+                ..
+            } => !calls.is_empty() || content.as_ref().is_some_and(content_has_tool_use),
+            Message::Assistant {
+                content: Some(content),
+                ..
+            } => content_has_tool_use(content),
+            Message::ToolCallItem { .. } => true,
+            Message::ProviderNative { value, .. } => matches!(
+                value.get("type").and_then(Json::as_str),
+                Some("function_call" | "custom_tool_call" | "tool_use")
+            ),
+            _ => false,
         })
+    }
+}
+
+fn first_content_text(content: &MessageContent) -> Option<&str> {
+    match content {
+        MessageContent::Text(text) => Some(text.as_str()),
+        MessageContent::Parts(parts) => parts.iter().find_map(|part| match part {
+            ContentPart::Text { text, .. } => Some(text.as_str()),
+            ContentPart::ProviderNative { value, .. } => value
+                .get("text")
+                .and_then(Json::as_str)
+                .or_else(|| value.get("refusal").and_then(Json::as_str)),
+            ContentPart::ImageUrl { .. }
+            | ContentPart::Image { .. }
+            | ContentPart::Audio { .. }
+            | ContentPart::File { .. }
+            | ContentPart::Refusal { .. }
+            | ContentPart::ToolUse { .. }
+            | ContentPart::ToolResult { .. } => None,
+        }),
+    }
+}
+
+fn content_has_tool_use(content: &MessageContent) -> bool {
+    match content {
+        MessageContent::Text(_) => false,
+        MessageContent::Parts(parts) => parts.iter().any(|part| match part {
+            ContentPart::ToolUse { .. } => true,
+            ContentPart::ProviderNative { value, .. } => matches!(
+                value.get("type").and_then(Json::as_str),
+                Some("tool_use" | "mcp_tool_use" | "server_tool_use")
+            ),
+            _ => false,
+        }),
+    }
+}
+
+fn native_message_text(value: &Json) -> Option<&str> {
+    match value.get("content")? {
+        Json::String(text) => Some(text.as_str()),
+        Json::Array(parts) => parts.iter().find_map(|part| {
+            part.get("text")
+                .and_then(Json::as_str)
+                .or_else(|| part.get("refusal").and_then(Json::as_str))
+        }),
+        _ => None,
     }
 }

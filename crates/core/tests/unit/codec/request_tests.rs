@@ -13,6 +13,8 @@ use serde_json::json;
 #[test]
 fn test_annotated_llm_request_round_trip() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("Hello".into()),
             name: None,
@@ -137,6 +139,7 @@ fn test_message_content_text_serialization() {
 fn test_message_content_parts_serialization() {
     let content = MessageContent::Parts(vec![ContentPart::Text {
         text: "Hello world".into(),
+        extra: serde_json::Map::new(),
     }]);
     let json_val = serde_json::to_value(&content).unwrap();
     assert_eq!(json_val, json!([{"type": "text", "text": "Hello world"}]));
@@ -173,13 +176,15 @@ fn test_tool_call_serialization() {
 
 #[test]
 fn test_tool_definition_serialization() {
-    let td = ToolDefinition {
-        tool_type: "function".into(),
+    let td = ToolDefinition::Function {
         function: FunctionDefinition {
             name: "get_weather".into(),
             description: Some("Get current weather".into()),
             parameters: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}})),
+            strict: None,
+            extra: serde_json::Map::new(),
         },
+        extra: serde_json::Map::new(),
     };
     let json_val = serde_json::to_value(&td).unwrap();
     assert_eq!(
@@ -273,6 +278,8 @@ fn test_annotated_llm_request_extra_flatten() {
 #[test]
 fn test_all_types_clone() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("system".into()),
@@ -281,6 +288,7 @@ fn test_all_types_clone() {
             Message::User {
                 content: MessageContent::Parts(vec![ContentPart::Text {
                     text: "user part".into(),
+                    extra: serde_json::Map::new(),
                 }]),
                 name: Some("alice".into()),
             },
@@ -292,13 +300,15 @@ fn test_all_types_clone() {
             top_p: Some(0.9),
             stop: Some(vec!["END".into()]),
         }),
-        tools: Some(vec![ToolDefinition {
-            tool_type: "function".into(),
+        tools: Some(vec![ToolDefinition::Function {
             function: FunctionDefinition {
                 name: "test".into(),
                 description: None,
                 parameters: None,
+                strict: None,
+                extra: serde_json::Map::new(),
             },
+            extra: serde_json::Map::new(),
         }]),
         tool_choice: Some(ToolChoice::Auto),
         store: None,
@@ -355,6 +365,8 @@ fn test_all_types_partial_eq() {
 #[test]
 fn test_system_prompt_returns_text() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("Be helpful".into()),
@@ -390,6 +402,8 @@ fn test_system_prompt_returns_text() {
 #[test]
 fn test_system_prompt_returns_none_when_absent() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("Hi".into()),
             name: None,
@@ -419,9 +433,12 @@ fn test_system_prompt_returns_none_when_absent() {
 #[test]
 fn test_system_prompt_from_parts() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::System {
             content: MessageContent::Parts(vec![ContentPart::Text {
                 text: "Be concise".into(),
+                extra: serde_json::Map::new(),
             }]),
             name: None,
         }],
@@ -454,6 +471,8 @@ fn test_system_prompt_from_parts() {
 #[test]
 fn test_last_user_message_returns_last() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::User {
                 content: MessageContent::Text("first".into()),
@@ -494,6 +513,8 @@ fn test_last_user_message_returns_last() {
 #[test]
 fn test_last_user_message_returns_none_when_absent() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::System {
             content: MessageContent::Text("system".into()),
             name: None,
@@ -523,6 +544,8 @@ fn test_last_user_message_returns_none_when_absent() {
 #[test]
 fn test_last_user_message_from_parts() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::Assistant {
                 content: None,
@@ -532,6 +555,7 @@ fn test_last_user_message_from_parts() {
             Message::User {
                 content: MessageContent::Parts(vec![ContentPart::Text {
                     text: "from parts".into(),
+                    extra: serde_json::Map::new(),
                 }]),
                 name: None,
             },
@@ -565,6 +589,8 @@ fn test_last_user_message_from_parts() {
 #[test]
 fn test_has_tool_calls_true() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::Assistant {
             content: None,
             tool_calls: Some(vec![ToolCall {
@@ -602,6 +628,8 @@ fn test_has_tool_calls_true() {
 #[test]
 fn test_has_tool_calls_false_no_assistant() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hi".into()),
             name: None,
@@ -631,6 +659,8 @@ fn test_has_tool_calls_false_no_assistant() {
 #[test]
 fn test_has_tool_calls_false_empty_vec() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::Assistant {
             content: Some(MessageContent::Text("hello".into())),
             tool_calls: Some(vec![]),

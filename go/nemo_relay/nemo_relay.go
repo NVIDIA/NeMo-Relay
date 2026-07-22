@@ -1549,7 +1549,10 @@ func DeregisterSubscriber(name string) error {
 
 // FlushSubscribers waits for subscriber callbacks queued before this call to
 // finish. Native event-producing APIs enqueue subscriber work and return
-// without waiting for observer callbacks.
+// without waiting for observer callbacks. Call this function outside native
+// subscriber callbacks. A re-entrant call returns without waiting to avoid
+// blocking the dispatcher, so callbacks later in the same dispatch snapshot
+// can still run.
 func FlushSubscribers() error {
 	return checkStatus(C.nemo_relay_flush_subscribers())
 }
@@ -1827,13 +1830,19 @@ func (e *AtofExporter) Deregister(name string) error {
 	return checkStatus(status)
 }
 
-// ForceFlush flushes the output file.
+// ForceFlush, outside a native subscriber callback, waits for queued subscriber delivery and then
+// flushes the configured file sink or asks the configured stream sink to drain up to its timeout.
+// A re-entrant call does not establish the delivery barrier. A stream timeout is logged and does
+// not by itself return an error.
 func (e *AtofExporter) ForceFlush() error {
 	status := C.nemo_relay_atof_exporter_force_flush(e.ptr)
 	return checkStatus(status)
 }
 
-// Shutdown flushes the output file.
+// Shutdown, outside a native subscriber callback, waits for queued subscriber delivery and then
+// flushes the configured file sink or asks the configured stream sink to drain and close up to its
+// timeout. A re-entrant call does not establish the delivery barrier. A stream timeout is logged
+// and does not by itself return an error.
 func (e *AtofExporter) Shutdown() error {
 	status := C.nemo_relay_atof_exporter_shutdown(e.ptr)
 	return checkStatus(status)

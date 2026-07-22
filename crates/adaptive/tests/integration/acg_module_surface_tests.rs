@@ -129,6 +129,8 @@ fn acg_module_surface_policy_and_ir_builder_symbols_compile_from_canonical_names
     assert!(envelope.policy.warm_first_enabled);
 
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are helpful.".to_string()),
@@ -175,6 +177,8 @@ fn acg_module_surface_build_prompt_ir_inserts_tool_schema_before_first_non_syste
     use nemo_relay_adaptive::acg::prompt_ir::{BlockContentType, PromptRole};
 
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are helpful.".to_string()),
@@ -187,8 +191,7 @@ fn acg_module_surface_build_prompt_ir_inserts_tool_schema_before_first_non_syste
         ],
         model: Some("claude-sonnet".to_string()),
         params: None,
-        tools: Some(vec![ToolDefinition {
-            tool_type: "function".to_string(),
+        tools: Some(vec![ToolDefinition::Function {
             function: FunctionDefinition {
                 name: "get_weather".to_string(),
                 description: Some("Look up the weather".to_string()),
@@ -198,7 +201,10 @@ fn acg_module_surface_build_prompt_ir_inserts_tool_schema_before_first_non_syste
                         "location": {"type": "string"}
                     }
                 })),
+                strict: None,
+                extra: serde_json::Map::new(),
             },
+            extra: serde_json::Map::new(),
         }]),
         tool_choice: None,
         store: None,

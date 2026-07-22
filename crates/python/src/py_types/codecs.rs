@@ -6,12 +6,14 @@ use serde::de::DeserializeOwned;
 
 use super::core::PyLLMRequest;
 use super::{
-    AnnotatedLLMRequest, AnnotatedLLMResponse, Arc, Bound, GenerationParams, LlmCodec,
-    LlmResponseCodec, Message, PyAny, PyResult, Python, ToolChoice, ToolDefinition, json_to_py,
-    py_to_json, to_python_json_value,
+    AnnotatedLLMRequest, AnnotatedLLMResponse, ApiSpecificRequest, Arc, Bound, GenerationParams,
+    LlmCodec, LlmResponseCodec, Message, MessageContent, PyAny, PyResult, Python, ToolChoice,
+    ToolDefinition, json_to_py, py_to_json, to_python_json_value,
 };
 #[cfg(test)]
 use super::{
+    FORCE_ANNOTATED_REQUEST_API_SPECIFIC_SERIALIZATION_ERROR,
+    FORCE_ANNOTATED_REQUEST_INSTRUCTIONS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_REQUEST_MESSAGES_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_REQUEST_PARAMS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_REQUEST_TOOL_CHOICE_SERIALIZATION_ERROR,
@@ -31,15 +33,18 @@ use nemo_relay::codec::response::FinishReason;
 /// A structured view of an LLM request produced by a Codec.
 ///
 /// Provides typed access to conversation messages, model name, generation
-/// parameters, tool definitions, tool choice, and extensible extra fields.
+/// parameters, tool definitions, tool choice, tagged provider-specific fields,
+/// and extensible unknown top-level fields.
 ///
 /// Properties:
 ///     messages (list): Parsed conversation messages (list of dicts with a ``role`` key).
+///     instructions (str | list | None): Provider-level system instructions.
 ///     model (str | None): Model identifier (e.g., ``"gpt-4"``).
 ///     params (dict | None): Normalized generation parameters.
 ///     tools (list | None): Tool definitions (function schemas).
 ///     tool_choice (Any | None): Tool choice control.
-///     extra (dict): Provider-specific extra fields.
+///     api_specific (dict | None): Tagged provider-specific request fields.
+///     extra (dict): Unknown future top-level fields.
 ///
 /// Helper methods:
 ///     system_prompt() -> str | None: Text of the first system message.
@@ -79,19 +84,27 @@ impl PyAnnotatedLLMRequest {
     ///
     /// Args:
     ///     messages: A list of message dicts, each with a ``role`` key.
+    ///     instructions: Optional provider-level instructions.
     ///     model: Optional model identifier.
     ///     params: Optional generation parameters dict.
     ///     tools: Optional list of tool definition dicts.
     ///     tool_choice: Optional tool choice control.
-    ///     extra: Optional dict of provider-specific extra fields.
+    ///     api_specific: Optional tagged provider-specific request fields.
+    ///     extra: Optional dict of unknown future top-level fields.
     #[new]
-    #[pyo3(signature = (messages, *, model=None, params=None, tools=None, tool_choice=None, extra=None))]
+    #[pyo3(signature = (messages, *, instructions=None, model=None, params=None, tools=None, tool_choice=None, api_specific=None, extra=None))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the Python constructor mirrors the public annotation fields as keywords"
+    )]
     pub(crate) fn new(
         messages: &Bound<'_, PyAny>,
+        instructions: Option<&Bound<'_, PyAny>>,
         model: Option<String>,
         params: Option<&Bound<'_, PyAny>>,
         tools: Option<&Bound<'_, PyAny>>,
         tool_choice: Option<&Bound<'_, PyAny>>,
+        api_specific: Option<&Bound<'_, PyAny>>,
         extra: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let msgs: Vec<Message> = pythonize::depythonize(messages).map_err(|e| {
@@ -103,6 +116,16 @@ impl PyAnnotatedLLMRequest {
             Some(p) if !p.is_none() => Some(pythonize::depythonize(p).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("invalid params: {e}"))
             })?),
+            _ => None,
+        };
+        let request_instructions: Option<MessageContent> = match instructions {
+            Some(value) if !value.is_none() => {
+                Some(pythonize::depythonize(value).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "invalid instructions: expected a string or content-part list: {e}"
+                    ))
+                })?)
+            }
             _ => None,
         };
         let tool_defs: Option<Vec<ToolDefinition>> = match tools {
@@ -119,6 +142,16 @@ impl PyAnnotatedLLMRequest {
             }
             _ => None,
         };
+        let provider_fields: Option<ApiSpecificRequest> = match api_specific {
+            Some(value) if !value.is_none() => {
+                Some(pythonize::depythonize(value).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "invalid api_specific: expected a tagged request object: {e}"
+                    ))
+                })?)
+            }
+            _ => None,
+        };
         let extra_map: serde_json::Map<String, serde_json::Value> = match extra {
             Some(e) if !e.is_none() => pythonize::depythonize(e).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("invalid extra: {e}"))
@@ -128,6 +161,7 @@ impl PyAnnotatedLLMRequest {
         Ok(Self {
             inner: AnnotatedLLMRequest {
                 messages: msgs,
+                instructions: request_instructions,
                 model,
                 params: gen_params,
                 tools: tool_defs,
@@ -145,6 +179,7 @@ impl PyAnnotatedLLMRequest {
                 max_tool_calls: None,
                 top_logprobs: None,
                 stream: None,
+                api_specific: provider_fields,
                 extra: extra_map,
             },
         })
@@ -168,6 +203,36 @@ impl PyAnnotatedLLMRequest {
                 "invalid messages: each dict must include a 'role' key (user/system/assistant/tool): {e}"
             ))
         })?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn instructions(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.instructions {
+            Some(value) => {
+                let value = to_python_json_value(
+                    value,
+                    "serialization error",
+                    #[cfg(test)]
+                    FORCE_ANNOTATED_REQUEST_INSTRUCTIONS_SERIALIZATION_ERROR,
+                )?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[setter]
+    pub(crate) fn set_instructions(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if value.is_none() {
+            self.inner.instructions = None;
+        } else {
+            self.inner.instructions = Some(pythonize::depythonize(value).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "invalid instructions: expected a string or content-part list: {e}"
+                ))
+            })?);
+        }
         Ok(())
     }
 
@@ -393,6 +458,34 @@ impl PyAnnotatedLLMRequest {
     #[setter]
     pub(crate) fn set_stream(&mut self, value: Option<bool>) {
         self.inner.stream = value;
+    }
+
+    #[getter]
+    pub(crate) fn api_specific(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.api_specific {
+            Some(value) => {
+                let value = to_python_json_value(
+                    value,
+                    "serialization error",
+                    #[cfg(test)]
+                    FORCE_ANNOTATED_REQUEST_API_SPECIFIC_SERIALIZATION_ERROR,
+                )?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[setter]
+    pub(crate) fn set_api_specific(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if value.is_none() {
+            self.inner.api_specific = None;
+        } else {
+            self.inner.api_specific = Some(pythonize::depythonize(value).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid api_specific: {e}"))
+            })?);
+        }
+        Ok(())
     }
 
     #[getter]

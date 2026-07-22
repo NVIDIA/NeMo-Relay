@@ -22,6 +22,8 @@ use serde_json::Value as Json;
 
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
+use crate::callback_factory;
+
 pub type JsonNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
 pub type JsonStreamNextFn =
@@ -156,8 +158,12 @@ fn build_completion_unknowns(
 ) -> napi::Result<(JsUnknown, JsUnknown)> {
     let resolve_completion = completion.clone();
     let resolve = env.create_function_from_closure("__nemo_relay_resolve", move |ctx| {
-        let value = ctx.get::<Json>(0).unwrap_or(Json::Null);
-        resolve_completion.send(Ok(value));
+        let value = ctx.get::<Json>(0).map_err(|error| {
+            FlowError::Internal(format!(
+                "JavaScript callback result could not be converted to JSON: {error}"
+            ))
+        });
+        resolve_completion.send(value);
         ctx.env.get_undefined()
     })?;
 
@@ -178,22 +184,6 @@ fn build_completion_unknowns(
     ))
 }
 
-fn create_promise_wrapper(env: &Env, callable: &JsFunction) -> napi::Result<JsFunction> {
-    let factory: JsFunction = env.run_script(
-        r#"((fn) => function __nemo_relay_promise_wrapper(error, arg0, next, resolve, reject) {
-  if (error != null) {
-    reject(error);
-    return;
-  }
-  Promise.resolve().then(() => (
-    next === undefined ? fn(arg0) : fn(arg0, next)
-  )).then(resolve, reject);
-})"#,
-    )?;
-    let wrapper_unknown: JsUnknown = factory.call(None, &[function_to_unknown(env, callable)])?;
-    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
-}
-
 /// A wrapper around a JS function that can be called from any thread and
 /// transparently handles both synchronous and Promise return values.
 pub struct PromiseAwareFn {
@@ -205,7 +195,7 @@ impl PromiseAwareFn {
     ///
     /// Must be called on the JS main thread (i.e., in a sync `#[napi]` function).
     pub fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
-        let wrapper = create_promise_wrapper(env, func)?;
+        let wrapper = callback_factory::wrap_promise_callback(env, func)?;
         let mut tsfn =
             env.create_threadsafe_function(&wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
                 let next = match ctx.value.next {

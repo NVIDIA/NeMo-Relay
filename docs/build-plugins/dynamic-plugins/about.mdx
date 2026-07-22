@@ -64,6 +64,13 @@ operators must enable a registered dynamic plugin explicitly. Declare only the
 capabilities the plugin needs. Add `config_schema.path` only with the
 `config_schema` capability.
 
+<Warning>
+Dynamic plugins that register an LLM request intercept consume the versioned
+request annotation contract. For Relay 0.6 request intercepts, set
+`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. Relay
+rejects the registration when the manifest still admits Relay 0.5.
+</Warning>
+
 The following requirements vary by execution lane:
 
 | Manifest area | Native dynamic plugin | Worker plugin |

@@ -28,12 +28,13 @@ use nemo_relay::api::llm::{
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
 };
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
-    ProviderSurface, response_codec as build_response_codec,
+    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
     streaming_codec as build_streaming_codec,
 };
 use nemo_relay::codec::streaming::StreamingCodec;
-use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 
@@ -149,17 +150,48 @@ async fn run_unmanaged_gateway(
 // Codecs registered for each managed provider route. Routes that emit LLM events but lack a typed
 // codec (count_tokens) return `None` so the runtime still wraps the call but skips annotation.
 struct RouteCodecs {
+    request: Option<Arc<dyn LlmCodec>>,
     streaming: Option<Box<dyn StreamingCodec>>,
     response: Option<Arc<dyn LlmResponseCodec>>,
+}
+
+struct GatewayRequestCodec {
+    inner: Arc<dyn LlmCodec>,
+}
+
+impl LlmCodec for GatewayRequestCodec {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+        self.inner.decode(request)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        let original_streaming = self.inner.decode(original)?.stream.unwrap_or(false);
+        let edited_streaming = annotated.stream.unwrap_or(false);
+        if edited_streaming != original_streaming {
+            return Err(FlowError::InvalidArgument(
+                "gateway request interceptors cannot change stream mode; preserve the original stream value"
+                    .into(),
+            ));
+        }
+        self.inner.encode(annotated, original)
+    }
 }
 
 fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
     match route.provider_surface() {
         Some(surface) => RouteCodecs {
+            request: Some(Arc::new(GatewayRequestCodec {
+                inner: build_request_codec(surface),
+            })),
             streaming: Some(build_streaming_codec(surface)),
             response: Some(build_response_codec(surface)),
         },
         None => RouteCodecs {
+            request: None,
             streaming: None,
             response: None,
         },
@@ -207,6 +239,7 @@ async fn run_managed_buffered(
         .attributes(attributes)
         .metadata(metadata)
         .model_name_opt(model_name)
+        .codec_opt(codecs.request)
         .response_codec_opt(codecs.response)
         .build();
     let result = TASK_SCOPE_STACK
@@ -407,6 +440,7 @@ async fn run_managed_streaming(
         .attributes(attributes)
         .metadata(metadata)
         .model_name_opt(model_name)
+        .codec_opt(codecs.request)
         .response_codec_opt(codecs.response)
         .build();
     let json_stream_result = TASK_SCOPE_STACK

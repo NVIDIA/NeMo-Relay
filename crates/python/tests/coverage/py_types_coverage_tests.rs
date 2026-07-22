@@ -572,6 +572,8 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
         assert_eq!(request.__repr__(), "LLMRequest(...)");
 
         let annotated_request = AnnotatedLLMRequest {
+            instructions: None,
+            api_specific: None,
             messages: vec![
                 Message::System {
                     content: MessageContent::Text("system".into()),
@@ -1070,19 +1072,31 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
             &json!({"type": "function", "function": {"name": "lookup"}}),
         )
         .unwrap();
+        let instructions = json_to_py(py, &json!("Initial policy")).unwrap();
+        let api_specific = json_to_py(py, &json!({"api": "openai_chat", "seed": 7})).unwrap();
         let extra = json_to_py(py, &json!({"provider": "test"})).unwrap();
 
         let mut annotated = PyAnnotatedLLMRequest::new(
             messages.bind(py),
+            Some(instructions.bind(py)),
             Some("demo-model".into()),
             Some(params.bind(py)),
             Some(tools.bind(py)),
             Some(tool_choice.bind(py)),
+            Some(api_specific.bind(py)),
             Some(extra.bind(py)),
         )
         .unwrap();
         assert_eq!(annotated.model(), Some("demo-model".into()));
-        assert_eq!(annotated.system_prompt(), Some("You are terse.".into()));
+        assert_eq!(
+            py_to_json(annotated.instructions(py).unwrap().bind(py)).unwrap(),
+            json!("Initial policy")
+        );
+        assert_eq!(
+            py_to_json(annotated.api_specific(py).unwrap().bind(py)).unwrap(),
+            json!({"api": "openai_chat", "seed": 7})
+        );
+        assert_eq!(annotated.system_prompt(), Some("Initial policy".into()));
         assert_eq!(
             annotated.last_user_message(),
             Some("Where is the weather?".into())
@@ -1126,6 +1140,16 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         let updated_messages =
             json_to_py(py, &json!([{"role": "user", "content": "updated"}])).unwrap();
         annotated.set_messages(updated_messages.bind(py)).unwrap();
+        let updated_instructions =
+            json_to_py(py, &json!([{"type": "text", "text": "Updated policy"}])).unwrap();
+        annotated
+            .set_instructions(updated_instructions.bind(py))
+            .unwrap();
+        let updated_api_specific =
+            json_to_py(py, &json!({"api": "openai_responses", "background": true})).unwrap();
+        annotated
+            .set_api_specific(updated_api_specific.bind(py))
+            .unwrap();
         annotated.set_model(Some("updated-model".into()));
         let updated_params = json_to_py(py, &json!({"temperature": 0.7})).unwrap();
         annotated.set_params(updated_params.bind(py)).unwrap();
@@ -1163,6 +1187,14 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         annotated.set_extra(updated_extra.bind(py)).unwrap();
         assert_eq!(annotated.model(), Some("updated-model".into()));
         assert_eq!(annotated.last_user_message(), Some("updated".into()));
+        assert_eq!(
+            py_to_json(annotated.instructions(py).unwrap().bind(py)).unwrap(),
+            json!([{"type": "text", "text": "Updated policy"}])
+        );
+        assert_eq!(
+            py_to_json(annotated.api_specific(py).unwrap().bind(py)).unwrap(),
+            json!({"api": "openai_responses", "background": true})
+        );
         assert_eq!(annotated.store(), Some(true));
         assert_eq!(annotated.previous_response_id(), Some("resp_1".into()));
         assert_eq!(
@@ -1194,6 +1226,8 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         );
 
         annotated.set_params(py.None().bind(py)).unwrap();
+        annotated.set_instructions(py.None().bind(py)).unwrap();
+        annotated.set_api_specific(py.None().bind(py)).unwrap();
         annotated.set_tools(py.None().bind(py)).unwrap();
         annotated.set_tool_choice(py.None().bind(py)).unwrap();
         annotated.set_truncation(py.None().bind(py)).unwrap();
@@ -1201,6 +1235,8 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         annotated.set_include(py.None().bind(py)).unwrap();
         annotated.set_metadata(py.None().bind(py)).unwrap();
         assert!(annotated.params(py).unwrap().bind(py).is_none());
+        assert!(annotated.instructions(py).unwrap().bind(py).is_none());
+        assert!(annotated.api_specific(py).unwrap().bind(py).is_none());
         assert!(annotated.tools(py).unwrap().bind(py).is_none());
         assert!(annotated.tool_choice(py).unwrap().bind(py).is_none());
         assert!(annotated.truncation(py).unwrap().bind(py).is_none());
@@ -1209,9 +1245,18 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         assert!(annotated.metadata(py).unwrap().bind(py).is_none());
 
         let bad_messages = json_to_py(py, &json!([{"content": "missing role"}])).unwrap();
-        let err = PyAnnotatedLLMRequest::new(bad_messages.bind(py), None, None, None, None, None)
-            .err()
-            .unwrap();
+        let err = PyAnnotatedLLMRequest::new(
+            bad_messages.bind(py),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .err()
+        .unwrap();
         assert!(err.to_string().contains("invalid messages"));
         let bad_params = json_to_py(py, &json!({"temperature": "hot"})).unwrap();
         assert!(annotated.set_params(bad_params.bind(py)).is_err());
@@ -1219,6 +1264,18 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         assert!(annotated.set_tools(bad_tools.bind(py)).is_err());
         let bad_choice = json_to_py(py, &json!({"bad": true})).unwrap();
         assert!(annotated.set_tool_choice(bad_choice.bind(py)).is_err());
+        let bad_instructions = json_to_py(py, &json!(true)).unwrap();
+        assert!(
+            annotated
+                .set_instructions(bad_instructions.bind(py))
+                .is_err()
+        );
+        let bad_api_specific = json_to_py(py, &json!({"api": "unknown"})).unwrap();
+        assert!(
+            annotated
+                .set_api_specific(bad_api_specific.bind(py))
+                .is_err()
+        );
         let bad_extra = PyList::empty(py);
         assert!(annotated.set_extra(&bad_extra.into_any()).is_err());
 
@@ -1477,6 +1534,10 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
 
         let annotated = PyAnnotatedLLMRequest {
             inner: AnnotatedLLMRequest {
+                instructions: Some(MessageContent::Text("system instructions".into())),
+                api_specific: Some(
+                    serde_json::from_value(json!({"api": "openai_chat", "seed": 7})).unwrap(),
+                ),
                 messages: vec![
                     Message::System {
                         content: MessageContent::Text("system".into()),
@@ -1493,13 +1554,15 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     max_tokens: Some(8),
                     ..Default::default()
                 }),
-                tools: Some(vec![nemo_relay::codec::request::ToolDefinition {
-                    tool_type: "function".into(),
+                tools: Some(vec![nemo_relay::codec::request::ToolDefinition::Function {
                     function: nemo_relay::codec::request::FunctionDefinition {
                         name: "lookup".into(),
                         description: None,
                         parameters: Some(json!({"type": "object"})),
+                        strict: None,
+                        extra: serde_json::Map::new(),
                     },
+                    extra: serde_json::Map::new(),
                 }]),
                 tool_choice: Some(nemo_relay::codec::request::ToolChoice::Auto),
                 store: None,
@@ -1582,6 +1645,11 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                 |py, _, annotated, _| annotated.messages(py).map(|_| ()),
             ),
             (
+                FORCE_ANNOTATED_REQUEST_INSTRUCTIONS_SERIALIZATION_ERROR,
+                "forced serialization failure",
+                |py, _, annotated, _| annotated.instructions(py).map(|_| ()),
+            ),
+            (
                 FORCE_ANNOTATED_REQUEST_PARAMS_SERIALIZATION_ERROR,
                 "forced serialization failure",
                 |py, _, annotated, _| annotated.params(py).map(|_| ()),
@@ -1595,6 +1663,11 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                 FORCE_ANNOTATED_REQUEST_TOOL_CHOICE_SERIALIZATION_ERROR,
                 "forced serialization failure",
                 |py, _, annotated, _| annotated.tool_choice(py).map(|_| ()),
+            ),
+            (
+                FORCE_ANNOTATED_REQUEST_API_SPECIFIC_SERIALIZATION_ERROR,
+                "forced serialization failure",
+                |py, _, annotated, _| annotated.api_specific(py).map(|_| ()),
             ),
             (
                 FORCE_ANNOTATED_RESPONSE_MESSAGE_SERIALIZATION_ERROR,
