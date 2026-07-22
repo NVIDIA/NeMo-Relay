@@ -173,18 +173,32 @@ surface flags. Profile-array configurations intentionally do not expose those
 flags: every enabled profile owns the complete pre-subscriber sanitization
 boundary.
 
-<Warning>
-The `trajectory_context` preset currently applies its analytical-field
-allowlist to generic scope metadata. String-valued classification fields that
-are not on that allowlist, including `nemo_relay_scope_role`,
-`hook_event_name`, and harness-provided `agent_kind`, can be replaced with the
-configured redaction token. `custom_mark_payload_policy` affects unknown
-custom Mark payloads, not Scope metadata.
+### `trajectory_context` Trusted Scope Metadata
 
-Profile-array mode does not currently provide a way to preserve generic scope
-metadata while retaining both LLM and tool sanitization. Track this limitation
-in [GitHub issue #528](https://github.com/NVIDIA/NeMo-Relay/issues/528).
-</Warning>
+The `trajectory_context` preset removes conversational content while retaining
+a fixed set of direct Scope metadata values that Relay uses to classify and
+reconstruct trajectories. Relay preserves a value only when both its field name
+and JSON type match the following contract:
+
+| JSON Type | Retained Fields |
+| --- | --- |
+| String | `nemo_relay_scope_role`, `agent_kind`, `hook_event_name`, `gateway_config_profile`, `gateway_mode`, `turn_source`, `harness`, `source`, `identity_quality`, `gateway_path`, `llm_correlation_status`, `llm_correlation_source`, `tool_correlation_status`, `tool_correlation_source`, `otel.status_code`, and `fidelity_source` |
+| Boolean | `provider_payload_exact` |
+
+Nested values, unlisted fields, and values with an unexpected JSON type
+continue through the preset's normal semantic redaction. Do not place PII or
+conversational content in retained fields. If these fields can contain an email
+address, apply an email-redaction profile later in the profile list.
+
+`custom_mark_payload_policy` applies to unknown custom Mark payloads, not Scope
+metadata. Its default value, `preserve`, leaves those custom Mark payloads
+unchanged. Set it to `redact_all_leaves` to redact their scalar values
+recursively.
+
+OpenTelemetry and OpenInference project the retained `agent_kind` value as the
+canonical `nemo_relay.agent.kind` attribute on trace roots and session identity
+marks. Use that attribute when classifying the originating harness from an
+exported span.
 
 ### CLI Editor Support
 
