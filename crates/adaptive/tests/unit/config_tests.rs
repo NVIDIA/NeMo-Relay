@@ -136,4 +136,14 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
         response_cache_backend.field("kind").unwrap().kind,
         EditorFieldKind::Enum
     );
+    #[cfg(not(feature = "redis-backend"))]
+    assert_eq!(
+        response_cache_backend.field("kind").unwrap().enum_values,
+        &["in_memory"]
+    );
+    #[cfg(feature = "redis-backend")]
+    assert_eq!(
+        response_cache_backend.field("kind").unwrap().enum_values,
+        &["in_memory", "redis"]
+    );
 }

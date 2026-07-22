@@ -54,6 +54,18 @@ export interface AcgConfig {
 
 /** Opt-in LLM response cache (exact-match) settings. */
 export interface ResponseCacheConfig {
+  ttlSeconds?: number;
+  namespace?: string;
+  priority?: number;
+  bypassRate?: number;
+  cacheNondeterministic?: boolean;
+  keyStrategy?: string;
+  headerAllowlist?: string[];
+  skipKeys?: string[];
+  backend?: BackendSpec;
+}
+
+interface ResponseCachePluginConfig {
   ttl_seconds?: number;
   namespace?: string;
   priority?: number;
@@ -74,15 +86,19 @@ export interface Config {
   adaptive_hints?: AdaptiveHintsConfig;
   tool_parallelism?: ToolParallelismConfig;
   acg?: AcgConfig;
-  response_cache?: ResponseCacheConfig;
+  responseCache?: ResponseCacheConfig;
   policy?: ConfigPolicy;
 }
+
+type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
+  response_cache?: ResponseCachePluginConfig;
+};
 
 /** Top-level adaptive component wrapper with fixed kind `adaptive`. */
 export interface ComponentSpec {
   kind: 'adaptive';
   enabled?: boolean;
-  config: Config;
+  config: AdaptivePluginConfig;
 }
 
 /** Normalized LLM token usage for cache telemetry. */
@@ -268,7 +284,7 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
  * @param config - Partial response-cache settings to override.
  * @returns A normalized response-cache config object.
  * @remarks The default backend is in-memory; pass a `backend` (e.g.
- * `redisBackend(url)`) for a shared cache. `bypass_rate` defaults to `0.0`
+ * `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`
  * (always reuse / exact replay).
  */
 export declare function responseCacheConfig(config?: ResponseCacheConfig): ResponseCacheConfig;

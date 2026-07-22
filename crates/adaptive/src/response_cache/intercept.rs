@@ -36,18 +36,43 @@ use crate::response_cache::store::{CacheEntry, CacheStore, now_unix_ms};
 /// is slow.
 const STREAM_TEE_CHANNEL_CAP: usize = 64;
 
+type CacheCommit = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+enum TeeMessage {
+    Chunk(FlowResult<Json>),
+    Commit(CacheCommit),
+}
+
 /// Receiver half of the streaming cache tee with upstream cleanup forwarding.
 struct ResponseCacheReceiver {
-    receiver: ReceiverStream<FlowResult<Json>>,
+    receiver: ReceiverStream<TeeMessage>,
     cancel: watch::Sender<bool>,
     closed: watch::Receiver<Option<FlowResult<()>>>,
+    finished: bool,
 }
 
 impl Stream for ResponseCacheReceiver {
     type Item = FlowResult<Json>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.receiver).poll_next(cx)
+        if self.finished {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut self.receiver).poll_next(cx) {
+            Poll::Ready(Some(TeeMessage::Chunk(item))) => Poll::Ready(Some(item)),
+            Poll::Ready(Some(TeeMessage::Commit(mut commit))) => {
+                if commit.as_mut().poll(cx).is_pending() {
+                    tokio::spawn(commit);
+                }
+                self.finished = true;
+                Poll::Ready(None)
+            }
+            Poll::Ready(None) => {
+                self.finished = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -63,6 +88,7 @@ impl LlmStreamInner for ResponseCacheReceiver {
         this.cancel.send_replace(true);
         this.receiver.close();
         while this.receiver.as_mut().try_recv().is_ok() {}
+        this.finished = true;
         let mut closed = this.closed.clone();
         Box::pin(async move {
             loop {
@@ -308,7 +334,7 @@ fn tee_and_aggregate(
     provider: String,
     model: Option<String>,
 ) -> LlmJsonStream {
-    let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(STREAM_TEE_CHANNEL_CAP);
+    let (tx, rx) = tokio::sync::mpsc::channel::<TeeMessage>(STREAM_TEE_CHANNEL_CAP);
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     let (closed_tx, closed_rx) = watch::channel(None);
     tokio::spawn(async move {
@@ -336,14 +362,14 @@ fn tee_and_aggregate(
                 }
                 Err(_) => {
                     // Upstream error is a failed call: forward it, never cache.
-                    let _ = tx.send(item).await;
+                    let _ = tx.send(TeeMessage::Chunk(item)).await;
                     break;
                 }
             }
             // Forward to the consumer; a send error means it was dropped.
             let sent = tokio::select! {
                 _ = cancel_rx.changed() => break,
-                sent = tx.send(item) => sent,
+                sent = tx.send(TeeMessage::Chunk(item)) => sent,
             };
             if sent.is_err() {
                 break;
@@ -356,10 +382,16 @@ fn tee_and_aggregate(
             let aggregate = codec.finalizer()();
             // Empty = mis-inferred surface; lossy = unfaithful replay.
             if !aggregate_has_no_content(&aggregate) && !aggregate_replay_lossy(&aggregate) {
-                maybe_store(&store, &config, &key, &provider, model, &aggregate).await;
+                let commit: CacheCommit = Box::pin(async move {
+                    maybe_store(&store, &config, &key, &provider, model, &aggregate).await;
+                });
+                let _ = tokio::select! {
+                    _ = cancel_rx.changed() => false,
+                    sent = tx.send(TeeMessage::Commit(commit)) => sent.is_ok(),
+                };
             }
         } else if reached_eof && let Err(error) = &close_result {
-            let _ = tx.send(Err(error.clone())).await;
+            let _ = tx.send(TeeMessage::Chunk(Err(error.clone()))).await;
         }
         closed_tx.send_replace(Some(close_result));
     });
@@ -367,6 +399,7 @@ fn tee_and_aggregate(
         receiver: ReceiverStream::new(rx),
         cancel: cancel_tx,
         closed: closed_rx,
+        finished: false,
     })
 }
 
@@ -544,3 +577,7 @@ pub(crate) fn should_bypass(rate: f64) -> bool {
         next_unit_f64() < rate
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/response_cache/intercept_tests.rs"]
+mod tests;

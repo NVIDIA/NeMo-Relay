@@ -11,6 +11,14 @@ use nemo_relay::codec::model_pricing::{
 
 use super::*;
 
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
 #[test]
 fn anthropic_shaped_bodies_price_through_the_catalog() {
     // A real Anthropic response body must yield a dollar figure when the
@@ -33,6 +41,7 @@ fn anthropic_shaped_bodies_price_through_the_catalog() {
     )
     .unwrap();
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+    let _reset_pricing = ResetPricingResolverGuard;
     let entry = CacheEntry::new(
         json!({
             "id": "msg_1",
@@ -49,7 +58,6 @@ fn anthropic_shaped_bodies_price_through_the_catalog() {
         Some("anthropic.messages".to_string()),
     );
     let (tokens, cost) = savings_from(&entry);
-    reset_active_pricing_resolver().unwrap();
     assert_eq!(tokens, Some(1000));
     let cost = cost.expect("a cataloged anthropic hit must report saved cost");
     assert!(

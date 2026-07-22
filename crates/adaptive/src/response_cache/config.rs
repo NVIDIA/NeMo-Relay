@@ -48,6 +48,15 @@ impl BackendConfig {
     }
 }
 
+#[cfg(not(feature = "redis-backend"))]
+nemo_relay::editor_config! {
+    impl BackendConfig {
+        kind => { label: "kind", kind: Enum, values: ["in_memory"] },
+        config => { label: "config", kind: Json },
+    }
+}
+
+#[cfg(feature = "redis-backend")]
 nemo_relay::editor_config! {
     impl BackendConfig {
         kind => { label: "kind", kind: Enum, values: ["in_memory", "redis"] },
