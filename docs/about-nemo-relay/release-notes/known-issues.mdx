@@ -19,9 +19,9 @@ The following limitations and migration steps apply to NVIDIA NeMo Relay 0.6.
 - Go and the raw C FFI remain experimental and source-first. Generated API
   pages focus on Rust, Python, and Node.js, and the new C and Go dynamic-plugin
   activation entry points are not ready for production use.
-- The NeMo Relay CLI remains experimental. Local coding-agent observability
-  depends on host hooks and provider traffic reaching the local gateway. Relay
-  cannot fully capture remote or cloud execution that bypasses the machine.
+- Local coding-agent observability depends on host hooks and provider traffic
+  reaching the local gateway. Relay cannot fully capture remote or cloud
+  execution that bypasses the machine.
 - Persistent Codex, Claude Code, and Hermes integrations share a loopback
   gateway and user-scoped Relay configuration. Use `nemo-relay run` when one
   launch must keep its project configuration isolated.

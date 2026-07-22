@@ -1,315 +1,552 @@
 ---
 title: "Glossary"
-description: ""
+sidebar-title: "Glossary"
+description: "Definitions for NVIDIA NeMo Relay runtime, plugin, integration, adaptive, and observability terms."
+template-library-version: "1.0.0"
 position: 2
 ---
+
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+{/* @tpl:formatting
+This is the Glossary template. Use it for a lookup-oriented glossary page that defines domain terms, acronyms, and product language readers will encounter elsewhere in the documentation; use the .md variant for Sphinx/MyST projects, the .rst variant for reStructuredText, or the -gfm.md variant for GitHub Flavored Markdown.
+*/}
+
+{/* @tpl:example
+To get started, refer to [NVIDIA NeMo Relay Glossary](https://docs.nvidia.com/nemo/relay/resources/glossary).
+*/}
+
+{/* @tpl:formatting
+- Use alphabetical H2 sections (`## A`, `## B`, …) so readers can jump by letter.
+- Use definition lists under each letter: one term line, then `:` and the definition (dictionary-style).
+- Use short first sentences for most definitions; add code, tables, or lists only when they add lookup value.
+- Use related links when readers should continue to a deeper concept, guide, or reference page.
+*/}
 
 NeMo Relay uses specialized runtime, integration, plugin, adaptive, and
 observability terms across bindings. This glossary defines the shared terms so
 the rest of the documentation can use them consistently.
 
-**Activation Report**
+---
 
-An **activation report** records which plugin components validated, initialized, or registered behavior successfully. Use it to distinguish configuration problems from runtime behavior problems.
+{/* @tpl:formatting
+- Add **alphabetical H2 headings** (`## A` through `## Z`, plus numerals/symbols if needed).
+- Under each heading, use a **definition list**: write the **term** on its own line, then a colon and the definition text.
+- Indent continuation lines (examples, **Related**, *See also*) so they stay part of the same entry.
+- Add a `{ref}` target line above an entry when other pages must link to that definition.
+- Add code blocks or tables only when they make the definition meaningfully clearer.
+*/}
+
+## A
+
+**Activation Report**
+: An activation report records which plugin components validated, initialized,
+  or registered behavior successfully. Use it to distinguish configuration
+  problems from runtime behavior problems.
 
 **Adaptive Cache Governor (ACG)**
-
-The **adaptive cache governor (ACG)** is the adaptive subsystem that analyzes LLM prompt structure, tracks stable prompt blocks, and plans provider-specific prompt-cache breakpoints.
+: The adaptive cache governor (ACG) analyzes LLM prompt structure, tracks
+  stable prompt blocks, and plans provider-specific prompt-cache breakpoints.
 
 **Adaptive Component**
-
-The **adaptive component** is the built-in plugin component with kind ``adaptive``. It can register telemetry subscribers, adaptive hint intercepts, tool-parallelism behavior, cache-governor behavior, and adaptive state backends.
+: The adaptive component is the built-in plugin component with kind
+  `adaptive`. It can register telemetry subscribers, adaptive hint intercepts,
+  tool-parallelism behavior, cache-governor behavior, and adaptive state
+  backends.
 
 **Adaptive Hint**
-
-An **adaptive hint** is metadata injected into an outgoing model request by an adaptive request intercept. Downstream code or provider adapters can use the hint to adjust behavior when explicitly configured to do so.
-
-**Adaptive Tuning**
-
-**Adaptive tuning** is the NeMo Relay runtime capability that observes instrumented work and enables controlled behavior changes through the plugin system.
+: An adaptive hint is metadata injected into an outgoing model request by an
+  adaptive request intercept. Downstream code or provider adapters can use the
+  hint to adjust behavior when explicitly configured to do so.
 
 **Adaptive State Backend**
-
-An **adaptive state backend** stores observations and learned state for adaptive behavior. In-memory state is process-local; Redis-backed state can be shared across workers or survive process restarts.
+: An adaptive state backend stores observations and learned state for adaptive
+  behavior. In-memory state is process-local; Redis-backed state can be shared
+  across workers or survive process restarts.
 
 **Adaptive Telemetry**
+: Adaptive telemetry is the subscriber path that observes lifecycle events for
+  adaptive learners without changing execution by itself.
 
-**Adaptive telemetry** is the subscriber path that observes lifecycle events for adaptive learners without changing execution by itself.
+**Adaptive Tuning**
+: Adaptive tuning is the NeMo Relay runtime capability that observes
+  instrumented work and enables controlled behavior changes through the plugin
+  system.
 
 **Agent Trajectory Interchange Format (ATIF)**
-
-**Agent Trajectory Interchange Format (ATIF)** is an external trajectory format used for offline analysis, replay, or evaluation. The NeMo Relay ATIF exporter collects lifecycle events and exports ATIF v1.7 trajectory data.
+: Agent Trajectory Interchange Format (ATIF) is an external trajectory format
+  used for offline analysis, replay, or evaluation. The NeMo Relay ATIF
+  exporter collects lifecycle events and exports ATIF v1.7 trajectory data.
 
 **Agent Trajectory Observability Format (ATOF)**
-
-**Agent Trajectory Observability Format (ATOF)** is the canonical event format NeMo Relay emits for scope lifecycle events and mark events. Subscribers and exporters consume ATOF events before translating compatible scope data into ATIF trajectories and trace data into OpenTelemetry or OpenInference.
+: Agent Trajectory Observability Format (ATOF) is the canonical event format
+  NeMo Relay emits for scope lifecycle events and mark events. Subscribers and
+  exporters consume ATOF events before translating compatible scope data into
+  ATIF trajectories and trace data into OpenTelemetry or OpenInference.
 
 **Annotated Request And Response Data**
+: Annotated request and response data is normalized provider information
+  created by LLM codecs. It lets request intercepts, subscribers, and exporters
+  reason about provider payloads through a shared model while preserving the raw
+  provider request or response shape.
 
-**Annotated request and response data** is normalized provider information created by LLM codecs. It lets request intercepts, subscribers, and exporters reason about provider payloads through a shared model while preserving the raw provider request or response shape.
+## B
 
 **Binding**
-
-A **binding** is a language-specific public API surface for the NeMo Relay runtime, such as Python, Node.js, Go, Rust, or C FFI.
+: A binding is a language-specific public API surface for the NeMo Relay
+  runtime, such as Python, Node.js, Go, Rust, or C FFI.
 
 **Break Chain**
+: `break_chain` is the request-intercept setting that stops later request
+  intercepts after the current intercept returns. Use it only when the current
+  request transform should be final.
 
-``break_chain`` is the request-intercept setting that stops later request intercepts after the current intercept returns. Use it only when the current request transform should be final.
+## C
 
 **Callback**
-
-A **callback** is the application, framework, tool, or provider function that does the real work. Managed execution passes this callback through NeMo Relay so middleware and lifecycle events surround the invocation.
+: A callback is the application, framework, tool, or provider function that
+  does the real work. Managed execution passes this callback through NeMo Relay
+  so middleware and lifecycle events surround the invocation.
 
 **Category Profile**
-
-A **category profile** is the event field that stores category-specific semantic details. NeMo Relay uses it for values such as LLM ``model_name``, tool ``tool_call_id``, and custom ``subtype``.
+: A category profile is the event field that stores category-specific semantic
+  details. NeMo Relay uses it for values such as LLM `model_name`, tool
+  `tool_call_id`, and custom `subtype`.
 
 **Codec**
-
-A **codec** is a deterministic translator at a NeMo Relay boundary. Codecs let framework or provider-native values remain convenient for application code while NeMo Relay observes JSON-compatible or normalized data.
+: A codec is a deterministic translator at a NeMo Relay boundary. Codecs let
+  framework or provider-native values remain convenient for application code
+  while NeMo Relay observes JSON-compatible or normalized data.
 
 **Collection Window**
-
-A **collection window** is the period during which an in-process exporter, such as the ATIF exporter, buffers events before export or clear. Bounded collection windows prevent unrelated runs from mixing in one artifact.
+: A collection window is the period during which an in-process exporter, such
+  as the ATIF exporter, buffers events before export or clear. Bounded
+  collection windows prevent unrelated runs from mixing in one artifact.
 
 **Collector**
-
-A **collector** is the callback used by streaming LLM helpers to observe each streamed chunk and accumulate state for the final response.
+: A collector is the callback used by streaming LLM helpers to observe each
+  streamed chunk and accumulate state for the final response.
 
 **Conditional Execution**
+: A conditional-execution guardrail decides whether the call is allowed to run
+  at all.
 
-A **conditional-execution guardrail** decides whether the call is allowed to run at all.
+## D
+
+**Dynamic Plugin**
+: A dynamic plugin is a discoverable plugin package that the operator registers
+  from a `relay-plugin.toml` manifest. Dynamic plugins are either native shared
+  libraries or local gRPC workers. Refer to [Discoverable
+  Plugins](/build-plugins/dynamic-plugins/about).
+
+## E
 
 **Event**
-
-An **event** is the runtime record of something that happened. NeMo Relay emits events for scope start and end, tool start and end, LLM start and end, and named mark points. Events are the shared data model consumed by subscribers and exporters.
+: An event is the runtime record of something that happened. NeMo Relay emits
+  events for scope start and end, tool start and end, LLM start and end, and
+  named mark points. Events are the shared data model consumed by subscribers
+  and exporters.
 
 **Event Envelope**
+: The event envelope is the shared set of fields carried by every ATOF event,
+  including identifiers, timestamps, names, data, data schema, metadata, and
+  parent linkage.
 
-The **event envelope** is the shared set of fields carried by every ATOF event, including identifiers, timestamps, names, data, data schema, metadata, and parent linkage.
+**Event Sanitizer**
+: An event sanitizer rewrites observability fields on mark, scope-start, or
+  scope-end events. It does not change the real callback arguments or result.
+  Refer to [Event Sanitizers](/reference/event-sanitizers).
 
 **Execution Intercept**
-
-An **execution intercept** wraps or replaces the real callback. Use this when behavior belongs around the invocation boundary itself, such as retries, timing, routing, wrapper logic, or framework integration.
+: An execution intercept wraps or replaces the real callback. Use it when
+  behavior belongs around the invocation boundary itself, such as retries,
+  timing, routing, wrapper logic, or framework integration.
 
 **Explicit Lifecycle API**
-
-An **explicit lifecycle API** is a manual start, end, or mark helper used when a framework owns the real invocation internally. It preserves observability but does not let execution intercepts wrap the real callback automatically.
-
-**Exporter**
-
-An **exporter** is a subscriber-oriented component that translates NeMo Relay events into an external artifact or backend format, such as an ATIF trajectory or OTLP trace spans.
+: An explicit lifecycle API is a manual start, end, or mark helper used when a
+  framework owns the real invocation internally. It preserves observability but
+  does not let execution intercepts wrap the real callback automatically.
 
 **Experimental Binding**
+: An experimental binding exposes runtime behavior for source-first users but
+  is not the primary documentation path. Go and the raw C FFI surface are
+  experimental unless a page says otherwise.
 
-An **experimental binding** exposes runtime behavior for source-first users but
-is not the primary documentation path. Go and the raw C FFI
-surface are experimental unless a page says otherwise.
+**Exporter**
+: An exporter is a subscriber-oriented component that translates NeMo Relay
+  events into an external artifact or backend format, such as an ATIF trajectory
+  or OTLP trace spans.
+
+## F
 
 **FFI**
-
-**FFI** means foreign function interface. NeMo Relay's C FFI layer exposes core runtime behavior to non-Rust languages and is used by the Go binding.
+: FFI means foreign function interface. NeMo Relay's C FFI layer exposes core
+  runtime behavior to non-Rust languages and is used by the Go binding.
 
 **Finalizer**
+: A finalizer is the callback used by streaming LLM helpers when the stream ends
+  through natural exhaustion or explicit close. It turns collected stream state
+  into the response payload that sanitize-response guardrails, subscribers, and
+  exporters can observe.
 
-A **finalizer** is the callback used by streaming LLM helpers when the stream ends through natural exhaustion or explicit close. It turns collected stream state into the response payload that sanitize-response guardrails, subscribers, and exporters can observe.
+## G
 
 **Global And Scope-Local Registration**
+: NeMo Relay supports two main ownership levels for middleware and subscribers.
 
-NeMo Relay supports two main ownership levels for middleware and subscribers. - **Global registrations** stay active for the whole process until removed. - **Scope-local registrations** are owned by one active scope and are cleaned up automatically when that scope closes. This split lets process-wide defaults coexist with request-local policy or instrumentation.
+  - **Global registrations** stay active for the whole process until removed.
+  - **Scope-local registrations** are owned by one active scope and are cleaned
+    up automatically when that scope closes.
+
+  This split lets process-wide defaults coexist with request-local policy or
+  instrumentation.
+
+**gRPC Worker Plugin**
+: A gRPC worker plugin is a dynamic plugin that runs as a local child process
+  and installs proxy callbacks through the stable `grpc-v1` protocol. It can
+  use a Python, Rust, or command runtime. The process boundary isolates crashes
+  and dependencies, but it is not a security sandbox. Refer to [gRPC Worker
+  Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about).
 
 **Guardrail**
+: A guardrail is middleware that either blocks execution or rewrites the data
+  recorded on emitted events. Sanitize guardrails are observability-oriented.
+  They do not rewrite the real arguments passed to the callback or the real
+  value returned to the caller.
 
-A **guardrail** is middleware that either blocks execution or rewrites the data recorded on emitted events. Sanitize guardrails are observability-oriented. They do not rewrite the real arguments passed to the callback or the real value returned to the caller.
+## I
 
 **Integration Boundary**
-
-An **integration boundary** is the stable point in an application, framework, or provider adapter where NeMo Relay can wrap, observe, or transform a tool or LLM invocation.
+: An integration boundary is the stable point in an application, framework, or
+  provider adapter where NeMo Relay can wrap, observe, or transform a tool or
+  LLM invocation.
 
 **Intercept**
+: An intercept is middleware that changes the real request path or wraps the
+  real callback.
 
-An **intercept** is middleware that changes the real request path or wraps the real callback.
+## J
 
 **JSON-Compatible Payload**
+: A JSON-compatible payload is data that can be represented in NeMo Relay's
+  JSON model. Event data, middleware payloads, and codec output should be
+  JSON-compatible.
 
-A **JSON-compatible payload** is data that can be represented in NeMo Relay's JSON model. Event data, middleware payloads, and codec output should be JSON-compatible.
+## L
 
 **Learner**
+: A learner is an adaptive component that consumes observed event data and
+  derives reusable guidance, such as tool parallelism plans or cache stability
+  signals.
 
-A **learner** is an adaptive component that consumes observed event data and derives reusable guidance, such as tool parallelism plans or cache stability signals.
+**Lifecycle Hook**
+: A lifecycle hook is a coding-agent callback that reports a session or tool
+  milestone. Relay-generated hooks forward the canonical payload to the local
+  Relay gateway.
 
 **Lifecycle Pair**
-
-A **lifecycle pair** is the matching start and end event for one scope, tool call, or LLM call. Subscribers and exporters use lifecycle pairs to compute durations, reconstruct boundaries, and preserve nesting.
+: A lifecycle pair is the matching start and end event for one scope, tool
+  call, or LLM call. Subscribers and exporters use lifecycle pairs to compute
+  durations, reconstruct boundaries, and preserve nesting.
 
 **LLM Call**
-
-An **LLM call** is an instrumented model-provider invocation. Managed LLM calls emit start and end events, run LLM middleware, and can carry a normalized ``model_name`` for observability and trajectory export.
+: An LLM call is an instrumented model-provider invocation. Managed LLM calls
+  emit start and end events, run LLM middleware, and can carry a normalized
+  `model_name` for observability and trajectory export.
 
 **LLM Stream**
+: An LLM stream is a streaming model response managed across multiple chunks
+  rather than a single response object. NeMo Relay captures the originating
+  scope stack, runs stream execution intercepts, collects chunks, and finalizes
+  the stream into a response-side event payload. Consumers that stop early
+  explicitly close the stream so the producer can clean up and finalize the
+  partial response.
 
-An **LLM stream** is a streaming model response managed across multiple chunks rather than a single response object. NeMo Relay captures the originating scope stack, runs stream execution intercepts, collects chunks, and finalizes the stream into a response-side event payload. Consumers that stop early explicitly close the stream so the producer can clean up and the partial response can be finalized.
+## M
 
 **Managed Execution And Manual Lifecycle**
+: NeMo Relay supports two main ways to model tool and LLM work.
 
-NeMo Relay supports two main ways to model tool and LLM work. - **Managed execution** means NeMo Relay owns the middleware pipeline and emitted lifecycle around the invocation. - **Manual lifecycle** means some other framework or runtime owns the real call boundary, and NeMo Relay only records the start and end points explicitly. Managed execution is the default choice for application code. Manual lifecycle exists mainly for framework integrations that cannot delegate the real invocation to NeMo Relay.
+  - **Managed execution** means NeMo Relay owns the middleware pipeline and
+    emitted lifecycle around the invocation.
+  - **Manual lifecycle** means another framework or runtime owns the real call
+    boundary, and NeMo Relay records the start and end points explicitly.
+
+  Managed execution is the default choice for application code. Manual
+  lifecycle exists mainly for framework integrations that cannot delegate the
+  real invocation to NeMo Relay.
 
 **Managed Execution Wrapper**
-
-A **managed execution wrapper** is the integration pattern where a tool or LLM provider callback is routed through NeMo Relay's managed execute helper. This is the preferred pattern when NeMo Relay can own middleware ordering, lifecycle pairing, and event emission around the real callback.
+: A managed execution wrapper is the integration pattern where a tool or LLM
+  provider callback is routed through NeMo Relay's managed execute helper. This
+  is the preferred pattern when NeMo Relay can own middleware ordering,
+  lifecycle pairing, and event emission around the real callback.
 
 **Mark Event**
-
-A **mark event** is a point-in-time event for a named runtime checkpoint that is not a full start/end lifecycle pair. Use marks for retries, checkpoints, interrupts, state transitions, or framework milestones that do not represent a complete nested invocation.
+: A mark event is a point-in-time event for a named runtime checkpoint that is
+  not a full start/end lifecycle pair. Use marks for retries, checkpoints,
+  interrupts, state transitions, or framework milestones that do not represent
+  a complete nested invocation.
 
 **Middleware**
+: Middleware is the runtime behavior that runs around tool or LLM work.
 
-**Middleware** is the runtime behavior that runs around tool or LLM work. Middleware can inspect, reject, transform, wrap, or sanitize execution at well-defined lifecycle points. NeMo Relay has two major middleware families: - **Intercepts** affect the real execution path. - **Guardrails** block work or rewrite the observability payload.
+  - **Intercepts** affect the real execution path.
+  - **Guardrails** block work or rewrite the observability payload.
 
 **Middleware Registry**
+: A middleware registry stores named middleware entries for one runtime surface,
+  such as tool request intercepts or LLM sanitize-response guardrails. The
+  runtime combines global registry entries with visible scope-local entries
+  before managed execution.
 
-A **middleware registry** stores named middleware entries for one runtime surface, such as tool request intercepts or LLM sanitize-response guardrails. The runtime combines global registry entries with visible scope-local entries before managed execution.
+**Model Context Protocol (MCP)**
+: Model Context Protocol (MCP) is the protocol that NeMo Relay uses for the
+  host-neutral lifecycle client in persistent coding-agent integrations. The
+  `nemo-relay mcp` server manages gateway lifetime and exposes no tools.
+
+**Model Pricing**
+: Model pricing is the built-in `pricing` plugin component that loads catalog
+  sources and annotates managed LLM responses with cost estimates when model and
+  token data are available. The component resolves configured sources through a
+  pricing resolver chain.
+
+## N
 
 **Next Function**
+: The next function is the continuation passed to an execution intercept. The
+  intercept calls `next` to run the next intercept or the original callback. An
+  intercept that does not call `next` intentionally replaces or short-circuits
+  the rest of the invocation.
 
-The **next function** is the continuation passed to an execution intercept. The intercept calls ``next`` to run the next intercept or the original callback. An intercept that does not call ``next`` intentionally replaces or short-circuits the rest of the invocation.
+**Native Dynamic Plugin**
+: A native dynamic plugin is a Rust shared library loaded into the Relay
+  process through the native plugin ABI. It must be rebuilt for the host ABI
+  and compatible Relay version, and it is not sandboxed. Refer to [Native
+  Dynamic Plugins](/build-plugins/dynamic-plugins/native-dynamic/about).
+
+**NeMo Guardrails**
+: NeMo Guardrails is the built-in `nemo_guardrails` plugin component for
+  first-party guardrail policy around managed tool and LLM execution. It
+  supports remote Guardrails-service and Python-backed local backends.
 
 **Non-Serializable Data**
+: Non-serializable data is framework or SDK state that cannot be represented as
+  JSON, such as clients, streams, callbacks, file handles, or class instances.
+  Keep those objects outside NeMo Relay payloads and pass only stable
+  identifiers or projections through events and middleware.
 
-**Non-serializable data** is framework or SDK state that cannot be represented as JSON, such as clients, streams, callbacks, file handles, or class instances. Keep those objects outside NeMo Relay payloads and pass only stable identifiers or projections through events and middleware.
+## O
 
 **OpenInference**
-
-**OpenInference** is an AI-observability semantic convention layered on trace spans. NeMo Relay's OpenInference subscriber maps lifecycle payloads to OpenInference-oriented attributes such as model inputs, outputs, and token usage.
+: OpenInference is an AI-observability semantic convention layered on trace
+  spans. NeMo Relay's OpenInference subscriber maps lifecycle payloads to
+  OpenInference-oriented attributes such as model inputs, outputs, and token
+  usage.
 
 **OpenTelemetry**
-
-**OpenTelemetry** is a vendor-neutral observability ecosystem. NeMo Relay can export lifecycle events as OpenTelemetry-compatible trace spans.
+: OpenTelemetry is a vendor-neutral observability ecosystem. NeMo Relay can
+  export lifecycle events as OpenTelemetry-compatible trace spans.
 
 **OpenTelemetry Protocol (OTLP)**
+: OpenTelemetry Protocol (OTLP) is the transport protocol used by the
+  OpenTelemetry and OpenInference subscribers to send trace data to a collector
+  or backend.
 
-**OpenTelemetry Protocol (OTLP)** is the transport protocol used by the OpenTelemetry and OpenInference subscribers to send trace data to a collector or backend.
+## P
+
+**Persistent Installation**
+: A persistent installation is a Relay-owned coding-agent integration created
+  with `nemo-relay install <agent>`. It registers an MCP lifecycle client and
+  trusted hooks in user configuration so the agent can use a shared local
+  gateway without a wrapper command. The installation uses an immutable
+  generation fence to reject stale managed entries.
+
+**PII Redaction**
+: PII redaction is the built-in `pii_redaction` plugin component that sanitizes
+  sensitive fields in emitted observability payloads. It does not change the
+  real callback arguments or returned result.
 
 **Plugin**
-
-A **plugin** is a reusable runtime component that installs middleware, subscribers, or related behavior from configuration rather than through hand-written registration at every call site. Plugins let you package reusable policy bundles, observability components, and adaptive behavior.
+: A plugin is a reusable runtime component that installs middleware,
+  subscribers, or related behavior from configuration rather than through
+  hand-written registration at every call site. Plugins let you package reusable
+  policy bundles, observability components, and adaptive behavior.
 
 **Plugin Component**
-
-A **plugin component** is one configured unit inside plugin configuration. Each component has a kind and component-specific settings, such as the built-in ``adaptive`` component.
+: A plugin component is one configured unit inside plugin configuration. Each
+  component has a kind and component-specific settings, such as the built-in
+  `adaptive` component.
 
 **Plugin Configuration**
-
-**Plugin configuration** is the versioned document or object that describes which plugin components should be validated, initialized, and activated.
+: Plugin configuration is the versioned document or object that describes which
+  plugin components should be validated, initialized, and activated.
 
 **Plugin Context**
+: A plugin context is the activation-time object that plugin code uses to
+  register middleware, subscribers, or other runtime behavior.
 
-A **plugin context** is the activation-time object that plugin code uses to register middleware, subscribers, or other runtime behavior.
+**Plugin Manifest**
+: A plugin manifest is the `relay-plugin.toml` package contract for a dynamic
+  plugin. It declares the plugin type, compatibility, capabilities, source,
+  integrity evidence, and loading details.
 
 **Priority**
-
-**Priority** is the ordering value attached to middleware registrations. NeMo Relay runs visible middleware in priority order after merging global and scope-local registrations.
+: Priority is the ordering value attached to middleware registrations. NeMo
+  Relay runs visible middleware in priority order after merging global and
+  scope-local registrations.
 
 **Primary Binding**
-
-A **primary binding** is one of the documented binding surfaces used for
-first-line examples and generated API references. The primary bindings are Rust,
-Python, and Node.js.
+: A primary binding is one of the documented binding surfaces used for
+  first-line examples and generated API references. The primary bindings are
+  Rust, Python, and Node.js.
 
 **Projection**
-
-A **projection** translates canonical NeMo Relay events into a downstream format
-such as ATIF, OpenTelemetry, or OpenInference. A projection should preserve the
-meaning of the runtime event stream without redefining ownership, middleware
-ordering, or provider-specific codec policy.
+: A projection translates canonical NeMo Relay events into a downstream format
+  such as ATIF, OpenTelemetry, or OpenInference. A projection should preserve
+  the meaning of the runtime event stream without redefining ownership,
+  middleware ordering, or provider-specific codec policy.
 
 **Prompt IR**
-
-**Prompt IR** is the internal representation ACG uses to model an LLM request as addressable prompt blocks for stability analysis and cache planning.
+: Prompt IR is the internal representation ACG uses to model an LLM request as
+  addressable prompt blocks for stability analysis and cache planning.
 
 **Prompt-Cache Breakpoint**
-
-A **prompt-cache breakpoint** is a provider-specific location in a prompt where the cache governor suggests or applies cache behavior for stable prompt sections.
+: A prompt-cache breakpoint is a provider-specific location in a prompt where
+  the cache governor suggests or applies cache behavior for stable prompt
+  sections.
 
 **Provider Adapter**
-
-A **provider adapter** is code that translates between a framework's model-call surface and a provider-specific API shape. Provider adapters often use request codecs when request intercepts or request-side middleware need normalized request semantics, and response codecs when events, subscribers, or exporters need normalized response annotations.
+: A provider adapter is code that translates between a framework's model-call
+  surface and a provider-specific API shape. Provider adapters often use request
+  codecs when request intercepts or request-side middleware need normalized
+  request semantics, and response codecs when events, subscribers, or exporters
+  need normalized response annotations.
 
 **Provider Codec**
+: A provider codec converts provider-specific LLM requests or responses into
+  normalized annotated data. Request codecs decode raw provider requests before
+  request intercepts run and encode edited annotations back into the provider
+  request before execution continues. Response codecs decode raw provider
+  responses for LLM end-event annotations, subscribers, exporters, and
+  diagnostics.
 
-A **provider codec** converts provider-specific LLM requests or responses into normalized annotated data. Request codecs decode raw provider requests before request intercepts run and encode edited annotations back into the provider request before execution continues. Response codecs decode raw provider responses for LLM end-event annotations, subscribers, exporters, and diagnostics.
+## R
+
+**Relay Gateway**
+: The Relay gateway is the local NeMo Relay process that receives coding-agent
+  lifecycle payloads and can route model-provider traffic. Compatible MCP
+  clients share a user-level gateway for persistent installations; transparent
+  runs use a private gateway.
 
 **Request Intercept**
-
-A **request intercept** rewrites the request before execution continues downstream. Use this when the real provider or tool implementation should receive modified input.
+: A request intercept rewrites the request before execution continues
+  downstream. Use this when the real provider or tool implementation should
+  receive modified input.
 
 **Response Codec**
-
-A **response codec** decodes a raw provider response into annotated response data for lifecycle events. It does not rewrite the value returned to the application unless the wrapper's typed value codec also does so.
+: A response codec decodes a raw provider response into annotated response data
+  for lifecycle events. It does not rewrite the value returned to the
+  application unless the wrapper's typed value codec also does so.
 
 **Rollout Policy**
-
-A **rollout policy** is the configuration strategy for enabling adaptive behavior gradually, such as starting in observation mode, then injecting hints, then allowing scheduling or cache-planning behavior.
+: A rollout policy is the configuration strategy for enabling adaptive behavior
+  gradually, such as starting in observation mode, then injecting hints, then
+  allowing scheduling or cache-planning behavior.
 
 **Root Scope**
-
-The **root scope** is the implicit base scope in every scope stack. All other scopes in that stack are descendants of the root.
+: The root scope is the implicit base scope in every scope stack. All other
+  scopes in that stack are descendants of the root.
 
 **Root UUID**
+: The root UUID is the identifier of the root scope for a scope stack. Events
+  carry this value as `root_uuid` so subscribers and exporters can group or
+  filter concurrent agent runs.
 
-The **root UUID** is the identifier of the root scope for a scope stack. Events carry this value as ``root_uuid`` so subscribers and exporters can group or filter concurrent agent runs.
+## S
 
 **Sanitize Request**
-
-A **sanitize-request guardrail** rewrites the payload recorded on the emitted start event.
+: A sanitize-request guardrail rewrites the payload recorded on the emitted
+  start event.
 
 **Sanitize Response**
-
-A **sanitize-response guardrail** rewrites the payload recorded on the emitted end event.
+: A sanitize-response guardrail rewrites the payload recorded on the emitted
+  end event.
 
 **Scope**
-
-A **scope** is a named unit of ownership in the runtime. Scopes create the parent-child structure that all emitted work attaches to. Scopes identify which request, task, or agent run owns the work, what the parent is for each tool or LLM call, and which scope-local middleware or subscribers are visible.
+: A scope is a named unit of ownership in the runtime. Scopes create the
+  parent-child structure that all emitted work attaches to. Scopes identify
+  which request, task, or agent run owns the work, what the parent is for each
+  tool or LLM call, and which scope-local middleware or subscribers are visible.
 
 **Scope Handle**
-
-A **scope handle** is the runtime identifier returned by scope, tool, or LLM start helpers. Manual lifecycle APIs use handles to pair explicit start and end calls.
+: A scope handle is the runtime identifier returned by scope, tool, or LLM
+  start helpers. Manual lifecycle APIs use handles to pair explicit start and
+  end calls.
 
 **Scope Stack**
-
-A **scope stack** is the active stack of scopes for the current task, thread, or request context. The stack always includes a root scope, and pushed scopes form the current parent chain for tools, LLM calls, marks, middleware visibility, and subscriber visibility. Use a fresh scope stack to isolate concurrent requests or agents. Propagate an existing scope stack only when detached work should remain part of the same logical trace.
+: A scope stack is the active stack of scopes for the current task, thread, or
+  request context. The stack always includes a root scope, and pushed scopes
+  form the current parent chain for tools, LLM calls, marks, middleware
+  visibility, and subscriber visibility. Use a fresh scope stack to isolate
+  concurrent requests or agents. Propagate an existing scope stack only when
+  detached work should remain part of the same logical trace.
 
 **Scope Type**
-
-A **scope type** is the semantic category of a scope, such as ``Agent``, ``Function``, ``Tool``, ``Llm``, ``Retriever``, ``Embedder``, ``Reranker``, ``Guardrail``, ``Evaluator``, ``Custom``, or ``Unknown``.
+: A scope type is the semantic category of a scope, such as `Agent`,
+  `Function`, `Tool`, `Llm`, `Retriever`, `Embedder`, `Reranker`, `Guardrail`,
+  `Evaluator`, `Custom`, or `Unknown`.
 
 **Stream Execution Intercept**
-
-A **stream execution intercept** is the streaming LLM variant of an execution intercept. It wraps the real stream lifecycle rather than a single request/response callback.
+: A stream execution intercept is the streaming LLM variant of an execution
+  intercept. It wraps the real stream lifecycle rather than a single
+  request/response callback.
 
 **Subscriber**
+: A subscriber is a consumer of emitted events. Subscribers receive the runtime
+  event stream and can use it for in-process analytics, forwarding, or export.
 
-A **subscriber** is a consumer of emitted events. Subscribers receive the runtime event stream and can use it for in-process analytics, forwarding, or export. Examples include: - Custom event consumers - ATIF export - OpenTelemetry export - OpenInference export
+  Examples include custom event consumers, ATIF export, OpenTelemetry export,
+  and OpenInference export.
+
+## T
 
 **Tool Call**
-
-A **tool call** is an instrumented invocation of a named tool or function-like operation. Managed tool calls emit start and end events, run tool middleware, and can carry an optional provider-specific ``tool_call_id``.
+: A tool call is an instrumented invocation of a named tool or function-like
+  operation. Managed tool calls emit start and end events, run tool middleware,
+  and can carry an optional provider-specific `tool_call_id`.
 
 **Tool Parallelism**
-
-**Tool parallelism** is adaptive guidance about which tool calls may be run concurrently or scheduled differently based on observed dependency patterns. Supported modes include ``observe_only``, ``inject_hints``, and ``schedule``.
+: Tool parallelism is adaptive guidance about which tool calls can run
+  concurrently or be scheduled differently based on observed dependency
+  patterns. Supported modes include `observe_only`, `inject_hints`, and
+  `schedule`.
 
 **Trace Span**
-
-A **trace span** is a timed observability record in a tracing backend. Exported NeMo Relay scopes, tool calls, LLM calls, and marks appear as spans when using OpenTelemetry or OpenInference export.
+: A trace span is a timed observability record in a tracing backend. Exported
+  NeMo Relay scopes, tool calls, LLM calls, and marks appear as spans when using
+  OpenTelemetry or OpenInference export.
 
 **Trajectory**
+: A trajectory is an ordered record of an agent run. In ATIF export, LLM events
+  become agent steps, tool events become tool calls and observations, and scope
+  nesting becomes lineage metadata.
 
-A **trajectory** is an ordered record of an agent run. In ATIF export, LLM events become agent steps, tool events become tool calls and observations, and scope nesting becomes lineage metadata.
+**Transparent Run**
+: A transparent run is a no-install CLI launch that starts a private local
+  gateway, injects temporary hook and gateway configuration into one coding
+  agent process tree, and stops the gateway when that agent exits. Use an agent
+  shortcut such as `nemo-relay codex` or `nemo-relay run -- <command>`.
 
 **Typed Value Codec**
+: A typed value codec converts application-facing values to JSON before NeMo
+  Relay runs middleware or emits events, then converts JSON back into the type
+  expected by the framework callback or caller.
 
-A **typed value codec** converts application-facing values to JSON before NeMo Relay runs middleware or emits events, then converts JSON back into the type expected by the framework callback or caller.
+## Related Documentation
+
+- [NeMo Relay Overview](/about-nemo-relay/overview)
+- [NeMo Relay Concepts](/about-nemo-relay/concepts)
+- [API Reference](/reference/api)
+- [Support and FAQs](/resources/support-and-faqs)
