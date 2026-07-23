@@ -1444,7 +1444,14 @@ fn validate_atif_filename_template(template: &str) -> Result<(), String> {
             .ok_or_else(|| {
                 "ATIF filename_template contains an unclosed metadata placeholder".to_string()
             })?;
-        parse_atif_metadata_expression(&template[selector_start..end])?;
+        let (_, fallback) = parse_atif_metadata_expression(&template[selector_start..end])?;
+        if let Some(fallback) = fallback
+            && !is_safe_atif_metadata_path(fallback)
+        {
+            return Err(format!(
+                "ATIF filename_template fallback '{fallback}' must be a path-safe relative fragment"
+            ));
+        }
         cursor = end + 1;
     }
     Ok(())

@@ -1910,6 +1910,7 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
         "{metadata.tenant..id}/trajectory-{session_id}.json",
         "{metadata.tenant/trajectory-{session_id}.json",
         "{metadata.{tenant}}/trajectory-{session_id}.json",
+        "{metadata.missing:-../escape}/trajectory-{session_id}.json",
     ] {
         assert!(
             validate_atif_filename_template(template).is_err(),
