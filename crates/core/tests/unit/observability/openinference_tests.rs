@@ -405,6 +405,38 @@ fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
     }
 }
 
+fn sample_openinference_annotated_request_with_instructions() -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        instructions: Some(MessageContent::Text("Use concise answers.".to_string())),
+        api_specific: None,
+        messages: vec![Message::User {
+            content: MessageContent::Text("Search docs.".to_string()),
+            name: None,
+        }],
+        model: Some("gpt-4o".to_string()),
+        params: Some(GenerationParams {
+            temperature: Some(0.2),
+            max_tokens: Some(128),
+            top_p: None,
+            stop: None,
+        }),
+        tools: Some(vec![ToolDefinition::Function {
+            function: FunctionDefinition {
+                name: "search_docs".to_string(),
+                description: Some("Search the docs corpus.".to_string()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}}
+                })),
+                strict: None,
+                extra: serde_json::Map::new(),
+            },
+            extra: serde_json::Map::new(),
+        }]),
+        ..empty_annotated_request()
+    }
+}
+
 fn sample_openinference_annotated_response() -> AnnotatedLlmResponse {
     AnnotatedLlmResponse {
         message: Some(MessageContent::Text("I will search docs.".to_string())),
@@ -1705,11 +1737,17 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
     assert_eq!(spans.len(), 1);
     let attributes = attr_map(&spans[0].attributes);
     assert_attr(&attributes, "llm.provider", "nvidia-inference");
-    assert_attr(&attributes, "llm.system", "Use reliable sources.");
-    assert_attr(&attributes, "llm.input_messages.0.message.role", "user");
+    assert!(!attributes.contains_key("llm.system"));
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
     assert_attr(
         &attributes,
         "llm.input_messages.0.message.content",
+        "Use reliable sources.",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
         "Find the answer.",
     );
     assert_attr(
@@ -1741,6 +1779,132 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
     assert!(!attributes.contains_key("llm.finish_reason"));
     assert_no_attr_contains(&attributes, "headers");
     assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_empty() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "systemPrompt": "Use reliable sources.",
+                "prompt": "Find the answer.",
+                "messages": [],
+                "placeholderRequest": false,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "openclaw": {
+                "duration_ms": 42
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.system"));
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Use reliable sources.",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Find the answer.",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.2.message.role"));
+    assert!(!attributes.contains_key("llm.input_messages.2.message.content"));
+}
+
+#[test]
+fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_incomplete() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "systemPrompt": "Use reliable sources.",
+                "prompt": "Find the answer.",
+                "messages": [
+                    {"content": "content without role"},
+                    {"role": "user"},
+                    {"role": "user", "content": ""}
+                ],
+                "placeholderRequest": false,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "openclaw": {
+                "duration_ms": 42
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.system"));
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Use reliable sources.",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Find the answer.",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.2.message.role"));
+    assert!(!attributes.contains_key("llm.input_messages.2.message.content"));
 }
 
 #[test]
@@ -4219,8 +4383,13 @@ fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attribut
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
     let attributes = attr_map(&spans[0].attributes);
-    assert_attr(&attributes, "llm.system", "Use concise answers.");
+    assert!(!attributes.contains_key("llm.system"));
     assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Use concise answers.",
+    );
     assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
     assert_attr(
         &attributes,
@@ -4301,7 +4470,7 @@ fn annotated_input_projection_covers_extended_roles_and_native_text() {
         },
     ];
     let mut attributes = Vec::new();
-    push_annotated_input_messages(&mut attributes, &messages);
+    push_annotated_input_messages(&mut attributes, &messages, 0);
     let attributes = attr_map(&attributes);
     assert_attr(
         &attributes,
@@ -4351,6 +4520,62 @@ fn annotated_input_projection_covers_extended_roles_and_native_text() {
     assert_eq!(
         message_content_text(&content).as_deref(),
         Some("portable refusal\nnative text\nnative refusal")
+    );
+}
+
+#[test]
+fn annotated_llm_instructions_emit_leading_system_input_message() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::Start,
+        uuid,
+        None,
+        "annotated-chat-with-instructions",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(
+                    sample_openinference_annotated_request_with_instructions(),
+                ))
+                .build(),
+        ),
+    ));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "annotated-chat-with-instructions",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(sample_openinference_annotated_response()))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.system"));
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Use concise answers.",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Search docs.",
     );
 }
 
