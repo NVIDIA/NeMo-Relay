@@ -523,27 +523,24 @@ pub(crate) fn merge_usage(
 }
 
 pub(crate) fn model_name_for_llm_event(event: &crate::api::event::Event) -> Option<String> {
-    if let Some(model_name) = event.model_name() {
-        return Some(model_name.to_string());
-    }
     if event.category().map(|category| category.as_str()) != Some("llm") {
         return None;
     }
+    let manual_response_model =
+        manual::model_name_from_manual_llm_output(event.output()).map(ToOwned::to_owned);
+    let manual_request_model =
+        manual::model_name_from_manual_llm_output(event.input()).map(ToOwned::to_owned);
     event
         .normalized_llm_response()
         .and_then(|response| response.as_ref().model.clone())
+        .or(manual_response_model)
+        .or_else(|| event.model_name().map(ToOwned::to_owned))
         .or_else(|| {
             event
                 .normalized_llm_request()
                 .and_then(|request| request.as_ref().model.clone())
         })
-        .or_else(|| {
-            event
-                .output()
-                .or_else(|| event.input())
-                .and_then(|payload| manual::model_name_from_manual_llm_output(Some(payload)))
-                .map(ToOwned::to_owned)
-        })
+        .or(manual_request_model)
 }
 
 #[cfg(any(feature = "otel", feature = "openinference"))]

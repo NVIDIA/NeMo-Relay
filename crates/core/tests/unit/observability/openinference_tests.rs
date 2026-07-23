@@ -3437,6 +3437,32 @@ fn helper_functions_cover_additional_openinference_branches() {
         raw_model_attributes.get(oi::llm::MODEL_NAME.as_str()),
         Some(&"raw-model".to_string())
     );
+    let response_model_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("chat")
+            .data(json!({
+                "id": "chatcmpl-response-model",
+                "model": "response-model",
+                "choices": [{
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }]
+            }))
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("requested-model")
+                .build(),
+        ),
+    ));
+    let response_model_attributes = attr_map(&common_attributes(&response_model_end));
+    assert_eq!(
+        response_model_attributes.get(oi::llm::MODEL_NAME.as_str()),
+        Some(&"response-model".to_string())
+    );
     assert_eq!(
         llm_attributes.get("openinference.metadata.phase"),
         Some(&"done".to_string())

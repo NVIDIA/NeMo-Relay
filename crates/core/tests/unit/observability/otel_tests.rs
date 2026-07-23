@@ -1778,6 +1778,31 @@ fn helper_functions_cover_additional_otel_branches() {
         raw_model_attributes.get("nemo_relay.model_name"),
         Some(&"raw-model".to_string())
     );
+    let response_model_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "id": "chatcmpl-response-model",
+            "model": "response-model",
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop"
+            }]
+        })),
+        Some(
+            CategoryProfile::builder()
+                .model_name("requested-model")
+                .build(),
+        ),
+    );
+    let response_model_attributes = attr_map(&common_attributes(&response_model_event));
+    assert_eq!(
+        response_model_attributes.get("nemo_relay.model_name"),
+        Some(&"response-model".to_string())
+    );
 
     let tool_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
