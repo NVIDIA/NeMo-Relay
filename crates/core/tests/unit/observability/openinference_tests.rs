@@ -1705,11 +1705,17 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
     assert_eq!(spans.len(), 1);
     let attributes = attr_map(&spans[0].attributes);
     assert_attr(&attributes, "llm.provider", "nvidia-inference");
-    assert_attr(&attributes, "llm.system", "Use reliable sources.");
-    assert_attr(&attributes, "llm.input_messages.0.message.role", "user");
+    assert!(!attributes.contains_key("llm.system"));
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
     assert_attr(
         &attributes,
         "llm.input_messages.0.message.content",
+        "Use reliable sources.",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
         "Find the answer.",
     );
     assert_attr(
@@ -4193,7 +4199,7 @@ fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attribut
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
     let attributes = attr_map(&spans[0].attributes);
-    assert_attr(&attributes, "llm.system", "Use concise answers.");
+    assert!(!attributes.contains_key("llm.system"));
     assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
     assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
     assert_attr(

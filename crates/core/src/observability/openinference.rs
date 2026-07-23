@@ -1000,9 +1000,6 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         if let Some(provider) = input.get("provider").and_then(Json::as_str) {
             attributes.push(KeyValue::new(oi::llm::PROVIDER, provider.to_string()));
         }
-        if let Some(system) = input.get("systemPrompt").and_then(display_text_from_json) {
-            attributes.push(KeyValue::new(oi::llm::SYSTEM, system));
-        }
         push_replay_input_messages(attributes, input);
         return;
     }
@@ -1038,9 +1035,6 @@ fn push_annotated_request_attributes(
     attributes: &mut Vec<KeyValue>,
     request: &AnnotatedLlmRequest,
 ) {
-    if let Some(system) = request.system_prompt() {
-        attributes.push(KeyValue::new(oi::llm::SYSTEM, system.to_string()));
-    }
     if let Some(params) = request.params.as_ref().and_then(to_json_string) {
         attributes.push(KeyValue::new(oi::llm::INVOCATION_PARAMETERS, params));
     }
@@ -1229,27 +1223,38 @@ fn is_openclaw_replay_payload(content: &serde_json::Map<String, Json>) -> bool {
 }
 
 fn push_replay_input_messages(attributes: &mut Vec<KeyValue>, input: &Json) {
+    let mut next_index = 0usize;
+    if let Some(system_prompt) = input.get("systemPrompt").and_then(display_text_from_json) {
+        push_message_role(attributes, "llm.input_messages", next_index, "system");
+        attributes.push(KeyValue::new(
+            format!("llm.input_messages.{next_index}.message.content"),
+            system_prompt,
+        ));
+        next_index += 1;
+    }
     if let Some(messages) = input.get("messages").and_then(Json::as_array) {
-        for (index, message) in messages.iter().enumerate() {
-            push_replay_input_message(attributes, index, message);
+        for message in messages {
+            if push_replay_input_message(attributes, next_index, message) {
+                next_index += 1;
+            }
         }
         return;
     }
     if let Some(prompt) = input.get("prompt").and_then(display_text_from_json) {
-        push_message_role(attributes, "llm.input_messages", 0, "user");
+        push_message_role(attributes, "llm.input_messages", next_index, "user");
         attributes.push(KeyValue::new(
-            "llm.input_messages.0.message.content",
+            format!("llm.input_messages.{next_index}.message.content"),
             prompt,
         ));
     }
 }
 
-fn push_replay_input_message(attributes: &mut Vec<KeyValue>, index: usize, message: &Json) {
+fn push_replay_input_message(attributes: &mut Vec<KeyValue>, index: usize, message: &Json) -> bool {
     let Some(object) = message.as_object() else {
-        return;
+        return false;
     };
     if !object.contains_key("role") && !object.contains_key("content") {
-        return;
+        return false;
     }
     let role = object.get("role").and_then(Json::as_str).unwrap_or("user");
     push_message_role(attributes, "llm.input_messages", index, role);
@@ -1259,6 +1264,7 @@ fn push_replay_input_message(attributes: &mut Vec<KeyValue>, index: usize, messa
             text,
         ));
     }
+    true
 }
 
 fn push_replay_response_attributes(attributes: &mut Vec<KeyValue>, output: &Json) {
