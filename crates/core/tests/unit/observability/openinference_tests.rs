@@ -405,6 +405,38 @@ fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
     }
 }
 
+fn sample_openinference_annotated_request_with_instructions() -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        instructions: Some(MessageContent::Text("Use concise answers.".to_string())),
+        api_specific: None,
+        messages: vec![Message::User {
+            content: MessageContent::Text("Search docs.".to_string()),
+            name: None,
+        }],
+        model: Some("gpt-4o".to_string()),
+        params: Some(GenerationParams {
+            temperature: Some(0.2),
+            max_tokens: Some(128),
+            top_p: None,
+            stop: None,
+        }),
+        tools: Some(vec![ToolDefinition::Function {
+            function: FunctionDefinition {
+                name: "search_docs".to_string(),
+                description: Some("Search the docs corpus.".to_string()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}}
+                })),
+                strict: None,
+                extra: serde_json::Map::new(),
+            },
+            extra: serde_json::Map::new(),
+        }]),
+        ..empty_annotated_request()
+    }
+}
+
 fn sample_openinference_annotated_response() -> AnnotatedLlmResponse {
     AnnotatedLlmResponse {
         message: Some(MessageContent::Text("I will search docs.".to_string())),
@@ -4281,7 +4313,7 @@ fn annotated_input_projection_covers_extended_roles_and_native_text() {
         },
     ];
     let mut attributes = Vec::new();
-    push_annotated_input_messages(&mut attributes, &messages);
+    push_annotated_input_messages(&mut attributes, &messages, 0);
     let attributes = attr_map(&attributes);
     assert_attr(
         &attributes,
@@ -4331,6 +4363,62 @@ fn annotated_input_projection_covers_extended_roles_and_native_text() {
     assert_eq!(
         message_content_text(&content).as_deref(),
         Some("portable refusal\nnative text\nnative refusal")
+    );
+}
+
+#[test]
+fn annotated_llm_instructions_emit_leading_system_input_message() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::Start,
+        uuid,
+        None,
+        "annotated-chat-with-instructions",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(
+                    sample_openinference_annotated_request_with_instructions(),
+                ))
+                .build(),
+        ),
+    ));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "annotated-chat-with-instructions",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(sample_openinference_annotated_response()))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.system"));
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Use concise answers.",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Search docs.",
     );
 }
 

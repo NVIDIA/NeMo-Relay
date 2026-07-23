@@ -1038,7 +1038,13 @@ fn push_annotated_request_attributes(
     if let Some(params) = request.params.as_ref().and_then(to_json_string) {
         attributes.push(KeyValue::new(oi::llm::INVOCATION_PARAMETERS, params));
     }
-    push_annotated_input_messages(attributes, &request.messages);
+    let mut next_index = 0usize;
+    if let Some(instructions) = request.instructions.as_ref().and_then(message_content_text) {
+        push_message_role(attributes, "llm.input_messages", next_index, "system");
+        push_message_text_value(attributes, "llm.input_messages", next_index, instructions);
+        next_index += 1;
+    }
+    push_annotated_input_messages(attributes, &request.messages, next_index);
     if let Some(tools) = request.tools.as_deref() {
         push_annotated_tools(attributes, tools);
     }
@@ -1087,8 +1093,13 @@ fn push_optimization_attributes(
     crate::observability::push_common_optimization_attributes(attributes, summary);
 }
 
-fn push_annotated_input_messages(attributes: &mut Vec<KeyValue>, messages: &[Message]) {
-    for (index, message) in messages.iter().enumerate() {
+fn push_annotated_input_messages(
+    attributes: &mut Vec<KeyValue>,
+    messages: &[Message],
+    start_index: usize,
+) {
+    for (offset, message) in messages.iter().enumerate() {
+        let index = start_index + offset;
         let role = match message {
             Message::System { .. } => "system",
             Message::Developer { .. } => "developer",
