@@ -5231,6 +5231,243 @@ fn test_exporter_skips_duplicate_user_step_for_openai_responses_shell_call_conti
 }
 
 #[test]
+fn test_exporter_skips_duplicate_user_step_for_anthropic_tool_result_continuation() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm1_uuid = Uuid::now_v7();
+    let llm2_uuid = Uuid::now_v7();
+
+    let llm1_start = event_builder(llm1_uuid, EventType::Start)
+        .name("anthropic.messages")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "claude-sonnet-4",
+            "system": "Be concise.",
+            "messages": [{"role": "user", "content": "Find the file."}]
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+    let llm1_end = event_builder(llm1_uuid, EventType::End)
+        .name("anthropic.messages")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4",
+            "content": [
+                {"type": "text", "text": "I will search for it."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "search",
+                    "input": {"query": "README.md"}
+                }
+            ],
+            "stop_reason": "tool_use"
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+    let llm2_start = event_builder(llm2_uuid, EventType::Start)
+        .name("anthropic.messages")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "claude-sonnet-4",
+            "system": "Be concise.",
+            "messages": [
+                {"role": "user", "content": "Find the file."},
+                {"role": "assistant", "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "search",
+                        "input": {"query": "README.md"}
+                    }
+                ]},
+                {"role": "user", "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "README.md",
+                        "is_error": false
+                    }
+                ]}
+            ]
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+    let llm2_end = event_builder(llm2_uuid, EventType::End)
+        .name("anthropic.messages")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "msg_02",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4",
+            "content": [{"type": "text", "text": "README.md is the relevant file."}],
+            "stop_reason": "end_turn"
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([llm1_start, llm1_end, llm2_start, llm2_end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 3);
+    let user_steps = trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "user")
+        .collect::<Vec<_>>();
+    assert_eq!(user_steps.len(), 1);
+    assert_eq!(user_steps[0].message, json!("Find the file."));
+
+    let final_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[2].extra.clone().unwrap()).unwrap();
+    let llm_request = final_extra.llm_request.unwrap();
+    assert_eq!(
+        llm_request["messages"][2]["content"][0]["type"],
+        json!("tool_result")
+    );
+    assert_eq!(
+        llm_request["messages"][2]["content"][0]["tool_use_id"],
+        json!("toolu_01")
+    );
+}
+
+#[test]
+fn test_exporter_does_not_stash_unpaired_continuation_request_on_next_agent_step() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm1_uuid = Uuid::now_v7();
+    let llm2_uuid = Uuid::now_v7();
+    let llm3_uuid = Uuid::now_v7();
+
+    let llm1_start = event_builder(llm1_uuid, EventType::Start)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "switchyard",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Fix pip"}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+    let llm1_end = event_builder(llm1_uuid, EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_1",
+            "model": "switchyard",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I will inspect the environment."}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+    let llm2_start = event_builder(llm2_uuid, EventType::Start)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "switchyard",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Fix pip"}]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "pip is missing"
+                }
+            ]
+        }))
+        .model_name("switchyard")
+        .build();
+    let llm2_end = event_builder(llm2_uuid, EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .model_name("switchyard")
+        .build();
+    let llm3_start = event_builder(llm3_uuid, EventType::Start)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "switchyard",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Try ensurepip instead"}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+    let llm3_end = event_builder(llm3_uuid, EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_3",
+            "model": "switchyard",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Use ensurepip to restore pip."}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            llm1_start, llm1_end, llm2_start, llm2_end, llm3_start, llm3_end,
+        ]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 5);
+
+    let user_steps = trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "user")
+        .collect::<Vec<_>>();
+    assert_eq!(user_steps.len(), 3);
+    assert_eq!(user_steps[0].message, json!("Fix pip"));
+    assert_eq!(user_steps[1].message, json!("Fix pip"));
+    assert_eq!(user_steps[2].message, json!("Try ensurepip instead"));
+
+    let final_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[4].extra.clone().unwrap()).unwrap();
+    assert!(final_extra.llm_request.is_none());
+
+    let llm3_user_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[3].extra.clone().unwrap()).unwrap();
+    let llm3_request = llm3_user_extra.llm_request.unwrap();
+    assert_eq!(
+        llm3_request["input"][0]["content"][0]["text"],
+        json!("Try ensurepip instead")
+    );
+}
+
+#[test]
 fn test_reasoning_content_extracted() {
     // When an LLM End event carries output["reasoning"], the agent step
     // should have reasoning_content populated.

@@ -1015,11 +1015,62 @@ fn chat_messages_turn_state(messages: &[Json]) -> Option<RequestTurnState> {
         .iter()
         .rev()
         .filter_map(Json::as_object)
-        .find_map(|message| match message.get("role").and_then(Json::as_str) {
-            Some("system" | "developer") => None,
-            Some("user") | None => Some(RequestTurnState::FreshUser),
-            Some(_) => Some(RequestTurnState::Continuation),
-        })
+        .find_map(raw_chat_message_turn_state)
+}
+
+fn raw_chat_message_turn_state(
+    message: &serde_json::Map<String, Json>,
+) -> Option<RequestTurnState> {
+    match message.get("role").and_then(Json::as_str) {
+        Some("system" | "developer") => None,
+        Some("user") | None => Some(match message.get("content") {
+            Some(content) if raw_content_starts_new_turn(content) => RequestTurnState::FreshUser,
+            Some(_) => RequestTurnState::Continuation,
+            None => RequestTurnState::FreshUser,
+        }),
+        Some(_) => Some(RequestTurnState::Continuation),
+    }
+}
+
+fn raw_content_starts_new_turn(content: &Json) -> bool {
+    match content {
+        Json::String(_) => true,
+        Json::Array(parts) => {
+            if parts.iter().any(raw_content_part_is_user_input) {
+                return true;
+            }
+            !parts.iter().any(raw_content_part_is_tool_continuation)
+        }
+        Json::Object(_) => {
+            raw_content_part_is_user_input(content)
+                || !raw_content_part_is_tool_continuation(content)
+        }
+        _ => true,
+    }
+}
+
+fn raw_content_part_is_user_input(part: &Json) -> bool {
+    matches!(
+        part.get("type").and_then(Json::as_str),
+        Some(
+            "text"
+                | "input_text"
+                | "image_url"
+                | "image"
+                | "input_image"
+                | "audio"
+                | "input_audio"
+                | "file"
+                | "document"
+        )
+    )
+}
+
+fn raw_content_part_is_tool_continuation(part: &Json) -> bool {
+    matches!(
+        part.get("type").and_then(Json::as_str),
+        Some("tool_result" | "tool_use")
+    )
 }
 
 fn openai_responses_turn_state(input: &Json) -> Option<RequestTurnState> {
@@ -1565,6 +1616,7 @@ impl EventLookupMaps {
             }
             if event.scope_category() == Some(crate::api::event::ScopeCategory::End)
                 && event.category().map(|category| category.as_str()) == Some("llm")
+                && event.data().is_some()
             {
                 llm_end_uuids.insert(event.uuid());
             }
