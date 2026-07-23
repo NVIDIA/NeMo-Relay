@@ -229,18 +229,17 @@ fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Result<Vec
         .filter_map(|(index, item)| (!item).then_some(index))
         .collect::<Vec<_>>();
 
-    if !structurally_changed && edited.len() == baseline.len() {
-        for index in unmatched_edited {
-            alignment[index] = Some(index);
-        }
-        return Ok(alignment);
-    }
-
     if unmatched_edited.len() > 1 && unmatched_baseline.len() > 1 {
         return Err(FlowError::InvalidArgument(
             "cannot safely preserve provider fields for multiple edited array items without stable identities"
                 .into(),
         ));
+    }
+
+    if !structurally_changed && edited.len() == baseline.len() {
+        for index in unmatched_edited {
+            alignment[index] = Some(index);
+        }
     }
 
     Ok(alignment)
