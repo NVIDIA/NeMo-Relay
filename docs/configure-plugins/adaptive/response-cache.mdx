@@ -107,8 +107,8 @@ const adaptive = require("nemo-relay-node/adaptive");
 const plugin = require("nemo-relay-node/plugin");
 
 const adaptiveConfig = adaptive.defaultConfig();
-adaptiveConfig.response_cache = adaptive.responseCacheConfig({
-  ttl_seconds: 3600,
+adaptiveConfig.responseCache = adaptive.responseCacheConfig({
+  ttlSeconds: 3600,
   namespace: "dev-harness",
 });
 
