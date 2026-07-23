@@ -609,6 +609,10 @@ fn test_exporters_prefer_manual_response_model_name_over_requested_model() {
     let exports = export_through_all_exporters(&[start, end]);
 
     assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("response-model")
+    );
+    assert_eq!(
         exports
             .otel_attrs("model-call")
             .get("nemo_relay.model_name"),
