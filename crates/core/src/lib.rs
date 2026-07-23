@@ -59,6 +59,7 @@ pub mod codec;
 pub mod config_editor;
 mod context;
 pub mod error;
+mod inspection;
 pub mod json;
 pub mod logging;
 pub mod observability;
