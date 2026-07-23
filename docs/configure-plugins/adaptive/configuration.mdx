@@ -32,10 +32,12 @@ The top-level adaptive object contains:
 | `adaptive_hints` | Request hint-injection behavior. |
 | `tool_parallelism` | Tool scheduling observation or scheduling behavior. |
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
+| `response_cache` | Opt-in LLM response cache for repeated managed calls. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
-The requested area pages cover [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg) and
-[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints). State, telemetry, tool parallelism, and
+The requested area pages cover [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg),
+[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints), and
+[Response Cache](/configure-plugins/adaptive/response-cache). State, telemetry, tool parallelism, and
 policy remain whole-plugin settings:
 
 - Use `state.backend.kind = "in_memory"` for local experiments.
