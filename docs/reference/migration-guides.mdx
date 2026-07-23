@@ -6,100 +6,14 @@ position: 6
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to plan an upgrade from NeMo Relay 0.5 to 0.6. It groups the
+Use this page to plan an upgrade from NeMo Relay 0.6 to 0.7. It will group the
 actions from the release notes by the surface you operate. If you skip one or
 more releases, review the migration guides and release notes for every
 intervening release in sequence.
 
-## Upgrade to NeMo Relay 0.6
+## Upgrade to NeMo Relay 0.7
 
-### Coding-Agent Integrations
-
-Reinstall every persistent Codex, Claude Code, and Hermes Agent integration:
-
-```bash
-nemo-relay install <agent> --force
-```
-
-Or refresh all detected supported hosts:
-
-```bash
-nemo-relay install all --force
-```
-
-Version 0.5 installations do not use the 0.6 MCP-owned gateway lifecycle,
-agent-owned hooks, generation fencing, or user-scoped configuration. Confirm
-that the host satisfies the current minimum version before reinstalling:
-Claude Code 2.1.121, Codex CLI 0.143.0, or Hermes Agent 0.18.2. Then run
-`nemo-relay doctor --plugin <agent>` to verify the refreshed installation.
-
-### Dynamic Plugins and Workers
-
-Rebuild Rust native plugins and Rust `grpc-v1` workers that consume annotated
-LLM requests against NeMo Relay 0.6. Update Python workers to the 0.6 worker
-SDK and declare:
-
-```toml
-[compat]
-relay = ">=0.6,<1.0"
-```
-
-The annotation and LLM request-intercept outcome envelopes gained fields and
-variants. A plugin that registers an LLM request intercept cannot claim a
-compatibility range that admits Relay 0.5. Node.js, Go, and raw C FFI callbacks
-continue to receive JSON, but their consumers must not exhaustively match role
-or component discriminator strings. Go and raw C FFI remain experimental and
-source-first.
-
-### Streaming Consumers
-
-Close a managed LLM stream when you stop consuming it early so Relay can stop
-the producer and emit the interrupted end event. Replace direct Rust
-`LlmJsonStream` construction with its constructors, handle the result from Go
-`LlmStream.Close`, use Python `await stream.aclose()`, Node.js
-`await stream.close()`, or call `nemo_relay_stream_close` before freeing a C
-stream.
-
-### Exporters and Observability Queries
-
-Update ATOF configuration to version 2 and replace the legacy output fields
-with the tagged `atof.sinks` list. Direct ATOF exporter construction now takes
-one typed file or stream sink.
-
-Update OpenTelemetry and OpenInference queries, dashboards, and processors to
-the typed attribute paths. The former raw `*_json` payload attributes are no
-longer emitted. Use `attribute_mappings` only when an older key must continue
-to be available.
-
-ATIF no longer models marks as synthetic system steps. Use ATOF for canonical
-mark data or enable the OpenTelemetry or OpenInference `mark_projection =
-"tool"` visualization when a trace viewer needs visible mark nodes. Review
-any consumers that assume `step.model_name` always identifies the requested
-model; it now uses the effective response model where available.
-
-### Middleware, Sanitizers, and Runtime APIs
-
-Update PII redaction configuration to the composable `profiles` form when you
-need ordered policies. Existing single-policy configuration continues to work,
-but it cannot be combined with `profiles`. The optional
-`trajectory_context` preset changes observability payloads only; it does not
-change provider requests or client-visible responses.
-
-Sanitizer failures now drop the affected event. If your policy requires
-fail-open behavior, handle the failure inside the sanitizer and return only the
-safe fields.
-
-For Rust consumers, update exhaustive matches and direct struct literals for
-the expanded public enums and types. Prefer the current builders and typed sink
-constructors over direct literals where available.
-
-### Skills and Automation
-
-Replace retired 0.5 skill directories with the task-oriented public entry
-points, including `nemo-relay-install`, `nemo-relay-get-started`, the
-`nemo-relay-instrument-*` skills, and `nemo-relay-plugin-*` skills. The
-[NeMo Relay User Skills](https://github.com/NVIDIA/NeMo-Relay/blob/main/skills/README.md)
-catalog lists the current paths.
+Migration guidance will be added before the 0.7 release.
 
 ## Related Release Information
 
