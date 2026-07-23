@@ -8,10 +8,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use the response cache when the same LLM request is made more than once and the
-repeat should be served from a store instead of paying for the call again. A
-repeat of an identical request returns the earlier answer instantly, at no
-cost, and unchanged — usage fields intact, so a cached reuse is
-shape-identical to a live call.
+repeat should be served from a store instead of calling the provider again. An
+eligible request that matches an unexpired cache entry can be served from the
+store without calling the provider. Cached responses preserve the stored
+response shape and usage fields.
 
 The cache is an optional `response_cache` section of the
 [Adaptive plugin](/configure-plugins/adaptive/configuration), not a standalone plugin
@@ -22,13 +22,14 @@ call.
 
 ## When To Use It
 
-- Development and test loops that replay the same prompts — repeats are
-  instant, free, and reproducible.
-- CI suites that exercise real models — only the first run of each distinct
-  request pays.
-- Demos and workshops — stable answers and no cost spikes.
+- Development and test loops that replay the same prompts — eligible repeats
+  can reuse stored responses.
+- CI suites that exercise real models — cached repeats can avoid additional
+  provider calls.
+- Demos and workshops — reuse stable stored answers while reducing provider
+  calls.
 - A shared team cache — point the `redis` backend at one store and identical
-  requests hit across processes and machines.
+  requests can reuse entries across processes and machines.
 - Gateway deployments — enable caching for an agent without touching its code.
 
 Reuse requires the request to match exactly after normalization, so prompts
