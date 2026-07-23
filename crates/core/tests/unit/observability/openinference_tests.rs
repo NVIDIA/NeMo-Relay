@@ -1782,7 +1782,7 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
 }
 
 #[test]
-fn openclaw_replay_payloads_skip_empty_replay_messages() {
+fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_empty() {
     let (provider, exporter) = make_provider();
     let mut processor =
         OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
@@ -1799,7 +1799,71 @@ fn openclaw_replay_payloads_skip_empty_replay_messages() {
                 "provider": "nvidia-inference",
                 "model": "claude-sonnet-4",
                 "systemPrompt": "Use reliable sources.",
+                "prompt": "Find the answer.",
+                "messages": [],
+                "placeholderRequest": false,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "openclaw": {
+                "duration_ms": 42
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.system"));
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Use reliable sources.",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Find the answer.",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.2.message.role"));
+    assert!(!attributes.contains_key("llm.input_messages.2.message.content"));
+}
+
+#[test]
+fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_incomplete() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "systemPrompt": "Use reliable sources.",
+                "prompt": "Find the answer.",
                 "messages": [
+                    {"content": "content without role"},
+                    {"role": "user"},
                     {"role": "user", "content": ""}
                 ],
                 "placeholderRequest": false,
@@ -1833,8 +1897,14 @@ fn openclaw_replay_payloads_skip_empty_replay_messages() {
         "llm.input_messages.0.message.content",
         "Use reliable sources.",
     );
-    assert!(!attributes.contains_key("llm.input_messages.1.message.role"));
-    assert!(!attributes.contains_key("llm.input_messages.1.message.content"));
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Find the answer.",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.2.message.role"));
+    assert!(!attributes.contains_key("llm.input_messages.2.message.content"));
 }
 
 #[test]

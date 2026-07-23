@@ -1253,12 +1253,15 @@ fn push_replay_input_messages(attributes: &mut Vec<KeyValue>, input: &Json) {
         next_index += 1;
     }
     if let Some(messages) = input.get("messages").and_then(Json::as_array) {
+        let first_message_index = next_index;
         for message in messages {
             if push_replay_input_message(attributes, next_index, message) {
                 next_index += 1;
             }
         }
-        return;
+        if next_index > first_message_index {
+            return;
+        }
     }
     if let Some(prompt) = input.get("prompt").and_then(display_text_from_json) {
         push_message_role(attributes, "llm.input_messages", next_index, "user");
@@ -1273,13 +1276,12 @@ fn push_replay_input_message(attributes: &mut Vec<KeyValue>, index: usize, messa
     let Some(object) = message.as_object() else {
         return false;
     };
-    if !object.contains_key("role") && !object.contains_key("content") {
+    let Some(role) = object.get("role").and_then(Json::as_str) else {
         return false;
-    }
+    };
     let Some(text) = object.get("content").and_then(display_text_from_json) else {
         return false;
     };
-    let role = object.get("role").and_then(Json::as_str).unwrap_or("user");
     push_message_role(attributes, "llm.input_messages", index, role);
     attributes.push(KeyValue::new(
         format!("llm.input_messages.{index}.message.content"),
