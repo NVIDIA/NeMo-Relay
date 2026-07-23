@@ -4233,6 +4233,11 @@ fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attribut
     let attributes = attr_map(&spans[0].attributes);
     assert!(!attributes.contains_key("llm.system"));
     assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Use concise answers.",
+    );
     assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
     assert_attr(
         &attributes,
