@@ -15,6 +15,7 @@ from nemo_relay.adaptive import (
     BackendSpec,
     ComponentSpec,
     ConfigPolicy,
+    ResponseCacheConfig,
     StateConfig,
     TelemetryConfig,
     ToolParallelismConfig,
@@ -155,6 +156,46 @@ class TestDynamicConfigContract:
             "semi_stable_threshold": 0.5,
             "min_observations_for_full_confidence": 12,
         }
+
+    def test_response_cache_config_serializes_with_defaults(self):
+        assert ResponseCacheConfig().to_dict() == {
+            "ttl_seconds": 3600,
+            "namespace": "",
+            "priority": 50,
+            "bypass_rate": 0.0,
+            "cache_nondeterministic": True,
+            "key_strategy": "exact_request",
+            "header_allowlist": [],
+            "skip_keys": [],
+            "backend": {"kind": "in_memory", "config": {}},
+        }
+
+    def test_response_cache_rides_the_adaptive_component(self):
+        component = ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev"))).to_dict()
+        assert component["kind"] == "adaptive"
+        config = cast(dict[str, object], component["config"])
+        response_cache = cast(dict[str, object], config["response_cache"])
+        assert response_cache["namespace"] == "dev"
+
+    def test_response_cache_clean_report(self):
+        report = plugin.validate(
+            plugin.PluginConfig(
+                components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev")))]
+            )
+        )
+        assert report["diagnostics"] == []
+
+    def test_invalid_response_cache_section_is_rejected(self):
+        report = plugin.validate(
+            plugin.PluginConfig(
+                components=[
+                    ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(ttl_seconds=0, bypass_rate=2.0)))
+                ]
+            )
+        )
+        codes = {diag["code"] for diag in report["diagnostics"]}
+        assert "response_cache.invalid_ttl" in codes
+        assert "response_cache.invalid_bypass_rate" in codes
 
     def test_canonical_cache_telemetry_helper_supports_openai_provider(self):
         event = adaptive_module.build_cache_telemetry_event(

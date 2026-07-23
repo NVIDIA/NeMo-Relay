@@ -27,6 +27,8 @@ use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
 use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
+use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+use nemo_relay_adaptive::{ResponseCacheConfig, response_cache};
 use serde_json::{Value, json};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -527,6 +529,13 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         return checks;
     }
     let report = validate_plugin_config(&plugin_config);
+    let response_cache_invalid = report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.level == DiagnosticLevel::Error
+            && diagnostic.component.as_deref().is_some_and(|component| {
+                // Backend diagnostics are tagged `response_cache.backend[.kind]`.
+                component == "response_cache" || component.starts_with("response_cache.")
+            })
+    });
     if report.diagnostics.is_empty() {
         checks.push(Check {
             name: "Plugin validation",
@@ -557,8 +566,84 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         });
     }
     collect_pricing_component_checks(&mut checks, &plugin_config);
+    collect_response_cache_component_checks(&mut checks, &plugin_config, response_cache_invalid)
+        .await;
 
     checks
+}
+
+async fn collect_response_cache_component_checks(
+    checks: &mut Vec<Check>,
+    plugin_config: &PluginConfig,
+    config_invalid: bool,
+) {
+    // The response cache is a section of the adaptive component, not its own
+    // plugin kind: find the adaptive component and look for `response_cache`.
+    let Some(component) = plugin_config
+        .components
+        .iter()
+        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
+    else {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Info,
+            details: "not configured".into(),
+        });
+        return;
+    };
+    let Some(response_cache_value) = component
+        .config
+        .get("response_cache")
+        .filter(|value| !value.is_null())
+    else {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Info,
+            details: "not configured".into(),
+        });
+        return;
+    };
+    if !component.enabled {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Info,
+            details: "configured but disabled (adaptive plugin disabled)".into(),
+        });
+        return;
+    }
+    // Don't probe the backend for a config validation already rejected — that
+    // would report a misleading "reachable" Pass next to the validation failure.
+    if config_invalid {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Fail,
+            details: "config invalid (see plugin diagnostics above)".into(),
+        });
+        return;
+    }
+    let config: ResponseCacheConfig = match serde_json::from_value(response_cache_value.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            checks.push(Check {
+                name: "Response cache",
+                status: Status::Fail,
+                details: format!("invalid response_cache config: {error}"),
+            });
+            return;
+        }
+    };
+    match response_cache::check_backend_health(&config).await {
+        Ok(backend) => checks.push(Check {
+            name: "Response cache",
+            status: Status::Pass,
+            details: format!("on; backend '{backend}' reachable"),
+        }),
+        Err(error) => checks.push(Check {
+            name: "Response cache",
+            status: Status::Fail,
+            details: format!("backend not reachable: {error}"),
+        }),
+    }
 }
 
 async fn collect_observability_component_checks(checks: &mut Vec<Check>, config: &Value) {

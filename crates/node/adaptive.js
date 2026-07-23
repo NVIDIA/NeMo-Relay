@@ -148,6 +148,62 @@ function acgConfig(config = {}) {
 }
 
 /**
+ * Create response-cache settings with defaults applied.
+ *
+ * Merges caller-supplied overrides onto the opt-in LLM response-cache config
+ * shape (exact-match) used by the adaptive plugin. This is a section of
+ * the adaptive component, not a standalone plugin kind.
+ *
+ * @param {object} [config={}] - Partial response-cache settings to override.
+ * @returns {object} A normalized response-cache config object.
+ * @remarks The default backend is in-memory; pass a `backend` (e.g.
+ * `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`
+ * (always reuse / exact replay).
+ */
+function responseCacheConfig(config = {}) {
+  const { backend, ...rest } = config;
+  return {
+    ttlSeconds: 3600,
+    namespace: '',
+    priority: 50,
+    bypassRate: 0.0,
+    cacheNondeterministic: true,
+    keyStrategy: 'exact_request',
+    headerAllowlist: [],
+    skipKeys: [],
+    backend: backend ?? inMemoryBackend(),
+    ...rest,
+  };
+}
+
+const RESPONSE_CACHE_PLUGIN_FIELDS = {
+  ttlSeconds: 'ttl_seconds',
+  bypassRate: 'bypass_rate',
+  cacheNondeterministic: 'cache_nondeterministic',
+  keyStrategy: 'key_strategy',
+  headerAllowlist: 'header_allowlist',
+  skipKeys: 'skip_keys',
+};
+
+function toPluginConfig(config) {
+  const { responseCache, ...rest } = config;
+  if (responseCache === undefined) return config;
+  const serialized =
+    responseCache !== null && typeof responseCache === 'object' && !Array.isArray(responseCache)
+      ? Object.fromEntries(
+          Object.entries(responseCache).map(([key, value]) => [RESPONSE_CACHE_PLUGIN_FIELDS[key] ?? key, value]),
+        )
+      : responseCache;
+  return { ...rest, response_cache: serialized };
+}
+
+class AdaptiveRuntime extends lib.AdaptiveRuntime {
+  constructor(config) {
+    super(toPluginConfig(config));
+  }
+}
+
+/**
  * Wrap adaptive config as a top-level plugin component.
  *
  * Produces the plugin component entry that can be inserted directly
@@ -160,7 +216,7 @@ function acgConfig(config = {}) {
  * for validation while skipping runtime activation.
  */
 function ComponentSpec(config, { enabled = true } = {}) {
-  return plugin.ComponentSpec(ADAPTIVE_PLUGIN_KIND, config, {
+  return plugin.ComponentSpec(ADAPTIVE_PLUGIN_KIND, toPluginConfig(config), {
     enabled,
   });
 }
@@ -172,7 +228,7 @@ function ComponentSpec(config, { enabled = true } = {}) {
  * @returns {object} A structured validation report with diagnostics.
  */
 function validateConfig(config) {
-  return lib.validateAdaptiveConfig(config);
+  return lib.validateAdaptiveConfig(toPluginConfig(config));
 }
 
 /**
@@ -196,7 +252,7 @@ function setLatencySensitivity(value) {
 }
 
 module.exports = {
-  AdaptiveRuntime: lib.AdaptiveRuntime,
+  AdaptiveRuntime,
   ADAPTIVE_PLUGIN_KIND,
   defaultConfig,
   inMemoryBackend,
@@ -205,6 +261,7 @@ module.exports = {
   adaptiveHintsConfig,
   toolParallelismConfig,
   acgConfig,
+  responseCacheConfig,
   ComponentSpec,
   validateConfig,
   buildCacheTelemetryEvent,

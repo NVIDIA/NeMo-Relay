@@ -34,14 +34,15 @@ use crate::acg_learner::AcgLearner;
 use crate::adaptive_hints_intercept::AdaptiveHintsIntercept;
 use crate::cache_diagnostics::{self, CacheDiagnosticsTracker};
 use crate::config::{
-    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, TelemetryComponentConfig,
-    ToolParallelismComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, ResponseCacheConfig,
+    TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
 use crate::context_helpers::resolve_agent_id;
 use crate::error::{AdaptiveError, Result};
 use crate::intercepts::create_tool_execution_intercept_with_mode;
 use crate::learner::latency::LatencySensitivityLearner;
 use crate::learner::traits::Learner;
+use crate::response_cache::{build_store, make_intercept, make_stream_intercept};
 use crate::runtime::backend::build_backend;
 use crate::runtime::validation::validate_config;
 use crate::storage::traits::StorageBackendDyn;
@@ -481,6 +482,12 @@ impl AdaptiveRuntime {
                 self.runtime_id,
             )));
         }
+        // The response cache is independent of the learning-state backend: it has
+        // its own CacheStore and installs buffered and streaming LLM execution
+        // intercepts.
+        if let Some(config) = self.config.response_cache.clone() {
+            pending.push(Box::new(ResponseCacheFeature::new(config, self.runtime_id)));
+        }
         pending
     }
 
@@ -770,6 +777,49 @@ impl AdaptiveFeature for AcgFeature {
                         stream_intercept(&name, request, next).await
                     })
                 }),
+            )
+        })
+    }
+}
+
+struct ResponseCacheFeature {
+    name: String,
+    stream_name: String,
+    priority: i32,
+    config: ResponseCacheConfig,
+}
+
+impl ResponseCacheFeature {
+    fn new(config: ResponseCacheConfig, runtime_id: Uuid) -> Self {
+        Self {
+            name: format!("adaptive_{runtime_id}_response_cache_llm_execution"),
+            stream_name: format!("adaptive_{runtime_id}_response_cache_llm_stream_execution"),
+            priority: config.priority,
+            config,
+        }
+    }
+}
+
+impl AdaptiveFeature for ResponseCacheFeature {
+    fn register<'a>(
+        &'a mut self,
+        ctx: &'a mut RegistrationContext<'_>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Build the backend once, shared by both intercepts. A Redis backend
+            // unreachable at startup fails registration (fail-fast); the
+            // intercepts themselves fail open at runtime.
+            let store = build_store(&self.config).await?;
+            let config = Arc::new(self.config.clone());
+            ctx.register_llm_execution_intercept(
+                &self.name,
+                self.priority,
+                make_intercept(store.clone(), config.clone()),
+            )?;
+            ctx.register_llm_stream_execution_intercept(
+                &self.stream_name,
+                self.priority,
+                make_stream_intercept(store, config),
             )
         })
     }

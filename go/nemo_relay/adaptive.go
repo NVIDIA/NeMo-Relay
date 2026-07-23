@@ -17,6 +17,7 @@ type AdaptiveConfig struct {
 	AdaptiveHints   *AdaptiveHintsConfig   `json:"adaptive_hints,omitempty"`
 	ToolParallelism *ToolParallelismConfig `json:"tool_parallelism,omitempty"`
 	Acg             *AcgConfig             `json:"acg,omitempty"`
+	ResponseCache   *ResponseCacheConfig   `json:"response_cache,omitempty"`
 	Policy          *ConfigPolicy          `json:"policy,omitempty"`
 }
 
@@ -64,6 +65,49 @@ type AcgConfig struct {
 	ObservationWindow   uint32                  `json:"observation_window,omitempty"`
 	Priority            int32                   `json:"priority,omitempty"`
 	StabilityThresholds *AcgStabilityThresholds `json:"stability_thresholds,omitempty"`
+}
+
+// ResponseCacheConfig configures the opt-in LLM response cache: a section
+// of the adaptive config (a sibling to acg/adaptive_hints/tool_parallelism), not a
+// standalone plugin kind. The Rust core validates and installs it from the adaptive
+// runtime; this struct only has to carry the section through to the FFI validator.
+type ResponseCacheConfig struct {
+	// TTLSeconds is how long a stored answer stays reusable, in seconds (> 0).
+	// Always serialized: with omitempty an explicit 0 would vanish and Rust's
+	// default (3600) would silently replace it instead of failing validation.
+	TTLSeconds uint64 `json:"ttl_seconds"`
+	// Namespace is folded into every key to separate environments/tenants.
+	Namespace string `json:"namespace,omitempty"`
+	// Priority is the execution-intercept priority; lower runs first/outermost.
+	// Always serialized so an explicit 0 (outermost) stays expressible.
+	Priority int32 `json:"priority"`
+	// BypassRate is the probability in [0.0, 1.0] of skipping the cache and running live.
+	BypassRate float64 `json:"bypass_rate,omitempty"`
+	// CacheNondeterministic caches temperature>0 requests too (default true).
+	//
+	// Deliberately NOT omitempty: the Rust default is true, so omitting a false
+	// value would let the core re-apply true and silently re-enable caching of
+	// nondeterministic requests. Always serializing the field keeps an explicit
+	// false expressible — unlike the other zero-default fields here.
+	CacheNondeterministic bool `json:"cache_nondeterministic"`
+	// KeyStrategy is the key strategy. Only "exact_request" is supported.
+	KeyStrategy string `json:"key_strategy,omitempty"`
+	// HeaderAllowlist lists request headers folded into the key; never auth headers.
+	HeaderAllowlist []string `json:"header_allowlist,omitempty"`
+	// SkipKeys lists extra top-level request-body keys to drop from the key.
+	SkipKeys []string `json:"skip_keys,omitempty"`
+	// Backend selects the cache's own storage backend (distinct from the adaptive
+	// state backend). Defaults to in-memory when nil.
+	Backend *ResponseCacheBackendConfig `json:"backend,omitempty"`
+}
+
+// ResponseCacheBackendConfig selects the response-cache backend kind and options.
+type ResponseCacheBackendConfig struct {
+	// Kind is "in_memory" or "redis" (redis needs the redis-backend build feature).
+	Kind string `json:"kind"`
+	// Config holds backend-specific options (in_memory: max_bytes;
+	// redis: url/key_prefix).
+	Config map[string]any `json:"config,omitempty"`
 }
 
 // AdaptiveComponentSpec wraps one adaptive config as a top-level plugin component.
@@ -135,6 +179,38 @@ func NewAcgConfig() AcgConfig {
 		ObservationWindow:   100,
 		Priority:            50,
 		StabilityThresholds: &thresholds,
+	}
+}
+
+// NewResponseCacheConfig returns default response cache settings, mirroring
+// the Rust ResponseCacheConfig defaults (caching on, exact-request keying). Backend
+// is left nil so the core applies its in-memory default; set it for redis or to tune
+// the in-memory budget.
+func NewResponseCacheConfig() ResponseCacheConfig {
+	return ResponseCacheConfig{
+		TTLSeconds:            3600,
+		Priority:              50,
+		CacheNondeterministic: true,
+		KeyStrategy:           "exact_request",
+	}
+}
+
+// NewInMemoryResponseCacheBackend returns an in-memory response-cache backend spec.
+func NewInMemoryResponseCacheBackend() ResponseCacheBackendConfig {
+	return ResponseCacheBackendConfig{
+		Kind:   "in_memory",
+		Config: map[string]any{},
+	}
+}
+
+// NewRedisResponseCacheBackend returns a Redis response-cache backend spec.
+func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendConfig {
+	return ResponseCacheBackendConfig{
+		Kind: "redis",
+		Config: map[string]any{
+			"url":        url,
+			"key_prefix": keyPrefix,
+		},
 	}
 }
 

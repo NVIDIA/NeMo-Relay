@@ -252,6 +252,54 @@ class AcgConfig:
 
 
 @dataclass(slots=True)
+class ResponseCacheConfig:
+    """Opt-in LLM response cache (exact-match) settings.
+
+    This is a section of the adaptive component, not a standalone plugin kind.
+    When present, the adaptive plugin installs the response-cache execution
+    intercept that reuses an earlier answer for a repeated managed LLM call.
+
+    Args:
+        ttl_seconds: How long a stored answer stays reusable, in seconds.
+        namespace: Namespace folded into every key to separate environments/tenants.
+        priority: Execution-intercept priority. Lower runs first/outermost.
+        bypass_rate: Probability in ``[0.0, 1.0]`` of skipping the cache and running live.
+        cache_nondeterministic: Cache nondeterministic requests too; ``False``
+            caches only requests explicitly pinned deterministic (``temperature`` = 0).
+        key_strategy: Key strategy. Only ``"exact_request"`` is supported.
+        header_allowlist: Request headers folded into the key; never auth headers.
+        skip_keys: Extra top-level request-body keys to drop from the key.
+        backend: Cache storage backend (``in_memory`` or ``redis``).
+    """
+
+    ttl_seconds: int = 3600
+    namespace: str = ""
+    priority: int = 50
+    bypass_rate: float = 0.0
+    cache_nondeterministic: bool = True
+    key_strategy: str = "exact_request"
+    header_allowlist: list[str] = field(default_factory=list)
+    skip_keys: list[str] = field(default_factory=list)
+    backend: BackendSpec = field(default_factory=BackendSpec.in_memory)
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this response-cache config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "ttl_seconds": self.ttl_seconds,
+                "namespace": self.namespace,
+                "priority": self.priority,
+                "bypass_rate": self.bypass_rate,
+                "cache_nondeterministic": self.cache_nondeterministic,
+                "key_strategy": self.key_strategy,
+                "header_allowlist": self.header_allowlist,
+                "skip_keys": self.skip_keys,
+                "backend": _normalize(self.backend),
+            }
+        )
+
+
+@dataclass(slots=True)
 class AdaptiveConfig:
     """Canonical config document for the top-level adaptive component.
 
@@ -263,6 +311,7 @@ class AdaptiveConfig:
         adaptive_hints: Built-in LLM hint-injection settings.
         tool_parallelism: Built-in tool scheduling settings.
         acg: Adaptive Cache Governor settings.
+        response_cache: Opt-in LLM response cache settings.
         policy: Unsupported-config policy applied within the adaptive config.
 
     Behavior:
@@ -277,6 +326,7 @@ class AdaptiveConfig:
     adaptive_hints: AdaptiveHintsConfig | None = None
     tool_parallelism: ToolParallelismConfig | None = None
     acg: AcgConfig | None = None
+    response_cache: ResponseCacheConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
 
     def to_dict(self) -> JsonObject:
@@ -289,6 +339,7 @@ class AdaptiveConfig:
             "adaptive_hints": _normalize(self.adaptive_hints),
             "tool_parallelism": _normalize(self.tool_parallelism),
             "acg": _normalize(self.acg),
+            "response_cache": _normalize(self.response_cache),
             "policy": self.policy.to_dict(),
         }
 
@@ -385,6 +436,7 @@ __all__ = [
     "ConfigPolicy",
     "ConfigReport",
     "ComponentSpec",
+    "ResponseCacheConfig",
     "StateConfig",
     "TelemetryConfig",
     "ToolParallelismConfig",

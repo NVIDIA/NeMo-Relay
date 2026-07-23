@@ -243,4 +243,39 @@ describe('adaptive helpers', () => {
       },
     );
   });
+
+  it('keeps response-cache helpers camelCase and serializes plugin config', () => {
+    const responseCache = adaptive.responseCacheConfig();
+    assert.deepEqual(responseCache, {
+      ttlSeconds: 3600,
+      namespace: '',
+      priority: 50,
+      bypassRate: 0,
+      cacheNondeterministic: true,
+      keyStrategy: 'exact_request',
+      headerAllowlist: [],
+      skipKeys: [],
+      backend: adaptive.inMemoryBackend(),
+    });
+    assert.deepEqual(adaptive.ComponentSpec({ version: 1, responseCache }).config, {
+      version: 1,
+      response_cache: {
+        ttl_seconds: 3600,
+        namespace: '',
+        priority: 50,
+        bypass_rate: 0,
+        cache_nondeterministic: true,
+        key_strategy: 'exact_request',
+        header_allowlist: [],
+        skip_keys: [],
+        backend: adaptive.inMemoryBackend(),
+      },
+    });
+  });
+
+  it('serializes response-cache config at both native boundaries', () => {
+    const config = { version: 1, responseCache: { ttlSeconds: 0 } };
+    assert.equal(adaptive.validateConfig(config).diagnostics[0].code, 'response_cache.invalid_ttl');
+    assert.throws(() => new adaptive.AdaptiveRuntime(config), /ttl_seconds must be greater than 0/);
+  });
 });

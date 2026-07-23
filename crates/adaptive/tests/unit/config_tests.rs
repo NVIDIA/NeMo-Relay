@@ -90,6 +90,7 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
             "adaptive_hints",
             "tool_parallelism",
             "acg",
+            "response_cache",
             "policy",
         ]
     );
@@ -119,5 +120,30 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
             .unwrap()
             .kind,
         EditorFieldKind::Integer
+    );
+
+    let response_cache = schema.field("response_cache").unwrap().schema().unwrap();
+    assert_eq!(
+        response_cache.field("ttl_seconds").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+    assert_eq!(
+        response_cache.field("bypass_rate").unwrap().kind,
+        EditorFieldKind::Float
+    );
+    let response_cache_backend = response_cache.field("backend").unwrap().schema().unwrap();
+    assert_eq!(
+        response_cache_backend.field("kind").unwrap().kind,
+        EditorFieldKind::Enum
+    );
+    #[cfg(not(feature = "redis-backend"))]
+    assert_eq!(
+        response_cache_backend.field("kind").unwrap().enum_values,
+        &["in_memory"]
+    );
+    #[cfg(feature = "redis-backend")]
+    assert_eq!(
+        response_cache_backend.field("kind").unwrap().enum_values,
+        &["in_memory", "redis"]
     );
 }

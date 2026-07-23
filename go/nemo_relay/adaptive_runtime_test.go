@@ -169,3 +169,69 @@ func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 		t.Fatal("expected SetLatencySensitivity(0) to fail")
 	}
 }
+
+func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
+	backend := NewInMemoryResponseCacheBackend()
+	rc := NewResponseCacheConfig()
+	rc.Namespace = "go-harness"
+	rc.CacheNondeterministic = false // must survive marshal (no omitempty)
+	rc.Backend = &backend
+
+	config := NewAdaptiveConfig()
+	config.ResponseCache = &rc
+
+	// 1. The typed AdaptiveConfig must carry response_cache through json.Marshal.
+	//    The bug this guards is the struct silently DROPPING the section because it
+	//    enumerates fields by name with no response_cache field and no catch-all.
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	section, ok := decoded["response_cache"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_cache missing from marshaled config: %s", payload)
+	}
+	if section["namespace"] != "go-harness" {
+		t.Fatalf("response_cache fields not preserved: %#v", section)
+	}
+	if v, ok := section["cache_nondeterministic"].(bool); !ok || v {
+		t.Fatalf("explicit cache_nondeterministic=false was not preserved: %#v", section["cache_nondeterministic"])
+	}
+	if b, ok := section["backend"].(map[string]any); !ok || b["kind"] != "in_memory" {
+		t.Fatalf("backend not preserved: %#v", section["backend"])
+	}
+
+	// 2. A valid section validates clean through the FFI -> Rust adaptive validator.
+	report, err := ValidateAdaptiveConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+	}
+
+	// 3. An invalid section produces a response_cache diagnostic. This proves the
+	//    section is actually validated end-to-end (a dropped section would yield no
+	//    diagnostic at all), not merely carried in the struct.
+	bad := NewResponseCacheConfig()
+	bad.BypassRate = 2.0
+	badConfig := NewAdaptiveConfig()
+	badConfig.ResponseCache = &bad
+	badReport, err := ValidateAdaptiveConfig(badConfig)
+	if err != nil {
+		t.Fatalf("ValidateAdaptiveConfig (invalid bypass_rate) returned error: %v", err)
+	}
+	found := false
+	for _, d := range badReport.Diagnostics {
+		if d.Code == "response_cache.invalid_bypass_rate" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected response_cache.invalid_bypass_rate diagnostic, got %#v", badReport.Diagnostics)
+	}
+}

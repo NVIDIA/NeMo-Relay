@@ -7,6 +7,8 @@ use nemo_relay::plugin::ConfigPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
+use crate::response_cache::config::{BackendConfig, KEY_STRATEGY_EXACT_REQUEST};
+
 /// Canonical config document for the adaptive plugin component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveConfig {
@@ -32,6 +34,10 @@ pub struct AdaptiveConfig {
     /// Adaptive Cache Governor settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acg: Option<AcgComponentConfig>,
+    /// Opt-in LLM response cache (exact-match). When present, the
+    /// adaptive plugin installs the response-cache execution intercept(s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_cache: Option<ResponseCacheConfig>,
     /// Adaptive-local unsupported-config policy.
     #[serde(default)]
     pub policy: ConfigPolicy,
@@ -47,6 +53,7 @@ impl Default for AdaptiveConfig {
             adaptive_hints: None,
             tool_parallelism: None,
             acg: None,
+            response_cache: None,
             policy: ConfigPolicy::default(),
         }
     }
@@ -184,6 +191,55 @@ impl Default for AcgComponentConfig {
     }
 }
 
+/// Configuration for the adaptive plugin's `response_cache` feature
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResponseCacheConfig {
+    /// How long a stored answer stays reusable, in seconds.
+    pub ttl_seconds: u64,
+    /// Namespace folded into every key to separate environments/tenants.
+    pub namespace: String,
+    /// Execution-intercept priority; lower runs first/outermost (default `50`).
+    pub priority: i32,
+    /// Probability in `[0.0, 1.0]` of skipping the cache and running live.
+    pub bypass_rate: f64,
+    /// Cache nondeterministic requests too. Set `false` to cache only
+    /// requests explicitly pinned deterministic (`temperature` = 0) — absent
+    /// or unreadable temperatures count as nondeterministic.
+    pub cache_nondeterministic: bool,
+    /// Key strategy. Only [`KEY_STRATEGY_EXACT_REQUEST`] is supported.
+    pub key_strategy: String,
+    /// Request headers (case-insensitive) folded into the key; never auth headers.
+    pub header_allowlist: Vec<String>,
+    /// Extra top-level request-body keys to drop from the key, beyond the noise defaults.
+    pub skip_keys: Vec<String>,
+    /// Storage backend selection.
+    pub backend: BackendConfig,
+}
+
+impl Default for ResponseCacheConfig {
+    fn default() -> Self {
+        Self {
+            ttl_seconds: 3600,
+            namespace: String::new(),
+            priority: 50,
+            bypass_rate: 0.0,
+            cache_nondeterministic: true,
+            key_strategy: KEY_STRATEGY_EXACT_REQUEST.to_string(),
+            header_allowlist: Vec::new(),
+            skip_keys: Vec::new(),
+            backend: BackendConfig::default(),
+        }
+    }
+}
+
+impl ResponseCacheConfig {
+    /// TTL as a [`std::time::Duration`].
+    pub fn ttl(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.ttl_seconds)
+    }
+}
+
 fn default_adaptive_config_version() -> u32 {
     1
 }
@@ -254,6 +310,13 @@ nemo_relay::editor_config! {
             nested: AcgComponentConfig,
             default: AcgComponentConfig,
         },
+        response_cache => {
+            label: "response_cache",
+            kind: Section,
+            optional: true,
+            nested: ResponseCacheConfig,
+            default: ResponseCacheConfig,
+        },
         policy => {
             label: "policy",
             kind: Section,
@@ -322,6 +385,25 @@ nemo_relay::editor_config! {
             kind: Section,
             nested: crate::acg::stability::StabilityThresholds,
             default: crate::acg::stability::StabilityThresholds,
+        },
+    }
+}
+
+nemo_relay::editor_config! {
+    impl ResponseCacheConfig {
+        ttl_seconds => { label: "ttl_seconds", kind: Integer },
+        namespace => { label: "namespace", kind: String },
+        priority => { label: "priority", kind: Integer },
+        bypass_rate => { label: "bypass_rate", kind: Float },
+        cache_nondeterministic => { label: "cache_nondeterministic", kind: Boolean },
+        key_strategy => { label: "key_strategy", kind: String },
+        header_allowlist => { label: "header_allowlist", kind: Json },
+        skip_keys => { label: "skip_keys", kind: Json },
+        backend => {
+            label: "backend",
+            kind: Section,
+            nested: BackendConfig,
+            default: BackendConfig,
         },
     }
 }

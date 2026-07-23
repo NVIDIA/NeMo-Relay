@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::IntoResponse;
 use http_body_util::BodyExt;
 use reqwest::Client;
-use serde_json::Map;
+use serde_json::{Map, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn test_http_client() -> Client {
@@ -1031,12 +1031,14 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
     };
     let upstream_info = Arc::new(Mutex::new(None));
     let upstream_error = Arc::new(Mutex::new(None));
+    let upstream_failed = Arc::new(Mutex::new(false));
     let response_bytes = Arc::new(Mutex::new(None));
     let func = build_buffered_func(
         state,
         &prepared,
         upstream_info,
         upstream_error.clone(),
+        upstream_failed,
         response_bytes,
     );
     let error = func(LlmRequest {
@@ -1087,12 +1089,14 @@ async fn retry_aware_buffered_invalid_json_stays_structured() {
     };
     let upstream_info = Arc::new(Mutex::new(None));
     let upstream_error = Arc::new(Mutex::new(None));
+    let upstream_failed = Arc::new(Mutex::new(false));
     let response_bytes = Arc::new(Mutex::new(None));
     let func = build_buffered_func(
         state,
         &prepared,
         upstream_info,
         upstream_error.clone(),
+        upstream_failed,
         response_bytes,
     );
     let error = func(LlmRequest {

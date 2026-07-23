@@ -200,6 +200,7 @@ fn validate_adaptive_plugin_config_with_policy(
             "adaptive_hints",
             "tool_parallelism",
             "acg",
+            "response_cache",
             "policy",
         ],
     );
@@ -302,8 +303,73 @@ fn validate_adaptive_plugin_config_with_policy(
         );
     }
 
+    if let Some(response_cache_json) = plugin_config
+        .get("response_cache")
+        .and_then(Json::as_object)
+    {
+        validate_unknown_fields(
+            &mut diagnostics,
+            &config.policy,
+            Some("response_cache".to_string()),
+            response_cache_json,
+            &[
+                "ttl_seconds",
+                "namespace",
+                "priority",
+                "bypass_rate",
+                "cache_nondeterministic",
+                "key_strategy",
+                "header_allowlist",
+                "skip_keys",
+                "backend",
+            ],
+        );
+        if let Some(backend_json) = response_cache_json.get("backend").and_then(Json::as_object) {
+            validate_unknown_fields(
+                &mut diagnostics,
+                &config.policy,
+                Some("response_cache.backend".to_string()),
+                backend_json,
+                &["kind", "config"],
+            );
+            let backend_kind = backend_json
+                .get("kind")
+                .and_then(Json::as_str)
+                .unwrap_or_default();
+            if let Some(backend_config_json) = backend_json.get("config").and_then(Json::as_object)
+            {
+                validate_response_cache_backend_config_fields(
+                    &mut diagnostics,
+                    &config.policy,
+                    backend_kind,
+                    backend_config_json,
+                );
+            }
+        }
+    }
+
     diagnostics.extend(AdaptiveRuntime::validate_config(&config).diagnostics);
     diagnostics
+}
+
+fn validate_response_cache_backend_config_fields(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    backend_kind: &str,
+    backend_config: &Map<String, Json>,
+) {
+    let known_fields: &[&str] = match backend_kind {
+        "in_memory" => &["max_bytes"],
+        "redis" => &["url", "key_prefix"],
+        _ => return,
+    };
+    validate_unknown_fields(
+        diagnostics,
+        policy,
+        Some(format!("response_cache.backend.{backend_kind}")),
+        backend_config,
+        known_fields,
+    );
 }
 
 fn validate_backend_config_fields(
