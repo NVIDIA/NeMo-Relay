@@ -733,12 +733,10 @@ async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payl
             def request_sanitizer(request: Json, codec_context: LlmSanitizeContext) -> None:
                 del request
                 seen.append(("request", codec_context))
-                return None
 
             def response_sanitizer(response: Json, codec_context: LlmSanitizeContext) -> None:
                 del response
                 seen.append(("response", codec_context))
-                return None
 
             ctx.register_contextual_llm_sanitize_request_guardrail("request", request_sanitizer)
             ctx.register_contextual_llm_sanitize_response_guardrail("response", response_sanitizer)
@@ -749,6 +747,7 @@ async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payl
         (False, None),
         (True, "openai_responses"),
         (True, None),
+        (True, ""),
     ]:
         payload = _llm_payload(request={"content": {"prompt": "secret"}}, response={"secret": "value"})
         payload.has_active_codec = has_active_codec
@@ -769,6 +768,8 @@ async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payl
         ("response", {"has_active_codec": False, "codec_name": None}),
         ("request", {"has_active_codec": True, "codec_name": "openai_responses"}),
         ("response", {"has_active_codec": True, "codec_name": "openai_responses"}),
+        ("request", {"has_active_codec": True, "codec_name": None}),
+        ("response", {"has_active_codec": True, "codec_name": None}),
         ("request", {"has_active_codec": True, "codec_name": None}),
         ("response", {"has_active_codec": True, "codec_name": None}),
     ]

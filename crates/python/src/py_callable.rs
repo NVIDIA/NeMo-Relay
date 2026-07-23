@@ -852,10 +852,15 @@ pub fn wrap_py_contextual_llm_sanitize_request_fn(
             if result.is_none(py) {
                 return None;
             }
-            result
-                .extract::<PyLLMRequest>(py)
-                .ok()
-                .map(|request| request.inner)
+            match result.extract::<PyLLMRequest>(py) {
+                Ok(request) => Some(request.inner),
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: contextual LLM sanitize request callable returned unexpected type: {error}"
+                    );
+                    None
+                }
+            }
         })
     })
 }
@@ -1066,13 +1071,43 @@ pub fn wrap_py_contextual_llm_sanitize_response_fn(
                 "has_active_codec": context.has_active_codec,
                 "codec_name": context.codec_name,
             });
-            let py_context = json_to_py(py, &context).ok()?;
-            let py_response = json_to_py(py, &response).ok()?;
-            let result = py_fn.call1(py, (py_response, py_context)).ok()?;
+            let py_context = match json_to_py(py, &context) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("nemo_relay: failed to serialize LLM sanitize context: {error}");
+                    return None;
+                }
+            };
+            let py_response = match json_to_py(py, &response) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: json_to_py failed in contextual LLM sanitize response: {error}"
+                    );
+                    return None;
+                }
+            };
+            let result = match py_fn.call1(py, (py_response, py_context)) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: contextual LLM sanitize response callable failed: {error}"
+                    );
+                    return None;
+                }
+            };
             if result.is_none(py) {
                 return None;
             }
-            py_to_json(result.bind(py)).ok()
+            match py_to_json(result.bind(py)) {
+                Ok(response) => Some(response),
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: py_to_json failed in contextual LLM sanitize response: {error}"
+                    );
+                    None
+                }
+            }
         })
     })
 }

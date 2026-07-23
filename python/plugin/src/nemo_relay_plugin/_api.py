@@ -110,6 +110,15 @@ class LlmSanitizeContext(TypedDict):
     codec_name: str | None
 
 
+def _llm_sanitize_context(invocation: pb.LlmInvocation) -> LlmSanitizeContext:
+    """Return stable contextual-sanitizer codec data from a worker invocation."""
+    codec_name = invocation.codec_name if invocation.HasField("codec_name") else None
+    return {
+        "has_active_codec": invocation.has_active_codec,
+        "codec_name": codec_name or None,
+    }
+
+
 WORKER_PROTOCOL = "grpc-v1"
 JSON_SCHEMA = "nemo.relay.Json@1"
 EVENT_SCHEMA = "nemo.relay.Event@1"
@@ -1964,10 +1973,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     result = await _maybe_await(
                         self._handler(self._handlers.contextual_llm_sanitize_requests, request.registration_name)(
                             _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA),
-                            {
-                                "has_active_codec": request.llm.has_active_codec,
-                                "codec_name": request.llm.codec_name if request.llm.HasField("codec_name") else None,
-                            },
+                            _llm_sanitize_context(request.llm),
                         )
                     )
                     return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
@@ -1983,10 +1989,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     result = await _maybe_await(
                         self._handler(self._handlers.contextual_llm_sanitize_responses, request.registration_name)(
                             _decode_required_envelope(request.llm.response, "llm response"),
-                            {
-                                "has_active_codec": request.llm.has_active_codec,
-                                "codec_name": request.llm.codec_name if request.llm.HasField("codec_name") else None,
-                            },
+                            _llm_sanitize_context(request.llm),
                         )
                     )
                     return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)

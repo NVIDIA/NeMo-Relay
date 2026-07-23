@@ -715,7 +715,7 @@ fn llm_call_end_with_behavior(
     } else {
         resolve_llm_end_annotation(
             annotated_response,
-            data.as_ref().and(response_codec),
+            response_codec,
             data.as_ref(),
             &behavior,
             &handle.name,
@@ -771,7 +771,9 @@ fn llm_call_end_with_behavior(
 fn sanitize_context_for_request_codec(codec: Option<&dyn LlmCodec>) -> LlmSanitizeContext {
     LlmSanitizeContext {
         has_active_codec: codec.is_some(),
-        codec_name: codec.and_then(LlmCodec::codec_name),
+        codec_name: codec
+            .and_then(LlmCodec::codec_name)
+            .filter(|name| !name.is_empty()),
     }
 }
 
@@ -780,7 +782,9 @@ pub(crate) fn sanitize_context_for_response_codec(
 ) -> LlmSanitizeContext {
     LlmSanitizeContext {
         has_active_codec: codec.is_some(),
-        codec_name: codec.and_then(LlmResponseCodec::codec_name),
+        codec_name: codec
+            .and_then(LlmResponseCodec::codec_name)
+            .filter(|name| !name.is_empty()),
     }
 }
 

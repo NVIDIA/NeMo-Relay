@@ -403,21 +403,15 @@ pub(super) fn llm_sanitize_request_callback(
             return Some(request);
         }
         if !context.has_active_codec && !backend.uses_compatible_legacy_request_codec(&request) {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                codec_name = context.codec_name.unwrap_or("unknown"),
-                has_active_codec = context.has_active_codec;
-                "PII redaction omitted an LLM request payload because normalized target paths have no usable codec"
-            );
+            log_llm_payload_omitted("request", context, "no compatible legacy codec");
             return None;
         }
         let sanitized = backend.sanitize_request_with_codec(context, &request);
         if sanitized.is_none() {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                codec_name = context.codec_name.unwrap_or("unknown"),
-                has_active_codec = context.has_active_codec;
-                "PII redaction omitted an LLM request payload because normalized target paths have no usable codec"
+            log_llm_payload_omitted(
+                "request",
+                context,
+                "codec decode, sanitize, or encode failure",
             );
         }
         sanitized
@@ -435,27 +429,31 @@ pub(super) fn llm_sanitize_response_callback(
             return Some(backend.sanitize_json_preorder_dfs(payload));
         }
         if !context.has_active_codec && !backend.uses_compatible_legacy_response_codec(&payload) {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                codec_name = context.codec_name.unwrap_or("unknown"),
-                has_active_codec = context.has_active_codec;
-                "PII redaction omitted an LLM response payload because normalized target paths have no usable codec"
-            );
+            log_llm_payload_omitted("response", context, "no compatible legacy codec");
             return None;
         }
         let sanitized = backend
-            .sanitize_response_with_codec(context, payload.clone())
+            .sanitize_response_with_codec(context, payload)
             .map(|payload| backend.sanitize_json_preorder_dfs(payload));
         if sanitized.is_none() {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                codec_name = context.codec_name.unwrap_or("unknown"),
-                has_active_codec = context.has_active_codec;
-                "PII redaction omitted an LLM response payload because normalized target paths have no usable codec"
+            log_llm_payload_omitted(
+                "response",
+                context,
+                "codec decode, sanitize, or encode failure",
             );
         }
         sanitized
     })
+}
+
+fn log_llm_payload_omitted(direction: &str, context: LlmSanitizeContext, reason: &str) {
+    log::warn!(
+        target: "nemo_relay.plugin",
+        codec_name = context.codec_name.unwrap_or("unknown"),
+        has_active_codec = context.has_active_codec,
+        reason;
+        "PII redaction omitted an LLM {direction} payload"
+    );
 }
 
 fn render_json_pointer_path(path_segments: &[String]) -> String {
