@@ -28,12 +28,13 @@ use nemo_relay::api::llm::{
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
 };
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
-    ProviderSurface, response_codec as build_response_codec,
+    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
     streaming_codec as build_streaming_codec,
 };
 use nemo_relay::codec::streaming::StreamingCodec;
-use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 
@@ -149,17 +150,48 @@ async fn run_unmanaged_gateway(
 // Codecs registered for each managed provider route. Routes that emit LLM events but lack a typed
 // codec (count_tokens) return `None` so the runtime still wraps the call but skips annotation.
 struct RouteCodecs {
+    request: Option<Arc<dyn LlmCodec>>,
     streaming: Option<Box<dyn StreamingCodec>>,
     response: Option<Arc<dyn LlmResponseCodec>>,
+}
+
+struct GatewayRequestCodec {
+    inner: Arc<dyn LlmCodec>,
+}
+
+impl LlmCodec for GatewayRequestCodec {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+        self.inner.decode(request)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        let original_streaming = self.inner.decode(original)?.stream.unwrap_or(false);
+        let edited_streaming = annotated.stream.unwrap_or(false);
+        if edited_streaming != original_streaming {
+            return Err(FlowError::InvalidArgument(
+                "gateway request interceptors cannot change stream mode; preserve the original stream value"
+                    .into(),
+            ));
+        }
+        self.inner.encode(annotated, original)
+    }
 }
 
 fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
     match route.provider_surface() {
         Some(surface) => RouteCodecs {
+            request: Some(Arc::new(GatewayRequestCodec {
+                inner: build_request_codec(surface),
+            })),
             streaming: Some(build_streaming_codec(surface)),
             response: Some(build_response_codec(surface)),
         },
         None => RouteCodecs {
+            request: None,
             streaming: None,
             response: None,
         },
@@ -207,6 +239,7 @@ async fn run_managed_buffered(
         .attributes(attributes)
         .metadata(metadata)
         .model_name_opt(model_name)
+        .codec_opt(codecs.request)
         .response_codec_opt(codecs.response)
         .build();
     let result = TASK_SCOPE_STACK
@@ -407,6 +440,7 @@ async fn run_managed_streaming(
         .attributes(attributes)
         .metadata(metadata)
         .model_name_opt(model_name)
+        .codec_opt(codecs.request)
         .response_codec_opt(codecs.response)
         .build();
     let json_stream_result = TASK_SCOPE_STACK
@@ -798,57 +832,13 @@ fn effective_dispatch_request(
     let mut headers = headers.clone();
     strip_internal_dispatch_headers(&mut headers);
     let Some(request) = effective_request else {
-        return EffectiveUpstreamRequest {
-            body_bytes: body_bytes.clone(),
-            headers,
-            url: url.to_string(),
-            target_route: route,
-            credential_policy: TargetCredentialPolicy::SourceOrEnvironment,
-        };
+        return source_request(body_bytes, headers, url, route);
     };
-
-    let mut body_reencoded = false;
-    let body_bytes = if request.content.is_null() {
-        body_bytes.clone()
-    } else {
-        match serde_json::to_vec(&request.content) {
-            Ok(serialized) => {
-                body_reencoded = true;
-                Bytes::from(serialized)
-            }
-            Err(_) => {
-                log::warn!(
-                    target: "nemo_relay.gateway",
-                    event = "request_rewrite_fallback",
-                    reason = "serialization_failed";
-                    "The original upstream request was retained after rewrite serialization failed"
-                );
-                return EffectiveUpstreamRequest {
-                    body_bytes: body_bytes.clone(),
-                    headers,
-                    url: url.to_string(),
-                    target_route: route,
-                    credential_policy: TargetCredentialPolicy::SourceOrEnvironment,
-                };
-            }
-        }
+    let Some((body_bytes, body_reencoded)) = reencode_request_body(request, body_bytes) else {
+        return source_request(body_bytes, headers, url, route);
     };
-    let mut override_url = None;
-    let mut override_route = None;
-    let mut dispatch_route_header_seen = false;
-    for (name, value) in &request.headers {
-        if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_URL_HEADER) {
-            override_url = json_header_string(value);
-            continue;
-        }
-        if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_ROUTE_HEADER) {
-            dispatch_route_header_seen = true;
-            override_route = json_header_string(value)
-                .and_then(|value| ProviderRoute::from_dispatch_override(&value));
-            continue;
-        }
-    }
-    let credential_policy = if override_url.is_some() || dispatch_route_header_seen {
+    let overrides = dispatch_overrides(&request.headers);
+    let credential_policy = if overrides.is_explicit_target() {
         crate::provider_auth::remove_provider_credentials(&mut headers);
         TargetCredentialPolicy::ExplicitTarget
     } else {
@@ -857,7 +847,97 @@ fn effective_dispatch_request(
     // Observable source headers exclude credentials. Applying the rewritten map only after source
     // credentials are removed lets an explicit target binding add its own authorization without
     // inheriting credentials intended for the original provider.
-    for (name, value) in &request.headers {
+    apply_rewritten_headers(&mut headers, &request.headers);
+    if body_reencoded {
+        headers.remove(header::CONTENT_ENCODING);
+    }
+    EffectiveUpstreamRequest {
+        body_bytes,
+        headers,
+        url: overrides.resolve_url(url),
+        target_route: overrides.route.unwrap_or(route),
+        credential_policy,
+    }
+}
+
+fn source_request(
+    body_bytes: &Bytes,
+    headers: HeaderMap,
+    url: &str,
+    route: ProviderRoute,
+) -> EffectiveUpstreamRequest {
+    EffectiveUpstreamRequest {
+        body_bytes: body_bytes.clone(),
+        headers,
+        url: url.to_string(),
+        target_route: route,
+        credential_policy: TargetCredentialPolicy::SourceOrEnvironment,
+    }
+}
+
+fn reencode_request_body(request: &LlmRequest, body_bytes: &Bytes) -> Option<(Bytes, bool)> {
+    if request.content.is_null() {
+        return Some((body_bytes.clone(), false));
+    }
+    match serde_json::to_vec(&request.content) {
+        Ok(serialized) => Some((Bytes::from(serialized), true)),
+        Err(_) => {
+            log::warn!(
+                target: "nemo_relay.gateway",
+                event = "request_rewrite_fallback",
+                reason = "serialization_failed";
+                "The original upstream request was retained after rewrite serialization failed"
+            );
+            None
+        }
+    }
+}
+
+struct DispatchOverrides {
+    url: Option<String>,
+    route: Option<ProviderRoute>,
+    route_header_seen: bool,
+}
+
+impl DispatchOverrides {
+    fn is_explicit_target(&self) -> bool {
+        self.url.is_some() || self.route_header_seen
+    }
+
+    fn resolve_url(&self, fallback: &str) -> String {
+        if self.route_header_seen && self.route.is_none() {
+            fallback.to_string()
+        } else {
+            self.url.clone().unwrap_or_else(|| fallback.to_string())
+        }
+    }
+}
+
+fn dispatch_overrides(headers: &serde_json::Map<String, Value>) -> DispatchOverrides {
+    let mut url = None;
+    let mut route = None;
+    let mut route_header_seen = false;
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_URL_HEADER) {
+            url = json_header_string(value);
+        } else if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_ROUTE_HEADER) {
+            route_header_seen = true;
+            route = json_header_string(value)
+                .and_then(|value| ProviderRoute::from_dispatch_override(&value));
+        }
+    }
+    DispatchOverrides {
+        url,
+        route,
+        route_header_seen,
+    }
+}
+
+fn apply_rewritten_headers(
+    headers: &mut HeaderMap,
+    request_headers: &serde_json::Map<String, Value>,
+) {
+    for (name, value) in request_headers {
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
@@ -868,20 +948,6 @@ fn effective_dispatch_request(
             continue;
         };
         headers.insert(name, value);
-    }
-    if body_reencoded {
-        headers.remove(header::CONTENT_ENCODING);
-    }
-    EffectiveUpstreamRequest {
-        body_bytes,
-        headers,
-        url: if dispatch_route_header_seen && override_route.is_none() {
-            url.to_string()
-        } else {
-            override_url.unwrap_or_else(|| url.to_string())
-        },
-        target_route: override_route.unwrap_or(route),
-        credential_policy,
     }
 }
 

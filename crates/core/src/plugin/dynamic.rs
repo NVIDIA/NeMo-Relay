@@ -9,10 +9,13 @@
 //! one file as the feature grows.
 
 use chrono::Utc;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
-use crate::plugin::{PluginDeregistrationOutcome, deregister_plugin_registration_checked};
+use crate::plugin::{
+    PluginDeregistrationOutcome, PluginError, deregister_plugin_registration_checked,
+};
 
 /// Canonical identifier for one dynamic plugin record.
 pub type DynamicPluginId = String;
@@ -88,6 +91,21 @@ pub(super) fn deregister_tracked_registrations_checked(
         }
     }
     outcome
+}
+
+pub(super) fn validate_annotated_request_consumer_compatibility(
+    relay: &str,
+    plugin_kind: &str,
+) -> crate::plugin::Result<()> {
+    let requirement = VersionReq::parse(relay).map_err(|error| {
+        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {error}"))
+    })?;
+    if requirement.matches(&Version::new(0, 5, u64::MAX)) {
+        return Err(PluginError::InvalidConfig(format!(
+            "dynamic plugin '{plugin_kind}' registers an LLM request intercept and must declare compat.relay = \">=0.6,<1.0\" or another range that excludes Relay 0.5"
+        )));
+    }
+    Ok(())
 }
 
 /// Plugin execution lane.

@@ -135,7 +135,7 @@ describe('event sanitizer registries', () => {
       metadata: { background: true },
     }));
     try {
-      await lib.toolCallExecute('background-tool', { raw: true }, async (args) => args);
+      await lib.toolCallExecute('background-tool', { raw: true }, (args) => args);
       lib.flushSubscribers();
       await waitFor(events, 2);
     } finally {
@@ -168,7 +168,7 @@ describe('event sanitizer registries', () => {
         }));
         lib.registerScopeSanitizeStartGuardrail(name, 0, sanitizer);
         try {
-          await lib.toolCallExecute(name, { kept: kind }, async (args) => args);
+          await lib.toolCallExecute(name, { kept: kind }, (args) => args);
           lib.flushSubscribers();
           await waitFor(events, (Object.keys(invalidResults).indexOf(kind) + 1) * 2);
         } finally {
@@ -199,7 +199,7 @@ describe('event sanitizer registries', () => {
       throw new Error('background sanitizer boom');
     });
     try {
-      await lib.toolCallExecute('background-throw-tool', { kept: true }, async (args) => args);
+      await lib.toolCallExecute('background-throw-tool', { kept: true }, (args) => args);
       lib.flushSubscribers();
       await waitFor(events, 2);
       const start = events.find(

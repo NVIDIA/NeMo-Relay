@@ -4,18 +4,21 @@
 use std::ffi::OsString;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
 use nemo_relay::api::event::ScopeCategory;
+use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::registry::{
-    deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
+    deregister_llm_request_intercept, deregister_tool_conditional_execution_guardrail,
+    register_llm_request_intercept, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
@@ -102,6 +105,14 @@ struct SubscriberCleanup(&'static str);
 impl Drop for SubscriberCleanup {
     fn drop(&mut self) {
         let _ = deregister_subscriber(self.0);
+    }
+}
+
+struct RequestInterceptCleanup(&'static str);
+
+impl Drop for RequestInterceptCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_llm_request_intercept(self.0);
     }
 }
 
@@ -2540,6 +2551,313 @@ async fn gateway_accepts_codex_responses_path() {
 }
 
 #[tokio::test]
+async fn gateway_request_codec_exposes_annotations_and_applies_buffered_edits() {
+    let intercept_name = "server-gateway-request-codec-buffered-edit";
+    let _ = deregister_llm_request_intercept(intercept_name);
+    let _cleanup = RequestInterceptCleanup(intercept_name);
+    let observed = Arc::new(Mutex::new(None));
+    let captured = observed.clone();
+    register_llm_request_intercept(
+        intercept_name,
+        1,
+        false,
+        Arc::new(move |_name, mut request, annotated| {
+            if request.headers.get("x-codec-test").and_then(Value::as_str) != Some("buffered") {
+                return Ok(LlmRequestInterceptOutcome::new(request, annotated));
+            }
+            let mut annotated = annotated.expect("gateway generation route must have a codec");
+            *captured.lock().unwrap() = Some(serde_json::to_value(&annotated).unwrap());
+            let nemo_relay::codec::request::Message::User { content, .. } =
+                &mut annotated.messages[0]
+            else {
+                panic!("expected portable Responses string input");
+            };
+            *content = nemo_relay::codec::request::MessageContent::Text("edited".into());
+            request
+                .headers
+                .insert("x-test-intercept".into(), json!("visible"));
+            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_upstream(false).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .header("x-codec-test", "buffered")
+                .body(Body::from(
+                    json!({"model": "gpt-test", "input": "original"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["input"], json!("edited"));
+    assert_eq!(body["x_test_intercept"], json!("visible"));
+    let annotation = observed.lock().unwrap().clone().unwrap();
+    assert_eq!(annotation["messages"][0]["content"], json!("original"));
+    assert_eq!(annotation["api_specific"]["api"], json!("openai_responses"));
+}
+
+#[tokio::test]
+async fn gateway_request_codec_rejects_raw_body_mutation_before_upstream() {
+    let intercept_name = "server-gateway-request-codec-raw-rejection";
+    let _ = deregister_llm_request_intercept(intercept_name);
+    let _cleanup = RequestInterceptCleanup(intercept_name);
+    register_llm_request_intercept(
+        intercept_name,
+        1,
+        false,
+        Arc::new(|_name, mut request, annotated| {
+            if request.headers.get("x-codec-test").and_then(Value::as_str) == Some("raw") {
+                request.content["input"] = json!("forbidden raw edit");
+            }
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_upstream(false).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .header("x-codec-test", "raw")
+                .body(Body::from(
+                    json!({"model": "gpt-test", "input": "original"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn gateway_request_codec_rejects_malformed_modeled_structure_before_upstream() {
+    let (upstream, captured_requests) = spawn_request_codec_matrix_upstream().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-test",
+                        "messages": [],
+                        "response_format": "json_object",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(captured_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn gateway_request_codec_rejects_stream_mode_changes_before_upstream() {
+    let intercept_name = "server-gateway-request-codec-stream-mode-rejection";
+    let _ = deregister_llm_request_intercept(intercept_name);
+    let _cleanup = RequestInterceptCleanup(intercept_name);
+    register_llm_request_intercept(
+        intercept_name,
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            if request
+                .headers
+                .get("x-codec-stream-toggle")
+                .and_then(Value::as_str)
+                == Some("true")
+            {
+                let mut annotated = annotated.expect("generation route must expose an annotation");
+                annotated.stream = Some(!annotated.stream.unwrap_or(false));
+                return Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)));
+            }
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
+    )
+    .unwrap();
+
+    let (upstream, captured_requests) = spawn_request_codec_matrix_upstream().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router(config);
+
+    for streaming in [false, true] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("x-codec-stream-toggle", "true")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-test",
+                            "input": "original",
+                            "stream": streaming,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert!(captured_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn gateway_request_codecs_apply_buffered_and_streaming_edits_on_all_generation_routes() {
+    let intercept_name = "server-gateway-request-codec-all-generation-routes";
+    let _ = deregister_llm_request_intercept(intercept_name);
+    let _cleanup = RequestInterceptCleanup(intercept_name);
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let captured_annotations = observed.clone();
+    register_llm_request_intercept(
+        intercept_name,
+        1,
+        false,
+        Arc::new(move |_name, mut request, annotated| {
+            let Some(marker) = request
+                .headers
+                .get("x-codec-matrix")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                return Ok(LlmRequestInterceptOutcome::new(request, annotated));
+            };
+            let mut annotated = annotated.expect("generation route must expose an annotation");
+            captured_annotations.lock().unwrap().push(json!({
+                "marker": marker,
+                "annotation": annotated,
+            }));
+            let nemo_relay::codec::request::Message::User { content, .. } =
+                &mut annotated.messages[0]
+            else {
+                panic!("expected the first request item to be a portable user message");
+            };
+            *content = nemo_relay::codec::request::MessageContent::Text(format!("edited-{marker}"));
+            request
+                .headers
+                .insert("x-codec-edited".into(), json!(marker));
+            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+        }),
+    )
+    .unwrap();
+
+    let (upstream, captured_requests) = spawn_request_codec_matrix_upstream().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    config.anthropic_base_url = upstream.url();
+    let app = router(config);
+
+    for (surface, uri, mut payload) in [
+        (
+            "anthropic",
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 32,
+                "messages": [{"role": "user", "content": "original"}]
+            }),
+        ),
+        (
+            "chat",
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "original"}]
+            }),
+        ),
+        (
+            "responses",
+            "/v1/responses",
+            json!({"model": "gpt-5", "input": "original"}),
+        ),
+    ] {
+        for streaming in [false, true] {
+            payload["stream"] = json!(streaming);
+            let marker = format!(
+                "{surface}-{}",
+                if streaming { "streaming" } else { "buffered" }
+            );
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .header("x-codec-matrix", &marker)
+                        .body(Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{marker}");
+            response.into_body().collect().await.unwrap();
+        }
+    }
+
+    let captured = captured_requests.lock().unwrap();
+    assert_eq!(captured.len(), 6);
+    for request in captured.iter() {
+        let marker = request["marker"].as_str().unwrap();
+        assert_eq!(request["edited_header"], json!(marker));
+        let edited = format!("edited-{marker}");
+        match request["path"].as_str().unwrap() {
+            "/v1/messages" | "/v1/chat/completions" => {
+                assert_eq!(request["body"]["messages"][0]["content"], json!(edited));
+            }
+            "/v1/responses" => assert_eq!(request["body"]["input"], json!(edited)),
+            path => panic!("unexpected captured path {path}"),
+        }
+    }
+
+    let annotations = observed.lock().unwrap();
+    assert_eq!(annotations.len(), 6);
+    for observation in annotations.iter() {
+        let marker = observation["marker"].as_str().unwrap();
+        let expected_api = if marker.starts_with("anthropic-") {
+            "anthropic_messages"
+        } else if marker.starts_with("chat-") {
+            "openai_chat"
+        } else {
+            "openai_responses"
+        };
+        assert_eq!(
+            observation["annotation"]["api_specific"]["api"],
+            json!(expected_api)
+        );
+    }
+}
+
+#[tokio::test]
 async fn gateway_preserves_streaming_body() {
     let upstream = spawn_upstream(true).await;
     let mut config = test_config();
@@ -2646,7 +2964,13 @@ async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
                 .method("POST")
                 .uri("/v1/chat/completions")
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "model": "gpt-test" }).to_string()))
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-test",
+                        "messages": [{ "role": "user", "content": "hello" }]
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -3066,6 +3390,114 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
         url: format!("http://{address}"),
         handle,
     }
+}
+
+async fn spawn_request_codec_matrix_upstream() -> (TestServer, Arc<Mutex<Vec<Value>>>) {
+    async fn provider(
+        State(captured): State<Arc<Mutex<Vec<Value>>>>,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let marker = request
+            .headers()
+            .get("x-codec-matrix")
+            .and_then(|value| value.to_str().ok())
+            .unwrap()
+            .to_string();
+        let edited_header = request
+            .headers()
+            .get("x-codec-edited")
+            .and_then(|value| value.to_str().ok())
+            .unwrap()
+            .to_string();
+        let body = request.into_body().collect().await.unwrap().to_bytes();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        captured.lock().unwrap().push(json!({
+            "path": path,
+            "marker": marker,
+            "edited_header": edited_header,
+            "body": payload,
+        }));
+
+        if !payload["stream"].as_bool().unwrap_or(false) {
+            return match path.as_str() {
+                "/v1/messages" => Json(json!({
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-20250514",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }))
+                .into_response(),
+                "/v1/chat/completions" => Json(json!({
+                    "id": "chatcmpl_1",
+                    "model": "gpt-4.1",
+                    "choices": [{
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop"
+                    }]
+                }))
+                .into_response(),
+                "/v1/responses" => Json(json!({
+                    "id": "resp_1",
+                    "model": "gpt-5",
+                    "status": "completed",
+                    "output": []
+                }))
+                .into_response(),
+                _ => StatusCode::NOT_FOUND.into_response(),
+            };
+        }
+
+        let events: &[&[u8]] = match path.as_str() {
+            "/v1/messages" => &[
+                b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-20250514\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+                b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n\n",
+                b"data: {\"type\":\"message_stop\"}\n\n",
+            ],
+            "/v1/chat/completions" => &[
+                b"data: {\"id\":\"chatcmpl_1\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4.1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+                b"data: {\"id\":\"chatcmpl_1\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4.1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+                b"data: [DONE]\n\n",
+            ],
+            "/v1/responses" => &[
+                b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5\"}}\n\n",
+                b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[]}}\n\n",
+            ],
+            _ => return StatusCode::NOT_FOUND.into_response(),
+        };
+        let chunks = stream::iter(
+            events
+                .iter()
+                .map(|event| Ok::<_, std::convert::Infallible>(Bytes::copy_from_slice(event))),
+        );
+        (
+            [(header::CONTENT_TYPE, "text/event-stream")],
+            Body::from_stream(chunks),
+        )
+            .into_response()
+    }
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .route("/v1/messages", post(provider))
+        .route("/v1/chat/completions", post(provider))
+        .route("/v1/responses", post(provider))
+        .with_state(captured.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (
+        TestServer {
+            url: format!("http://{address}"),
+            handle,
+        },
+        captured,
+    )
 }
 
 async fn spawn_failing_stream_upstream() -> TestServer {

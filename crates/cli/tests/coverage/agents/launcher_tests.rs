@@ -2072,9 +2072,15 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
 async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _cwd = crate::test_support::CwdTestScope::locked();
-    let _env = EnvScope::without_managed_bootstrap();
-    let _ = nemo_relay::plugin::clear_plugin_configuration();
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::set(&[
+        (crate::bootstrap::state::BOOTSTRAP_STATE_DIR_ENV, None),
+        ("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", None),
+        (crate::configuration::BOOTSTRAP_FINGERPRINT_ENV, None),
+        ("HOME", Some(temp.path().as_os_str())),
+        ("XDG_CONFIG_HOME", Some(temp.path().join("xdg").as_os_str())),
+    ]);
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
     let hooks_path = temp.path().join("hermes-home/config.yaml");
     std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
     let original = "hooks:\n  PreToolUse: []\n";

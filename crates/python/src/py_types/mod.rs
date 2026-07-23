@@ -19,8 +19,8 @@ use nemo_relay::api::runtime::ScopeStackHandle;
 use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType as CoreScopeType};
 use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
 use nemo_relay::codec::request::{
-    AnnotatedLlmRequest as AnnotatedLLMRequest, GenerationParams, Message, ToolChoice,
-    ToolDefinition,
+    AnnotatedLlmRequest as AnnotatedLLMRequest, ApiSpecificRequest, GenerationParams, Message,
+    MessageContent, ToolChoice, ToolDefinition,
 };
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -55,6 +55,10 @@ pub(crate) const FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR: u64 = 1 << 
 pub(crate) const FORCE_ANNOTATED_RESPONSE_API_SPECIFIC_SERIALIZATION_ERROR: u64 = 1 << 9;
 #[cfg(test)]
 pub(crate) const FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR: u64 = 1 << 10;
+#[cfg(test)]
+pub(crate) const FORCE_ANNOTATED_REQUEST_INSTRUCTIONS_SERIALIZATION_ERROR: u64 = 1 << 11;
+#[cfg(test)]
+pub(crate) const FORCE_ANNOTATED_REQUEST_API_SPECIFIC_SERIALIZATION_ERROR: u64 = 1 << 12;
 
 #[cfg(test)]
 pub(crate) fn set_forced_serialization_mask_for_tests(mask: u64) {

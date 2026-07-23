@@ -12,7 +12,11 @@ use crate::api::llm::LlmRequest;
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
-use super::request::{AnnotatedLlmRequest, GenerationParams, Message, ToolChoice, ToolDefinition};
+use super::request::{
+    AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, FunctionDefinition,
+    GenerationParams, Message, MessageContent, OpenAiImageUrl, ProviderNativeComponent, ToolCall,
+    ToolChoice, ToolDefinition,
+};
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
@@ -136,7 +140,976 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "parallel_tool_calls",
     "top_logprobs",
     "stream",
+    "audio",
+    "frequency_penalty",
+    "function_call",
+    "functions",
+    "logit_bias",
+    "logprobs",
+    "modalities",
+    "moderation",
+    "n",
+    "prediction",
+    "presence_penalty",
+    "prompt_cache_key",
+    "prompt_cache_options",
+    "prompt_cache_retention",
+    "reasoning_effort",
+    "response_format",
+    "safety_identifier",
+    "seed",
+    "stream_options",
+    "verbosity",
+    "web_search_options",
 ];
+
+fn chat_native(kind: &str, value: &Json) -> ProviderNativeComponent {
+    ProviderNativeComponent {
+        provider: "openai_chat".into(),
+        kind: kind.to_string(),
+        value: value.clone(),
+    }
+}
+
+fn decode_chat_content(value: &Json) -> Result<MessageContent> {
+    if let Some(text) = value.as_str() {
+        return Ok(MessageContent::Text(text.to_string()));
+    }
+    let parts = value.as_array().ok_or_else(|| {
+        FlowError::InvalidArgument("OpenAI Chat message content must be a string or array".into())
+    })?;
+    Ok(MessageContent::Parts(
+        parts
+            .iter()
+            .map(decode_chat_content_part)
+            .collect::<Result<Vec<_>>>()?,
+    ))
+}
+
+fn decode_chat_content_part(value: &Json) -> Result<ContentPart> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("OpenAI Chat content part must be an object".into())
+    })?;
+    let kind = obj.get("type").and_then(Json::as_str).unwrap_or("unknown");
+    match kind {
+        "text" => Ok(ContentPart::Text {
+            text: obj
+                .get("text")
+                .and_then(Json::as_str)
+                .ok_or_else(|| {
+                    FlowError::InvalidArgument("OpenAI Chat text part is missing text".into())
+                })?
+                .to_string(),
+            extra: obj
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "type" | "text"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }),
+        "image_url" => {
+            let image_url: OpenAiImageUrl =
+                serde_json::from_value(obj.get("image_url").cloned().ok_or_else(|| {
+                    FlowError::InvalidArgument("OpenAI Chat image part is missing image_url".into())
+                })?)
+                .map_err(|error| {
+                    FlowError::InvalidArgument(format!("invalid OpenAI Chat image_url: {error}"))
+                })?;
+            Ok(ContentPart::ImageUrl {
+                image_url,
+                extra: obj
+                    .iter()
+                    .filter(|(key, _)| !matches!(key.as_str(), "type" | "image_url"))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            })
+        }
+        "input_audio" => Ok(ContentPart::Audio {
+            audio: obj.get("input_audio").cloned().ok_or_else(|| {
+                FlowError::InvalidArgument("OpenAI Chat audio part is missing input_audio".into())
+            })?,
+            extra: obj
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "type" | "input_audio"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }),
+        "file" => Ok(ContentPart::File {
+            file: obj.get("file").cloned().ok_or_else(|| {
+                FlowError::InvalidArgument("OpenAI Chat file part is missing file".into())
+            })?,
+            extra: obj
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "type" | "file"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }),
+        "refusal" => Ok(ContentPart::Refusal {
+            refusal: obj
+                .get("refusal")
+                .and_then(Json::as_str)
+                .ok_or_else(|| {
+                    FlowError::InvalidArgument("OpenAI Chat refusal part is missing refusal".into())
+                })?
+                .to_string(),
+            extra: obj
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "type" | "refusal"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }),
+        _ => Ok(ContentPart::ProviderNative {
+            provider: "openai_chat".into(),
+            kind: kind.to_string(),
+            value: value.clone(),
+        }),
+    }
+}
+
+fn optional_chat_string(
+    obj: &serde_json::Map<String, Json>,
+    key: &str,
+    context: &str,
+) -> Result<Option<String>> {
+    match obj.get(key) {
+        Some(Json::Null) | None => Ok(None),
+        Some(Json::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(FlowError::InvalidArgument(format!(
+            "OpenAI Chat {context} {key} must be a string or null"
+        ))),
+    }
+}
+
+fn decode_chat_tool_call(value: &Json) -> Result<Option<ToolCall>> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("OpenAI Chat tool call must be an object".into())
+    })?;
+    if obj.get("type").and_then(Json::as_str) != Some("function") {
+        return Ok(None);
+    }
+    if obj
+        .keys()
+        .any(|key| !matches!(key.as_str(), "id" | "type" | "function"))
+    {
+        return Ok(None);
+    }
+    let function = obj
+        .get("function")
+        .and_then(Json::as_object)
+        .ok_or_else(|| {
+            FlowError::InvalidArgument("OpenAI Chat function tool call is missing function".into())
+        })?;
+    if function
+        .keys()
+        .any(|key| !matches!(key.as_str(), "name" | "arguments"))
+    {
+        return Ok(None);
+    }
+    let id = obj.get("id").and_then(Json::as_str).ok_or_else(|| {
+        FlowError::InvalidArgument("OpenAI Chat function tool call is missing id".into())
+    })?;
+    let name = function.get("name").and_then(Json::as_str).ok_or_else(|| {
+        FlowError::InvalidArgument("OpenAI Chat function tool call is missing name".into())
+    })?;
+    let arguments = function
+        .get("arguments")
+        .and_then(Json::as_str)
+        .ok_or_else(|| {
+            FlowError::InvalidArgument("OpenAI Chat function tool call is missing arguments".into())
+        })?;
+    Ok(Some(ToolCall {
+        id: id.to_string(),
+        call_type: "function".into(),
+        function: FunctionCall {
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        },
+    }))
+}
+
+fn decode_chat_message(value: &Json) -> Result<Message> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("OpenAI Chat message must be an object".into())
+    })?;
+    let role = obj
+        .get("role")
+        .and_then(Json::as_str)
+        .ok_or_else(|| FlowError::InvalidArgument("OpenAI Chat message is missing role".into()))?;
+    let native = || Message::ProviderNative {
+        provider: "openai_chat".into(),
+        kind: role.to_string(),
+        value: value.clone(),
+    };
+    match role {
+        "system" | "developer" | "user" => {
+            if obj
+                .keys()
+                .any(|key| !matches!(key.as_str(), "role" | "content" | "name"))
+            {
+                return Ok(native());
+            }
+            let content = decode_chat_content(obj.get("content").ok_or_else(|| {
+                FlowError::InvalidArgument("OpenAI Chat message is missing content".into())
+            })?)?;
+            let name = optional_chat_string(obj, "name", "message")?;
+            Ok(match role {
+                "system" => Message::System { content, name },
+                "developer" => Message::Developer { content, name },
+                _ => Message::User { content, name },
+            })
+        }
+        "assistant" => {
+            if obj
+                .keys()
+                .any(|key| !matches!(key.as_str(), "role" | "content" | "tool_calls" | "name"))
+            {
+                return Ok(native());
+            }
+            let content = obj
+                .get("content")
+                .filter(|content| !content.is_null())
+                .map(decode_chat_content)
+                .transpose()?;
+            let tool_calls = match obj.get("tool_calls") {
+                Some(Json::Null) | None => None,
+                Some(Json::Array(calls)) => {
+                    let decoded = calls
+                        .iter()
+                        .map(decode_chat_tool_call)
+                        .collect::<Result<Vec<_>>>()?;
+                    let Some(decoded) = decoded.into_iter().collect::<Option<Vec<_>>>() else {
+                        return Ok(native());
+                    };
+                    Some(decoded)
+                }
+                Some(_) => {
+                    return Err(FlowError::InvalidArgument(
+                        "OpenAI Chat assistant tool_calls must be an array or null".into(),
+                    ));
+                }
+            };
+            Ok(Message::Assistant {
+                content,
+                tool_calls,
+                name: optional_chat_string(obj, "name", "assistant message")?,
+            })
+        }
+        "tool"
+            if obj
+                .keys()
+                .all(|key| matches!(key.as_str(), "role" | "content" | "tool_call_id")) =>
+        {
+            Ok(Message::Tool {
+                content: decode_chat_content(obj.get("content").ok_or_else(|| {
+                    FlowError::InvalidArgument("OpenAI Chat tool message is missing content".into())
+                })?)?,
+                tool_call_id: obj
+                    .get("tool_call_id")
+                    .and_then(Json::as_str)
+                    .ok_or_else(|| {
+                        FlowError::InvalidArgument(
+                            "OpenAI Chat tool message is missing tool_call_id".into(),
+                        )
+                    })?
+                    .to_string(),
+            })
+        }
+        "function"
+            if obj
+                .keys()
+                .all(|key| matches!(key.as_str(), "role" | "content" | "name")) =>
+        {
+            Ok(Message::Function {
+                content: optional_chat_string(obj, "content", "function message")?,
+                name: obj
+                    .get("name")
+                    .and_then(Json::as_str)
+                    .ok_or_else(|| {
+                        FlowError::InvalidArgument(
+                            "OpenAI Chat function message is missing name".into(),
+                        )
+                    })?
+                    .to_string(),
+            })
+        }
+        _ => Ok(native()),
+    }
+}
+
+fn encode_chat_content(content: &MessageContent) -> Result<Json> {
+    match content {
+        MessageContent::Text(text) => Ok(Json::String(text.clone())),
+        MessageContent::Parts(parts) => Ok(Json::Array(
+            parts
+                .iter()
+                .map(|part| match part {
+                    ContentPart::Text { text, extra } => {
+                        let mut obj = extra.clone();
+                        obj.insert("type".into(), Json::String("text".into()));
+                        obj.insert("text".into(), Json::String(text.clone()));
+                        Ok(Json::Object(obj))
+                    }
+                    ContentPart::ImageUrl { image_url, extra } => {
+                        let mut obj = extra.clone();
+                        obj.insert("type".into(), Json::String("image_url".into()));
+                        obj.insert(
+                            "image_url".into(),
+                            serde_json::to_value(image_url).map_err(|error| {
+                                FlowError::Internal(format!(
+                                    "OpenAI Chat image URL encode: {error}"
+                                ))
+                            })?,
+                        );
+                        Ok(Json::Object(obj))
+                    }
+                    ContentPart::Audio { audio, extra } => {
+                        let mut obj = extra.clone();
+                        obj.insert("type".into(), Json::String("input_audio".into()));
+                        obj.insert("input_audio".into(), audio.clone());
+                        Ok(Json::Object(obj))
+                    }
+                    ContentPart::File { file, extra } => {
+                        let mut obj = extra.clone();
+                        obj.insert("type".into(), Json::String("file".into()));
+                        obj.insert("file".into(), file.clone());
+                        Ok(Json::Object(obj))
+                    }
+                    ContentPart::Refusal { refusal, extra } => {
+                        let mut obj = extra.clone();
+                        obj.insert("type".into(), Json::String("refusal".into()));
+                        obj.insert("refusal".into(), Json::String(refusal.clone()));
+                        Ok(Json::Object(obj))
+                    }
+                    ContentPart::ProviderNative {
+                        provider, value, ..
+                    } if provider == "openai_chat" => Ok(value.clone()),
+                    other => Err(FlowError::InvalidArgument(format!(
+                        "content part {other:?} cannot be encoded for OpenAI Chat"
+                    ))),
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )),
+    }
+}
+
+fn encode_chat_message(message: &Message) -> Result<Json> {
+    let message_with_content =
+        |role: &str, content: &MessageContent, name: &Option<String>| -> Result<Json> {
+            let mut obj = serde_json::Map::new();
+            obj.insert("role".into(), Json::String(role.into()));
+            obj.insert("content".into(), encode_chat_content(content)?);
+            if let Some(name) = name {
+                obj.insert("name".into(), Json::String(name.clone()));
+            }
+            Ok(Json::Object(obj))
+        };
+    match message {
+        Message::System { content, name } => message_with_content("system", content, name),
+        Message::Developer { content, name } => message_with_content("developer", content, name),
+        Message::User { content, name } => message_with_content("user", content, name),
+        Message::Assistant {
+            content,
+            tool_calls,
+            name,
+        } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("role".into(), Json::String("assistant".into()));
+            if let Some(content) = content {
+                obj.insert("content".into(), encode_chat_content(content)?);
+            }
+            if let Some(tool_calls) = tool_calls {
+                obj.insert(
+                    "tool_calls".into(),
+                    serde_json::to_value(tool_calls).map_err(|error| {
+                        FlowError::Internal(format!("OpenAI Chat tool calls encode: {error}"))
+                    })?,
+                );
+            }
+            if let Some(name) = name {
+                obj.insert("name".into(), Json::String(name.clone()));
+            }
+            Ok(Json::Object(obj))
+        }
+        Message::Tool {
+            content,
+            tool_call_id,
+        } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("role".into(), Json::String("tool".into()));
+            obj.insert("content".into(), encode_chat_content(content)?);
+            obj.insert("tool_call_id".into(), Json::String(tool_call_id.clone()));
+            Ok(Json::Object(obj))
+        }
+        Message::Function { content, name } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("role".into(), Json::String("function".into()));
+            obj.insert(
+                "content".into(),
+                content.clone().map(Json::String).unwrap_or(Json::Null),
+            );
+            obj.insert("name".into(), Json::String(name.clone()));
+            Ok(Json::Object(obj))
+        }
+        Message::ProviderNative {
+            provider, value, ..
+        } if provider == "openai_chat" => Ok(value.clone()),
+        other => Err(FlowError::InvalidArgument(format!(
+            "message {other:?} cannot be encoded for OpenAI Chat"
+        ))),
+    }
+}
+
+fn decode_chat_tool(value: &Json) -> Result<ToolDefinition> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| FlowError::InvalidArgument("OpenAI Chat tool must be an object".into()))?;
+    if obj.get("type").and_then(Json::as_str) != Some("function") {
+        let native = chat_native(
+            obj.get("type").and_then(Json::as_str).unwrap_or("unknown"),
+            value,
+        );
+        return Ok(ToolDefinition::ProviderNative {
+            provider: native.provider,
+            kind: native.kind,
+            value: native.value,
+        });
+    }
+    let function = obj
+        .get("function")
+        .and_then(Json::as_object)
+        .ok_or_else(|| {
+            FlowError::InvalidArgument("OpenAI Chat function tool is missing function".into())
+        })?;
+    let name = function.get("name").and_then(Json::as_str).ok_or_else(|| {
+        FlowError::InvalidArgument("OpenAI Chat function tool is missing name".into())
+    })?;
+    let description = super::optional_string(function, "description", "OpenAI Chat function tool")?;
+    let strict = super::optional_bool(function, "strict", "OpenAI Chat function tool")?;
+    Ok(ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: name.to_string(),
+            description,
+            parameters: function.get("parameters").cloned(),
+            strict,
+            extra: function
+                .iter()
+                .filter(|(key, _)| {
+                    !matches!(
+                        key.as_str(),
+                        "name" | "description" | "parameters" | "strict"
+                    )
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        },
+        extra: obj
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "type" | "function"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    })
+}
+
+fn encode_chat_tool(tool: &ToolDefinition) -> Result<Json> {
+    match tool {
+        ToolDefinition::Function { function, extra } => {
+            let mut function_obj = function.extra.clone();
+            function_obj.insert("name".into(), Json::String(function.name.clone()));
+            if let Some(description) = &function.description {
+                function_obj.insert("description".into(), Json::String(description.clone()));
+            }
+            if let Some(parameters) = &function.parameters {
+                function_obj.insert("parameters".into(), parameters.clone());
+            }
+            if let Some(strict) = function.strict {
+                function_obj.insert("strict".into(), Json::Bool(strict));
+            }
+            let mut obj = extra.clone();
+            obj.insert("type".into(), Json::String("function".into()));
+            obj.insert("function".into(), Json::Object(function_obj));
+            Ok(Json::Object(obj))
+        }
+        ToolDefinition::ProviderNative {
+            provider, value, ..
+        } if provider == "openai_chat" => Ok(value.clone()),
+        other => Err(FlowError::InvalidArgument(format!(
+            "tool {other:?} cannot be encoded for OpenAI Chat"
+        ))),
+    }
+}
+
+fn decode_chat_tool_choice(value: &Json) -> ToolChoice {
+    match value.as_str() {
+        Some("auto") => ToolChoice::Auto,
+        Some("none") => ToolChoice::None,
+        Some("required") => ToolChoice::Required,
+        _ => {
+            if let Some(function) = value
+                .as_object()
+                .filter(|obj| obj.get("type").and_then(Json::as_str) == Some("function"))
+                .and_then(|obj| obj.get("function"))
+                .and_then(Json::as_object)
+                .and_then(|function| function.get("name"))
+                .and_then(Json::as_str)
+            {
+                ToolChoice::Specific(super::request::ToolChoiceFunction {
+                    choice_type: "function".into(),
+                    function: super::request::ToolChoiceFunctionName {
+                        name: function.to_string(),
+                    },
+                })
+            } else {
+                ToolChoice::ProviderNative(chat_native("tool_choice", value))
+            }
+        }
+    }
+}
+
+fn encode_chat_tool_choice(choice: &ToolChoice) -> Result<Json> {
+    match choice {
+        ToolChoice::Auto => Ok(Json::String("auto".into())),
+        ToolChoice::None => Ok(Json::String("none".into())),
+        ToolChoice::Required => Ok(Json::String("required".into())),
+        ToolChoice::Specific(choice) => Ok(serde_json::json!({
+            "type":"function",
+            "function":{"name":choice.function.name}
+        })),
+        ToolChoice::ProviderNative(native) if native.provider == "openai_chat" => {
+            Ok(native.value.clone())
+        }
+        ToolChoice::ProviderNative(native) => Err(FlowError::InvalidArgument(format!(
+            "tool choice for {} cannot be encoded for OpenAI Chat",
+            native.provider
+        ))),
+    }
+}
+
+fn patch_extra_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    baseline: &serde_json::Map<String, Json>,
+    edited: &serde_json::Map<String, Json>,
+) {
+    for key in baseline.keys().filter(|key| !edited.contains_key(*key)) {
+        obj.remove(key);
+    }
+    for (key, value) in edited {
+        if baseline.get(key) != Some(value) {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn set_or_remove_json(obj: &mut serde_json::Map<String, Json>, key: &str, value: Option<Json>) {
+    if let Some(value) = value {
+        obj.insert(key.into(), value);
+    } else {
+        obj.remove(key);
+    }
+}
+
+fn patch_chat_messages_and_validate(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) -> Result<()> {
+    if annotated.messages != baseline.messages {
+        let original_messages = obj.get("messages").and_then(Json::as_array);
+        obj.insert(
+            "messages".into(),
+            Json::Array(super::encode_changed_items(
+                &annotated.messages,
+                &baseline.messages,
+                original_messages.map(Vec::as_slice),
+                encode_chat_message,
+            )?),
+        );
+    }
+    let unsupported = [
+        annotated.instructions != baseline.instructions,
+        annotated.previous_response_id != baseline.previous_response_id,
+        annotated.truncation != baseline.truncation,
+        annotated.reasoning != baseline.reasoning,
+        annotated.include != baseline.include,
+        annotated.max_output_tokens != baseline.max_output_tokens,
+        annotated.max_tool_calls != baseline.max_tool_calls,
+    ]
+    .into_iter()
+    .any(|changed| changed);
+    if unsupported {
+        return Err(FlowError::InvalidArgument(
+            "request contains fields that cannot be encoded for OpenAI Chat".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn patch_chat_model_and_params(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) {
+    if annotated.model != baseline.model {
+        set_or_remove_json(obj, "model", annotated.model.clone().map(Json::String));
+    }
+    if annotated.params == baseline.params {
+        return;
+    }
+    let edited = annotated.params.as_ref();
+    let before = baseline.params.as_ref();
+    patch_chat_optional_params(obj, edited, before);
+    patch_chat_max_tokens(obj, edited, before);
+    patch_chat_stop_sequences(obj, edited, before);
+}
+
+fn patch_chat_optional_params(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: Option<&GenerationParams>,
+    before: Option<&GenerationParams>,
+) {
+    for (key, value, old_value) in [
+        (
+            "temperature",
+            edited.and_then(|params| params.temperature),
+            before.and_then(|params| params.temperature),
+        ),
+        (
+            "top_p",
+            edited.and_then(|params| params.top_p),
+            before.and_then(|params| params.top_p),
+        ),
+    ] {
+        if value != old_value {
+            set_or_remove_json(obj, key, value.map(json_f64));
+        }
+    }
+}
+
+fn patch_chat_max_tokens(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: Option<&GenerationParams>,
+    before: Option<&GenerationParams>,
+) {
+    let max_tokens = edited.and_then(|params| params.max_tokens);
+    if max_tokens == before.and_then(|params| params.max_tokens) {
+        return;
+    }
+    let max_tokens = max_tokens.map(Json::from);
+    if max_tokens.is_none() {
+        obj.remove("max_completion_tokens");
+        obj.remove("max_tokens");
+        return;
+    }
+    let key = if obj.contains_key("max_completion_tokens") || !obj.contains_key("max_tokens") {
+        "max_completion_tokens"
+    } else {
+        "max_tokens"
+    };
+    set_or_remove_json(obj, key, max_tokens);
+}
+
+fn patch_chat_stop_sequences(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: Option<&GenerationParams>,
+    before: Option<&GenerationParams>,
+) {
+    let stop = edited.and_then(|params| params.stop.as_ref());
+    if stop == before.and_then(|params| params.stop.as_ref()) {
+        return;
+    }
+    let stop = stop.map(|values| {
+        if obj.get("stop").is_some_and(Json::is_string) && values.len() == 1 {
+            Json::String(values[0].clone())
+        } else {
+            serde_json::json!(values)
+        }
+    });
+    set_or_remove_json(obj, "stop", stop);
+}
+
+fn patch_chat_tools(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) -> Result<()> {
+    if annotated.tools != baseline.tools {
+        let tools = annotated
+            .tools
+            .as_deref()
+            .map(|tools| {
+                super::encode_changed_items(
+                    tools,
+                    baseline.tools.as_deref().unwrap_or(&[]),
+                    obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
+                    encode_chat_tool,
+                )
+            })
+            .transpose()?
+            .map(Json::Array);
+        set_or_remove_json(obj, "tools", tools);
+    }
+    if annotated.tool_choice != baseline.tool_choice {
+        let tool_choice = match (&annotated.tool_choice, &baseline.tool_choice) {
+            (Some(edited), Some(before)) => {
+                let edited = encode_chat_tool_choice(edited)?;
+                let before = encode_chat_tool_choice(before)?;
+                Some(match obj.get("tool_choice") {
+                    Some(original) => super::patch_changed_json(original, &before, &edited)?,
+                    None => edited,
+                })
+            }
+            (Some(edited), None) => Some(encode_chat_tool_choice(edited)?),
+            (None, _) => None,
+        };
+        set_or_remove_json(obj, "tool_choice", tool_choice);
+    }
+    Ok(())
+}
+
+fn patch_chat_common_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) {
+    if annotated.metadata != baseline.metadata {
+        set_or_remove_json(obj, "metadata", annotated.metadata.clone());
+    }
+    for (key, edited, before) in [
+        ("store", annotated.store, baseline.store),
+        (
+            "parallel_tool_calls",
+            annotated.parallel_tool_calls,
+            baseline.parallel_tool_calls,
+        ),
+        ("stream", annotated.stream, baseline.stream),
+    ] {
+        if edited != before {
+            set_or_remove_json(obj, key, edited.map(Json::Bool));
+        }
+    }
+    for (key, edited, before) in [
+        ("user", &annotated.user, &baseline.user),
+        (
+            "service_tier",
+            &annotated.service_tier,
+            &baseline.service_tier,
+        ),
+    ] {
+        if edited != before {
+            set_or_remove_json(obj, key, edited.clone().map(Json::String));
+        }
+    }
+    if annotated.top_logprobs != baseline.top_logprobs {
+        set_or_remove_json(obj, "top_logprobs", annotated.top_logprobs.map(Json::from));
+    }
+}
+
+fn patch_optional_json_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    fields: &[(&str, &Option<Json>, &Option<Json>)],
+) {
+    for (key, edited, before) in fields {
+        if edited != before {
+            set_or_remove_json(obj, key, (*edited).clone());
+        }
+    }
+}
+
+fn patch_optional_string_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    fields: &[(&str, &Option<String>, &Option<String>)],
+) {
+    for (key, edited, before) in fields {
+        if edited != before {
+            set_or_remove_json(obj, key, (*edited).clone().map(Json::String));
+        }
+    }
+}
+
+fn patch_optional_f64_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    fields: &[(&str, &Option<f64>, &Option<f64>)],
+) {
+    for (key, edited, before) in fields {
+        if edited != before {
+            set_or_remove_json(obj, key, (*edited).map(json_f64));
+        }
+    }
+}
+
+fn patch_chat_api_specific(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: &Option<ApiSpecificRequest>,
+    baseline: &Option<ApiSpecificRequest>,
+) -> Result<()> {
+    match (edited, baseline) {
+        (
+            Some(edited @ ApiSpecificRequest::OpenAIChat { .. }),
+            Some(baseline @ ApiSpecificRequest::OpenAIChat { .. }),
+        ) => {
+            patch_chat_api_fields(obj, edited, baseline);
+            Ok(())
+        }
+        (None, Some(ApiSpecificRequest::OpenAIChat { .. })) => {
+            for key in [
+                "audio",
+                "frequency_penalty",
+                "function_call",
+                "functions",
+                "logit_bias",
+                "logprobs",
+                "modalities",
+                "moderation",
+                "n",
+                "prediction",
+                "presence_penalty",
+                "prompt_cache_key",
+                "prompt_cache_options",
+                "prompt_cache_retention",
+                "reasoning_effort",
+                "response_format",
+                "safety_identifier",
+                "seed",
+                "stream_options",
+                "verbosity",
+                "web_search_options",
+            ] {
+                obj.remove(key);
+            }
+            Ok(())
+        }
+        (Some(_), _) | (None, Some(_)) => Err(FlowError::InvalidArgument(
+            "api_specific provider does not match OpenAI Chat".into(),
+        )),
+        (None, None) => Ok(()),
+    }
+}
+
+fn patch_chat_api_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    edited: &ApiSpecificRequest,
+    baseline: &ApiSpecificRequest,
+) {
+    let (
+        ApiSpecificRequest::OpenAIChat {
+            audio,
+            frequency_penalty,
+            function_call,
+            functions,
+            logit_bias,
+            logprobs,
+            modalities,
+            moderation,
+            n,
+            prediction,
+            presence_penalty,
+            prompt_cache_key,
+            prompt_cache_options,
+            prompt_cache_retention,
+            reasoning_effort,
+            response_format,
+            safety_identifier,
+            seed,
+            stream_options,
+            verbosity,
+            web_search_options,
+        },
+        ApiSpecificRequest::OpenAIChat {
+            audio: old_audio,
+            frequency_penalty: old_frequency_penalty,
+            function_call: old_function_call,
+            functions: old_functions,
+            logit_bias: old_logit_bias,
+            logprobs: old_logprobs,
+            modalities: old_modalities,
+            moderation: old_moderation,
+            n: old_n,
+            prediction: old_prediction,
+            presence_penalty: old_presence_penalty,
+            prompt_cache_key: old_prompt_cache_key,
+            prompt_cache_options: old_prompt_cache_options,
+            prompt_cache_retention: old_prompt_cache_retention,
+            reasoning_effort: old_reasoning_effort,
+            response_format: old_response_format,
+            safety_identifier: old_safety_identifier,
+            seed: old_seed,
+            stream_options: old_stream_options,
+            verbosity: old_verbosity,
+            web_search_options: old_web_search_options,
+        },
+    ) = (edited, baseline)
+    else {
+        unreachable!("OpenAI Chat variants checked by caller");
+    };
+    patch_optional_json_fields(
+        obj,
+        &[
+            ("audio", audio, old_audio),
+            ("function_call", function_call, old_function_call),
+            ("logit_bias", logit_bias, old_logit_bias),
+            ("moderation", moderation, old_moderation),
+            ("prediction", prediction, old_prediction),
+            (
+                "prompt_cache_options",
+                prompt_cache_options,
+                old_prompt_cache_options,
+            ),
+            ("response_format", response_format, old_response_format),
+            ("stream_options", stream_options, old_stream_options),
+            (
+                "web_search_options",
+                web_search_options,
+                old_web_search_options,
+            ),
+        ],
+    );
+    patch_optional_f64_fields(
+        obj,
+        &[
+            (
+                "frequency_penalty",
+                frequency_penalty,
+                old_frequency_penalty,
+            ),
+            ("presence_penalty", presence_penalty, old_presence_penalty),
+        ],
+    );
+    patch_optional_string_fields(
+        obj,
+        &[
+            ("prompt_cache_key", prompt_cache_key, old_prompt_cache_key),
+            (
+                "prompt_cache_retention",
+                prompt_cache_retention,
+                old_prompt_cache_retention,
+            ),
+            ("reasoning_effort", reasoning_effort, old_reasoning_effort),
+            (
+                "safety_identifier",
+                safety_identifier,
+                old_safety_identifier,
+            ),
+            ("verbosity", verbosity, old_verbosity),
+        ],
+    );
+    if functions != old_functions {
+        set_or_remove_json(obj, "functions", functions.clone().map(Json::Array));
+    }
+    if modalities != old_modalities {
+        set_or_remove_json(
+            obj,
+            "modalities",
+            modalities.as_ref().map(|value| serde_json::json!(value)),
+        );
+    }
+    if logprobs != old_logprobs {
+        set_or_remove_json(obj, "logprobs", logprobs.map(Json::Bool));
+    }
+    if n != old_n {
+        set_or_remove_json(obj, "n", n.map(Json::from));
+    }
+    if seed != old_seed {
+        set_or_remove_json(obj, "seed", seed.map(Json::from));
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LlmResponseCodec implementation
@@ -237,29 +1210,37 @@ impl LlmCodec for OpenAIChatCodec {
             .content
             .as_object()
             .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
-
-        // Extract messages (default to empty vec if absent).
-        let messages: Vec<Message> = obj
+        let messages = obj
             .get("messages")
-            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
-            .unwrap_or_default();
-
-        // Extract model.
-        let model = obj.get("model").and_then(|v| v.as_str()).map(String::from);
-
-        // Extract generation params.
-        let temperature = obj.get("temperature").and_then(|v| v.as_f64());
-        let top_p = obj.get("top_p").and_then(|v| v.as_f64());
-        let stop = obj
-            .get("stop")
-            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok());
-
-        // max_completion_tokens takes priority over max_tokens (newer API key).
-        let max_tokens = obj
-            .get("max_completion_tokens")
-            .and_then(|v| v.as_u64())
-            .or_else(|| obj.get("max_tokens").and_then(|v| v.as_u64()));
-
+            .ok_or_else(|| {
+                FlowError::InvalidArgument("OpenAI Chat request is missing messages".into())
+            })?
+            .as_array()
+            .ok_or_else(|| {
+                FlowError::InvalidArgument("OpenAI Chat messages must be an array".into())
+            })?
+            .iter()
+            .map(decode_chat_message)
+            .collect::<Result<Vec<_>>>()?;
+        let model = super::optional_string(obj, "model", "OpenAI Chat")?;
+        let temperature = super::optional_f64(obj, "temperature", "OpenAI Chat")?;
+        let top_p = super::optional_f64(obj, "top_p", "OpenAI Chat")?;
+        let stop = match obj.get("stop") {
+            Some(Json::String(stop)) => Some(vec![stop.clone()]),
+            Some(Json::Array(_)) => Some(
+                serde_json::from_value::<Vec<String>>(obj["stop"].clone()).map_err(|error| {
+                    FlowError::InvalidArgument(format!("invalid OpenAI Chat stop value: {error}"))
+                })?,
+            ),
+            Some(Json::Null) | None => None,
+            Some(_) => {
+                return Err(FlowError::InvalidArgument(
+                    "OpenAI Chat stop must be a string, array, or null".into(),
+                ));
+            }
+        };
+        let max_tokens = super::optional_u64(obj, "max_completion_tokens", "OpenAI Chat")?
+            .or(super::optional_u64(obj, "max_tokens", "OpenAI Chat")?);
         let params =
             if temperature.is_some() || max_tokens.is_some() || top_p.is_some() || stop.is_some() {
                 Some(GenerationParams {
@@ -271,22 +1252,62 @@ impl LlmCodec for OpenAIChatCodec {
             } else {
                 None
             };
-
-        // Extract tools.
-        let tools: Option<Vec<ToolDefinition>> = obj
+        let tools = obj
             .get("tools")
-            .map(|v| serde_json::from_value(v.clone()))
-            .transpose()
-            .map_err(|e| FlowError::Internal(format!("OpenAI Chat tools decode: {e}")))?;
-
-        // Extract tool_choice.
-        let tool_choice: Option<ToolChoice> = obj
-            .get("tool_choice")
-            .map(|v| serde_json::from_value(v.clone()))
-            .transpose()
-            .map_err(|e| FlowError::Internal(format!("OpenAI Chat tool_choice decode: {e}")))?;
-
-        // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
+            .map(|value| {
+                value
+                    .as_array()
+                    .ok_or_else(|| {
+                        FlowError::InvalidArgument("OpenAI Chat tools must be an array".into())
+                    })?
+                    .iter()
+                    .map(decode_chat_tool)
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+        let tool_choice = obj.get("tool_choice").map(decode_chat_tool_choice);
+        let store = super::optional_bool(obj, "store", "OpenAI Chat")?;
+        let user = super::optional_string(obj, "user", "OpenAI Chat")?;
+        let service_tier = super::optional_string(obj, "service_tier", "OpenAI Chat")?;
+        let parallel_tool_calls = super::optional_bool(obj, "parallel_tool_calls", "OpenAI Chat")?;
+        let top_logprobs = super::optional_u64(obj, "top_logprobs", "OpenAI Chat")?;
+        let stream = super::optional_bool(obj, "stream", "OpenAI Chat")?;
+        let frequency_penalty = super::optional_f64(obj, "frequency_penalty", "OpenAI Chat")?;
+        let functions = match obj.get("functions") {
+            Some(Json::Null) | None => None,
+            Some(Json::Array(functions)) => Some(functions.clone()),
+            Some(_) => {
+                return Err(FlowError::InvalidArgument(
+                    "OpenAI Chat functions must be an array or null".into(),
+                ));
+            }
+        };
+        let logprobs = super::optional_bool(obj, "logprobs", "OpenAI Chat")?;
+        let modalities = match obj.get("modalities") {
+            Some(Json::Null) | None => None,
+            Some(value) => Some(serde_json::from_value(value.clone()).map_err(|error| {
+                FlowError::InvalidArgument(format!("invalid OpenAI Chat modalities: {error}"))
+            })?),
+        };
+        let n = super::optional_u64(obj, "n", "OpenAI Chat")?;
+        let presence_penalty = super::optional_f64(obj, "presence_penalty", "OpenAI Chat")?;
+        let prompt_cache_key = super::optional_string(obj, "prompt_cache_key", "OpenAI Chat")?;
+        let prompt_cache_retention =
+            super::optional_string(obj, "prompt_cache_retention", "OpenAI Chat")?;
+        let reasoning_effort = super::optional_string(obj, "reasoning_effort", "OpenAI Chat")?;
+        let safety_identifier = super::optional_string(obj, "safety_identifier", "OpenAI Chat")?;
+        let seed = super::optional_i64(obj, "seed", "OpenAI Chat")?;
+        let verbosity = super::optional_string(obj, "verbosity", "OpenAI Chat")?;
+        let metadata = super::optional_object(obj, "metadata", "OpenAI Chat")?;
+        let audio = super::optional_object(obj, "audio", "OpenAI Chat")?;
+        let logit_bias = super::optional_object(obj, "logit_bias", "OpenAI Chat")?;
+        let moderation = super::optional_object(obj, "moderation", "OpenAI Chat")?;
+        let prediction = super::optional_object(obj, "prediction", "OpenAI Chat")?;
+        let prompt_cache_options =
+            super::optional_object(obj, "prompt_cache_options", "OpenAI Chat")?;
+        let response_format = super::optional_object(obj, "response_format", "OpenAI Chat")?;
+        let stream_options = super::optional_object(obj, "stream_options", "OpenAI Chat")?;
+        let web_search_options = super::optional_object(obj, "web_search_options", "OpenAI Chat")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
@@ -295,104 +1316,63 @@ impl LlmCodec for OpenAIChatCodec {
 
         Ok(AnnotatedLlmRequest {
             messages,
+            instructions: None,
             model,
             params,
             tools,
             tool_choice,
-            store: obj.get("store").and_then(|v| v.as_bool()),
+            store,
             previous_response_id: None,
             truncation: None,
             reasoning: None,
             include: None,
-            user: obj.get("user").and_then(|v| v.as_str()).map(String::from),
-            metadata: obj.get("metadata").cloned(),
-            service_tier: obj
-                .get("service_tier")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+            user,
+            metadata,
+            service_tier,
+            parallel_tool_calls,
             max_output_tokens: None,
             max_tool_calls: None,
-            top_logprobs: obj.get("top_logprobs").and_then(|v| v.as_u64()),
-            stream: obj.get("stream").and_then(|v| v.as_bool()),
+            top_logprobs,
+            stream,
+            api_specific: Some(ApiSpecificRequest::OpenAIChat {
+                audio,
+                frequency_penalty,
+                function_call: obj.get("function_call").cloned(),
+                functions,
+                logit_bias,
+                logprobs,
+                modalities,
+                moderation,
+                n,
+                prediction,
+                presence_penalty,
+                prompt_cache_key,
+                prompt_cache_options,
+                prompt_cache_retention,
+                reasoning_effort,
+                response_format,
+                safety_identifier,
+                seed,
+                stream_options,
+                verbosity,
+                web_search_options,
+            }),
             extra,
         })
     }
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
+        let baseline = self.decode(original)?;
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-
-        insert_serialized(obj, "messages", &annotated.messages, "messages")?;
-
-        if let Some(ref model) = annotated.model {
-            obj.insert("model".into(), Json::String(model.clone()));
-        }
-
-        if let Some(ref params) = annotated.params {
-            overlay_generation_params(obj, params)?;
-        }
-
-        if let Some(ref tools) = annotated.tools {
-            insert_serialized(obj, "tools", tools, "tools")?;
-        }
-
-        if let Some(ref tool_choice) = annotated.tool_choice {
-            insert_serialized(obj, "tool_choice", tool_choice, "tool_choice")?;
-        }
-
-        if let Some(store) = annotated.store {
-            obj.insert("store".into(), Json::Bool(store));
-        }
-        if let Some(ref user) = annotated.user {
-            obj.insert("user".into(), Json::String(user.clone()));
-        }
-        if let Some(ref metadata) = annotated.metadata {
-            obj.insert("metadata".into(), metadata.clone());
-        }
-        if let Some(ref service_tier) = annotated.service_tier {
-            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
-        }
-        if let Some(parallel_tool_calls) = annotated.parallel_tool_calls {
-            obj.insert(
-                "parallel_tool_calls".into(),
-                Json::Bool(parallel_tool_calls),
-            );
-        }
-        if let Some(top_logprobs) = annotated.top_logprobs {
-            obj.insert("top_logprobs".into(), Json::from(top_logprobs));
-        }
-        if let Some(stream) = annotated.stream {
-            obj.insert("stream".into(), Json::Bool(stream));
-        }
-
-        for (k, v) in &annotated.extra {
-            obj.insert(k.clone(), v.clone());
-        }
-
-        // Force `stream_options.include_usage` when the caller did not set it.
-        //
-        // Rationale: OpenAI-compatible backends only emit the terminal chunk
-        // containing `usage` (prompt/completion/total tokens) when this flag
-        // is true. Without it, Phoenix spans show `token_count=0` for every
-        // LLM call even though the provider knows the real counts. The
-        // observability exporter (OpenInference) reads usage off the
-        // annotated response, so the flag has to be set at the request level
-        // before bytes go on the wire.
-        //
-        // Guarded on `stream == true` per the OpenAI Chat Completions spec,
-        // which restricts `stream_options` to streaming requests. Caller-
-        // provided `stream_options` are preserved verbatim (including
-        // explicit opt-outs such as `include_usage: false`).
-        let is_streaming = obj.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-        if is_streaming && !obj.contains_key("stream_options") {
-            obj.insert(
-                "stream_options".into(),
-                serde_json::json!({"include_usage": true}),
-            );
-        }
+        patch_chat_messages_and_validate(obj, annotated, &baseline)?;
+        patch_chat_model_and_params(obj, annotated, &baseline);
+        patch_chat_tools(obj, annotated, &baseline)?;
+        patch_chat_common_fields(obj, annotated, &baseline);
+        patch_chat_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
+        patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
         Ok(LlmRequest {
             headers: original.headers.clone(),
@@ -406,42 +1386,6 @@ fn json_f64(v: f64) -> Json {
     serde_json::Number::from_f64(v)
         .map(Json::Number)
         .unwrap_or(Json::Null)
-}
-
-fn insert_serialized<T: serde::Serialize>(
-    obj: &mut serde_json::Map<String, Json>,
-    key: &str,
-    value: &T,
-    context: &str,
-) -> Result<()> {
-    let json = serde_json::to_value(value)
-        .map_err(|e| FlowError::Internal(format!("OpenAI Chat {context} encode: {e}")))?;
-    obj.insert(key.into(), json);
-    Ok(())
-}
-
-fn overlay_generation_params(
-    obj: &mut serde_json::Map<String, Json>,
-    params: &GenerationParams,
-) -> Result<()> {
-    if let Some(temp) = params.temperature {
-        obj.insert("temperature".into(), json_f64(temp));
-    }
-    if let Some(top_p) = params.top_p {
-        obj.insert("top_p".into(), json_f64(top_p));
-    }
-    if let Some(ref stop) = params.stop {
-        insert_serialized(obj, "stop", stop, "stop")?;
-    }
-    if let Some(max_tokens) = params.max_tokens {
-        let key = if obj.contains_key("max_completion_tokens") {
-            "max_completion_tokens"
-        } else {
-            "max_tokens"
-        };
-        obj.insert(key.into(), Json::from(max_tokens));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

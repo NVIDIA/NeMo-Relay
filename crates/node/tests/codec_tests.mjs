@@ -92,7 +92,7 @@ describe('Codec pipeline integration', () => {
       await execWithCodec(
         'test-llm',
         makeRequest(),
-        async (req) => ({
+        (req) => ({
           choices: [
             {
               message: {
@@ -135,7 +135,7 @@ describe('Codec pipeline integration', () => {
       await execWithCodec(
         'test-llm',
         makeRequest(),
-        async (req) => {
+        (req) => {
           executedContent = req.content;
           return {
             choices: [],
@@ -222,7 +222,7 @@ describe('Codec pipeline integration', () => {
       await execWithCodec(
         'test-llm',
         makeRequest(),
-        async (req) => ({
+        (req) => ({
           choices: [],
         }),
         decodeB,

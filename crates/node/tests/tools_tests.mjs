@@ -41,6 +41,12 @@ function rejectWithPrimitive(value) {
   return Promise.reject(value);
 }
 
+function sparseArray() {
+  const values = new Array(2);
+  values[1] = 1;
+  return values;
+}
+
 async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
   flushSubscribers();
   // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
@@ -236,6 +242,107 @@ describe('Tool execute', () => {
       null,
     );
     assert.equal(result, null);
+  });
+
+  it('sync execute rejects thrown callbacks without terminating Node', async () => {
+    await assert.rejects(
+      () =>
+        toolCallExecute('exec_tool_throw', {}, () => {
+          throw new Error('sync tool callback failed');
+        }),
+      /sync tool callback failed/,
+    );
+
+    const result = await toolCallExecute('exec_tool_after_throw', {}, () => ({
+      ok: true,
+    }));
+    assert.deepEqual(result, {
+      ok: true,
+    });
+  });
+
+  it('sync and async execute reject invalid JSON results without terminating Node', async () => {
+    const cases = [
+      ['sync_bigint', () => toolCallExecute('exec_tool_bigint', {}, () => 1n)],
+      ['async_bigint', () => toolCallExecuteAsync('exec_async_tool_bigint', {}, async () => ({ value: 1n }))],
+      ['sync_date', () => toolCallExecute('exec_tool_date', {}, () => new Date())],
+      ['async_map', () => toolCallExecuteAsync('exec_async_tool_map', {}, async () => new Map([['value', 1]]))],
+      ['sync_sparse_array', () => toolCallExecute('exec_tool_sparse_array', {}, sparseArray)],
+      ['async_sparse_array', () => toolCallExecuteAsync('exec_async_tool_sparse_array', {}, async () => sparseArray())],
+    ];
+
+    for (const [kind, execute] of cases) {
+      await assert.rejects(execute, /bigint|undefined|json/i);
+      const result = await toolCallExecute(`exec_tool_after_${kind}`, {}, () => ({
+        ok: true,
+      }));
+      assert.deepEqual(result, {
+        ok: true,
+      });
+    }
+  });
+
+  it('sync and async execute reject circular results without terminating Node', async () => {
+    const circularResult = () => {
+      const result = {};
+      result.self = result;
+      return result;
+    };
+
+    const cases = [
+      ['sync', () => toolCallExecute('exec_tool_circular', {}, circularResult)],
+      ['async', () => toolCallExecuteAsync('exec_async_tool_circular', {}, async () => circularResult())],
+    ];
+
+    for (const [kind, execute] of cases) {
+      await assert.rejects(execute, /circular|json/i);
+
+      const result = await toolCallExecute(`exec_tool_after_circular_${kind}`, {}, () => ({
+        ok: true,
+      }));
+      assert.deepEqual(result, { ok: true });
+    }
+  });
+
+  it('sync and async execute read stateful getter results once', async () => {
+    const statefulResult = () => {
+      let reads = 0;
+      return {
+        get value() {
+          reads += 1;
+          return reads;
+        },
+      };
+    };
+    const cases = [
+      () => toolCallExecute('exec_tool_stateful_getter', {}, statefulResult),
+      () => toolCallExecuteAsync('exec_async_tool_stateful_getter', {}, async () => statefulResult()),
+    ];
+
+    for (const execute of cases) {
+      const result = await execute();
+      assert.deepEqual(result, {
+        value: 1,
+      });
+    }
+  });
+
+  it('sync and async execute serialize arrays by index instead of their iterator', async () => {
+    const statefulArray = () => {
+      const result = [1];
+      result[Symbol.iterator] = function* iterator() {
+        yield 99;
+      };
+      return result;
+    };
+    const cases = [
+      () => toolCallExecute('exec_tool_iterator', {}, statefulArray),
+      () => toolCallExecuteAsync('exec_async_tool_iterator', {}, async () => statefulArray()),
+    ];
+
+    for (const execute of cases) {
+      assert.deepEqual(await execute(), [1]);
+    }
   });
 
   it('execute with attributes', async () => {

@@ -814,8 +814,8 @@ describe('typedLlmStreamExecute', () => {
       assert.equal(collected.length, 2);
       assert.notEqual(interceptedAnnotated, null);
       assert.equal(interceptedAnnotated.model, 'gpt-4.1-mini');
-      assert.equal(interceptedAnnotated.messages[0].role, 'system');
-      assert.equal(interceptedAnnotated.messages[1].role, 'user');
+      assert.equal(interceptedAnnotated.instructions, 'Be terse.');
+      assert.equal(interceptedAnnotated.messages[0].role, 'user');
 
       const deadline = Date.now() + 2000;
       while (

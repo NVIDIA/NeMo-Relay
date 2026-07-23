@@ -10,8 +10,8 @@ use std::sync::Arc;
 use nemo_relay::codec::resolve::supported_codec_names;
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
-    register_plugin,
+    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
+    apply_global_config_policy, deregister_plugin, register_plugin,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -175,8 +175,15 @@ impl Default for PiiRedactionProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BuiltinBackendConfig {
+    /// Optional semantic sanitization preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_preset_schema"))]
+    pub preset: Option<String>,
     /// Action applied to matching string leaves.
-    #[serde(default = "default_builtin_action")]
+    #[serde(
+        default = "default_builtin_action",
+        skip_serializing_if = "is_default_builtin_action"
+    )]
     #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_action_schema"))]
     pub action: String,
     /// Exact JSON-pointer paths to sanitize. Empty means every string leaf.
@@ -200,11 +207,22 @@ pub struct BuiltinBackendConfig {
     /// Number of trailing characters to keep when `action = "mask"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmasked_suffix: Option<usize>,
+    /// How the trajectory preset handles opaque custom-mark payloads.
+    #[serde(
+        default = "default_custom_mark_payload_policy",
+        skip_serializing_if = "is_default_custom_mark_payload_policy"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "custom_mark_payload_policy_schema")
+    )]
+    pub custom_mark_payload_policy: String,
 }
 
 impl Default for BuiltinBackendConfig {
     fn default() -> Self {
         Self {
+            preset: None,
             action: default_builtin_action(),
             target_paths: Vec::new(),
             pattern: None,
@@ -213,6 +231,7 @@ impl Default for BuiltinBackendConfig {
             mask_char: None,
             unmasked_prefix: None,
             unmasked_suffix: None,
+            custom_mark_payload_policy: default_custom_mark_payload_policy(),
         }
     }
 }
@@ -327,6 +346,12 @@ static PII_REDACTION_PROFILE_LIST_ITEM: nemo_relay::config_editor::EditorListIte
 
 nemo_relay::editor_config! {
     impl BuiltinBackendConfig {
+        preset => {
+            label: "preset",
+            kind: Enum,
+            values: ["trajectory_context"],
+            optional: true,
+        },
         action => {
             label: "action",
             kind: Enum,
@@ -359,6 +384,11 @@ nemo_relay::editor_config! {
         mask_char => { label: "mask_char", kind: String, optional: true },
         unmasked_prefix => { label: "unmasked_prefix", kind: Integer, optional: true },
         unmasked_suffix => { label: "unmasked_suffix", kind: Integer, optional: true },
+        custom_mark_payload_policy => {
+            label: "custom_mark_payload_policy",
+            kind: Enum,
+            values: ["preserve", "redact_all_leaves"],
+        },
     }
 }
 
@@ -385,6 +415,14 @@ impl Plugin for PiiRedactionPlugin {
 
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         validate_pii_redaction_plugin_config(plugin_config)
+    }
+
+    fn validate_with_policy(
+        &self,
+        plugin_config: &Map<String, Json>,
+        policy: &ConfigPolicy,
+    ) -> Vec<ConfigDiagnostic> {
+        validate_pii_redaction_plugin_config_with_policy(plugin_config, Some(policy))
     }
 
     fn register<'a>(
@@ -436,6 +474,24 @@ fn builtin_action_schema(
         generator,
         &["remove", "redact", "regex_replace", "hash", "mask"],
         Some("remove"),
+    )
+}
+
+#[cfg(feature = "schema")]
+fn builtin_preset_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["trajectory_context"], None)
+}
+
+#[cfg(feature = "schema")]
+fn custom_mark_payload_policy_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(
+        generator,
+        &["preserve", "redact_all_leaves"],
+        Some("preserve"),
     )
 }
 
@@ -534,7 +590,14 @@ fn parse_pii_redaction_config(
 fn validate_pii_redaction_plugin_config(
     plugin_config: &Map<String, Json>,
 ) -> Vec<ConfigDiagnostic> {
-    let config = match parse_pii_redaction_config(plugin_config) {
+    validate_pii_redaction_plugin_config_with_policy(plugin_config, None)
+}
+
+fn validate_pii_redaction_plugin_config_with_policy(
+    plugin_config: &Map<String, Json>,
+    policy: Option<&ConfigPolicy>,
+) -> Vec<ConfigDiagnostic> {
+    let mut config = match parse_pii_redaction_config(plugin_config) {
         Ok(config) => config,
         Err(err) => {
             return vec![ConfigDiagnostic {
@@ -546,6 +609,9 @@ fn validate_pii_redaction_plugin_config(
             }];
         }
     };
+    if let Some(policy) = policy {
+        config.policy = apply_global_config_policy(config.policy, policy);
+    }
 
     let mut diagnostics = vec![];
 
@@ -584,6 +650,7 @@ fn validate_pii_redaction_plugin_config(
         plugin_config,
         "builtin",
         &[
+            "preset",
             "action",
             "target_paths",
             "pattern",
@@ -592,6 +659,7 @@ fn validate_pii_redaction_plugin_config(
             "mask_char",
             "unmasked_prefix",
             "unmasked_suffix",
+            "custom_mark_payload_policy",
         ],
     );
     validate_section_fields(
@@ -612,7 +680,7 @@ fn validate_pii_redaction_plugin_config(
     validate_surface_selection(&mut diagnostics, &config.policy, &config);
     validate_codec_requirements(&mut diagnostics, &config.policy, &config);
     validate_builtin_mode_requirements(&mut diagnostics, &config.policy, plugin_config, &config);
-    validate_builtin_action_requirements(&mut diagnostics, &config.policy, &config);
+    validate_builtin_action_requirements(&mut diagnostics, &config.policy, plugin_config, &config);
     validate_local_mode_requirements(&mut diagnostics, &config.policy, plugin_config, &config);
 
     diagnostics
@@ -684,6 +752,7 @@ fn validate_profile_configuration(
             raw_profile,
             "builtin",
             &[
+                "preset",
                 "action",
                 "target_paths",
                 "pattern",
@@ -692,6 +761,7 @@ fn validate_profile_configuration(
                 "mask_char",
                 "unmasked_prefix",
                 "unmasked_suffix",
+                "custom_mark_payload_policy",
             ],
         );
         validate_section_fields(
@@ -717,6 +787,7 @@ fn validate_profile_configuration(
         validate_builtin_action_requirements(
             &mut profile_diagnostics,
             &config.policy,
+            raw_profile,
             &profile_config,
         );
         validate_local_mode_requirements(
@@ -848,11 +919,33 @@ fn validate_builtin_mode_requirements(
 fn validate_builtin_action_requirements(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
     config: &PiiRedactionConfig,
 ) {
     let Some(builtin) = config.builtin.as_ref() else {
         return;
     };
+
+    if builtin.preset.is_some() {
+        validate_builtin_preset_requirements(diagnostics, policy, plugin_config, builtin);
+        return;
+    }
+
+    let custom_policy_configured = plugin_config
+        .get("builtin")
+        .and_then(Json::as_object)
+        .is_some_and(|builtin| builtin.contains_key("custom_mark_payload_policy"));
+    if custom_policy_configured {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.custom_mark_payload_policy".to_string()),
+            "builtin.custom_mark_payload_policy requires builtin.preset = 'trajectory_context'"
+                .to_string(),
+        );
+    }
 
     if !matches!(
         builtin.action.as_str(),
@@ -940,6 +1033,59 @@ fn validate_builtin_action_requirements(
             Some("builtin.mask_char".to_string()),
             "builtin.mask_char must not be empty when builtin.action = 'mask'".to_string(),
         );
+    }
+}
+
+fn validate_builtin_preset_requirements(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
+    builtin: &BuiltinBackendConfig,
+) {
+    if builtin.preset.as_deref() != Some("trajectory_context") {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.preset".to_string()),
+            "builtin.preset must be 'trajectory_context'".to_string(),
+        );
+    }
+    if !matches!(
+        builtin.custom_mark_payload_policy.as_str(),
+        "preserve" | "redact_all_leaves"
+    ) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.custom_mark_payload_policy".to_string()),
+            "builtin.custom_mark_payload_policy must be 'preserve' or 'redact_all_leaves'"
+                .to_string(),
+        );
+    }
+    let raw_builtin = plugin_config.get("builtin").and_then(Json::as_object);
+    for field in [
+        "action",
+        "detector",
+        "pattern",
+        "target_paths",
+        "mask_char",
+        "unmasked_prefix",
+        "unmasked_suffix",
+    ] {
+        if raw_builtin.is_some_and(|raw| raw.contains_key(field)) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some(format!("builtin.{field}")),
+                format!("builtin.{field} cannot be combined with builtin.preset"),
+            );
+        }
     }
 }
 
@@ -1223,6 +1369,10 @@ fn default_builtin_action() -> String {
     "remove".to_string()
 }
 
+fn default_custom_mark_payload_policy() -> String {
+    "preserve".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1233,6 +1383,14 @@ fn default_priority() -> i32 {
 
 fn is_default_mode(mode: &str) -> bool {
     mode == "builtin"
+}
+
+fn is_default_builtin_action(action: &str) -> bool {
+    action == "remove"
+}
+
+fn is_default_custom_mark_payload_policy(policy: &str) -> bool {
+    policy == "preserve"
 }
 
 fn is_true(value: &bool) -> bool {

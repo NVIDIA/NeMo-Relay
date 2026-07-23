@@ -31,6 +31,9 @@ observability backend, or guardrail authoring system. It gives those systems a
 common runtime boundary to meet at.
 </Note>
 
+For how Relay complements OpenTelemetry GenAI conventions and observability or
+evaluation products, see [How NeMo Relay Relates to Other Tooling](/about-nemo-relay/ecosystem#how-nemo-relay-relates-to-other-tooling).
+
 The first design question is simple: where can Relay observe or control the real
 work? The answer determines whether you should use a CLI sidecar, direct SDK
 instrumentation, a maintained integration, a framework wrapper, or a plugin.
@@ -115,7 +118,7 @@ Use the tasks below to build your understanding and set up Relay:
 | Task | Start With |
 |---|---|
 | Install packages | [Installation](/getting-started/installation) |
-| Understand the mental model | [Agent Runtime Primer](/getting-started/agent-runtime-primer) |
+| Understand the mental model | [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) |
 | Configure plugin files | [Plugin Configuration Files](/configure-plugins/plugin-configuration-files) |
 | Export traces or trajectories | [Observability](/configure-plugins/observability/about) |
 | Tune performance with adaptive behavior | [Adaptive](/configure-plugins/adaptive/about) |

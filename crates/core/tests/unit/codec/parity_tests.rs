@@ -680,8 +680,19 @@ fn test_request_normalization_parity() {
             name: None,
         },
     ];
+    assert_eq!(chat.messages, expected_messages);
+    let expected_user_messages = vec![Message::User {
+        content: MessageContent::Text("Summarize the docs.".to_string()),
+        name: None,
+    }];
+    assert_eq!(anthropic.messages, expected_user_messages);
+    assert_eq!(responses.messages, expected_user_messages);
+    assert_eq!(
+        anthropic.instructions,
+        Some(MessageContent::Text("You are terse.".to_string()))
+    );
+    assert_eq!(anthropic.instructions, responses.instructions);
     for decoded in [&chat, &anthropic, &responses] {
-        assert_eq!(decoded.messages, expected_messages);
         assert_eq!(decoded.model.as_deref(), Some("parity-request-model"));
         assert_eq!(decoded.system_prompt(), Some("You are terse."));
         assert_eq!(decoded.last_user_message(), Some("Summarize the docs."));
@@ -714,4 +725,107 @@ fn test_request_normalization_parity() {
     assert_eq!(responses.max_output_tokens, Some(256));
     assert_eq!(chat.max_output_tokens, None);
     assert_eq!(anthropic.max_output_tokens, None);
+}
+
+#[test]
+fn baseline_patching_keeps_raw_array_fields_with_reordered_logical_items() {
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A"},
+        {"type": "text", "text": "b", "provider_marker": "B"},
+        {"type": "text", "text": "c", "provider_marker": "C"}
+    ]);
+    let baseline = json!([
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"},
+        {"type": "text", "text": "c"}
+    ]);
+    let edited = json!([
+        {"type": "text", "text": "b"},
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "c"}
+    ]);
+
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
+        json!([
+            {"type": "text", "text": "b", "provider_marker": "B"},
+            {"type": "text", "text": "a", "provider_marker": "A"},
+            {"type": "text", "text": "c", "provider_marker": "C"}
+        ])
+    );
+}
+
+#[test]
+fn baseline_patching_does_not_pair_reordered_deletion_with_unrelated_insertion() {
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A"},
+        {"type": "text", "text": "b", "provider_marker": "B"}
+    ]);
+    let baseline = json!([
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"}
+    ]);
+    let edited = json!([
+        {"type": "text", "text": "new"},
+        {"type": "text", "text": "a"}
+    ]);
+
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
+        json!([
+            {"type": "text", "text": "new"},
+            {"type": "text", "text": "a", "provider_marker": "A"}
+        ])
+    );
+}
+
+#[test]
+fn baseline_patching_handles_insert_delete_and_duplicate_reorders() {
+    let duplicate_a = json!({"type": "text", "text": "a"});
+    let b = json!({"type": "text", "text": "b"});
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A1"},
+        {"type": "text", "text": "a", "provider_marker": "A2"},
+        {"type": "text", "text": "b", "provider_marker": "B"}
+    ]);
+    let baseline = Json::Array(vec![duplicate_a.clone(), duplicate_a.clone(), b.clone()]);
+    let edited = Json::Array(vec![
+        duplicate_a.clone(),
+        b,
+        duplicate_a,
+        json!({"type": "text", "text": "new"}),
+    ]);
+
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
+        json!([
+            {"type": "text", "text": "a", "provider_marker": "A1"},
+            {"type": "text", "text": "b", "provider_marker": "B"},
+            {"type": "text", "text": "a", "provider_marker": "A2"},
+            {"type": "text", "text": "new"}
+        ])
+    );
+}
+
+#[test]
+fn baseline_patching_rejects_multiple_reordered_and_edited_items_without_provenance() {
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A"},
+        {"type": "text", "text": "b", "provider_marker": "B"}
+    ]);
+    let baseline = json!([
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"}
+    ]);
+    let edited = json!([
+        {"type": "text", "text": "b-edited"},
+        {"type": "text", "text": "a-edited"}
+    ]);
+
+    let error = super::patch_changed_json(&original, &baseline, &edited).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("multiple edited array items without stable identities")
+    );
 }

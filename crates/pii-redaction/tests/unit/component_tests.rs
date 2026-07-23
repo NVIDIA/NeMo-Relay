@@ -10,11 +10,12 @@ use crate::api::event::{
     ScopeCategory, ScopeEvent,
 };
 use crate::api::llm::{
-    LlmCallExecuteParams, LlmCallParams, LlmRequest, llm_call, llm_call_execute,
+    LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams, llm_call,
+    llm_call_execute, llm_stream_call_execute,
 };
 use crate::api::runtime::{
-    LlmExecutionNextFn, NemoRelayContextState, create_scope_stack, global_context,
-    set_thread_scope_stack,
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, NemoRelayContextState,
+    create_scope_stack, global_context, set_thread_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
@@ -23,12 +24,14 @@ use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::api::tool::{ToolCallEndParams, ToolCallParams, tool_call, tool_call_end};
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::traits::LlmResponseCodec;
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, PluginError, PluginRegistrationContext,
-    clear_plugin_configuration, ensure_builtin_plugins_registered, initialize_plugins,
-    list_plugin_kinds, rollback_registrations, validate_plugin_config,
+    ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
+    PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
+    ensure_builtin_plugins_registered, initialize_plugins, list_plugin_kinds,
+    rollback_registrations, validate_plugin_config,
 };
+use futures::StreamExt;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
 use nemo_relay::observability::openinference::OpenInferenceSubscriber;
@@ -69,6 +72,67 @@ fn plugin_config(config: Json) -> PluginConfig {
         components: vec![component(config)],
         policy: Default::default(),
     }
+}
+
+#[test]
+fn top_level_policy_controls_component_diagnostics() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let component_config = json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "builtin": {
+            "action": "INVALID_ACTION",
+            "target_paths": ["/secret"]
+        }
+    });
+
+    let mut warn_config = plugin_config(component_config.clone());
+    warn_config.policy = ConfigPolicy {
+        unsupported_value: UnsupportedBehavior::Warn,
+        ..ConfigPolicy::default()
+    };
+    let warn_report = validate_plugin_config(&warn_config);
+    assert!(warn_report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "pii_redaction.unsupported_value"
+            && diagnostic.field.as_deref() == Some("builtin.action")
+            && diagnostic.level == DiagnosticLevel::Warning
+    }));
+
+    let mut ignored_config = plugin_config(component_config);
+    ignored_config.policy = ConfigPolicy {
+        unsupported_value: UnsupportedBehavior::Ignore,
+        ..ConfigPolicy::default()
+    };
+    let ignored_report = validate_plugin_config(&ignored_config);
+    assert!(
+        !ignored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "pii_redaction.unsupported_value")
+    );
+
+    let mut unknown_field_config = plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "builtin": {"action": "remove"},
+        "unexpected": true
+    }));
+    unknown_field_config.policy = ConfigPolicy {
+        unknown_field: UnsupportedBehavior::Error,
+        ..ConfigPolicy::default()
+    };
+    let unknown_field_report = validate_plugin_config(&unknown_field_config);
+    assert!(unknown_field_report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "pii_redaction.unknown_field"
+            && diagnostic.field.as_deref() == Some("unexpected")
+            && diagnostic.level == DiagnosticLevel::Error
+    }));
 }
 
 fn reset_runtime() {
@@ -128,10 +192,701 @@ fn builtin_registry_includes_pii_redaction_component() {
 fn builtin_backend_config_default_matches_documented_action_default() {
     let config = BuiltinBackendConfig::default();
 
+    assert!(config.preset.is_none());
     assert_eq!(config.action, "remove");
+    assert_eq!(config.custom_mark_payload_policy, "preserve");
     assert!(config.target_paths.is_empty());
     assert!(config.pattern.is_none());
     assert!(config.detector.is_none());
+}
+
+#[test]
+fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    let valid = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "preset": "trajectory_context",
+                "custom_mark_payload_policy": "redact_all_leaves"
+            }
+        }]
+    })));
+    assert!(!valid.has_errors(), "{:#?}", valid.diagnostics);
+
+    let invalid = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "preset": "trajectory_context",
+                "action": "redact",
+                "detector": "email"
+            }
+        }]
+    })));
+    assert!(invalid.has_errors());
+    assert!(
+        invalid.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("profiles[0].builtin.action")
+        })
+    );
+    assert!(
+        invalid.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("profiles[0].builtin.detector")
+        })
+    );
+
+    let policy_without_preset = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {"custom_mark_payload_policy": "preserve"}
+        }]
+    })));
+    assert!(policy_without_preset.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("profiles[0].builtin.custom_mark_payload_policy")
+    }));
+}
+
+fn trajectory_backend(codec: Option<&str>, policy: &str) -> crate::builtin::CompiledBuiltinBackend {
+    crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            preset: Some("trajectory_context".into()),
+            custom_mark_payload_policy: policy.into(),
+            ..BuiltinBackendConfig::default()
+        },
+        codec.map(str::to_string),
+    )
+    .unwrap()
+}
+
+#[test]
+fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
+    let callback = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
+        Some("openai_chat"),
+        "preserve",
+    ));
+    let request = callback(LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "system", "content": "private system prompt"},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "private user prompt"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,secret", "detail": "high"}}
+                ]},
+                {"role": "assistant", "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{\"query\":\"private query\",\"limit\":5}"}
+                }]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "private result"}
+            ],
+            "tools": [{"type": "function", "function": {
+                "name": "search",
+                "description": "private description",
+                "parameters": {"type": "object", "properties": {
+                    "query": {"type": "string", "description": "private schema text", "default": "private default"}
+                }, "required": ["query"]}
+            }}],
+            "temperature": 0.2,
+            "stop": ["private stop sequence"],
+            "participant": {"name": "Alice Example", "username": "alice"},
+            "person_name": "Alice Example"
+        }),
+    });
+
+    assert_eq!(request.content["model"], "claude-sonnet-4-6");
+    assert_eq!(request.content["temperature"], 0.2);
+    assert_eq!(request.content["stop"][0], "[REDACTED]");
+    assert_eq!(request.content["participant"]["name"], "[REDACTED]");
+    assert_eq!(request.content["participant"]["username"], "[REDACTED]");
+    assert_eq!(request.content["person_name"], "[REDACTED]");
+    assert_eq!(request.content["messages"][0]["role"], "system");
+    assert_eq!(request.content["messages"][0]["content"], "[REDACTED]");
+    assert_eq!(request.content["messages"][1]["content"][0]["type"], "text");
+    assert_eq!(
+        request.content["messages"][1]["content"][0]["text"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        request.content["messages"][1]["content"][1]["image_url"]["url"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        request.content["messages"][2]["tool_calls"][0]["id"],
+        "call_1"
+    );
+    assert_eq!(
+        request.content["messages"][2]["tool_calls"][0]["function"]["name"],
+        "search"
+    );
+    let arguments: Json = serde_json::from_str(
+        request.content["messages"][2]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(arguments, json!({"query": "[REDACTED]", "limit": 0}));
+    assert_eq!(request.content["messages"][3]["tool_call_id"], "call_1");
+    assert_eq!(request.content["messages"][3]["content"], "[REDACTED]");
+    assert_eq!(request.content["tools"][0]["function"]["name"], "search");
+    assert_eq!(
+        request.content["tools"][0]["function"]["description"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        request.content["tools"][0]["function"]["parameters"]["required"][0],
+        "query"
+    );
+}
+
+#[test]
+fn trajectory_preset_preserves_response_analytics_and_redacts_response_content() {
+    let callback = crate::builtin::llm_sanitize_response_callback(trajectory_backend(
+        Some("openai_chat"),
+        "preserve",
+    ));
+    let sanitized = callback(json!({
+        "id": "chatcmpl_1",
+        "model": "claude-opus-4-6",
+        "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+            "role": "assistant",
+            "content": "private answer",
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {
+                "name": "terminal", "arguments": "{\"command\":\"cat secret.txt\"}"
+            }}]
+        }, "logprobs": {"content": [{"token": "secret", "logprob": -0.5}]}}],
+        "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
+        "cost": {"total": 1.25}
+    }));
+
+    assert_eq!(sanitized["id"], "chatcmpl_1");
+    assert_eq!(sanitized["model"], "claude-opus-4-6");
+    assert_eq!(sanitized["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(sanitized["choices"][0]["message"]["role"], "assistant");
+    assert_eq!(sanitized["choices"][0]["message"]["content"], "[REDACTED]");
+    assert_eq!(
+        sanitized["choices"][0]["message"]["tool_calls"][0]["id"],
+        "call_1"
+    );
+    assert_eq!(
+        sanitized["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+        "terminal"
+    );
+    let arguments: Json = serde_json::from_str(
+        sanitized["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(arguments, json!({"command": "[REDACTED]"}));
+    assert_eq!(sanitized["usage"]["total_tokens"], 25);
+    assert_eq!(sanitized["cost"]["total"], 1.25);
+}
+
+#[test]
+fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
+    let responses_request = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
+        Some("openai_responses"),
+        "preserve",
+    ))(LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-5",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "private input"}]}],
+            "reasoning": {"effort": "high", "summary": "private reasoning"},
+            "max_output_tokens": 100
+        }),
+    });
+    assert_eq!(responses_request.content["model"], "gpt-5");
+    assert_eq!(responses_request.content["input"][0]["role"], "user");
+    assert_eq!(
+        responses_request.content["input"][0]["content"][0]["text"],
+        "[REDACTED]"
+    );
+    assert_eq!(responses_request.content["max_output_tokens"], 100);
+
+    let responses_response = crate::builtin::llm_sanitize_response_callback(trajectory_backend(
+        Some("openai_responses"),
+        "preserve",
+    ))(json!({
+        "id": "resp_1",
+        "model": "gpt-5",
+        "status": "completed",
+        "output": [{"id": "msg_1", "type": "message", "role": "assistant", "content": [
+            {"type": "output_text", "text": "private output"}
+        ]}],
+        "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
+    }));
+    assert_eq!(responses_response["id"], "resp_1");
+    assert_eq!(responses_response["status"], "completed");
+    assert_eq!(responses_response["output"][0]["id"], "msg_1");
+    assert_eq!(
+        responses_response["output"][0]["content"][0]["text"],
+        "[REDACTED]"
+    );
+    assert_eq!(responses_response["usage"]["total_tokens"], 14);
+
+    let anthropic_request = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
+        Some("anthropic_messages"),
+        "preserve",
+    ))(LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "claude-sonnet-4-6",
+            "system": "private system",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "private user"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "private-base64"}}
+            ]}],
+            "max_tokens": 128
+        }),
+    });
+    assert_eq!(anthropic_request.content["model"], "claude-sonnet-4-6");
+    assert_eq!(anthropic_request.content["system"], "[REDACTED]");
+    assert_eq!(
+        anthropic_request.content["messages"][0]["content"][0]["text"], "[REDACTED]",
+        "{}",
+        anthropic_request.content
+    );
+    assert_eq!(
+        anthropic_request.content["messages"][0]["content"][1]["source"]["data"],
+        "[REDACTED]"
+    );
+    assert_eq!(anthropic_request.content["max_tokens"], 128);
+
+    let anthropic_response = crate::builtin::llm_sanitize_response_callback(trajectory_backend(
+        Some("anthropic_messages"),
+        "preserve",
+    ))(json!({
+        "id": "msg_1",
+        "model": "claude-sonnet-4-6",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "private chain of thought", "signature": "private-signature"},
+            {"type": "text", "text": "private answer"}
+        ],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 12, "output_tokens": 6, "cache_read_input_tokens": 8}
+    }));
+    assert_eq!(anthropic_response["id"], "msg_1");
+    assert_eq!(anthropic_response["role"], "assistant");
+    assert_eq!(anthropic_response["content"][0]["type"], "thinking");
+    assert_eq!(anthropic_response["content"][0]["thinking"], "[REDACTED]");
+    assert_eq!(anthropic_response["content"][1]["text"], "[REDACTED]");
+    assert_eq!(anthropic_response["usage"]["input_tokens"], 12);
+    assert_eq!(anthropic_response["usage"]["cache_read_input_tokens"], 8);
+}
+
+#[test]
+fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let chunk = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("llm.chunk").build(),
+        Some(EventCategory::custom()),
+        Some(CategoryProfile::builder().subtype("llm.chunk").build()),
+    ));
+    let sanitized = callback(
+        &chunk,
+        EventSanitizeFields {
+            data: Some(json!({
+                "chunk_index": 2,
+                "event_type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "private delta"}
+            })),
+            category_profile: chunk.category_profile().cloned(),
+            metadata: None,
+        },
+    );
+    assert_eq!(sanitized.data.as_ref().unwrap()["chunk_index"], 2);
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["event_type"],
+        "content_block_delta"
+    );
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["delta"]["text"],
+        "[REDACTED]"
+    );
+
+    let optimization = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("nemo_relay.llm.optimization")
+            .build(),
+        Some(EventCategory::custom()),
+        Some(
+            CategoryProfile::builder()
+                .subtype("nemo_relay.llm.optimization")
+                .build(),
+        ),
+    ));
+    let sanitized = callback(
+        &optimization,
+        EventSanitizeFields {
+            data: Some(json!({
+                "producer": "neutral.router",
+                "kind": "model_routing",
+                "applied": true,
+                "model_transition": {
+                    "baseline": {"model": "claude-opus-4-6"},
+                    "effective": {"model": "claude-sonnet-4-6"}
+                },
+                "token_impact": {"saved": {"prompt_tokens": 40, "total_tokens": 40}},
+                "payload": {"private_excerpt": "private content"}
+            })),
+            category_profile: optimization.category_profile().cloned(),
+            metadata: None,
+        },
+    );
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["producer"],
+        "neutral.router"
+    );
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["model_transition"]["baseline"]["model"],
+        "claude-opus-4-6"
+    );
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["token_impact"]["saved"]["total_tokens"],
+        40
+    );
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["payload"]["private_excerpt"],
+        "[REDACTED]"
+    );
+
+    let nested_agent = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("worker-agent").build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let sanitized = callback(
+        &nested_agent,
+        EventSanitizeFields {
+            data: Some(json!({
+                "request_id": "request-1",
+                "instruction": "private delegated task",
+                "history": [{"role": "user", "content": "private history"}]
+            })),
+            category_profile: None,
+            metadata: Some(json!({"parent_scope_id": "scope-1", "note": "private note"})),
+        },
+    );
+    assert_eq!(sanitized.data.as_ref().unwrap()["request_id"], "request-1");
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["instruction"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["history"][0]["role"],
+        "user"
+    );
+    assert_eq!(
+        sanitized.data.as_ref().unwrap()["history"][0]["content"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        sanitized.metadata.as_ref().unwrap()["parent_scope_id"],
+        "scope-1"
+    );
+    assert_eq!(sanitized.metadata.as_ref().unwrap()["note"], "[REDACTED]");
+}
+
+#[test]
+fn trajectory_preset_preserves_trusted_scope_metadata_only() {
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let metadata = json!({
+        "nemo_relay_scope_role": "turn",
+        "agent_kind": "codex",
+        "hook_event_name": "UserPromptSubmit",
+        "gateway_config_profile": "development",
+        "gateway_mode": "passthrough",
+        "turn_source": "user_prompt",
+        "harness": "codex",
+        "source": "hook",
+        "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
+        "private_note": "private context",
+        "nested": {"harness": "private nested context"}
+    });
+    let expected_metadata = json!({
+        "nemo_relay_scope_role": "turn",
+        "agent_kind": "codex",
+        "hook_event_name": "UserPromptSubmit",
+        "gateway_config_profile": "development",
+        "gateway_mode": "passthrough",
+        "turn_source": "user_prompt",
+        "harness": "codex",
+        "source": "hook",
+        "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
+        "private_note": "[REDACTED]",
+        "nested": {"harness": "[REDACTED]"}
+    });
+
+    for (scope_category, category) in [
+        (ScopeCategory::Start, EventCategory::agent()),
+        (ScopeCategory::End, EventCategory::agent()),
+        (ScopeCategory::Start, EventCategory::llm()),
+        (ScopeCategory::End, EventCategory::llm()),
+        (ScopeCategory::Start, EventCategory::tool()),
+        (ScopeCategory::End, EventCategory::tool()),
+    ] {
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().name("trusted-scope").build(),
+            scope_category,
+            Vec::new(),
+            category,
+            None,
+        ));
+        let sanitized = callback(
+            &event,
+            EventSanitizeFields {
+                data: None,
+                category_profile: None,
+                metadata: Some(metadata.clone()),
+            },
+        );
+        assert_eq!(sanitized.metadata, Some(expected_metadata.clone()));
+    }
+
+    let malformed = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("malformed-trusted-scope").build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let sanitized = callback(
+        &malformed,
+        EventSanitizeFields {
+            data: None,
+            category_profile: None,
+            metadata: Some(json!({
+                "harness": {"private": "private context"},
+                "source": 42,
+                "identity_quality": ["private context"],
+                "provider_payload_exact": "private context"
+            })),
+        },
+    );
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({
+            "harness": {"private": "[REDACTED]"},
+            "source": 0,
+            "identity_quality": ["[REDACTED]"],
+            "provider_payload_exact": "[REDACTED]"
+        }))
+    );
+
+    let mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("llm.chunk").build(),
+        Some(EventCategory::custom()),
+        Some(CategoryProfile::builder().subtype("llm.chunk").build()),
+    ));
+    let sanitized = callback(
+        &mark,
+        EventSanitizeFields {
+            data: None,
+            category_profile: mark.category_profile().cloned(),
+            metadata: Some(json!({"harness": "codex", "source": "hook"})),
+        },
+    );
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({"harness": "[REDACTED]", "source": "[REDACTED]"}))
+    );
+}
+
+#[test]
+fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("neutral.plugin.evidence").build(),
+        Some(EventCategory::custom()),
+        Some(CategoryProfile {
+            subtype: Some("neutral.plugin".into()),
+            extra: BTreeMap::from([("opaque".into(), json!({"label": "private"}))]),
+            ..CategoryProfile::default()
+        }),
+    ));
+    let fields = EventSanitizeFields {
+        data: Some(json!({"text": "private", "score": 0.75, "nested": [true, null]})),
+        category_profile: event.category_profile().cloned(),
+        metadata: Some(json!({"owner": "private owner"})),
+    };
+
+    let preserve = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    assert_eq!(preserve(&event, fields.clone()), fields);
+
+    let redact =
+        crate::builtin::event_sanitize_callback(trajectory_backend(None, "redact_all_leaves"));
+    let sanitized = redact(&event, fields);
+    assert_eq!(
+        sanitized.data.unwrap(),
+        json!({
+            "text": "[REDACTED]", "score": 0, "nested": [false, null]
+        })
+    );
+    assert_eq!(sanitized.metadata.unwrap(), json!({"owner": "[REDACTED]"}));
+    let profile = sanitized.category_profile.unwrap();
+    assert_eq!(profile.subtype.as_deref(), Some("neutral.plugin"));
+    assert_eq!(profile.extra["opaque"]["label"], "[REDACTED]");
+}
+
+#[test]
+fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations() {
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let annotated_response: nemo_relay::codec::response::AnnotatedLlmResponse =
+        serde_json::from_value(json!({
+            "model": "claude-sonnet-4-6",
+            "message": "private answer",
+            "finish_reason": "complete",
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "cost": {
+                    "total": 0.42,
+                    "currency": "USD",
+                    "source": "provider_reported"
+                }
+            },
+            "optimization_summary": {
+                "schema_version": "1",
+                "calculation_version": "1",
+                "status": "complete",
+                "baseline_model": {"model": "claude-opus-4-6"},
+                "effective_model": {"model": "claude-sonnet-4-6"},
+                "effective_usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+                "baseline_usage": {"prompt_tokens": 140, "completion_tokens": 20, "total_tokens": 160},
+                "tokens_saved": {"prompt_tokens": 40, "total_tokens": 40},
+                "estimated_cost_saved": 0.8,
+                "currency": "USD",
+                "contributions": [{
+                    "producer": "neutral.optimizer",
+                    "kind": "input_compression",
+                    "applied": true,
+                    "token_impact": {
+                        "saved": {"prompt_tokens": 40, "total_tokens": 40},
+                        "quality": "estimated",
+                        "estimation_method": "neutral_counter"
+                    },
+                    "payload_schema": {"name": "neutral.evidence", "version": "1"},
+                    "payload": {"private_excerpt": "private tool output", "strategy": "head_tail"}
+                }]
+            }
+        }))
+        .unwrap();
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("llm").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        None,
+    ));
+    let sanitized = callback(
+        &event,
+        EventSanitizeFields {
+            data: Some(json!({"already": "sanitized by the response callback"})),
+            category_profile: Some(
+                CategoryProfile::builder()
+                    .model_name("claude-sonnet-4-6")
+                    .annotated_response(Arc::new(annotated_response))
+                    .build(),
+            ),
+            metadata: None,
+        },
+    );
+
+    let profile = sanitized.category_profile.unwrap();
+    assert_eq!(profile.model_name.as_deref(), Some("claude-sonnet-4-6"));
+    let response = profile.annotated_response.unwrap();
+    assert_eq!(response.response_text(), Some("[REDACTED]"));
+    assert_eq!(response.usage.as_ref().unwrap().total_tokens, Some(120));
+    assert_eq!(
+        response
+            .usage
+            .as_ref()
+            .unwrap()
+            .cost
+            .as_ref()
+            .unwrap()
+            .total,
+        Some(0.42)
+    );
+    let summary = response.optimization_summary.as_ref().unwrap();
+    assert_eq!(summary.tokens_saved.prompt_tokens, Some(40));
+    assert_eq!(summary.estimated_cost_saved, Some(0.8));
+    assert_eq!(summary.contributions[0].producer, "neutral.optimizer");
+    assert_eq!(
+        summary.contributions[0].payload.as_ref().unwrap()["private_excerpt"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        summary.contributions[0].payload.as_ref().unwrap()["strategy"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        sanitized.data.unwrap()["already"],
+        "sanitized by the response callback",
+        "specialized LLM data must not be processed twice"
+    );
+}
+
+#[test]
+fn preserved_custom_marks_remain_eligible_for_a_later_email_profile() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("neutral.plugin.evidence").build(),
+        Some(EventCategory::custom()),
+        Some(CategoryProfile::builder().subtype("neutral.plugin").build()),
+    ));
+    let fields = EventSanitizeFields {
+        data: Some(json!({"owner": "alice@example.com", "score": 0.9})),
+        category_profile: event.category_profile().cloned(),
+        metadata: Some(json!({"contact": "bob@example.com"})),
+    };
+    let trajectory = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let email = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+
+    let sanitized = email(&event, trajectory(&event, fields));
+    assert_eq!(sanitized.data.as_ref().unwrap()["owner"], "[REDACTED]");
+    assert_eq!(sanitized.data.as_ref().unwrap()["score"], 0.9);
+    assert_eq!(
+        sanitized.metadata.as_ref().unwrap()["contact"],
+        "[REDACTED]"
+    );
 }
 
 #[test]
@@ -181,6 +936,18 @@ fn typed_profile_config_serializes_without_conflicting_legacy_defaults() {
 
     let report = validate_plugin_config(&plugin_config(serialized));
     assert!(!report.has_errors(), "{:?}", report.diagnostics);
+}
+
+#[test]
+fn typed_trajectory_preset_omits_the_legacy_default_action() {
+    let config = BuiltinBackendConfig {
+        preset: Some("trajectory_context".into()),
+        ..BuiltinBackendConfig::default()
+    };
+    let serialized = serde_json::to_value(config).unwrap();
+    assert_eq!(serialized["preset"], "trajectory_context");
+    assert!(serialized.get("action").is_none());
+    assert!(serialized.get("custom_mark_payload_policy").is_none());
 }
 
 #[test]
@@ -980,22 +1747,28 @@ fn mark_false_preserves_mark_fields() {
 }
 
 #[test]
-fn sanitized_pii_never_reaches_subscribers_or_exporters() {
+fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
     futures::executor::block_on(initialize_plugins(plugin_config(json!({
-        "mode": "builtin",
         "codec": "openai_chat",
-        "input": true,
-        "output": true,
-        "tool_input": false,
-        "tool_output": false,
-        "builtin": {
-            "action": "redact",
-            "detector": "email"
-        }
+        "profiles": [
+            {
+                "mode": "builtin",
+                "priority": 80,
+                "builtin": {
+                    "preset": "trajectory_context",
+                    "custom_mark_payload_policy": "redact_all_leaves"
+                }
+            },
+            {
+                "mode": "builtin",
+                "priority": 90,
+                "builtin": {"action": "redact", "detector": "email"}
+            }
+        ]
     }))))
     .unwrap();
 
@@ -1038,19 +1811,40 @@ fn sanitized_pii_never_reaches_subscribers_or_exporters() {
         .unwrap();
 
     let raw_pii = "person@example.com";
+    let raw_context = "private trajectory context canary";
+    let trusted_scope_metadata = json!({
+        "nemo_relay_scope_role": "session",
+        "agent_kind": "hermes",
+        "hook_event_name": "SessionStart",
+        "gateway_config_profile": "development",
+        "gateway_mode": "passthrough",
+        "turn_source": "user_prompt",
+        "harness": "hermes",
+        "source": "hook",
+        "identity_quality": "native",
+        "gateway_path": "responses",
+        "llm_correlation_status": "matched",
+        "llm_correlation_source": "provider",
+        "tool_correlation_status": "matched",
+        "tool_correlation_source": "provider",
+        "otel.status_code": "OK",
+        "fidelity_source": "provider",
+        "provider_payload_exact": true,
+        "session_owner": raw_pii
+    });
     let agent = push_scope(
         PushScopeParams::builder()
             .name("hermes-agent")
             .scope_type(ScopeType::Agent)
-            .input(json!({"prompt": raw_pii}))
-            .metadata(json!({"session_owner": raw_pii}))
+            .input(json!({"prompt": raw_context, "request_id": "request-1"}))
+            .metadata(trusted_scope_metadata.clone())
             .build(),
     )
     .unwrap();
     event(
         EmitMarkEventParams::builder()
             .name("hermes.checkpoint")
-            .data(json!({"email": raw_pii}))
+            .data(json!({"content": raw_context, "email": raw_pii, "score": 0.95}))
             .metadata(json!({"reviewer": raw_pii}))
             .build(),
     )
@@ -1058,12 +1852,13 @@ fn sanitized_pii_never_reaches_subscribers_or_exporters() {
     pop_scope(
         PopScopeParams::builder()
             .handle_uuid(&agent.uuid)
-            .output(json!({"answer": raw_pii}))
+            .output(json!({"answer": raw_context}))
             .metadata(json!({"approver": raw_pii}))
             .build(),
     )
     .unwrap();
 
+    crate::api::subscriber::flush_subscribers().unwrap();
     atof.force_flush().unwrap();
     let trajectory = atif.export().unwrap();
     otel.force_flush().unwrap();
@@ -1074,18 +1869,61 @@ fn sanitized_pii_never_reaches_subscribers_or_exporters() {
     let atif_json = serde_json::to_string(&trajectory).unwrap();
     let otel_debug = format!("{:?}", otel_exporter.get_finished_spans().unwrap());
     let openinference_debug = format!("{:?}", openinference_exporter.get_finished_spans().unwrap());
-    for (surface, output) in [
-        ("subscriber", subscriber_json),
-        ("ATOF", atof_json),
-        ("ATIF", atif_json),
-        ("OpenTelemetry", otel_debug),
-        ("OpenInference", openinference_debug),
+    for (surface, output, retains_scope_metadata) in [
+        ("subscriber", subscriber_json, true),
+        ("ATOF", atof_json, true),
+        ("ATIF", atif_json, false),
+        ("OpenTelemetry", otel_debug, true),
+        ("OpenInference", openinference_debug, true),
     ] {
         assert!(
             !output.contains(raw_pii),
             "raw PII leaked through {surface}: {output}"
         );
+        assert!(
+            !output.contains(raw_context),
+            "trajectory context leaked through {surface}: {output}"
+        );
+        if retains_scope_metadata {
+            for (key, value) in trusted_scope_metadata
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| *key != "session_owner")
+            {
+                assert!(
+                    output.contains(key) && output.contains(value.to_string().trim_matches('"')),
+                    "trusted scope metadata {key} was not retained in {surface}: {output}"
+                );
+            }
+        }
     }
+
+    let captured = captured_events_snapshot(&captured);
+    let agent_start = captured
+        .iter()
+        .find(|event| {
+            event.name() == "hermes-agent" && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    assert_eq!(agent_start.data().unwrap()["request_id"], "request-1");
+    assert_eq!(agent_start.data().unwrap()["prompt"], "[REDACTED]");
+    let agent_metadata = agent_start.metadata().unwrap();
+    for (key, value) in trusted_scope_metadata
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(key, _)| *key != "session_owner")
+    {
+        assert_eq!(agent_metadata[key], *value, "{key}");
+    }
+    assert_eq!(agent_metadata["session_owner"], "[REDACTED]");
+    let custom_mark = captured
+        .iter()
+        .find(|event| event.name() == "hermes.checkpoint")
+        .unwrap();
+    assert_eq!(custom_mark.data().unwrap()["content"], "[REDACTED]");
+    assert_eq!(custom_mark.data().unwrap()["score"], 0);
 
     deregister_subscriber("pii-regression-subscriber").unwrap();
     atof.deregister("pii-regression-atof").unwrap();
@@ -1094,6 +1932,100 @@ fn sanitized_pii_never_reaches_subscribers_or_exporters() {
     openinference
         .deregister("pii-regression-openinference")
         .unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client_chunks() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {"preset": "trajectory_context"}
+        }]
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-trajectory-stream");
+    let raw_delta = "private streaming delta";
+    let provider: LlmStreamExecutionNextFn = Arc::new(move |_request| {
+        Box::pin(async move {
+            Ok(LlmJsonStream::new(futures::stream::iter(vec![Ok(json!({
+                "id": "chatcmpl-stream",
+                "object": "chat.completion.chunk",
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "delta": {"content": raw_delta}, "finish_reason": null}]
+            }))])))
+        })
+    });
+    let request_codec: Arc<dyn LlmCodec> = Arc::new(OpenAIChatCodec);
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "private stream prompt"}]
+                }),
+            })
+            .func(provider)
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| {
+                json!({
+                    "id": "chatcmpl-stream",
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "private final answer"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11}
+                })
+            }))
+            .codec(request_codec)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let chunk = stream.next().await.unwrap().unwrap();
+    assert_eq!(chunk["choices"][0]["delta"]["content"], raw_delta);
+    assert!(stream.next().await.is_none());
+
+    let captured = captured_events_snapshot(&events);
+    let start = captured
+        .iter()
+        .find(|event| event.scope_category() == Some(ScopeCategory::Start))
+        .unwrap();
+    assert_eq!(
+        start.input().unwrap()["content"]["messages"][0]["content"],
+        "[REDACTED]"
+    );
+    let chunk_mark = captured
+        .iter()
+        .find(|event| event.name() == "llm.chunk")
+        .unwrap();
+    assert_eq!(chunk_mark.data().unwrap()["chunk_index"], 0);
+    assert!(!chunk_mark.to_json_string().unwrap().contains(raw_delta));
+    let end = captured
+        .iter()
+        .find(|event| event.scope_category() == Some(ScopeCategory::End))
+        .unwrap();
+    assert_eq!(
+        end.output().unwrap()["choices"][0]["message"]["content"],
+        "[REDACTED]"
+    );
+    assert_eq!(end.output().unwrap()["usage"]["total_tokens"], 11);
+
+    deregister_subscriber("pii-trajectory-stream").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

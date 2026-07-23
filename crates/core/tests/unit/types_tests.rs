@@ -93,6 +93,8 @@ crate::editor_config! {
 
 fn annotated_request(model: &str, text: &str) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text(text.into()),
             name: None,
