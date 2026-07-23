@@ -552,6 +552,35 @@ fn test_exporters_prefer_response_model_name_over_requested_model() {
     );
 }
 
+#[test]
+fn test_exporters_fall_back_to_requested_model_when_response_model_is_missing() {
+    let exports = run_llm_scenario(
+        chat_request_content("requested-model"),
+        json!({
+            "id": "chatcmpl-no-model",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop"
+            }]
+        }),
+    );
+
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"requested-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"requested-model".to_string())
+    );
+}
+
 // ===================================================================
 // Tool-call parity
 // ===================================================================
