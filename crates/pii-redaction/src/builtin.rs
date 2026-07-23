@@ -449,6 +449,7 @@ pub(super) fn llm_sanitize_response_callback(
 fn log_llm_payload_omitted(direction: &str, context: LlmSanitizeContext, reason: &str) {
     log::warn!(
         target: "nemo_relay.plugin",
+        event = "pii_llm_payload_omitted",
         codec_name = context.codec_name.unwrap_or("unknown"),
         has_active_codec = context.has_active_codec,
         reason;
