@@ -15,7 +15,8 @@ use std::sync::{
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory,
     EventSanitizeFields, Json, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome,
-    LlmStream, LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin,
+    LlmSanitizeContext, LlmStream, LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin,
+    NemoRelayNativeContextualLlmRequestCb, NemoRelayNativeContextualLlmResponseCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb,
     NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
@@ -135,6 +136,38 @@ struct RegisteredLlmJson {
     free_fn: NemoRelayNativeFreeFn,
 }
 
+struct RegisteredContextualLlmRequest {
+    name: String,
+    priority: i32,
+    cb: NemoRelayNativeContextualLlmRequestCb,
+    user_data: usize,
+    free_fn: NemoRelayNativeFreeFn,
+}
+
+impl RegisteredContextualLlmRequest {
+    unsafe fn free(self) {
+        if let Some(free_fn) = self.free_fn {
+            unsafe { free_fn(self.user_data as *mut c_void) };
+        }
+    }
+}
+
+struct RegisteredContextualLlmResponse {
+    name: String,
+    priority: i32,
+    cb: NemoRelayNativeContextualLlmResponseCb,
+    user_data: usize,
+    free_fn: NemoRelayNativeFreeFn,
+}
+
+impl RegisteredContextualLlmResponse {
+    unsafe fn free(self) {
+        if let Some(free_fn) = self.free_fn {
+            unsafe { free_fn(self.user_data as *mut c_void) };
+        }
+    }
+}
+
 impl RegisteredLlmJson {
     unsafe fn free(self) {
         if let Some(free_fn) = self.free_fn {
@@ -232,6 +265,8 @@ impl_captured_registration!(
     RegisteredToolExecution,
     RegisteredLlmRequest,
     RegisteredLlmJson,
+    RegisteredContextualLlmRequest,
+    RegisteredContextualLlmResponse,
     RegisteredLlmConditional,
     RegisteredLlmExecution,
     RegisteredLlmStreamExecution,
@@ -289,6 +324,10 @@ static TOOL_CONDITIONAL_REGISTRATION: Mutex<Option<RegisteredToolConditional>> =
 static TOOL_EXECUTION_REGISTRATION: Mutex<Option<RegisteredToolExecution>> = Mutex::new(None);
 static LLM_REQUEST_REGISTRATION: Mutex<Option<RegisteredLlmRequest>> = Mutex::new(None);
 static LLM_JSON_REGISTRATION: Mutex<Option<RegisteredLlmJson>> = Mutex::new(None);
+static CONTEXTUAL_LLM_REQUEST_REGISTRATION: Mutex<Option<RegisteredContextualLlmRequest>> =
+    Mutex::new(None);
+static CONTEXTUAL_LLM_RESPONSE_REGISTRATION: Mutex<Option<RegisteredContextualLlmResponse>> =
+    Mutex::new(None);
 static LLM_CONDITIONAL_REGISTRATION: Mutex<Option<RegisteredLlmConditional>> = Mutex::new(None);
 static LLM_EXECUTION_REGISTRATION: Mutex<Option<RegisteredLlmExecution>> = Mutex::new(None);
 static LLM_STREAM_EXECUTION_REGISTRATION: Mutex<Option<RegisteredLlmStreamExecution>> =
@@ -316,13 +355,13 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 296);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 312);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
                 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272,
-                280, 288,
+                280, 288, 296, 304,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
@@ -336,12 +375,13 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 148);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 156);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80,
-                84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+                84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 148,
+                152,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
@@ -353,7 +393,7 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_offsets() -> [usize; 37] {
+fn host_api_offsets() -> [usize; 39] {
     [
         offset_of!(NemoRelayNativeHostApiV1, abi_version),
         offset_of!(NemoRelayNativeHostApiV1, struct_size),
@@ -433,6 +473,14 @@ fn host_api_offsets() -> [usize; 37] {
         offset_of!(
             NemoRelayNativeHostApiV1,
             plugin_context_register_scope_sanitize_end_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV1,
+            plugin_context_register_contextual_llm_sanitize_request_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV1,
+            plugin_context_register_contextual_llm_sanitize_response_guardrail
         ),
     ]
 }
@@ -1126,6 +1174,64 @@ unsafe extern "C" fn true_scope_stack_active() -> bool {
     true
 }
 
+unsafe extern "C" fn capture_contextual_llm_request(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeContextualLlmRequestCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    let status = *REGISTRATION_STATUS.lock().unwrap();
+    if status == NemoRelayStatus::Ok {
+        let host = test_host();
+        let name = match required_host_string(&host, name) {
+            Ok(name) => name,
+            Err(status) => return status,
+        };
+        replace_registration(
+            &CONTEXTUAL_LLM_REQUEST_REGISTRATION,
+            RegisteredContextualLlmRequest {
+                name,
+                priority,
+                cb,
+                user_data: user_data as usize,
+                free_fn,
+            },
+        );
+    }
+    status
+}
+
+unsafe extern "C" fn capture_contextual_llm_response(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeContextualLlmResponseCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    let status = *REGISTRATION_STATUS.lock().unwrap();
+    if status == NemoRelayStatus::Ok {
+        let host = test_host();
+        let name = match required_host_string(&host, name) {
+            Ok(name) => name,
+            Err(status) => return status,
+        };
+        replace_registration(
+            &CONTEXTUAL_LLM_RESPONSE_REGISTRATION,
+            RegisteredContextualLlmResponse {
+                name,
+                priority,
+                cb,
+                user_data: user_data as usize,
+                free_fn,
+            },
+        );
+    }
+    status
+}
+
 fn test_host() -> NemoRelayNativeHostApiV1 {
     NemoRelayNativeHostApiV1 {
         abi_version: NEMO_RELAY_NATIVE_ABI_VERSION,
@@ -1165,6 +1271,10 @@ fn test_host() -> NemoRelayNativeHostApiV1 {
         plugin_context_register_mark_sanitize_guardrail: capture_event_sanitize,
         plugin_context_register_scope_sanitize_start_guardrail: capture_event_sanitize,
         plugin_context_register_scope_sanitize_end_guardrail: capture_event_sanitize,
+        plugin_context_register_contextual_llm_sanitize_request_guardrail:
+            capture_contextual_llm_request,
+        plugin_context_register_contextual_llm_sanitize_response_guardrail:
+            capture_contextual_llm_response,
     }
 }
 
@@ -1184,6 +1294,8 @@ fn reset_state() {
     clear_registration(&TOOL_EXECUTION_REGISTRATION);
     clear_registration(&LLM_REQUEST_REGISTRATION);
     clear_registration(&LLM_JSON_REGISTRATION);
+    clear_registration(&CONTEXTUAL_LLM_REQUEST_REGISTRATION);
+    clear_registration(&CONTEXTUAL_LLM_RESPONSE_REGISTRATION);
     clear_registration(&LLM_CONDITIONAL_REGISTRATION);
     clear_registration(&LLM_EXECUTION_REGISTRATION);
     clear_registration(&LLM_STREAM_EXECUTION_REGISTRATION);
@@ -1408,6 +1520,22 @@ fn take_llm_json_registration() -> RegisteredLlmJson {
         .unwrap()
         .take()
         .expect("LLM JSON callback should be registered")
+}
+
+fn take_contextual_llm_request_registration() -> RegisteredContextualLlmRequest {
+    CONTEXTUAL_LLM_REQUEST_REGISTRATION
+        .lock()
+        .unwrap()
+        .take()
+        .expect("contextual LLM request callback should be registered")
+}
+
+fn take_contextual_llm_response_registration() -> RegisteredContextualLlmResponse {
+    CONTEXTUAL_LLM_RESPONSE_REGISTRATION
+        .lock()
+        .unwrap()
+        .take()
+        .expect("contextual LLM response callback should be registered")
 }
 
 fn take_llm_conditional_registration() -> RegisteredLlmConditional {
@@ -4114,6 +4242,124 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
     assert_eq!(read_json_and_free(&host, out)["sanitized"], json!(true));
     unsafe {
         (host.string_free)(response);
+        registration.free();
+    }
+}
+
+#[test]
+fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
+    let _guard = begin_test();
+    let host = test_host();
+    let context = LlmSanitizeContext {
+        has_active_codec: true,
+        codec_name: Some("openai_chat".into()),
+    };
+
+    let mut ctx = test_context(&host);
+    ctx.register_contextual_llm_sanitize_request_guardrail(
+        "contextual-request",
+        14,
+        |mut request, callback_context| {
+            assert!(callback_context.has_active_codec);
+            assert_eq!(callback_context.codec_name.as_deref(), Some("openai_chat"));
+            request.headers.insert("x-contextual".into(), json!(true));
+            Some(request)
+        },
+    )
+    .unwrap();
+
+    let registration = take_contextual_llm_request_registration();
+    assert_eq!(registration.name, "contextual-request");
+    assert_eq!(registration.priority, 14);
+    let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
+    let context_json = json_host_string(&host, serde_json::to_value(&context).unwrap());
+    let mut out = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            request,
+            context_json,
+            &mut out,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    assert_eq!(
+        read_json_and_free(&host, out)["headers"]["x-contextual"],
+        json!(true)
+    );
+    unsafe {
+        (host.string_free)(request);
+        (host.string_free)(context_json);
+        registration.free();
+    }
+
+    let mut ctx = test_context(&host);
+    ctx.register_contextual_llm_sanitize_response_guardrail(
+        "contextual-response",
+        15,
+        |mut payload, callback_context| {
+            assert_eq!(callback_context.codec_name.as_deref(), Some("openai_chat"));
+            payload["contextual"] = json!(true);
+            Some(payload)
+        },
+    )
+    .unwrap();
+
+    let registration = take_contextual_llm_response_registration();
+    assert_eq!(registration.name, "contextual-response");
+    assert_eq!(registration.priority, 15);
+    let response = json_host_string(&host, json!({ "output": true }));
+    let context_json = json_host_string(&host, serde_json::to_value(context).unwrap());
+    let mut out = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            response,
+            context_json,
+            &mut out,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    assert_eq!(read_json_and_free(&host, out)["contextual"], json!(true));
+    unsafe {
+        (host.string_free)(response);
+        (host.string_free)(context_json);
+        registration.free();
+    }
+}
+
+#[test]
+fn typed_contextual_llm_sanitizer_uses_null_output_to_omit_payload() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+    ctx.register_contextual_llm_sanitize_response_guardrail(
+        "contextual-omit",
+        16,
+        |_payload, _context| None,
+    )
+    .unwrap();
+
+    let registration = take_contextual_llm_response_registration();
+    let response = json_host_string(&host, json!({"secret": "value"}));
+    let context = json_host_string(
+        &host,
+        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
+    );
+    let mut out = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            response,
+            context,
+            &mut out,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    assert!(out.is_null(), "null native output must represent omission");
+    unsafe {
+        (host.string_free)(response);
+        (host.string_free)(context);
         registration.free();
     }
 }

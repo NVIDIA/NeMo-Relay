@@ -132,6 +132,8 @@ message Registration {
   RegistrationSurface surface = 2;
   int32 priority = 3;
   bool break_chain = 4;
+  // The callback receives per-call codec context and may omit the event payload.
+  bool contextual = 5;
 }
 
 message InvokeRequest {
@@ -160,6 +162,8 @@ message LlmInvocation {
   JsonEnvelope request = 2;
   JsonEnvelope annotated_request = 3;
   JsonEnvelope response = 4;
+  bool has_active_codec = 5;
+  optional string codec_name = 6;
 }
 
 message InvokeResponse {

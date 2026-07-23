@@ -21,6 +21,8 @@ Example::
 """
 
 from nemo_relay import (
+    ContextualLlmSanitizeRequestGuardrail,
+    ContextualLlmSanitizeResponseGuardrail,
     EventSanitizeGuardrail,
     LlmConditionalExecutionGuardrail,
     LlmSanitizeRequestGuardrail,
@@ -52,6 +54,12 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     deregister_tool_sanitize_response_guardrail as _native_deregister_tool_sanitize_response,
+)
+from nemo_relay._native import (
+    register_contextual_llm_sanitize_request_guardrail as _native_register_contextual_llm_sanitize_request,
+)
+from nemo_relay._native import (
+    register_contextual_llm_sanitize_response_guardrail as _native_register_contextual_llm_sanitize_response,
 )
 from nemo_relay._native import (
     register_llm_conditional_execution_guardrail as _native_register_llm_conditional_execution,
@@ -325,6 +333,29 @@ def deregister_llm_sanitize_response(name: str) -> bool:
     return _native_deregister_llm_sanitize_response(name)
 
 
+def register_contextual_llm_sanitize_request(
+    name: str, priority: int, guardrail: ContextualLlmSanitizeRequestGuardrail
+) -> None:
+    """Register a codec-aware LLM request sanitizer.
+
+    The callback is invoked as ``guardrail(request, context)``. ``context`` has
+    ``has_active_codec`` and ``codec_name`` keys. Returning ``None`` omits the
+    event payload and annotation for that call.
+    """
+    return _native_register_contextual_llm_sanitize_request(name, priority, guardrail)
+
+
+def register_contextual_llm_sanitize_response(
+    name: str, priority: int, guardrail: ContextualLlmSanitizeResponseGuardrail
+) -> None:
+    """Register a codec-aware LLM response sanitizer.
+
+    The callback is invoked as ``guardrail(response, context)``. Returning
+    ``None`` omits the event payload and annotation for that call.
+    """
+    return _native_register_contextual_llm_sanitize_response(name, priority, guardrail)
+
+
 def register_llm_conditional_execution(name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail) -> None:
     """Register a guardrail that can reject an LLM call before execution.
 
@@ -378,6 +409,8 @@ __all__ = [
     "deregister_llm_sanitize_request",
     "register_llm_sanitize_response",
     "deregister_llm_sanitize_response",
+    "register_contextual_llm_sanitize_request",
+    "register_contextual_llm_sanitize_response",
     "register_llm_conditional_execution",
     "deregister_llm_conditional_execution",
 ]

@@ -26,8 +26,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
+    ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
     LlmStreamInner, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
@@ -821,6 +822,44 @@ pub fn wrap_py_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn
     })
 }
 
+/// Wrap a Python callable `(LlmRequest, context: dict) -> Optional[LlmRequest]`.
+pub fn wrap_py_contextual_llm_sanitize_request_fn(
+    py_fn: Py<PyAny>,
+) -> ContextualLlmSanitizeRequestFn {
+    Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
+        Python::attach(|py| {
+            let context = serde_json::json!({
+                "has_active_codec": context.has_active_codec,
+                "codec_name": context.codec_name,
+            });
+            let py_context = match json_to_py(py, &context) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("nemo_relay: failed to serialize LLM sanitize context: {error}");
+                    return None;
+                }
+            };
+            let py_request = PyLLMRequest { inner: request };
+            let result = match py_fn.call1(py, (py_request, py_context)) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: contextual LLM sanitize request callable failed: {error}"
+                    );
+                    return None;
+                }
+            };
+            if result.is_none(py) {
+                return None;
+            }
+            result
+                .extract::<PyLLMRequest>(py)
+                .ok()
+                .map(|request| request.inner)
+        })
+    })
+}
+
 /// Wrap a Python callable `(LlmRequest) -> Optional[str]` for LLM conditional guardrails.
 pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
     Arc::new(move |request: &LlmRequest| {
@@ -1013,6 +1052,27 @@ pub fn wrap_py_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponse
                 eprintln!("nemo_relay: py_to_json failed in LLM sanitize response guardrail: {e}");
                 response.clone()
             })
+        })
+    })
+}
+
+/// Wrap a Python callable `(Json, context: dict) -> Optional[Json]`.
+pub fn wrap_py_contextual_llm_sanitize_response_fn(
+    py_fn: Py<PyAny>,
+) -> ContextualLlmSanitizeResponseFn {
+    Arc::new(move |response: Json, context: LlmSanitizeContext| {
+        Python::attach(|py| {
+            let context = serde_json::json!({
+                "has_active_codec": context.has_active_codec,
+                "codec_name": context.codec_name,
+            });
+            let py_context = json_to_py(py, &context).ok()?;
+            let py_response = json_to_py(py, &response).ok()?;
+            let result = py_fn.call1(py, (py_response, py_context)).ok()?;
+            if result.is_none(py) {
+                return None;
+            }
+            py_to_json(result.bind(py)).ok()
         })
     })
 }

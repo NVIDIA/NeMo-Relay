@@ -23,8 +23,9 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
+    ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
     ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
@@ -108,6 +109,33 @@ pub type NemoRelayLlmRequestCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
 ) -> *mut FfiLLMRequest;
+
+/// Codec identity supplied to a contextual LLM sanitizer. `codec_name` is null
+/// when no recognized built-in codec is active and is valid only for the
+/// duration of the callback.
+#[repr(C)]
+pub struct NemoRelayLlmSanitizeContext {
+    /// Whether this managed call supplied a response/request codec.
+    pub has_active_codec: bool,
+    /// Canonical built-in codec name, or null for no or unknown codec.
+    pub codec_name: *const c_char,
+}
+
+/// Contextual LLM request sanitizer. It receives the request first and its
+/// codec context second. Return null to omit the observability payload.
+pub type NemoRelayContextualLlmRequestCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    request: *const FfiLLMRequest,
+    context: NemoRelayLlmSanitizeContext,
+) -> *mut FfiLLMRequest;
+
+/// Contextual LLM response sanitizer. It receives response JSON first and its
+/// codec context second. Return null to omit the observability payload.
+pub type NemoRelayContextualLlmResponseCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    response_json: *const c_char,
+    context: NemoRelayLlmSanitizeContext,
+) -> *mut c_char;
 
 /// Callback for LLM conditional execution guardrails.
 /// Returns NULL to allow execution, or an error message string to reject.
@@ -691,6 +719,55 @@ pub fn wrap_llm_sanitize_request_fn(
             let result = unsafe { Box::from_raw(result_ptr) };
             result.0
         }
+    })
+}
+
+/// Wrap a contextual C LLM request sanitizer into a Rust closure.
+pub fn wrap_contextual_llm_sanitize_request_fn(
+    cb: NemoRelayContextualLlmRequestCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> ContextualLlmSanitizeRequestFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
+        let codec_name = context.codec_name.and_then(|name| CString::new(name).ok());
+        let ffi_context = NemoRelayLlmSanitizeContext {
+            has_active_codec: context.has_active_codec,
+            codec_name: codec_name
+                .as_ref()
+                .map_or(std::ptr::null(), |name| name.as_ptr()),
+        };
+        let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+        let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
+        unsafe { drop(Box::from_raw(ffi_req)) };
+        (!result_ptr.is_null()).then(|| unsafe { Box::from_raw(result_ptr) }.0)
+    })
+}
+
+/// Wrap a contextual C LLM response sanitizer into a Rust closure.
+pub fn wrap_contextual_llm_sanitize_response_fn(
+    cb: NemoRelayContextualLlmResponseCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> ContextualLlmSanitizeResponseFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |response: Json, context: LlmSanitizeContext| {
+        let codec_name = context.codec_name.and_then(|name| CString::new(name).ok());
+        let ffi_context = NemoRelayLlmSanitizeContext {
+            has_active_codec: context.has_active_codec,
+            codec_name: codec_name
+                .as_ref()
+                .map_or(std::ptr::null(), |name| name.as_ptr()),
+        };
+        let response_json = json_to_c_string(&response);
+        let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };
+        unsafe { nemo_relay_string_free_internal(response_json) };
+        if result_ptr.is_null() {
+            return None;
+        }
+        let result = ptr_to_json(result_ptr);
+        unsafe { nemo_relay_string_free_internal(result_ptr) };
+        Some(result)
     })
 }
 

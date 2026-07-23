@@ -26,15 +26,21 @@ typedef struct FfiToolHandle FfiToolHandle;
 typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
+typedef struct NemoRelayLlmSanitizeContext {
+	bool has_active_codec;
+	const char* codec_name;
+} NemoRelayLlmSanitizeContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NemoRelayToolExecFn)(void* user_data, const char* args_json);
 typedef FfiLLMRequest* (*NemoRelayLlmRequestCb)(void* user_data, const FfiLLMRequest* request);
+typedef FfiLLMRequest* (*NemoRelayContextualLlmRequestCb)(void* user_data, const FfiLLMRequest* request, NemoRelayLlmSanitizeContext context);
 typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const FfiLLMRequest* request);
 typedef char* (*NemoRelayLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NemoRelayLlmResponseFn)(void* user_data, const char* response_json);
+typedef char* (*NemoRelayContextualLlmResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeContext context);
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 typedef struct FfiPluginContext FfiPluginContext;
@@ -172,6 +178,23 @@ type LLMResponseFunc func(responseJSON json.RawMessage) json.RawMessage
 // (possibly modified) versions of each. The Go binding uses JSON
 // serialization rather than opaque C pointers for ergonomics.
 type LLMRequestFunc func(headers, content json.RawMessage) (headers2, content2 json.RawMessage)
+
+// LLMSanitizeContext identifies the codec active for one managed LLM call.
+// CodecName is nil when no recognized built-in codec is available.
+type LLMSanitizeContext struct {
+	HasActiveCodec bool
+	CodecName      *string
+}
+
+// ContextualLLMRequestFunc sanitizes an emitted LLM request. It receives the
+// request first and codec context second; returning omit true removes the
+// event payload and annotation without affecting the provider call.
+type ContextualLLMRequestFunc func(request LLMRequestDTO, context LLMSanitizeContext) (sanitized LLMRequestDTO, omit bool)
+
+// ContextualLLMResponseFunc sanitizes an emitted LLM response. It receives the
+// response first and codec context second; returning omit true removes the
+// event payload and annotation without affecting the provider response.
+type ContextualLLMResponseFunc func(response json.RawMessage, context LLMSanitizeContext) (sanitized json.RawMessage, omit bool)
 
 // LLMConditionalFunc is a callback that decides whether an LLM call should
 // proceed. It returns nil to allow execution, or a non-nil pointer to an error
@@ -474,12 +497,52 @@ func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *
 	return C.nemo_relay_llm_request_new(cNewHeaders, cNewContent)
 }
 
+func llmSanitizeContextFromC(context C.NemoRelayLlmSanitizeContext) LLMSanitizeContext {
+	var codecName *string
+	if context.codec_name != nil {
+		name := C.GoString(context.codec_name)
+		codecName = &name
+	}
+	return LLMSanitizeContext{HasActiveCodec: bool(context.has_active_codec), CodecName: codecName}
+}
+
+//export goContextualLlmRequestTrampoline
+func goContextualLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest, context C.NemoRelayLlmSanitizeContext) *C.FfiLLMRequest {
+	fn := lookupClosure(userData).(ContextualLLMRequestFunc)
+	cHeaders := C.nemo_relay_llm_request_headers(request)
+	cContent := C.nemo_relay_llm_request_content(request)
+	defer C.nemo_relay_string_free(cHeaders)
+	defer C.nemo_relay_string_free(cContent)
+	sanitized, omit := fn(LLMRequestDTO{
+		Headers: json.RawMessage(C.GoString(cHeaders)),
+		Content: json.RawMessage(C.GoString(cContent)),
+	}, llmSanitizeContextFromC(context))
+	if omit {
+		return nil
+	}
+	cHeaders = C.CString(string(sanitized.Headers))
+	cContent = C.CString(string(sanitized.Content))
+	defer C.free(unsafe.Pointer(cHeaders))
+	defer C.free(unsafe.Pointer(cContent))
+	return C.nemo_relay_llm_request_new(cHeaders, cContent)
+}
+
 //export goLlmResponseTrampoline
 func goLlmResponseTrampoline(userData unsafe.Pointer, responseJSON *C.char) *C.char {
 	fn := lookupClosure(userData).(LLMResponseFunc)
 	goJSON := json.RawMessage(C.GoString(responseJSON))
 	result := fn(goJSON)
 	return C.CString(string(result))
+}
+
+//export goContextualLlmResponseTrampoline
+func goContextualLlmResponseTrampoline(userData unsafe.Pointer, responseJSON *C.char, context C.NemoRelayLlmSanitizeContext) *C.char {
+	fn := lookupClosure(userData).(ContextualLLMResponseFunc)
+	sanitized, omit := fn(json.RawMessage(C.GoString(responseJSON)), llmSanitizeContextFromC(context))
+	if omit {
+		return nil
+	}
+	return C.CString(string(sanitized))
 }
 
 //export goLlmConditionalTrampoline

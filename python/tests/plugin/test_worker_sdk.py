@@ -29,6 +29,7 @@ from nemo_relay_plugin import (  # noqa: E402
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
+    LlmSanitizeContext,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
@@ -697,6 +698,80 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
     assert registrations.count(("duplicate", pb.TOOL_REQUEST_INTERCEPT)) == 1
     assert ("shared", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL) in registrations
     assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
+
+
+def test_plugin_context_registers_contextual_llm_sanitizers():
+    context = PluginContext()
+
+    context.register_contextual_llm_sanitize_request_guardrail(
+        "request",
+        lambda request, codec_context: request if codec_context["has_active_codec"] else None,
+    )
+    context.register_contextual_llm_sanitize_response_guardrail(
+        "response",
+        lambda response, codec_context: response if codec_context["codec_name"] else None,
+    )
+
+    assert [
+        (registration.local_name, registration.surface, registration.contextual)
+        for registration in context._handlers.registrations
+    ] == [
+        ("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, True),
+        ("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, True),
+    ]
+
+
+async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
+    seen: list[tuple[str, LlmSanitizeContext]] = []
+
+    class ContextualSanitizerPlugin(WorkerPlugin):
+        plugin_id = "tests.contextual_sanitizer"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def request_sanitizer(request: Json, codec_context: LlmSanitizeContext) -> None:
+                del request
+                seen.append(("request", codec_context))
+                return None
+
+            def response_sanitizer(response: Json, codec_context: LlmSanitizeContext) -> None:
+                del response
+                seen.append(("response", codec_context))
+                return None
+
+            ctx.register_contextual_llm_sanitize_request_guardrail("request", request_sanitizer)
+            ctx.register_contextual_llm_sanitize_response_guardrail("response", response_sanitizer)
+
+    service = _service(ContextualSanitizerPlugin(), RecordingHostStub())
+    await _register(service)
+    for has_active_codec, codec_name in [
+        (False, None),
+        (True, "openai_responses"),
+        (True, None),
+    ]:
+        payload = _llm_payload(request={"content": {"prompt": "secret"}}, response={"secret": "value"})
+        payload.has_active_codec = has_active_codec
+        if codec_name is not None:
+            payload.codec_name = codec_name
+
+        request_response = await service.Invoke(
+            _invoke_request("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, llm=payload), AbortContext()
+        )
+        response_response = await service.Invoke(
+            _invoke_request("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, llm=payload), AbortContext()
+        )
+        assert request_response.WhichOneof("result") == "empty"
+        assert response_response.WhichOneof("result") == "empty"
+
+    assert seen == [
+        ("request", {"has_active_codec": False, "codec_name": None}),
+        ("response", {"has_active_codec": False, "codec_name": None}),
+        ("request", {"has_active_codec": True, "codec_name": "openai_responses"}),
+        ("response", {"has_active_codec": True, "codec_name": "openai_responses"}),
+        ("request", {"has_active_codec": True, "codec_name": None}),
+        ("response", {"has_active_codec": True, "codec_name": None}),
+    ]
 
 
 @pytest.mark.parametrize(

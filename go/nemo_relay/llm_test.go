@@ -385,6 +385,68 @@ func TestLlmSanitizeResponseGuardrail(t *testing.T) {
 	DeregisterLlmSanitizeResponseGuardrail("go_llm_san_resp")
 }
 
+func TestContextualLlmSanitizeGuardrails(t *testing.T) {
+	var capturedInput, capturedOutput json.RawMessage
+	var mu sync.Mutex
+	if err := RegisterSubscriber("go_contextual_llm_sanitize_events", func(event Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if event.Kind() == "scope" && event.Category() == "llm" && event.ScopeCategory() == "start" {
+			capturedInput = append(json.RawMessage(nil), event.Input()...)
+		}
+		if event.Kind() == "scope" && event.Category() == "llm" && event.ScopeCategory() == "end" {
+			capturedOutput = append(json.RawMessage(nil), event.Output()...)
+		}
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber("go_contextual_llm_sanitize_events")
+
+	if err := RegisterContextualLlmSanitizeRequestGuardrail("go_contextual_llm_request", 1,
+		func(request LLMRequestDTO, context LLMSanitizeContext) (LLMRequestDTO, bool) {
+			if context.HasActiveCodec {
+				t.Fatal("manual registration should not receive an active codec")
+			}
+			return request, true
+		},
+	); err != nil {
+		t.Fatalf(llmRegisterFailed, err)
+	}
+	defer DeregisterLlmSanitizeRequestGuardrail("go_contextual_llm_request")
+
+	if err := RegisterContextualLlmSanitizeResponseGuardrail("go_contextual_llm_response", 1,
+		func(response json.RawMessage, context LLMSanitizeContext) (json.RawMessage, bool) {
+			if context.CodecName != nil {
+				t.Fatal("manual registration should not receive a codec name")
+			}
+			return response, true
+		},
+	); err != nil {
+		t.Fatalf(llmRegisterFailed, err)
+	}
+	defer DeregisterLlmSanitizeResponseGuardrail("go_contextual_llm_response")
+
+	result, err := LlmCallExecute("go_contextual_llm_sanitize", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"response":"client-visible"}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf(llmCallExecuteFailed, err)
+	}
+	if string(result) != `{"response":"client-visible"}` {
+		t.Fatalf("contextual sanitizers must not change the client result: %s", result)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(llmFlushSubscribersFailed, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedInput != nil || capturedOutput != nil {
+		t.Fatalf("contextual omission must remove observability payloads, got input=%s output=%s", capturedInput, capturedOutput)
+	}
+}
+
 func TestLlmConditionalExecutionGuardrail(t *testing.T) {
 	err := RegisterLlmConditionalExecutionGuardrail("go_llm_cond", 1,
 		func(headers, content json.RawMessage) *string {

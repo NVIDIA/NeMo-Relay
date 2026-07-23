@@ -191,6 +191,43 @@ guardrails important:
 - If you need to change the real execution path, use an intercept
 - If you need to change only the emitted payload, use a sanitize guardrail
 
+## Contextual LLM Sanitizers
+
+LLM sanitize guardrails have two compatible callback forms. Existing callbacks
+continue to receive only the payload and must return a sanitized payload. New
+**contextual** callbacks receive the payload first, then per-call codec
+information:
+
+```text
+request:  (LlmRequest, context) -> Option<LlmRequest>
+response: (Json, context) -> Option<Json>
+```
+
+`context` has this shape in every language binding:
+
+```json
+{
+  "has_active_codec": true,
+  "codec_name": "openai_responses"
+}
+```
+
+`has_active_codec` distinguishes a legacy/manual call with no codec from a
+managed call using an unrecognized custom codec. `codec_name` is present only
+for Relay's built-in `openai_chat`, `openai_responses`, and
+`anthropic_messages` codecs. Do not infer a provider from a custom request
+shape.
+
+Return a payload to continue the sanitizer chain. Return `None` (or `null` in
+JavaScript) only when observing the payload would be unsafe: Relay omits the
+LLM event payload and its annotation, while leaving the client-visible request
+and response unchanged. Omission short-circuits later LLM sanitizers.
+
+Contextual and legacy callbacks use the same registry and therefore preserve
+the normal priority and name tie-break ordering. Use a contextual callback when
+the sanitization rule depends on the active provider codec; retain the legacy
+form for provider-independent sanitization.
+
 ## Detailed Execution Flow
 
 <MermaidStyles />

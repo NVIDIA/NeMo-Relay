@@ -144,6 +144,25 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
 /// # Returns
 /// Sanitized [`LlmRequest`] for the emitted event.
 pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
+
+/// Per-call codec context for first-party LLM sanitize guardrails.
+///
+/// The context distinguishes no active codec from an active custom codec that
+/// does not identify a Relay built-in provider surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LlmSanitizeContext {
+    /// Whether the managed call supplied a codec for this payload direction.
+    pub has_active_codec: bool,
+    /// Canonical built-in codec name, when the active codec identifies one.
+    pub codec_name: Option<&'static str>,
+}
+
+/// Result of a contextual LLM request sanitizer.
+///
+/// `None` omits both the raw request payload and its annotation from the
+/// emitted start event.
+pub type ContextualLlmSanitizeRequestFn =
+    Arc<dyn Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync>;
 /// Sanitize an LLM response before the runtime records it.
 ///
 /// These callbacks rewrite the JSON response payload captured on LLM-end
@@ -155,6 +174,39 @@ pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sy
 /// # Returns
 /// Sanitized JSON response payload for the emitted event.
 pub type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
+
+/// Result of a contextual LLM response sanitizer.
+///
+/// `None` omits both the raw response payload and its annotation from the
+/// emitted end event.
+pub type ContextualLlmSanitizeResponseFn =
+    Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
+
+/// One LLM request sanitizer stored in the shared priority-ordered registry.
+#[derive(Clone)]
+pub(crate) enum LlmSanitizeRequestGuardrail {
+    Legacy(LlmSanitizeRequestFn),
+    Contextual(ContextualLlmSanitizeRequestFn),
+}
+
+impl From<LlmSanitizeRequestFn> for LlmSanitizeRequestGuardrail {
+    fn from(callback: LlmSanitizeRequestFn) -> Self {
+        Self::Legacy(callback)
+    }
+}
+
+/// One LLM response sanitizer stored in the shared priority-ordered registry.
+#[derive(Clone)]
+pub(crate) enum LlmSanitizeResponseGuardrail {
+    Legacy(LlmSanitizeResponseFn),
+    Contextual(ContextualLlmSanitizeResponseFn),
+}
+
+impl From<LlmSanitizeResponseFn> for LlmSanitizeResponseGuardrail {
+    fn from(callback: LlmSanitizeResponseFn) -> Self {
+        Self::Legacy(callback)
+    }
+}
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,

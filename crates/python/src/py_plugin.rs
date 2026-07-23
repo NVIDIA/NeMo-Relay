@@ -20,6 +20,8 @@ use nemo_relay::api::registry::{
     deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
     deregister_tool_execution_intercept, deregister_tool_request_intercept,
     deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    register_contextual_llm_sanitize_request_guardrail,
+    register_contextual_llm_sanitize_response_guardrail,
     register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
     register_llm_request_intercept, register_llm_sanitize_request_guardrail,
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
@@ -39,6 +41,7 @@ use nemo_relay::plugin::{
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_callable::{
+    wrap_py_contextual_llm_sanitize_request_fn, wrap_py_contextual_llm_sanitize_response_fn,
     wrap_py_event_sanitize_fn, wrap_py_event_subscriber, wrap_py_llm_conditional_fn,
     wrap_py_llm_exec_intercept_fn, wrap_py_llm_request_intercept_fn,
     wrap_py_llm_sanitize_request_fn, wrap_py_llm_sanitize_response_fn,
@@ -420,6 +423,48 @@ impl PyPluginContext {
             },
             deregister_llm_sanitize_response_guardrail,
             "llm sanitize response guardrail",
+        )
+    }
+
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_contextual_llm_sanitize_request_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_contextual_llm_sanitize_request_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_contextual_llm_sanitize_request_fn(callback),
+                )
+            },
+            deregister_llm_sanitize_request_guardrail,
+            "contextual llm sanitize request guardrail",
+        )
+    }
+
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_contextual_llm_sanitize_response_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_contextual_llm_sanitize_response_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_contextual_llm_sanitize_response_fn(callback),
+                )
+            },
+            deregister_llm_sanitize_response_guardrail,
+            "contextual llm sanitize response guardrail",
         )
     }
 

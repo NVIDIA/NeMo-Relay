@@ -74,6 +74,13 @@ invocation, or LLM invocation. `InvokeResponse` returns an empty result, JSON
 result, guardrail result, LLM request-intercept result, tool-execution result,
 or `WorkerError`. `InvokeStream` emits JSON chunks or `WorkerError` chunks.
 
+For contextual LLM sanitizer registrations, set `Registration.contextual` to
+`true`. The corresponding `LlmInvocation` includes `has_active_codec` and an
+optional `codec_name`. The worker callback receives that context alongside the
+request or response JSON. It returns a normal JSON result to continue, or an
+empty result to omit the LLM observability payload and annotation. The legacy
+LLM sanitizer registrations and payload forms remain valid.
+
 ## RelayHostRuntime RPCs
 
 Relay implements these RPCs for worker callbacks:

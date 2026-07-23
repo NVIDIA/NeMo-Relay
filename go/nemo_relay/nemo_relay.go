@@ -38,6 +38,7 @@ typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 typedef struct FfiCodecHandle FfiCodecHandle;
+typedef struct NemoRelayLlmSanitizeContext { bool has_active_codec; const char* codec_name; } NemoRelayLlmSanitizeContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
@@ -136,12 +137,16 @@ extern int32_t nemo_relay_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
 typedef FfiLLMRequest* (*NemoRelayLlmRequestCb)(void* user_data, const FfiLLMRequest* request);
+typedef FfiLLMRequest* (*NemoRelayContextualLlmRequestCb)(void* user_data, const FfiLLMRequest* request, NemoRelayLlmSanitizeContext context);
 extern int32_t nemo_relay_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NemoRelayLlmRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_sanitize_request_guardrail(const char* name);
+extern int32_t nemo_relay_register_contextual_llm_sanitize_request_guardrail(const char* name, int32_t priority, NemoRelayContextualLlmRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
 
 typedef char* (*NemoRelayLlmResponseFn)(void* user_data, const char* response_json);
+typedef char* (*NemoRelayContextualLlmResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeContext context);
 extern int32_t nemo_relay_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NemoRelayLlmResponseFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_sanitize_response_guardrail(const char* name);
+extern int32_t nemo_relay_register_contextual_llm_sanitize_response_guardrail(const char* name, int32_t priority, NemoRelayContextualLlmResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
 
 typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const FfiLLMRequest* request);
 extern int32_t nemo_relay_register_llm_conditional_execution_guardrail(const char* name, int32_t priority, NemoRelayLlmConditionalCb cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -275,7 +280,9 @@ extern char* goToolExecTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
 extern void goFreeTrampoline(void*);
 extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*);
+extern FfiLLMRequest* goContextualLlmRequestTrampoline(void*, const FfiLLMRequest*, NemoRelayLlmSanitizeContext);
 extern char* goLlmResponseTrampoline(void*, const char*);
+extern char* goContextualLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeContext);
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
@@ -1391,6 +1398,20 @@ func DeregisterLlmSanitizeRequestGuardrail(name string) error {
 	return checkStatus(C.nemo_relay_deregister_llm_sanitize_request_guardrail(cName))
 }
 
+// RegisterContextualLlmSanitizeRequestGuardrail registers a codec-aware LLM
+// request sanitizer. Its callback receives the request first and context
+// second; returning omit true removes only the emitted observability payload.
+func RegisterContextualLlmSanitizeRequestGuardrail(name string, priority int32, fn ContextualLLMRequestFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_contextual_llm_sanitize_request_guardrail(
+		cName, C.int32_t(priority),
+		C.NemoRelayContextualLlmRequestCb(C.goContextualLlmRequestTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
 // RegisterLlmSanitizeResponseGuardrail registers a guardrail that sanitizes
 // LLM response data before it is returned to the caller. The callback receives
 // the response as plain JSON and must return the (possibly modified) response
@@ -1413,6 +1434,20 @@ func DeregisterLlmSanitizeResponseGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nemo_relay_deregister_llm_sanitize_response_guardrail(cName))
+}
+
+// RegisterContextualLlmSanitizeResponseGuardrail registers a codec-aware LLM
+// response sanitizer. Its callback receives the response first and context
+// second; returning omit true removes only the emitted observability payload.
+func RegisterContextualLlmSanitizeResponseGuardrail(name string, priority int32, fn ContextualLLMResponseFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_contextual_llm_sanitize_response_guardrail(
+		cName, C.int32_t(priority),
+		C.NemoRelayContextualLlmResponseCb(C.goContextualLlmResponseTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
 }
 
 // RegisterLlmConditionalExecutionGuardrail registers a guardrail that

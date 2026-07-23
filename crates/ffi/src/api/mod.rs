@@ -14,12 +14,14 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
+    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb,
+    NemoRelayContextualLlmRequestCb, NemoRelayContextualLlmResponseCb, NemoRelayEventSanitizeCb,
     NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayJsonCb,
     NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
     NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb,
     NemoRelayPluginValidateCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
     NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn, wrap_collector_fn,
+    wrap_contextual_llm_sanitize_request_fn, wrap_contextual_llm_sanitize_response_fn,
     wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn,
     wrap_llm_exec_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
     wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_fn,

@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::api::event::{BaseEvent, MarkEvent};
-use crate::api::runtime::NemoRelayContextState;
+use crate::api::runtime::{LlmSanitizeContext, NemoRelayContextState};
 use nemo_relay_worker_proto::json_envelope;
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -241,6 +241,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Subscriber as i32,
                 priority: 0,
                 break_chain: false,
+                contextual: false,
             }],
             error: None,
         },
@@ -256,6 +257,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: 999,
                 priority: 0,
                 break_chain: false,
+                contextual: false,
             }],
             error: None,
         },
@@ -275,6 +277,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Unspecified as i32,
                 priority: 0,
                 break_chain: false,
+                contextual: false,
             }],
             error: None,
         },
@@ -534,6 +537,92 @@ async fn callback_helpers_cover_worker_response_edges() {
         error
             .to_string()
             .contains("LLM request intercept returned unexpected")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
+    enable_operational_logs();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (callback, _shutdown) = fake_callback_service({
+        let seen = seen.clone();
+        move |request| {
+            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+                request.payload
+            else {
+                panic!("contextual LLM sanitizer must receive an LLM invocation");
+            };
+            seen.lock().unwrap().push((
+                request.registration_name,
+                invocation.has_active_codec,
+                invocation.codec_name,
+                invocation.request.is_some(),
+                invocation.response.is_some(),
+            ));
+            InvokeResponse {
+                result: Some(InvokeResult::Empty(EmptyResult {})),
+            }
+        }
+    })
+    .await;
+
+    let contexts = [
+        LlmSanitizeContext::default(),
+        LlmSanitizeContext {
+            has_active_codec: true,
+            codec_name: Some("openai_responses"),
+        },
+        LlmSanitizeContext {
+            has_active_codec: true,
+            codec_name: None,
+        },
+    ];
+    for context in contexts {
+        assert!(
+            callback
+                .invoke_contextual_llm_request_json(
+                    "contextual_request",
+                    valid_llm_request(),
+                    context,
+                )
+                .expect("empty worker result must represent request omission")
+                .is_none()
+        );
+        assert!(
+            callback
+                .invoke_contextual_llm_response_json(
+                    "contextual_response",
+                    json!({"secret": "value"}),
+                    context,
+                )
+                .expect("empty worker result must represent response omission")
+                .is_none()
+        );
+    }
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        [
+            ("contextual_request".into(), false, None, true, false),
+            ("contextual_response".into(), false, None, false, true),
+            (
+                "contextual_request".into(),
+                true,
+                Some("openai_responses".into()),
+                true,
+                false,
+            ),
+            (
+                "contextual_response".into(),
+                true,
+                Some("openai_responses".into()),
+                false,
+                true,
+            ),
+            ("contextual_request".into(), true, None, true, false),
+            ("contextual_response".into(), true, None, false, true),
+        ]
     );
 }
 
@@ -1167,16 +1256,20 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
         assert_eq!(
             NemoRelayContextState::llm_sanitize_request_snapshot_chain(
                 llm_request.clone(),
+                crate::api::runtime::LlmSanitizeContext::default(),
                 &entries,
-            ),
+            )
+            .expect("an empty sanitizer chain must retain the request"),
             llm_request
         );
         let entries = state.llm_sanitize_response_entries(&[]);
         assert_eq!(
             NemoRelayContextState::llm_sanitize_response_snapshot_chain(
                 llm_response.clone(),
+                crate::api::runtime::LlmSanitizeContext::default(),
                 &entries,
-            ),
+            )
+            .expect("an empty sanitizer chain must retain the response"),
             llm_response
         );
     }
@@ -1715,6 +1808,7 @@ fn registration(surface: RegistrationSurface, local_name: &str) -> Registration 
         surface: surface as i32,
         priority: 0,
         break_chain: false,
+        contextual: false,
     }
 }
 

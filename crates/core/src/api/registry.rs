@@ -4,8 +4,10 @@
 //! Middleware registry helpers for global and scope-local guardrails,
 //! intercepts, and subscribers.
 
+use crate::api::runtime::callbacks::{LlmSanitizeRequestGuardrail, LlmSanitizeResponseGuardrail};
 use crate::api::runtime::{
-    EventSanitizeFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
+    LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
@@ -111,7 +113,7 @@ macro_rules! global_guardrail_registry_api {
             state
                 .$field
                 .register(
-                    Guardrail::new(name, priority, guardrail),
+                    Guardrail::new(name, priority, guardrail.into()),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -298,7 +300,7 @@ macro_rules! scope_guardrail_registry_api {
             registries
                 .$field
                 .register(
-                    Guardrail::new(name, priority, guardrail),
+                    Guardrail::new(name, priority, guardrail.into()),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -475,6 +477,54 @@ global_guardrail_registry_api!(
     mark_sanitize_guardrails,
     EventSanitizeFn
 );
+
+/// Register a contextual global LLM sanitize-request guardrail.
+///
+/// This in-process Rust extension preserves the same registry and priority
+/// ordering as legacy LLM sanitizers while supplying active-codec context.
+pub fn register_contextual_llm_sanitize_request_guardrail(
+    name: &str,
+    priority: i32,
+    guardrail: ContextualLlmSanitizeRequestFn,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let mut state = context
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    state
+        .llm_sanitize_request_guardrails
+        .register(Guardrail::new(
+            name,
+            priority,
+            LlmSanitizeRequestGuardrail::Contextual(guardrail),
+        ))
+        .map_err(FlowError::AlreadyExists)
+}
+
+/// Register a contextual global LLM sanitize-response guardrail.
+///
+/// This in-process Rust extension preserves the same registry and priority
+/// ordering as legacy LLM sanitizers while supplying active-codec context.
+pub fn register_contextual_llm_sanitize_response_guardrail(
+    name: &str,
+    priority: i32,
+    guardrail: ContextualLlmSanitizeResponseFn,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let mut state = context
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    state
+        .llm_sanitize_response_guardrails
+        .register(Guardrail::new(
+            name,
+            priority,
+            LlmSanitizeResponseGuardrail::Contextual(guardrail),
+        ))
+        .map_err(FlowError::AlreadyExists)
+}
 global_guardrail_registry_api!(
     /// Register a global scope-start event sanitizer.
     register_scope_sanitize_start_guardrail,

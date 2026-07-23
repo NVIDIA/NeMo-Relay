@@ -255,6 +255,38 @@ typedef struct FfiLLMRequest *(*NemoRelayLlmRequestCb)(void *user_data,
                                                        const struct FfiLLMRequest *request);
 
 /**
+ * Codec identity supplied to a contextual LLM sanitizer. `codec_name` is null
+ * when no recognized built-in codec is active and is valid only for the
+ * duration of the callback.
+ */
+typedef struct NemoRelayLlmSanitizeContext {
+  /**
+   * Whether this managed call supplied a response/request codec.
+   */
+  bool has_active_codec;
+  /**
+   * Canonical built-in codec name, or null for no or unknown codec.
+   */
+  const char *codec_name;
+} NemoRelayLlmSanitizeContext;
+
+/**
+ * Contextual LLM request sanitizer. It receives the request first and its
+ * codec context second. Return null to omit the observability payload.
+ */
+typedef struct FfiLLMRequest *(*NemoRelayContextualLlmRequestCb)(void *user_data,
+                                                                 const struct FfiLLMRequest *request,
+                                                                 struct NemoRelayLlmSanitizeContext context);
+
+/**
+ * Contextual LLM response sanitizer. It receives response JSON first and its
+ * codec context second. Return null to omit the observability payload.
+ */
+typedef char *(*NemoRelayContextualLlmResponseCb)(void *user_data,
+                                                  const char *response_json,
+                                                  struct NemoRelayLlmSanitizeContext context);
+
+/**
  * Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
  * The returned string must be allocated with `malloc` or equivalent.
  */
@@ -962,12 +994,40 @@ NemoRelayStatus nemo_relay_register_llm_sanitize_request_guardrail(const char *n
                                                                    NemoRelayFreeFn free_fn);
 
 /**
+ * Register a codec-aware LLM request sanitizer. The callback receives the
+ * request first and its codec context second; returning null omits the event
+ * payload and annotation.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NemoRelayStatus nemo_relay_register_contextual_llm_sanitize_request_guardrail(const char *name,
+                                                                              int32_t priority,
+                                                                              NemoRelayContextualLlmRequestCb cb,
+                                                                              void *user_data,
+                                                                              NemoRelayFreeFn free_fn);
+
+/**
  * Deregister an LLM request sanitization guardrail by name.
  *
  * # Safety
  * `name` must be a valid C string.
  */
 NemoRelayStatus nemo_relay_deregister_llm_sanitize_request_guardrail(const char *name);
+
+/**
+ * Register a codec-aware LLM response sanitizer. The callback receives the
+ * response first and its codec context second; returning null omits the event
+ * payload and annotation.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NemoRelayStatus nemo_relay_register_contextual_llm_sanitize_response_guardrail(const char *name,
+                                                                               int32_t priority,
+                                                                               NemoRelayContextualLlmResponseCb cb,
+                                                                               void *user_data,
+                                                                               NemoRelayFreeFn free_fn);
 
 /**
  * Register an LLM response sanitization guardrail. The callback can inspect
@@ -1709,6 +1769,22 @@ NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_request_guardrai
                                                                                   NemoRelayFreeFn free_fn);
 
 /**
+ * Register a codec-aware LLM request sanitizer into the plugin registration context.
+ * The callback receives the request first and context second; null omits the
+ * observability payload and annotation.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the plugin registration lifetime.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_contextual_llm_sanitize_request_guardrail(struct FfiPluginContext *ctx,
+                                                                                             const char *name,
+                                                                                             int32_t priority,
+                                                                                             NemoRelayContextualLlmRequestCb cb,
+                                                                                             void *user_data,
+                                                                                             NemoRelayFreeFn free_fn);
+
+/**
  * Register an LLM sanitize-response guardrail into the plugin registration context.
  *
  * # Safety
@@ -1721,6 +1797,22 @@ NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_response_guardra
                                                                                    NemoRelayJsonCb cb,
                                                                                    void *user_data,
                                                                                    NemoRelayFreeFn free_fn);
+
+/**
+ * Register a codec-aware LLM response sanitizer into the plugin registration context.
+ * The callback receives the response first and context second; null omits the
+ * observability payload and annotation.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the plugin registration lifetime.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_contextual_llm_sanitize_response_guardrail(struct FfiPluginContext *ctx,
+                                                                                              const char *name,
+                                                                                              int32_t priority,
+                                                                                              NemoRelayContextualLlmResponseCb cb,
+                                                                                              void *user_data,
+                                                                                              NemoRelayFreeFn free_fn);
 
 /**
  * Register an LLM conditional-execution guardrail into the plugin registration context.

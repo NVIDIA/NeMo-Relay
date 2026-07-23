@@ -12,12 +12,13 @@ use sha2::{Digest, Sha256};
 use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn,
+    ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
+    LlmSanitizeContext, ToolSanitizeFn,
 };
 use nemo_relay::codec::resolve::{
-    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
+    ProviderSurface, detect_request_surface, detect_response_surface,
+    request_codec as build_request_codec, response_codec as build_response_codec,
 };
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
 use super::component::BuiltinBackendConfig;
@@ -29,9 +30,7 @@ use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer};
 pub(super) struct CompiledBuiltinBackend {
     action: BuiltinAction,
     target_paths: Arc<Vec<String>>,
-    request_codec: Option<Arc<dyn LlmCodec>>,
-    response_codec: Option<Arc<dyn LlmResponseCodec>>,
-    codec_name: Option<BuiltinCodecName>,
+    legacy_surface: Option<ProviderSurface>,
     trajectory: Option<TrajectorySanitizer>,
 }
 
@@ -168,9 +167,7 @@ impl CompiledBuiltinBackend {
         Ok(Self {
             action,
             target_paths: Arc::new(config.target_paths),
-            request_codec: surface.map(build_request_codec),
-            response_codec: surface.map(build_response_codec),
-            codec_name: surface.map(BuiltinCodecName::from_provider_surface),
+            legacy_surface: surface,
             trajectory,
         })
     }
@@ -286,16 +283,44 @@ impl CompiledBuiltinBackend {
         }
     }
 
-    fn sanitize_request_with_codec(&self, request: &LlmRequest) -> Option<LlmRequest> {
-        let codec = self.request_codec.as_ref()?;
+    fn selected_surface(&self, context: LlmSanitizeContext) -> Option<ProviderSurface> {
+        if context.has_active_codec {
+            return context
+                .codec_name
+                .and_then(ProviderSurface::from_codec_name);
+        }
+        self.legacy_surface
+    }
+
+    fn uses_compatible_legacy_request_codec(&self, request: &LlmRequest) -> bool {
+        self.legacy_surface
+            .is_some_and(|surface| detect_request_surface(&request.content) == Some(surface))
+    }
+
+    fn uses_compatible_legacy_response_codec(&self, payload: &Json) -> bool {
+        self.legacy_surface
+            .is_some_and(|surface| detect_response_surface(payload) == Some(surface))
+    }
+
+    fn sanitize_request_with_codec(
+        &self,
+        context: LlmSanitizeContext,
+        request: &LlmRequest,
+    ) -> Option<LlmRequest> {
+        let codec = build_request_codec(self.selected_surface(context)?);
         let annotated = codec.decode(request).ok()?;
         let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
         codec.encode(&sanitized_annotated, request).ok()
     }
 
-    fn sanitize_response_with_codec(&self, payload: Json) -> Option<Json> {
-        let codec = self.response_codec.as_ref()?;
-        let codec_name = self.codec_name?;
+    fn sanitize_response_with_codec(
+        &self,
+        context: LlmSanitizeContext,
+        payload: Json,
+    ) -> Option<Json> {
+        let surface = self.selected_surface(context)?;
+        let codec = build_response_codec(surface);
+        let codec_name = BuiltinCodecName::from_provider_surface(surface);
         let annotated = codec.decode_response(&payload).ok()?;
         let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
         Some(codec_name.overlay_response_payload(payload, &sanitized_annotated))
@@ -367,35 +392,69 @@ fn event_sanitize_callback_with_scope_categories(
 
 pub(super) fn llm_sanitize_request_callback(
     backend: CompiledBuiltinBackend,
-) -> LlmSanitizeRequestFn {
-    Arc::new(move |mut request: LlmRequest| {
+) -> ContextualLlmSanitizeRequestFn {
+    Arc::new(move |mut request: LlmRequest, context| {
         if let Some(trajectory) = backend.trajectory.as_ref() {
             request.content = trajectory.sanitize_provider_payload(request.content);
-            return request;
+            return Some(request);
         }
-        if let Some(encoded) = backend.sanitize_request_with_codec(&request) {
-            return encoded;
+        if backend.target_paths.is_empty() {
+            request.content = backend.sanitize_json_preorder_dfs(request.content);
+            return Some(request);
         }
-        request.content = backend.sanitize_json_preorder_dfs(request.content);
-        request
+        if !context.has_active_codec && !backend.uses_compatible_legacy_request_codec(&request) {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                codec_name = context.codec_name.unwrap_or("unknown"),
+                has_active_codec = context.has_active_codec;
+                "PII redaction omitted an LLM request payload because normalized target paths have no usable codec"
+            );
+            return None;
+        }
+        let sanitized = backend.sanitize_request_with_codec(context, &request);
+        if sanitized.is_none() {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                codec_name = context.codec_name.unwrap_or("unknown"),
+                has_active_codec = context.has_active_codec;
+                "PII redaction omitted an LLM request payload because normalized target paths have no usable codec"
+            );
+        }
+        sanitized
     })
 }
 
 pub(super) fn llm_sanitize_response_callback(
     backend: CompiledBuiltinBackend,
-) -> LlmSanitizeResponseFn {
-    Arc::new(move |payload: Json| {
+) -> ContextualLlmSanitizeResponseFn {
+    Arc::new(move |payload: Json, context| {
         if let Some(trajectory) = backend.trajectory.as_ref() {
-            return trajectory.sanitize_provider_payload(payload);
+            return Some(trajectory.sanitize_provider_payload(payload));
         }
         if backend.target_paths.is_empty() {
-            return backend.sanitize_json_preorder_dfs(payload);
+            return Some(backend.sanitize_json_preorder_dfs(payload));
         }
-
-        let payload = backend
-            .sanitize_response_with_codec(payload.clone())
-            .unwrap_or(payload);
-        backend.sanitize_json_preorder_dfs(payload)
+        if !context.has_active_codec && !backend.uses_compatible_legacy_response_codec(&payload) {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                codec_name = context.codec_name.unwrap_or("unknown"),
+                has_active_codec = context.has_active_codec;
+                "PII redaction omitted an LLM response payload because normalized target paths have no usable codec"
+            );
+            return None;
+        }
+        let sanitized = backend
+            .sanitize_response_with_codec(context, payload.clone())
+            .map(|payload| backend.sanitize_json_preorder_dfs(payload));
+        if sanitized.is_none() {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                codec_name = context.codec_name.unwrap_or("unknown"),
+                has_active_codec = context.has_active_codec;
+                "PII redaction omitted an LLM response payload because normalized target paths have no usable codec"
+            );
+        }
+        sanitized
     })
 }
 
