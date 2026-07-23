@@ -1267,14 +1267,15 @@ fn push_replay_input_message(attributes: &mut Vec<KeyValue>, index: usize, messa
     if !object.contains_key("role") && !object.contains_key("content") {
         return false;
     }
+    let Some(text) = object.get("content").and_then(display_text_from_json) else {
+        return false;
+    };
     let role = object.get("role").and_then(Json::as_str).unwrap_or("user");
     push_message_role(attributes, "llm.input_messages", index, role);
-    if let Some(text) = object.get("content").and_then(display_text_from_json) {
-        attributes.push(KeyValue::new(
-            format!("llm.input_messages.{index}.message.content"),
-            text,
-        ));
-    }
+    attributes.push(KeyValue::new(
+        format!("llm.input_messages.{index}.message.content"),
+        text,
+    ));
     true
 }
 
