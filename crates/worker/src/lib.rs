@@ -1880,7 +1880,7 @@ impl LlmPayload {
     fn sanitize_context(&self) -> LlmSanitizeContext {
         LlmSanitizeContext {
             has_active_codec: self.has_active_codec,
-            codec_name: self.codec_name.clone(),
+            codec_name: self.codec_name.clone().filter(|name| !name.is_empty()),
         }
     }
 }
