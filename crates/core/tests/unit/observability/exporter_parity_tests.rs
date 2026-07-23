@@ -527,6 +527,31 @@ fn test_exporters_agree_on_model_name() {
     );
 }
 
+#[test]
+fn test_exporters_prefer_response_model_name_over_requested_model() {
+    let exports = run_llm_scenario(
+        chat_request_content("requested-model"),
+        chat_response_output("response-model"),
+    );
+
+    assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("response-model")
+    );
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"response-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"response-model".to_string())
+    );
+}
+
 // ===================================================================
 // Tool-call parity
 // ===================================================================

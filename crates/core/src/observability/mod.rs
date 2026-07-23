@@ -523,15 +523,13 @@ pub(crate) fn merge_usage(
 }
 
 pub(crate) fn model_name_for_llm_event(event: &crate::api::event::Event) -> Option<String> {
-    if let Some(model_name) = event.model_name() {
-        return Some(model_name.to_string());
-    }
     if event.category().map(|category| category.as_str()) != Some("llm") {
         return None;
     }
     event
         .normalized_llm_response()
         .and_then(|response| response.as_ref().model.clone())
+        .or_else(|| event.model_name().map(ToOwned::to_owned))
         .or_else(|| {
             event
                 .normalized_llm_request()

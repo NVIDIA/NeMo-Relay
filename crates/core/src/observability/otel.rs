@@ -555,6 +555,7 @@ fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap>
 struct ActiveSpan {
     span: Span,
     span_context: SpanContext,
+    start_model_name: Option<String>,
     projected_attributes: Vec<KeyValue>,
 }
 
@@ -649,6 +650,7 @@ impl OtelEventProcessor {
         self.remove_completed_span_context(event.uuid());
         let parent_context = self.parent_context(event);
         let is_trace_root = !parent_context.span().span_context().is_valid();
+        let start_model_name = model_name_for_llm_event(event);
         let mut span = self
             .tracer
             .span_builder(span_name(event))
@@ -658,6 +660,9 @@ impl OtelEventProcessor {
             .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &parent_context);
         let mut attributes = start_attributes(event);
+        if start_model_name.is_some() {
+            attributes.retain(|attribute| attribute.key.as_str() != "nemo_relay.model_name");
+        }
         if is_trace_root {
             push_session_identity_attributes(&mut attributes, event);
         }
@@ -669,6 +674,7 @@ impl OtelEventProcessor {
             ActiveSpan {
                 span,
                 span_context,
+                start_model_name,
                 projected_attributes,
             },
         );
@@ -682,6 +688,9 @@ impl OtelEventProcessor {
 
         super::set_span_status_from_event_metadata(&mut active_span.span, event);
         let mut attributes = end_attributes(event);
+        if let Some(model_name) = model_name_for_llm_event(event).or(active_span.start_model_name) {
+            attributes.push(KeyValue::new("nemo_relay.model_name", model_name));
+        }
         if !self.attribute_mappings.is_empty() {
             let mut projected_attributes = active_span.projected_attributes;
             projected_attributes.extend(attributes.iter().cloned());
