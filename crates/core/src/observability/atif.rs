@@ -1044,17 +1044,7 @@ fn openai_responses_item_turn_state(
             Some("user") | None => Some(RequestTurnState::FreshUser),
             Some(_) => Some(RequestTurnState::Continuation),
         },
-        Some(
-            "function_call"
-            | "custom_tool_call"
-            | "mcp_tool_call"
-            | "tool_call"
-            | "function_call_output"
-            | "custom_tool_call_output"
-            | "mcp_tool_result"
-            | "tool_result"
-            | "reasoning",
-        ) => Some(RequestTurnState::Continuation),
+        Some(_) => Some(RequestTurnState::Continuation),
         _ => None,
     }
 }

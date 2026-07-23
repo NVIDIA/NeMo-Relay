@@ -5125,6 +5125,112 @@ fn test_exporter_skips_duplicate_user_step_for_openai_responses_tool_continuatio
 }
 
 #[test]
+fn test_exporter_skips_duplicate_user_step_for_openai_responses_shell_call_continuation() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm1_uuid = Uuid::now_v7();
+    let llm2_uuid = Uuid::now_v7();
+    let codec = OpenAIResponsesCodec;
+
+    let llm1_start_input = json!({
+        "model": "switchyard",
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Fix pip"}]
+        }]
+    });
+    let llm1_start = event_builder(llm1_uuid, EventType::Start)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .input(llm1_start_input)
+        .model_name("switchyard")
+        .build();
+    let llm1_end = event_builder(llm1_uuid, EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_1",
+            "model": "switchyard",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I will inspect the environment."}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+
+    let llm2_start_input = json!({
+        "model": "switchyard",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Fix pip"}]
+            },
+            {
+                "type": "shell_call",
+                "id": "sh_1",
+                "call_id": "sh_call",
+                "action": {"commands": ["which pip"]}
+            }
+        ]
+    });
+    let llm2_start = event_builder(llm2_uuid, EventType::Start)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .input(llm2_start_input.clone())
+        .annotated_request(
+            codec
+                .decode(&LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: llm2_start_input,
+                })
+                .unwrap(),
+        )
+        .model_name("switchyard")
+        .build();
+    let llm2_end = event_builder(llm2_uuid, EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_2",
+            "model": "switchyard",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I found the missing pip binary."}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([llm1_start, llm1_end, llm2_start, llm2_end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 3);
+    let user_steps = trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "user")
+        .collect::<Vec<_>>();
+    assert_eq!(user_steps.len(), 1);
+    assert_eq!(user_steps[0].message, json!("Fix pip"));
+
+    let final_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[2].extra.clone().unwrap()).unwrap();
+    let llm_request = final_extra.llm_request.unwrap();
+    assert_eq!(llm_request["input"][1]["type"], json!("shell_call"));
+    assert_eq!(llm_request["input"][1]["call_id"], json!("sh_call"));
+}
+
+#[test]
 fn test_reasoning_content_extracted() {
     // When an LLM End event carries output["reasoning"], the agent step
     // should have reasoning_content populated.
