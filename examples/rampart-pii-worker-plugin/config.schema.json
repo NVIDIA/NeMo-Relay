@@ -1,0 +1,63 @@
+{
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rampart PII Worker",
+  "type": "object",
+  "additionalProperties": false,
+  "x-nemo-relay-order": [
+    "allow_network",
+    "max_latency_ms",
+    "priority",
+    "input",
+    "output",
+    "tool_input",
+    "tool_output"
+  ],
+  "properties": {
+    "version": {
+      "title": "Configuration version",
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "allow_network": {
+      "title": "Allow model download during activation",
+      "description": "Keep disabled after the model has been prepared in the local cache.",
+      "type": "boolean",
+      "default": false
+    },
+    "max_latency_ms": {
+      "title": "Per-content latency budget",
+      "type": "integer",
+      "minimum": 1,
+      "default": 250
+    },
+    "priority": {
+      "title": "Sanitizer priority",
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483646,
+      "default": 100
+    },
+    "input": {
+      "title": "Sanitize LLM request events",
+      "type": "boolean",
+      "default": true
+    },
+    "output": {
+      "title": "Sanitize LLM response events",
+      "type": "boolean",
+      "default": true
+    },
+    "tool_input": {
+      "title": "Sanitize tool request events",
+      "type": "boolean",
+      "default": true
+    },
+    "tool_output": {
+      "title": "Sanitize tool response events",
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

@@ -368,7 +368,7 @@ for ends.
 
 ## Local Model Mode
 
-`local_model` is reserved for a future in-process local-model backend.
+`local_model` is reserved for a future host-provided local-model backend.
 
 ### Current Status
 
@@ -385,3 +385,9 @@ The current local-model status is:
 
 Without a provider, runtimes report the local backend as unavailable during
 plugin initialization.
+
+The optional
+[Rampart worker](/configure-plugins/pii-redaction/rampart-worker) does not
+register through this provider seam. It runs as a manifest-backed `grpc-v1`
+dynamic plugin so its ONNX runtime, model cache, and process lifecycle remain
+outside the Relay host.

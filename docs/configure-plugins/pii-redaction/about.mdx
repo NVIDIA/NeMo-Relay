@@ -26,6 +26,11 @@ The plugin supports these backend modes:
 - `local_model`
   - Reserves a future local-model backend lane for more stochastic detection behavior.
 
+For an out-of-process contextual detection option, use the optional
+[Rampart worker](/configure-plugins/pii-redaction/rampart-worker). It follows
+the manifest-backed `grpc-v1` worker lifecycle and does not install ONNX
+dependencies into the Relay host.
+
 ## Use This Plugin When
 
 Start here when you need to:
@@ -134,3 +139,6 @@ In particular:
 - [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
   documents the built-in component shape, action semantics, supported codecs,
   and example configs.
+- [Rampart Worker](/configure-plugins/pii-redaction/rampart-worker) documents
+  optional local contextual detection and how it composes with deterministic
+  profiles.

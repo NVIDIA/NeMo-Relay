@@ -1,0 +1,126 @@
+---
+title: "Rampart Worker"
+sidebar-title: "Rampart Worker"
+description: "Add local contextual PII detection with the optional Rampart Python worker plugin."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the optional Rampart worker when deterministic patterns are not sufficient
+to identify contextual PII such as names and addresses. The worker runs the
+`nationaldesignstudio/rampart` ONNX model in a Relay-managed local Python
+process and sanitizes emitted LLM and tool observability payloads.
+
+The worker is separate from the built-in `pii_redaction.local_model` provider
+seam. It uses the public `grpc-v1` worker protocol, keeps ONNX dependencies out
+of the Relay host, and owns model-process startup and shutdown through the
+normal dynamic-plugin lifecycle.
+
+## Combine Both Detection Lanes
+
+Use both layers for defense in depth:
+
+- Configure the built-in PII plugin for deterministic organization policy,
+  including API keys, tokens, network identifiers, and validated structured
+  values.
+- Enable the Rampart worker for contextual entities whose meaning depends on
+  surrounding text.
+
+Sanitizers run by ascending priority. Set the deterministic profiles to a lower
+priority when they should run before the worker. The worker defaults to
+priority `100`.
+
+The worker includes Rampart's deterministic pre-pass for cards, SSNs, emails,
+URLs, and network addresses. It also redacts bare UUID and long-hex identifiers.
+An identifier is preserved only when an adjacent
+`trace`/`span`/`request`/`correlation` label marks it as operational. This
+overlap lets the worker operate safely by itself; the built-in plugin still
+covers additional organization-specific secrets.
+
+## Register the Worker
+
+The worker source is included at
+`examples/rampart-pii-worker-plugin` in the NeMo Relay repository. From that
+directory, register and enable it:
+
+```bash
+nemo-relay plugins add --user ./relay-plugin.toml
+nemo-relay plugins enable nvidia.rampart_pii
+```
+
+`plugins add` creates an isolated managed Python environment and installs the
+worker dependencies. It does not download model files.
+
+## Prepare the Model
+
+The plugin release pins one immutable Rampart model revision. For the first
+activation, allow that revision to be downloaded into the local Hugging Face
+cache:
+
+```toml
+[[plugins.dynamic]]
+manifest = "/absolute/path/to/rampart-pii-worker-plugin/relay-plugin.toml"
+
+[plugins.dynamic.config]
+allow_network = true
+```
+
+After the model is cached, set `allow_network = false`. Offline activation
+fails if the pinned model is unavailable instead of silently accessing the
+network.
+
+## Configure Sanitization
+
+The worker accepts this configuration:
+
+```toml
+[plugins.dynamic.config]
+version = 1
+allow_network = false
+max_latency_ms = 250
+priority = 100
+input = true
+output = true
+tool_input = true
+tool_output = true
+```
+
+| Field | Behavior |
+|---|---|
+| `allow_network` | Allows the pinned model revision to be downloaded during activation. Defaults to `false`. |
+| `max_latency_ms` | Per-content fail-closed latency threshold. Defaults to `250`. |
+| `priority` | Sanitizer execution priority. Lower values run first. Defaults to `100`. |
+| `input` | Sanitizes LLM request events. Defaults to `true`. |
+| `output` | Sanitizes LLM response events. Defaults to `true`. |
+| `tool_input` | Sanitizes tool request events. Defaults to `true`. |
+| `tool_output` | Sanitizes tool response events. Defaults to `true`. |
+
+At least one sanitization surface must remain enabled. Unknown fields are
+rejected.
+
+## Privacy and Failure Behavior
+
+The worker changes observability events only. Provider and tool callback values
+remain unchanged.
+
+The worker returns a failure replacement when classification fails, exceeds
+the configured latency threshold, or receives an oversized content boundary.
+It also registers scope-event backstops so a worker-process failure clears
+affected lifecycle observability fields rather than retaining raw specialized
+payloads.
+
+Worker teardown reports process failures to the host. The worker process is
+isolated, but it is not a security sandbox and runs with the Relay user's local
+permissions.
+
+## Model Limits
+
+Rampart supports English, Spanish, French, German, Italian, Portuguese, and
+Dutch text written in Latin script. It does not provide complete coverage for
+non-Latin names, indirect identifiers, adversarial input, or every regulated
+identifier. Keep deterministic profiles and application-specific privacy
+controls enabled where required.
+
+The model is released under CC BY 4.0. The worker package includes the required
+model attribution and does not vendor model weights.
