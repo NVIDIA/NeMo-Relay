@@ -91,6 +91,11 @@ langchain-nvidia = [
     "aiohttp>=3.14.1",
 ]
 
+langchain-oci = [
+    "nemo-relay[langchain]",
+    "langchain-oci>=0.2.4,<1.0.0",
+]
+
 [tool.maturin]
 manifest-path = "crates/python/Cargo.toml"
 python-source = "python"

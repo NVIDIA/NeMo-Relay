@@ -1,0 +1,124 @@
+---
+title: "NeMo Relay OCI Generative AI Integration"
+sidebar-title: "OCI Generative AI Integration Guide"
+description: "Add NeMo Relay observability to LangChain agents backed by Oracle Cloud Infrastructure (OCI) Generative AI."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `nemo_relay.integrations.langchain` package to add NeMo Relay
+observability to LangChain agents that call
+[Oracle Cloud Infrastructure (OCI) Generative AI](https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/)
+through the [`langchain-oci`](https://pypi.org/project/langchain-oci/) provider.
+
+OCI Generative AI serves managed on-demand models (Meta Llama, Cohere Command,
+xAI Grok, Google Gemini, and OpenAI models) and dedicated AI cluster endpoints,
+including imported open-weights models such as NVIDIA Nemotron. The same
+integration path covers both.
+
+## Setup
+
+Install the LangChain integration extra together with the OCI provider extra in
+your application environment.
+
+<Tabs>
+<Tab title="uv">
+```bash
+uv add "nemo-relay[langchain,langchain-oci]"
+```
+</Tab>
+
+<Tab title="pip">
+```bash
+pip install "nemo-relay[langchain,langchain-oci]"
+```
+</Tab>
+
+</Tabs>
+
+The `langchain-oci` provider authenticates with the OCI SDK. All standard OCI
+authentication types work: API key, session token, instance principal, and
+resource principal. Configure a profile in `~/.oci/config` or run on an OCI
+compute instance with an instance principal.
+
+## Usage Example
+
+```python
+import asyncio
+
+import nemo_relay
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+from langchain_oci import ChatOCIGenAI
+from nemo_relay.integrations.langchain import NemoRelayCallbackHandler, NemoRelayMiddleware
+
+
+@tool
+def get_weather(location: str) -> str:
+    """Get the current weather for a location."""
+    return f"The weather in {location} is sunny and 72 degrees."
+
+
+model = ChatOCIGenAI(
+    model_id="meta.llama-3.3-70b-instruct",
+    service_endpoint="https://inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+    compartment_id="<compartment-ocid>",
+    auth_type="API_KEY",
+    model_kwargs={"temperature": 0.0, "max_tokens": 512},
+)
+
+agent = create_agent(
+    model=model,
+    tools=[get_weather],
+    middleware=[NemoRelayMiddleware()],
+    system_prompt="Use tools when they are relevant. Keep the final answer brief.",
+)
+
+input_payload = {
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the weather in San Francisco?",
+        }
+    ]
+}
+
+with nemo_relay.scope.scope("langchain-request", nemo_relay.ScopeType.Agent):
+    result = asyncio.run(
+        agent.ainvoke(input_payload, config={"callbacks": [NemoRelayCallbackHandler()]})
+    )
+
+final_message = result["messages"][-1]
+print(f"Final response: {final_message.content}")
+```
+
+## Dedicated AI Cluster Endpoints
+
+To call a model hosted on an OCI dedicated AI cluster — including imported
+open-weights models such as NVIDIA Nemotron — pass the endpoint OCID as the
+model ID. Everything else, including the NeMo Relay integration, stays the
+same:
+
+```python
+model = ChatOCIGenAI(
+    model_id="ocid1.generativeaiendpoint.oc1.<region>.<endpoint-id>",
+    service_endpoint="https://inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+    compartment_id="<compartment-ocid>",
+    auth_type="API_KEY",
+    provider="meta",
+)
+```
+
+## Verify the Integration
+
+The integration works correctly when:
+
+- The agent run completes and prints a final response.
+- The `langchain-request` scope contains the managed model call.
+- Tool activity appears under the same request when the agent decides to use `get_weather`.
+
+## Observability
+
+Refer to [Observability](/configure-plugins/observability/about) for details on exporting NeMo Relay observability data to third-party systems.
