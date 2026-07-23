@@ -48,7 +48,7 @@ Directory containing trajectory JSON files. Ignored when [`storage`](/reference/
 
 ### `filename_template: String`
 
-Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID. When [`storage`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is non-empty, the rendered filename is appended to each backend's key prefix.
+Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID, and `{metadata.<path>:-fallback}` placeholders use path-safe strings from the top-level scope metadata or the optional literal fallback. When [`storage`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is non-empty, the rendered filename is appended to each backend's key prefix.
 
 ### `storage: Vec<AtifStorageConfig>`
 
