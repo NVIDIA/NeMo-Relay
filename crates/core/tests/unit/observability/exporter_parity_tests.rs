@@ -568,6 +568,10 @@ fn test_exporters_fall_back_to_requested_model_when_response_model_is_missing() 
     );
 
     assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("requested-model")
+    );
+    assert_eq!(
         exports
             .otel_attrs("model-call")
             .get("nemo_relay.model_name"),

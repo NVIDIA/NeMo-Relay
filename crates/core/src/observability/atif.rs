@@ -2553,6 +2553,8 @@ impl StepConversionState {
             .llm_start_model_names
             .get(&event.uuid())
             .map(String::as_str);
+        let step_model_name =
+            effective_response_model_name(event).or_else(|| paired_start_model.map(str::to_owned));
         let ancestry = build_ancestry(event, &lookups.name_map);
         let invocation = build_invocation_info(
             start_ts,
@@ -2582,7 +2584,7 @@ impl StepConversionState {
                 .and_then(|response| atif_message_from_annotated_response(response))
                 .unwrap_or_else(|| extract_llm_response_message(output)),
             timestamp: Some(event.timestamp().to_rfc3339()),
-            model_name: effective_response_model_name(event),
+            model_name: step_model_name,
             reasoning_effort,
             reasoning_content,
             tool_calls,
