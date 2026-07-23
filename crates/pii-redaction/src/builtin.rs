@@ -15,10 +15,12 @@ use nemo_relay::api::runtime::{
     ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
     LlmSanitizeContext, ToolSanitizeFn,
 };
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
     ProviderSurface, detect_request_surface, detect_response_surface,
     request_codec as build_request_codec, response_codec as build_response_codec,
 };
+use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
 use super::component::BuiltinBackendConfig;
@@ -310,7 +312,46 @@ impl CompiledBuiltinBackend {
         let codec = build_request_codec(self.selected_surface(context)?);
         let annotated = codec.decode(request).ok()?;
         let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
-        codec.encode(&sanitized_annotated, request).ok()
+        codec
+            .encode(&sanitized_annotated, request)
+            .ok()
+            .or_else(|| {
+                self.sanitize_request_target_paths_incrementally(
+                    codec.as_ref(),
+                    request,
+                    sanitized_annotated,
+                )
+            })
+    }
+
+    fn sanitize_request_target_paths_incrementally(
+        &self,
+        codec: &dyn LlmCodec,
+        request: &LlmRequest,
+        sanitized_annotated: AnnotatedLlmRequest,
+    ) -> Option<LlmRequest> {
+        let sanitized = serde_json::to_value(sanitized_annotated).ok()?;
+        let mut sanitized_request = request.clone();
+
+        for target_path in self.target_paths.iter() {
+            let target_segments = json_pointer_segments(target_path)?;
+            let Some(target_value) = sanitized_json_pointer_value(&sanitized, &target_segments)
+            else {
+                continue;
+            };
+            let target_value = target_value.clone();
+            let current_annotated = codec.decode(&sanitized_request).ok()?;
+            let mut current = serde_json::to_value(&current_annotated).ok()?;
+            let current_value = sanitized_json_pointer_value(&current, &target_segments)?;
+            if current_value == &target_value {
+                continue;
+            }
+            replace_sanitized_json_pointer_value(&mut current, &target_segments, target_value)?;
+            let updated = serde_json::from_value(current).ok()?;
+            sanitized_request = codec.encode(&updated, &sanitized_request).ok()?;
+        }
+
+        Some(sanitized_request)
     }
 
     fn sanitize_response_with_codec(
@@ -455,6 +496,57 @@ fn log_llm_payload_omitted(direction: &str, context: LlmSanitizeContext, reason:
         reason;
         "PII redaction omitted an LLM {direction} payload"
     );
+}
+
+fn json_pointer_segments(pointer: &str) -> Option<Vec<String>> {
+    pointer
+        .strip_prefix('/')
+        .map(|path| path.split('/').map(unescape_json_pointer_segment).collect())
+}
+
+fn unescape_json_pointer_segment(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
+}
+
+fn sanitized_json_pointer_value<'a>(value: &'a Json, segments: &[String]) -> Option<&'a Json> {
+    segments
+        .iter()
+        .try_fold(value, |value, segment| match value {
+            Json::Object(values) => values.get(segment),
+            Json::Array(values) => segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| values.get(index)),
+            _ => None,
+        })
+}
+
+fn replace_sanitized_json_pointer_value(
+    value: &mut Json,
+    segments: &[String],
+    replacement: Json,
+) -> Option<()> {
+    let (last, parents) = segments.split_last()?;
+    let parent = parents
+        .iter()
+        .try_fold(value, |value, segment| match value {
+            Json::Object(values) => values.get_mut(segment),
+            Json::Array(values) => segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| values.get_mut(index)),
+            _ => None,
+        })?;
+    match parent {
+        Json::Object(values) => values.insert(last.clone(), replacement).map(|_| ()),
+        Json::Array(values) => {
+            let index = last.parse::<usize>().ok()?;
+            let value = values.get_mut(index)?;
+            *value = replacement;
+            Some(())
+        }
+        _ => None,
+    }
 }
 
 fn render_json_pointer_path(path_segments: &[String]) -> String {
