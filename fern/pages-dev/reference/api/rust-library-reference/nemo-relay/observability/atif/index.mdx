@@ -22,7 +22,7 @@ The [`AtifExporter`](/reference/api/rust-library-reference/nemo-relay/observabil
 The core conversion from NeMo Relay events to ATIF steps follows these rules:
 
 - NeMo Relay Event | ATIF Step | Notes
-- LLM Start | `user` step | Messages extracted from LlmRequest
+- LLM Start | `user` step | Fresh user turns only; same-turn continuations stay on the agent step
 - LLM End | `agent` step | Response content, tool_calls promoted
 - Tool Start | *(skipped)* | tool_calls come from LLM End instead
 - Tool End | agent observation | Correlated by `source_call_id`
