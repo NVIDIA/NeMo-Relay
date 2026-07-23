@@ -1,7 +1,7 @@
 ---
 title: "Release Notes for NVIDIA NeMo Relay"
 sidebar-title: "Release Notes"
-description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.6."
+description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.7."
 template-library-version: "1.0.0"
 position: 6
 ---
@@ -25,32 +25,13 @@ This is the Release Notes template. Document one release version per page and us
 This page contains the release notes for [NVIDIA NeMo
 Relay](/about-nemo-relay/overview).
 
-## Release 0.6
+## Release 0.7
 
-NVIDIA NeMo Relay 0.6 strengthens local coding-agent observability, event
-sanitization, observability exports, and dynamic plugin lifecycle management.
+NVIDIA NeMo Relay 0.7 release notes are in preparation.
 
 ### Highlights
 
-- Coding agents now connect through `nemo-relay mcp`, which starts or adopts a
-  shared authenticated gateway before hooks or routed provider traffic arrive.
-  Codex, Claude Code, and Hermes clients can share the gateway and coordinate
-  recovery before idle shutdown.
-- Relay adds global, scope-local, and plugin-installed sanitizers for mark,
-  scope-start, and scope-end events. The PII redaction plugin now supports
-  ordered, composable profiles and the opt-in `trajectory_context` preset.
-- ATOF configuration version 2 supports multiple independently configured file
-  and stream sinks. OpenTelemetry and OpenInference now use typed attributes,
-  and trace exporters can project selected marks as tool spans.
-- Rust, Python, and Node.js embedding hosts can own native and worker dynamic
-  plugin lifecycles. Experimental Go and C entry points expose the same
-  source-first lifecycle.
-- The coding-agent gateway supports lossless request annotations for Anthropic
-  Messages, OpenAI Chat Completions, and OpenAI Responses generation routes.
-- The CLI adds recursive plugin configuration editing and configurable
-  human-readable or JSONL operational logging.
-- The opt-in Switchyard integration can validate and route buffered or
-  streaming provider requests through a separately managed Decision API.
+- _Highlights will be added for the 0.7 release._
 
 ### Support Matrix and Compatibility Updates
 
@@ -59,32 +40,14 @@ supported platforms and architectures, worker runtimes, coding agents, and
 integrations. It also records current limitations, including platform-specific
 worker requirements.
 
-This release requires migration work for persistent coding-agent installations,
-ATOF configuration, typed observability attributes, annotated-request plugin
-consumers, and managed LLM streams. Refer to the [Migration
-Guides](/reference/migration-guides) for upgrade actions from 0.5 to 0.6.
+Migration guidance for upgrading from 0.6 to 0.7 will be added to the
+[Migration Guides](/reference/migration-guides) before the release.
 
-### Fixed Known Issues in 0.6
+### Fixed Known Issues in 0.7
 
-- Coding-agent gateway generation routes now decode request annotations for
-  Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses while
-  preserving unchanged nested fields, explicit nulls, and provider
-  representations.
-- Installed coding-agent sessions now acquire the shared gateway through MCP
-  before hooks or routed provider traffic, preventing cold-start loss and
-  coordinating concurrent startup and recovery.
-- Transparent Codex routing now recognizes `at-...` access tokens and sends
-  them to the ChatGPT Codex backend without rewriting unrelated bearer tokens
-  or provider API keys.
-- Relay now asks Codex to prefer the readable legacy multi-agent path during
-  managed runs and restores the user's prior setting during uninstall.
-- ATIF now reports the normalized provider response model when a routed or
-  translated call runs on a model that differs from the request.
-- The NeMo Flow migration skill now skips credential-bearing dotenv files and
-  symbolic links, requires exact project-root confirmation, and refuses write
-  mode for filesystem roots and home directories.
+- _Fixed issues will be added for the 0.7 release._
 
-## Known Issues in 0.6
+## Known Issues in 0.7
 
 - Go and the raw C FFI remain experimental and source-first. Generated API
   pages focus on Rust, Python, and Node.js.
