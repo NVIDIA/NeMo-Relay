@@ -538,7 +538,10 @@ fn replace_sanitized_json_pointer_value(
             _ => None,
         })?;
     match parent {
-        Json::Object(values) => values.insert(last.clone(), replacement).map(|_| ()),
+        Json::Object(values) => {
+            values.insert(last.clone(), replacement);
+            Some(())
+        }
         Json::Array(values) => {
             let index = last.parse::<usize>().ok()?;
             let value = values.get_mut(index)?;
