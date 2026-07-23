@@ -2705,6 +2705,7 @@ fn normalized_response_model_name(event: &Event) -> Option<String> {
 
 fn effective_model_for_pair(start: &Event, end: &Event) -> Option<String> {
     normalized_response_model_name(end)
+        .or_else(|| manual::model_name_from_manual_llm_output(end.output()).map(ToOwned::to_owned))
         .or_else(|| {
             start
                 .model_name()

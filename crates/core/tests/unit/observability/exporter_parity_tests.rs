@@ -527,6 +527,105 @@ fn test_exporters_agree_on_model_name() {
     );
 }
 
+#[test]
+fn test_exporters_prefer_response_model_name_over_requested_model() {
+    let exports = run_llm_scenario(
+        chat_request_content("requested-model"),
+        chat_response_output("response-model"),
+    );
+
+    assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("response-model")
+    );
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"response-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"response-model".to_string())
+    );
+}
+
+#[test]
+fn test_exporters_fall_back_to_requested_model_when_response_model_is_missing() {
+    let exports = run_llm_scenario(
+        chat_request_content("requested-model"),
+        json!({
+            "id": "chatcmpl-no-model",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop"
+            }]
+        }),
+    );
+
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"requested-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"requested-model".to_string())
+    );
+}
+
+#[test]
+fn test_exporters_prefer_manual_response_model_name_over_requested_model() {
+    let uuid = Uuid::now_v7();
+    let start = llm_event_with_model(
+        ScopeCategory::Start,
+        uuid,
+        "model-call",
+        json!({"prompt": "manual prompt"}),
+        "requested-model",
+    );
+    let end = llm_event_with_model(
+        ScopeCategory::End,
+        uuid,
+        "model-call",
+        json!({
+            "content": "manual answer",
+            "model": "response-model"
+        }),
+        "requested-model",
+    );
+    assert!(
+        end.normalized_llm_response().is_none(),
+        "payload must exercise the manual response-model fallback, not a codec",
+    );
+
+    let exports = export_through_all_exporters(&[start, end]);
+
+    assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("response-model")
+    );
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"response-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"response-model".to_string())
+    );
+}
+
 // ===================================================================
 // Tool-call parity
 // ===================================================================
