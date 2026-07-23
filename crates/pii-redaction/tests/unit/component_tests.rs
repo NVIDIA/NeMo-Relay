@@ -14,8 +14,8 @@ use crate::api::llm::{
     llm_call_execute, llm_stream_call_execute,
 };
 use crate::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, NemoRelayContextState,
-    create_scope_stack, global_context, set_thread_scope_stack,
+    LlmExecutionNextFn, LlmJsonStream, LlmSanitizeContext, LlmStreamExecutionNextFn,
+    NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
@@ -263,6 +263,121 @@ fn trajectory_backend(codec: Option<&str>, policy: &str) -> crate::builtin::Comp
     .unwrap()
 }
 
+fn no_codec_context() -> LlmSanitizeContext {
+    LlmSanitizeContext::default()
+}
+
+#[test]
+fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_paths: vec![
+                "/messages/0/content/0/text".to_string(),
+                "/message".to_string(),
+            ],
+            ..BuiltinBackendConfig::default()
+        },
+        Some("openai_chat".to_string()),
+    )
+    .unwrap();
+    let sanitize_request = crate::builtin::llm_sanitize_request_callback(backend.clone());
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
+    let active_request = sanitize_request(
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({
+                "model": "gpt-4.1-mini",
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "sk-request-secret"}]}]
+            }),
+        },
+        LlmSanitizeContext {
+            has_active_codec: true,
+            codec_name: Some("openai_responses"),
+        },
+    )
+    .expect("the active OpenAI Responses codec must override the legacy fallback");
+    assert_eq!(
+        active_request.content["input"][0]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+
+    let responses_payload = json!({
+        "id": "resp_123",
+        "model": "gpt-4.1-mini",
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "content": [{"type": "output_text", "text": "sk-responses-secret"}]
+        }]
+    });
+
+    let active_responses = sanitize_response(
+        responses_payload.clone(),
+        LlmSanitizeContext {
+            has_active_codec: true,
+            codec_name: Some("openai_responses"),
+        },
+    )
+    .expect("the active OpenAI Responses codec must override the legacy fallback");
+    assert_eq!(
+        active_responses["output"][0]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+
+    assert!(
+        sanitize_response(responses_payload.clone(), no_codec_context()).is_none(),
+        "an incompatible configured fallback codec must omit a normalized payload"
+    );
+
+    assert!(
+        sanitize_response(
+            responses_payload,
+            LlmSanitizeContext {
+                has_active_codec: true,
+                codec_name: None,
+            },
+        )
+        .is_none(),
+        "a normalized-path policy must omit an unknown active provider payload"
+    );
+}
+
+#[test]
+fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_paths: vec!["/messages/0/content".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        Some("openai_chat".to_string()),
+    )
+    .unwrap();
+    let sanitize_request = crate::builtin::llm_sanitize_request_callback(backend.clone());
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
+
+    assert!(
+        sanitize_request(
+            LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"messages": "sk-request-secret"}),
+            },
+            no_codec_context(),
+        )
+        .is_none(),
+        "a shallow legacy surface match must not enable a raw-payload fallback"
+    );
+    assert!(
+        sanitize_response(json!({"choices": "sk-response-secret"}), no_codec_context()).is_none(),
+        "a legacy response codec failure must omit the payload instead of emitting raw content"
+    );
+}
+
 #[test]
 fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
     let callback = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
@@ -298,7 +413,8 @@ fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
             "participant": {"name": "Alice Example", "username": "alice"},
             "person_name": "Alice Example"
         }),
-    });
+    }, no_codec_context())
+    .unwrap();
 
     assert_eq!(request.content["model"], "claude-sonnet-4-6");
     assert_eq!(request.content["temperature"], 0.2);
@@ -351,19 +467,23 @@ fn trajectory_preset_preserves_response_analytics_and_redacts_response_content()
         Some("openai_chat"),
         "preserve",
     ));
-    let sanitized = callback(json!({
-        "id": "chatcmpl_1",
-        "model": "claude-opus-4-6",
-        "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
-            "role": "assistant",
-            "content": "private answer",
-            "tool_calls": [{"id": "call_1", "type": "function", "function": {
-                "name": "terminal", "arguments": "{\"command\":\"cat secret.txt\"}"
-            }}]
-        }, "logprobs": {"content": [{"token": "secret", "logprob": -0.5}]}}],
-        "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
-        "cost": {"total": 1.25}
-    }));
+    let sanitized = callback(
+        json!({
+            "id": "chatcmpl_1",
+            "model": "claude-opus-4-6",
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant",
+                "content": "private answer",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {
+                    "name": "terminal", "arguments": "{\"command\":\"cat secret.txt\"}"
+                }}]
+            }, "logprobs": {"content": [{"token": "secret", "logprob": -0.5}]}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
+            "cost": {"total": 1.25}
+        }),
+        no_codec_context(),
+    )
+    .unwrap();
 
     assert_eq!(sanitized["id"], "chatcmpl_1");
     assert_eq!(sanitized["model"], "claude-opus-4-6");
@@ -402,7 +522,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
             "reasoning": {"effort": "high", "summary": "private reasoning"},
             "max_output_tokens": 100
         }),
-    });
+    }, no_codec_context())
+    .unwrap();
     assert_eq!(responses_request.content["model"], "gpt-5");
     assert_eq!(responses_request.content["input"][0]["role"], "user");
     assert_eq!(
@@ -414,15 +535,19 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
     let responses_response = crate::builtin::llm_sanitize_response_callback(trajectory_backend(
         Some("openai_responses"),
         "preserve",
-    ))(json!({
-        "id": "resp_1",
-        "model": "gpt-5",
-        "status": "completed",
-        "output": [{"id": "msg_1", "type": "message", "role": "assistant", "content": [
-            {"type": "output_text", "text": "private output"}
-        ]}],
-        "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
-    }));
+    ))(
+        json!({
+            "id": "resp_1",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [{"id": "msg_1", "type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "private output"}
+            ]}],
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
+        }),
+        no_codec_context(),
+    )
+    .unwrap();
     assert_eq!(responses_response["id"], "resp_1");
     assert_eq!(responses_response["status"], "completed");
     assert_eq!(responses_response["output"][0]["id"], "msg_1");
@@ -446,7 +571,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
             ]}],
             "max_tokens": 128
         }),
-    });
+    }, no_codec_context())
+    .unwrap();
     assert_eq!(anthropic_request.content["model"], "claude-sonnet-4-6");
     assert_eq!(anthropic_request.content["system"], "[REDACTED]");
     assert_eq!(
@@ -474,7 +600,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
         ],
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 12, "output_tokens": 6, "cache_read_input_tokens": 8}
-    }));
+    }), no_codec_context())
+    .unwrap();
     assert_eq!(anthropic_response["id"], "msg_1");
     assert_eq!(anthropic_response["role"], "assistant");
     assert_eq!(anthropic_response["content"][0]["type"], "thinking");
@@ -1451,7 +1578,7 @@ fn validate_rejects_builtin_mode_without_builtin_section() {
 }
 
 #[test]
-fn validate_rejects_llm_surfaces_without_codec() {
+fn validate_allows_llm_surfaces_without_codec() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
@@ -1464,12 +1591,7 @@ fn validate_rejects_llm_surfaces_without_codec() {
         "output": false,
     })));
 
-    assert!(report.diagnostics.iter().any(|diag| {
-        diag.field.as_deref() == Some("codec")
-            && diag
-                .message
-                .contains("codec is required when any LLM surface is enabled")
-    }));
+    assert!(report.diagnostics.is_empty(), "{report:?}");
 }
 
 #[test]
@@ -2026,6 +2148,93 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
     assert_eq!(end.output().unwrap()["usage"]["total_tokens"], 11);
 
     deregister_subscriber("pii-trajectory-stream").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn normalized_paths_use_the_active_codec_for_stream_finalization() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_responses",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/message"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-active-codec-stream-finalization");
+    let provider: LlmStreamExecutionNextFn = Arc::new(move |_request| {
+        Box::pin(async move {
+            Ok(LlmJsonStream::new(futures::stream::iter(vec![Ok(json!({
+                "id": "chatcmpl-stream",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": "sk-client-visible"}}]
+            }))])))
+        })
+    });
+    let request_codec: Arc<dyn LlmCodec> = Arc::new(OpenAIChatCodec);
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
+            })
+            .func(provider)
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| {
+                json!({
+                    "id": "chatcmpl-stream",
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "sk-stream-secret"},
+                        "finish_reason": "stop"
+                    }]
+                })
+            }))
+            .codec(request_codec)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        stream.next().await.unwrap().unwrap()["choices"][0]["delta"]["content"],
+        json!("sk-client-visible")
+    );
+    assert!(stream.next().await.is_none());
+
+    let captured = captured_events_snapshot(&events);
+    let end = captured
+        .iter()
+        .find(|event| event.scope_category() == Some(ScopeCategory::End))
+        .unwrap();
+    assert_eq!(
+        end.output().unwrap()["choices"][0]["message"]["content"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(
+        end.annotated_response()
+            .and_then(|response| response.response_text()),
+        Some("[REDACTED]")
+    );
+
+    deregister_subscriber("pii-active-codec-stream-finalization").unwrap();
     clear_plugin_configuration().unwrap();
 }
 
@@ -4052,7 +4261,7 @@ async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_mes
 
     initialize_plugins(plugin_config(json!({
         "mode": "builtin",
-        "codec": "openai_responses",
+        "codec": "openai_chat",
         "input": false,
         "output": true,
         "tool_input": false,

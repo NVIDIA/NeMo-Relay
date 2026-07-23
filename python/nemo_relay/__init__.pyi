@@ -190,6 +190,12 @@ Arguments:
 Return:
     Response object recorded on the emitted lifecycle event.
 """
+LlmSanitizeContext: TypeAlias = JsonObject
+"""Codec identity supplied while a managed LLM event is sanitized."""
+ContextualLlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, LlmSanitizeContext], Optional[LLMRequest]]
+"""Codec-aware sanitizer invoked as ``callback(request, context)``."""
+ContextualLlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject, LlmSanitizeContext], Optional[JsonObject]]
+"""Codec-aware sanitizer invoked as ``callback(response, context)``."""
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
 """Guardrail callback that can block an LLM call.
 

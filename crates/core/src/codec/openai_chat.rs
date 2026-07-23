@@ -1116,6 +1116,10 @@ fn patch_chat_api_fields(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OpenAIChatCodec {
+    fn codec_name(&self) -> Option<&'static str> {
+        Some("openai_chat")
+    }
+
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         let raw: RawChatCompletion = serde_json::from_value(response.clone())
             .map_err(|e| FlowError::Internal(format!("OpenAI Chat response decode: {e}")))?;
@@ -1205,6 +1209,10 @@ impl LlmResponseCodec for OpenAIChatCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OpenAIChatCodec {
+    fn codec_name(&self) -> Option<&'static str> {
+        Some("openai_chat")
+    }
+
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         let obj = request
             .content

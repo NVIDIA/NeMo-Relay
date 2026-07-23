@@ -3,20 +3,22 @@
 
 use super::{
     Arc, CStr, ConfigDiagnostic, DiagnosticLevel, DynamicPluginActivationSpec, FfiPluginActivation,
-    FfiPluginContext, Future, NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb,
-    NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb,
-    NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb,
-    NemoRelayPluginValidateCb, NemoRelayStatus, NemoRelayToolConditionalCb,
-    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError,
-    PluginHostActivation, PluginRegistrationContext, active_plugin_report, c_char, c_str_to_json,
-    c_str_to_string, clear_last_error, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
-    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
-    status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_sanitize_fn,
-    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
-    wrap_llm_request_intercept_fn, wrap_llm_response_fn, wrap_llm_sanitize_request_fn,
-    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
-    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    FfiPluginContext, Future, NemoRelayContextualLlmRequestCb, NemoRelayContextualLlmResponseCb,
+    NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb,
+    NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb,
+    NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb,
+    NemoRelayStatus, NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb,
+    NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError, PluginHostActivation,
+    PluginRegistrationContext, active_plugin_report, c_char, c_str_to_json, c_str_to_string,
+    clear_last_error, clear_plugin_configuration, deregister_plugin, initialize_plugins,
+    json_to_c_string, last_error_message, list_plugin_kinds, nemo_relay_string_free,
+    register_adaptive_component, register_plugin, set_last_error, status_from_plugin_error,
+    tokio_runtime, validate_plugin_config, wrap_contextual_llm_sanitize_request_fn,
+    wrap_contextual_llm_sanitize_response_fn, wrap_event_sanitize_fn, wrap_event_subscriber,
+    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
+    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn,
+    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
+    wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -753,6 +755,40 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_sanitize_request
     }
 }
 
+/// Register a codec-aware LLM request sanitizer into the plugin registration context.
+/// The callback receives the request first and context second; null omits the
+/// observability payload and annotation.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_contextual_llm_sanitize_request_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayContextualLlmRequestCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_contextual_llm_sanitize_request_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_contextual_llm_sanitize_request_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(&error),
+    }
+}
+
 /// Register an LLM sanitize-response guardrail into the plugin registration context.
 ///
 /// # Safety
@@ -782,6 +818,40 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_sanitize_respons
     {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register a codec-aware LLM response sanitizer into the plugin registration context.
+/// The callback receives the response first and context second; null omits the
+/// observability payload and annotation.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_contextual_llm_sanitize_response_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayContextualLlmResponseCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_contextual_llm_sanitize_response_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_contextual_llm_sanitize_response_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(&error),
     }
 }
 

@@ -38,6 +38,15 @@ use serde_json::Map;
 /// Native plugin ABI version supported by this crate.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 1;
 
+/// Per-call codec context delivered to contextual LLM sanitizer callbacks.
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
+pub struct LlmSanitizeContext {
+    /// Whether the managed call supplied a codec for this payload direction.
+    pub has_active_codec: bool,
+    /// Canonical built-in codec name, when the active codec is recognized.
+    pub codec_name: Option<String>,
+}
+
 /// Status codes returned by stable native ABI functions.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,10 +257,26 @@ pub type NemoRelayNativeLlmRequestCb = unsafe extern "C" fn(
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
+/// Native contextual LLM request sanitizer callback.
+pub type NemoRelayNativeContextualLlmRequestCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    request_json: *const NemoRelayNativeString,
+    context_json: *const NemoRelayNativeString,
+    out_request_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus;
+
 /// Native JSON transform callback for LLM response sanitizers.
 pub type NemoRelayNativeJsonCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     payload_json: *const NemoRelayNativeString,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus;
+
+/// Native contextual LLM response sanitizer callback.
+pub type NemoRelayNativeContextualLlmResponseCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    payload_json: *const NemoRelayNativeString,
+    context_json: *const NemoRelayNativeString,
     out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
@@ -537,6 +562,26 @@ pub struct NemoRelayNativeHostApiV1 {
             name: *const NemoRelayNativeString,
             priority: i32,
             cb: NemoRelayNativeEventSanitizeCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus,
+    /// Registers a contextual LLM sanitize-request guardrail through the plugin context.
+    pub plugin_context_register_contextual_llm_sanitize_request_guardrail:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            priority: i32,
+            cb: NemoRelayNativeContextualLlmRequestCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus,
+    /// Registers a contextual LLM sanitize-response guardrail through the plugin context.
+    pub plugin_context_register_contextual_llm_sanitize_response_guardrail:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            priority: i32,
+            cb: NemoRelayNativeContextualLlmResponseCb,
             user_data: *mut c_void,
             free_fn: NemoRelayNativeFreeFn,
         ) -> NemoRelayStatus,
@@ -1574,6 +1619,62 @@ impl<'a> PluginContext<'a> {
         )
     }
 
+    /// Registers a typed contextual LLM sanitize-request guardrail.
+    pub fn register_contextual_llm_sanitize_request_guardrail<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync + 'static,
+    {
+        let user_data = typed_callback_user_data(self.host, callback);
+        let status = unsafe {
+            self.register_contextual_llm_sanitize_request_guardrail_raw(
+                name,
+                priority,
+                typed_contextual_llm_sanitize_request_trampoline::<F>,
+                user_data,
+                Some(drop_typed_callback::<F>),
+            )
+        };
+        finish_typed_registration::<F>(
+            self.host,
+            status,
+            user_data,
+            "contextual llm sanitize request guardrail",
+        )
+    }
+
+    /// Registers a typed contextual LLM sanitize-response guardrail.
+    pub fn register_contextual_llm_sanitize_response_guardrail<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync + 'static,
+    {
+        let user_data = typed_callback_user_data(self.host, callback);
+        let status = unsafe {
+            self.register_contextual_llm_sanitize_response_guardrail_raw(
+                name,
+                priority,
+                typed_contextual_llm_sanitize_response_trampoline::<F>,
+                user_data,
+                Some(drop_typed_callback::<F>),
+            )
+        };
+        finish_typed_registration::<F>(
+            self.host,
+            status,
+            user_data,
+            "contextual llm sanitize response guardrail",
+        )
+    }
+
     /// Registers a typed LLM conditional-execution guardrail.
     pub fn register_llm_conditional_execution_guardrail<F>(
         &mut self,
@@ -1917,6 +2018,46 @@ impl<'a> PluginContext<'a> {
     ) -> NemoRelayStatus {
         self.with_name(name, |host, name| unsafe {
             (host.plugin_context_register_llm_sanitize_response_guardrail)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
+    /// Registers a raw contextual LLM sanitize-request guardrail callback.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid for every host callback
+    /// invocation until the host deregisters the callback or calls `free_fn`.
+    pub unsafe fn register_contextual_llm_sanitize_request_guardrail_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeContextualLlmRequestCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        self.with_name(name, |host, name| unsafe {
+            (host.plugin_context_register_contextual_llm_sanitize_request_guardrail)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
+    /// Registers a raw contextual LLM sanitize-response guardrail callback.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid for every host callback
+    /// invocation until the host deregisters the callback or calls `free_fn`.
+    pub unsafe fn register_contextual_llm_sanitize_response_guardrail_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeContextualLlmResponseCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        self.with_name(name, |host, name| unsafe {
+            (host.plugin_context_register_contextual_llm_sanitize_response_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
         })
@@ -2318,6 +2459,68 @@ where
         Ok(Ok(status)) => status,
         Ok(Err(status)) => status,
         Err(_) => callback_panic(&state.host, "LLM sanitize response callback"),
+    }
+}
+
+unsafe extern "C" fn typed_contextual_llm_sanitize_request_trampoline<F>(
+    user_data: *mut c_void,
+    request_json: *const NemoRelayNativeString,
+    context_json: *const NemoRelayNativeString,
+    out_request_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus
+where
+    F: Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync + 'static,
+{
+    if user_data.is_null() || out_request_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_request_json = ptr::null_mut() };
+    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let context: LlmSanitizeContext =
+            read_json_value(&state.host, context_json, "LLM sanitize context")?;
+        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
+        match (state.callback)(request, context) {
+            Some(output) => {
+                Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_request_json))
+            }
+            None => Ok(NemoRelayStatus::Ok),
+        }
+    }));
+    match result {
+        Ok(Ok(status)) => status,
+        Ok(Err(status)) => status,
+        Err(_) => callback_panic(&state.host, "contextual LLM sanitize request callback"),
+    }
+}
+
+unsafe extern "C" fn typed_contextual_llm_sanitize_response_trampoline<F>(
+    user_data: *mut c_void,
+    payload_json: *const NemoRelayNativeString,
+    context_json: *const NemoRelayNativeString,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus
+where
+    F: Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync + 'static,
+{
+    if user_data.is_null() || out_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_json = ptr::null_mut() };
+    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let context: LlmSanitizeContext =
+            read_json_value(&state.host, context_json, "LLM sanitize context")?;
+        let payload: Json = read_json_value(&state.host, payload_json, "LLM response")?;
+        match (state.callback)(payload, context) {
+            Some(output) => Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json)),
+            None => Ok(NemoRelayStatus::Ok),
+        }
+    }));
+    match result {
+        Ok(Ok(status)) => status,
+        Ok(Err(status)) => status,
+        Err(_) => callback_panic(&state.host, "contextual LLM sanitize response callback"),
     }
 }
 

@@ -16,8 +16,9 @@ use std::sync::Arc;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
+    ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
     ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde::{Deserialize, Serialize};
@@ -463,6 +464,68 @@ pub fn wrap_js_llm_response_fn(
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error and fall back to original response.
         recv_middleware_json_or_value(rx, "nemo_relay: JS LLM response callback failed", response)
+    })
+}
+
+/// Wrap a JS function for contextual LLM request sanitization.
+///
+/// The callback receives `(request, context)`; returning `null` omits the event payload.
+pub fn wrap_js_contextual_llm_sanitize_request_fn(
+    func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
+) -> ContextualLlmSanitizeRequestFn {
+    let func = Arc::new(func);
+    Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
+        let context = serde_json::json!({
+            "has_active_codec": context.has_active_codec,
+            "codec_name": context.codec_name,
+        });
+        let request = serde_json::to_value(request).unwrap_or(Json::Null);
+        let (tx, rx) = std::sync::mpsc::channel();
+        if func.call_with_return_value(
+            (request, context),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |value: Option<Json>| {
+                let _ = tx.send(callback_json(value));
+                Ok(())
+            },
+        ) != napi::Status::Ok
+        {
+            return None;
+        }
+        recv_middleware_json_result(rx, "nemo_relay: JS contextual LLM request callback failed")
+            .ok()
+            .and_then(|value| (!value.is_null()).then_some(value))
+            .and_then(|value| serde_json::from_value(value).ok())
+    })
+}
+
+/// Wrap a JS function for contextual LLM response sanitization.
+///
+/// The callback receives `(response, context)`; returning `null` omits the event payload.
+pub fn wrap_js_contextual_llm_sanitize_response_fn(
+    func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
+) -> ContextualLlmSanitizeResponseFn {
+    let func = Arc::new(func);
+    Arc::new(move |response: Json, context: LlmSanitizeContext| {
+        let context = serde_json::json!({
+            "has_active_codec": context.has_active_codec,
+            "codec_name": context.codec_name,
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        if func.call_with_return_value(
+            (response, context),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |value: Option<Json>| {
+                let _ = tx.send(callback_json(value));
+                Ok(())
+            },
+        ) != napi::Status::Ok
+        {
+            return None;
+        }
+        recv_middleware_json_result(rx, "nemo_relay: JS contextual LLM response callback failed")
+            .ok()
+            .and_then(|value| (!value.is_null()).then_some(value))
     })
 }
 

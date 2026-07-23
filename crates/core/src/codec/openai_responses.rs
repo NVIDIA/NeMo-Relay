@@ -1194,6 +1194,10 @@ fn patch_responses_common_fields(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OpenAIResponsesCodec {
+    fn codec_name(&self) -> Option<&'static str> {
+        Some("openai_responses")
+    }
+
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         let raw: RawResponsesResponse = serde_json::from_value(response.clone())
             .map_err(|e| FlowError::Internal(format!("OpenAI Responses response decode: {e}")))?;
@@ -1275,6 +1279,10 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OpenAIResponsesCodec {
+    fn codec_name(&self) -> Option<&'static str> {
+        Some("openai_responses")
+    }
+
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         let obj = request
             .content

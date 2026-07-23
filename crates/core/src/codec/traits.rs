@@ -33,6 +33,15 @@ use super::response::AnnotatedLlmResponse;
 ///   so the Rust core cannot know concrete types at compile time.
 ///   Store as `Arc<dyn LlmCodec>`.
 pub trait LlmCodec: Send + Sync {
+    /// Return the canonical built-in codec name when this codec represents a
+    /// Relay provider surface.
+    ///
+    /// Custom codecs should keep the default `None`; callers must not infer a
+    /// provider surface from opaque codec implementations or request shape.
+    fn codec_name(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Parse opaque request content into structured form.
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest>;
 
@@ -72,6 +81,14 @@ pub trait LlmCodec: Send + Sync {
 /// 1. Deserialize raw JSON into API-specific intermediate structs
 /// 2. Map intermediate structs into the normalized `AnnotatedLlmResponse`
 pub trait LlmResponseCodec: Send + Sync {
+    /// Return the canonical built-in codec name when this codec represents a
+    /// Relay provider surface.
+    ///
+    /// Custom codecs should keep the default `None`.
+    fn codec_name(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Parse a raw JSON response into normalized structured form.
     ///
     /// Implementations should return `Err` only for genuinely unparseable input.

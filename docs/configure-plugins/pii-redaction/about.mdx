@@ -91,7 +91,7 @@ The current backend boundary is intentional:
 
 - Managed tool surfaces are sanitized as JSON payloads with exact JSON-pointer
   targeting.
-- Managed LLM surfaces use the selected built-in codec so redaction can target
+- Managed LLM surfaces use the active built-in codec for each call so redaction can target
   normalized Relay request and response shapes such as `/messages/0/content`
   and `/message`.
 - `mark` sanitizes `data`, `category_profile`, and `metadata` independently on

@@ -55,8 +55,8 @@ use tower::service_fn;
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
-    current_scope_stack, with_scope_stack,
+    LlmExecutionNextFn, LlmJsonStream, LlmSanitizeContext, LlmStreamExecutionNextFn,
+    ToolExecutionNextFn, current_scope_stack, with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -1193,52 +1193,96 @@ impl WorkerPluginInstance {
                 RegistrationSurface::LlmSanitizeRequestGuardrail => {
                     let instance = Arc::new(self.clone_for_callback());
                     let callback_name = name.clone();
-                    ctx.register_llm_sanitize_request_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |request| {
-                            instance
-                                .invoke_llm_request_json(
-                                    &callback_name,
-                                    RegistrationSurface::LlmSanitizeRequestGuardrail,
-                                    "",
-                                    request.clone(),
-                                    None,
-                                    None,
-                                )
-                                .unwrap_or_else(|_| {
-                                    instance.log_callback_fallback(
+                    if registration.contextual {
+                        ctx.register_contextual_llm_sanitize_request_guardrail(
+                            &name,
+                            priority,
+                            Arc::new(move |request, context| {
+                                instance
+                                    .invoke_contextual_llm_request_json(
+                                        &callback_name,
+                                        request.clone(),
+                                        context,
+                                    )
+                                    .unwrap_or_else(|_| {
+                                        instance.log_callback_fallback(
+                                            &callback_name,
+                                            RegistrationSurface::LlmSanitizeRequestGuardrail,
+                                        );
+                                        Some(request)
+                                    })
+                            }),
+                        )?;
+                    } else {
+                        ctx.register_llm_sanitize_request_guardrail(
+                            &name,
+                            priority,
+                            Arc::new(move |request| {
+                                instance
+                                    .invoke_llm_request_json(
                                         &callback_name,
                                         RegistrationSurface::LlmSanitizeRequestGuardrail,
-                                    );
-                                    request
-                                })
-                        }),
-                    )?;
+                                        "",
+                                        request.clone(),
+                                        None,
+                                        None,
+                                    )
+                                    .unwrap_or_else(|_| {
+                                        instance.log_callback_fallback(
+                                            &callback_name,
+                                            RegistrationSurface::LlmSanitizeRequestGuardrail,
+                                        );
+                                        request
+                                    })
+                            }),
+                        )?;
+                    }
                 }
                 RegistrationSurface::LlmSanitizeResponseGuardrail => {
                     let instance = Arc::new(self.clone_for_callback());
                     let callback_name = name.clone();
-                    ctx.register_llm_sanitize_response_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |value| {
-                            instance
-                                .invoke_llm_response_json(
-                                    &callback_name,
-                                    RegistrationSurface::LlmSanitizeResponseGuardrail,
-                                    "",
-                                    value.clone(),
-                                )
-                                .unwrap_or_else(|_| {
-                                    instance.log_callback_fallback(
+                    if registration.contextual {
+                        ctx.register_contextual_llm_sanitize_response_guardrail(
+                            &name,
+                            priority,
+                            Arc::new(move |value, context| {
+                                instance
+                                    .invoke_contextual_llm_response_json(
+                                        &callback_name,
+                                        value.clone(),
+                                        context,
+                                    )
+                                    .unwrap_or_else(|_| {
+                                        instance.log_callback_fallback(
+                                            &callback_name,
+                                            RegistrationSurface::LlmSanitizeResponseGuardrail,
+                                        );
+                                        Some(value)
+                                    })
+                            }),
+                        )?;
+                    } else {
+                        ctx.register_llm_sanitize_response_guardrail(
+                            &name,
+                            priority,
+                            Arc::new(move |value| {
+                                instance
+                                    .invoke_llm_response_json(
                                         &callback_name,
                                         RegistrationSurface::LlmSanitizeResponseGuardrail,
-                                    );
-                                    value
-                                })
-                        }),
-                    )?;
+                                        "",
+                                        value.clone(),
+                                    )
+                                    .unwrap_or_else(|_| {
+                                        instance.log_callback_fallback(
+                                            &callback_name,
+                                            RegistrationSurface::LlmSanitizeResponseGuardrail,
+                                        );
+                                        value
+                                    })
+                            }),
+                        )?;
+                    }
                 }
                 RegistrationSurface::LlmConditionalExecutionGuardrail => {
                     let instance = Arc::new(self.clone_for_callback());
@@ -1600,6 +1644,53 @@ impl WorkerPluginCallback {
             )),
         );
         json_from_invoke_response(self.invoke_blocking(invoke)?)
+    }
+
+    fn invoke_contextual_llm_request_json(
+        &self,
+        registration_name: &str,
+        request: LlmRequest,
+        context: LlmSanitizeContext,
+    ) -> FlowResult<Option<LlmRequest>> {
+        let invoke = self.base_request(
+            registration_name,
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+            None,
+            Some(invoke_request_payload_llm_context(
+                "",
+                Some(request),
+                None,
+                None,
+                context,
+            )),
+        );
+        optional_json_from_invoke_response(self.invoke_blocking(invoke)?)?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|err| {
+                FlowError::Internal(format!("worker returned invalid LLM request: {err}"))
+            })
+    }
+
+    fn invoke_contextual_llm_response_json(
+        &self,
+        registration_name: &str,
+        response: Json,
+        context: LlmSanitizeContext,
+    ) -> FlowResult<Option<Json>> {
+        let invoke = self.base_request(
+            registration_name,
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
+            None,
+            Some(invoke_request_payload_llm_context(
+                "",
+                None,
+                None,
+                Some(response),
+                context,
+            )),
+        );
+        optional_json_from_invoke_response(self.invoke_blocking(invoke)?)
     }
 
     fn invoke_llm_guardrail(
@@ -2487,6 +2578,31 @@ fn invoke_request_payload_llm(
         response: response
             .as_ref()
             .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
+        has_active_codec: false,
+        codec_name: None,
+    })
+}
+
+fn invoke_request_payload_llm_context(
+    model_name: &str,
+    request: Option<LlmRequest>,
+    annotated_request: Option<AnnotatedLlmRequest>,
+    response: Option<Json>,
+    context: LlmSanitizeContext,
+) -> invoke_request_payload::Payload {
+    invoke_request_payload::Payload::Llm(LlmInvocation {
+        model_name: model_name.into(),
+        request: request
+            .as_ref()
+            .map(|request| json_envelope_infallible(LLM_REQUEST_SCHEMA, request)),
+        annotated_request: annotated_request
+            .as_ref()
+            .map(|request| json_envelope_infallible(ANNOTATED_LLM_REQUEST_SCHEMA, request)),
+        response: response
+            .as_ref()
+            .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
+        has_active_codec: context.has_active_codec,
+        codec_name: context.codec_name.map(str::to_owned),
     })
 }
 
@@ -2508,6 +2624,27 @@ fn json_from_invoke_response(response: InvokeResponse) -> FlowResult<Json> {
         Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
         _ => Err(FlowError::Internal(
             "worker returned unexpected invoke result".into(),
+        )),
+    }
+}
+
+fn optional_json_from_invoke_response(response: InvokeResponse) -> FlowResult<Option<Json>> {
+    match response.result {
+        Some(invoke_response_result::Result::Empty(_)) => Ok(None),
+        Some(invoke_response_result::Result::Json(result)) => {
+            if let Some(error) = result.error {
+                return Err(worker_error_to_flow(error));
+            }
+            let envelope = required_envelope(result.value, "worker JSON result")?;
+            decode_json_envelope::<Json>(&envelope)
+                .map(Some)
+                .map_err(|err| {
+                    FlowError::Internal(format!("worker returned invalid JSON result: {err}"))
+                })
+        }
+        Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
+        _ => Err(FlowError::Internal(
+            "worker returned unexpected contextual sanitizer result".into(),
         )),
     }
 }

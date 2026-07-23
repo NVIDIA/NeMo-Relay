@@ -15,7 +15,8 @@ use std::task::{Context, Poll};
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
-    NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSanitizeCb,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeContextualLlmRequestCb,
+    NemoRelayNativeContextualLlmResponseCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
     NemoRelayNativeLlmRequestCb, NemoRelayNativeLlmRequestInterceptCb,
@@ -35,9 +36,9 @@ use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -629,6 +630,10 @@ fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
             native_plugin_context_register_scope_sanitize_start_guardrail,
         plugin_context_register_scope_sanitize_end_guardrail:
             native_plugin_context_register_scope_sanitize_end_guardrail,
+        plugin_context_register_contextual_llm_sanitize_request_guardrail:
+            native_plugin_context_register_contextual_llm_sanitize_request_guardrail,
+        plugin_context_register_contextual_llm_sanitize_response_guardrail:
+            native_plugin_context_register_contextual_llm_sanitize_response_guardrail,
     }) as *const _
 }
 
@@ -1315,6 +1320,64 @@ unsafe extern "C" fn native_plugin_context_register_llm_sanitize_response_guardr
     }
 }
 
+unsafe extern "C" fn native_plugin_context_register_contextual_llm_sanitize_request_guardrail(
+    ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeContextualLlmRequestCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let host_ctx = match host_ctx_mut(ctx) {
+        Ok(ctx) => ctx,
+        Err(status) => return status,
+    };
+    let instance = host_ctx.instance.clone();
+    let ctx = unsafe { &mut *host_ctx.ctx };
+    let name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match ctx.register_contextual_llm_sanitize_request_guardrail(
+        &name,
+        priority,
+        wrap_contextual_llm_request_fn(instance, cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(err) => status_from_plugin_error(err),
+    }
+}
+
+unsafe extern "C" fn native_plugin_context_register_contextual_llm_sanitize_response_guardrail(
+    ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeContextualLlmResponseCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let host_ctx = match host_ctx_mut(ctx) {
+        Ok(ctx) => ctx,
+        Err(status) => return status,
+    };
+    let instance = host_ctx.instance.clone();
+    let ctx = unsafe { &mut *host_ctx.ctx };
+    let name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match ctx.register_contextual_llm_sanitize_response_guardrail(
+        &name,
+        priority,
+        wrap_contextual_llm_response_fn(instance, cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(err) => status_from_plugin_error(err),
+    }
+}
+
 unsafe extern "C" fn native_plugin_context_register_llm_conditional_execution_guardrail(
     ctx: *mut NemoRelayNativePluginContext,
     name: *const NemoRelayNativeString,
@@ -1740,6 +1803,18 @@ fn wrap_llm_request_fn(
     })
 }
 
+fn wrap_contextual_llm_request_fn(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeContextualLlmRequestCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> crate::api::runtime::ContextualLlmSanitizeRequestFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |request, context| {
+        call_contextual_llm_request_callback(cb, user_data.ptr, &request, context).ok()
+    })
+}
+
 fn call_llm_request_callback(
     cb: NemoRelayNativeLlmRequestCb,
     user_data: *mut c_void,
@@ -1793,6 +1868,101 @@ fn wrap_json_fn(
         take_json_from_native_string(out, "native JSON callback returned null")
             .unwrap_or(Json::Null)
     })
+}
+
+fn wrap_contextual_llm_response_fn(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeContextualLlmResponseCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> crate::api::runtime::ContextualLlmSanitizeResponseFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |payload, context| {
+        call_contextual_llm_response_callback(cb, user_data.ptr, &payload, context).ok()
+    })
+}
+
+fn call_contextual_llm_request_callback(
+    cb: NemoRelayNativeContextualLlmRequestCb,
+    user_data: *mut c_void,
+    request: &LlmRequest,
+    context: LlmSanitizeContext,
+) -> FlowResult<LlmRequest> {
+    clear_native_last_error();
+    let context_json = serde_json::json!({
+        "has_active_codec": context.has_active_codec,
+        "codec_name": context.codec_name,
+    });
+    let context_string = native_string_from_json(&context_json).ok_or_else(|| {
+        FlowError::Internal("failed to allocate native LLM sanitize context".into())
+    })?;
+    let request_json = serde_json::to_value(request)
+        .map_err(|err| FlowError::Internal(format!("failed to serialize LLM request: {err}")))?;
+    let request_string = native_string_from_json(&request_json)
+        .ok_or_else(|| FlowError::Internal("failed to allocate native LLM request".into()))?;
+    let mut out = ptr::null_mut();
+    let status = unsafe { cb(user_data, request_string, context_string, &mut out) };
+    unsafe {
+        native_string_free(context_string);
+        native_string_free(request_string);
+    }
+    if status != NemoRelayStatus::Ok {
+        if !out.is_null() {
+            unsafe { native_string_free(out) };
+        }
+        return Err(flow_error_from_status(
+            status,
+            "native contextual LLM request callback failed",
+        ));
+    }
+    if out.is_null() {
+        return Err(FlowError::Internal(
+            "native contextual LLM request omitted payload".into(),
+        ));
+    }
+    let result_json =
+        take_json_from_native_string(out, "native contextual LLM request returned invalid JSON")?;
+    serde_json::from_value(result_json)
+        .map_err(|err| FlowError::Internal(format!("invalid LLM request JSON: {err}")))
+}
+
+fn call_contextual_llm_response_callback(
+    cb: NemoRelayNativeContextualLlmResponseCb,
+    user_data: *mut c_void,
+    payload: &Json,
+    context: LlmSanitizeContext,
+) -> FlowResult<Json> {
+    clear_native_last_error();
+    let context_json = serde_json::json!({
+        "has_active_codec": context.has_active_codec,
+        "codec_name": context.codec_name,
+    });
+    let context_string = native_string_from_json(&context_json).ok_or_else(|| {
+        FlowError::Internal("failed to allocate native LLM sanitize context".into())
+    })?;
+    let payload_string = native_string_from_json(payload)
+        .ok_or_else(|| FlowError::Internal("failed to allocate native LLM response".into()))?;
+    let mut out = ptr::null_mut();
+    let status = unsafe { cb(user_data, payload_string, context_string, &mut out) };
+    unsafe {
+        native_string_free(context_string);
+        native_string_free(payload_string);
+    }
+    if status != NemoRelayStatus::Ok {
+        if !out.is_null() {
+            unsafe { native_string_free(out) };
+        }
+        return Err(flow_error_from_status(
+            status,
+            "native contextual LLM response callback failed",
+        ));
+    }
+    if out.is_null() {
+        return Err(FlowError::Internal(
+            "native contextual LLM response omitted payload".into(),
+        ));
+    }
+    take_json_from_native_string(out, "native contextual LLM response returned invalid JSON")
 }
 
 fn wrap_llm_conditional_fn(

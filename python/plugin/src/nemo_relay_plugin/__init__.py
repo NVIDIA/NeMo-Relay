@@ -20,6 +20,7 @@ Public data types:
     Event: A Relay event represented as a JSON object.
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
+    LlmSanitizeContext: Codec identity supplied to a contextual LLM sanitizer.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
@@ -46,6 +47,8 @@ Public callback aliases:
     ToolExecutionCallback: Tool execution intercept callback.
     LlmSanitizeRequestCallback: LLM request sanitizer callback.
     LlmSanitizeResponseCallback: LLM response sanitizer callback.
+    ContextualLlmSanitizeRequestCallback: Codec-aware LLM request sanitizer callback.
+    ContextualLlmSanitizeResponseCallback: Codec-aware LLM response sanitizer callback.
     LlmConditionalCallback: LLM execution guardrail callback.
     LlmRequestCallback: LLM request intercept callback.
     LlmExecutionCallback: Unary LLM execution intercept callback.
@@ -66,6 +69,8 @@ Public functions:
 from ._api import (
     AnnotatedLlmRequest,
     ConfigDiagnostic,
+    ContextualLlmSanitizeRequestCallback,
+    ContextualLlmSanitizeResponseCallback,
     DiagnosticLevel,
     Event,
     EventSanitizeCallback,
@@ -84,6 +89,7 @@ from ._api import (
     LlmRequest,
     LlmRequestCallback,
     LlmRequestInterceptOutcome,
+    LlmSanitizeContext,
     LlmSanitizeRequestCallback,
     LlmSanitizeResponseCallback,
     LlmStreamExecutionCallback,
@@ -123,10 +129,13 @@ __all__ = [
     "LlmOptimizationTokens",
     "LlmNext",
     "LlmRequest",
+    "LlmSanitizeContext",
     "LlmRequestCallback",
     "LlmRequestInterceptOutcome",
     "LlmSanitizeRequestCallback",
     "LlmSanitizeResponseCallback",
+    "ContextualLlmSanitizeRequestCallback",
+    "ContextualLlmSanitizeResponseCallback",
     "LlmStreamNext",
     "LlmStreamExecutionCallback",
     "PluginContext",

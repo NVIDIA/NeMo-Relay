@@ -23,6 +23,8 @@ const {
   deregisterLlmSanitizeRequestGuardrail,
   registerLlmSanitizeResponseGuardrail,
   deregisterLlmSanitizeResponseGuardrail,
+  registerContextualLlmSanitizeRequestGuardrail,
+  registerContextualLlmSanitizeResponseGuardrail,
   registerLlmConditionalExecutionGuardrail,
   deregisterLlmConditionalExecutionGuardrail,
   registerLlmRequestIntercept,
@@ -356,6 +358,48 @@ describe('LLM execute', () => {
 // ===========================================================================
 
 describe('LLM guardrails', () => {
+  it('contextual sanitizers receive payload first and codec context second', async () => {
+    const events = [];
+    let requestContext;
+    let responseContext;
+    registerSubscriber('node_contextual_llm_sanitize_events', (event) => events.push(event));
+    registerContextualLlmSanitizeRequestGuardrail(
+      'node_contextual_llm_sanitize_request',
+      10,
+      (request, context) => {
+        requestContext = context;
+        return {
+          ...request,
+          headers: { ...request.headers, 'X-Contextual-Sanitized': 'request' },
+        };
+      },
+    );
+    registerContextualLlmSanitizeResponseGuardrail(
+      'node_contextual_llm_sanitize_response',
+      10,
+      (response, context) => {
+        responseContext = context;
+        return { ...response, contextualSanitized: true };
+      },
+    );
+
+    try {
+      const result = await llmCallExecute('contextual_sanitize_llm', makeNative(), () => ({ ok: true }));
+      assert.deepEqual(result, { ok: true });
+      assert.deepEqual(requestContext, { has_active_codec: false, codec_name: null });
+      assert.deepEqual(responseContext, { has_active_codec: false, codec_name: null });
+      await flushSubscriberCallbacks();
+      const start = events.find((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start');
+      const end = events.find((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'end');
+      assert.equal(start.data.headers['X-Contextual-Sanitized'], 'request');
+      assert.equal(end.data.contextualSanitized, true);
+    } finally {
+      deregisterLlmSanitizeRequestGuardrail('node_contextual_llm_sanitize_request');
+      deregisterLlmSanitizeResponseGuardrail('node_contextual_llm_sanitize_response');
+      deregisterSubscriber('node_contextual_llm_sanitize_events');
+    }
+  });
+
   it('sanitize request guardrail', () => {
     registerLlmSanitizeRequestGuardrail('node_llm_san_req', 10, (request) => {
       request.extra = 'sanitized';

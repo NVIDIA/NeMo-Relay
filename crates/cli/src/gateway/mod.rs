@@ -160,6 +160,10 @@ struct GatewayRequestCodec {
 }
 
 impl LlmCodec for GatewayRequestCodec {
+    fn codec_name(&self) -> Option<&'static str> {
+        self.inner.codec_name()
+    }
+
     fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
         self.inner.decode(request)
     }

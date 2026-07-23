@@ -5,6 +5,12 @@
 
 import type { EventSanitizeFields, Json } from './index';
 
+/** Codec identity available while a managed LLM event is sanitized. */
+export interface LlmSanitizeContext {
+  has_active_codec: boolean;
+  codec_name: string | null;
+}
+
 /** Policy behavior for unsupported configuration. */
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
 
@@ -209,6 +215,18 @@ export interface PluginContext {
   registerLlmSanitizeRequestGuardrail(name: string, priority: number, callback: (request: Json) => Json): void;
   /** Register an LLM sanitize-response guardrail for this component. */
   registerLlmSanitizeResponseGuardrail(name: string, priority: number, callback: (response: Json) => Json): void;
+  /** Register a codec-aware LLM request sanitizer. The callback receives `(request, context)`. */
+  registerContextualLlmSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: Json, context: LlmSanitizeContext) => Json | null,
+  ): void;
+  /** Register a codec-aware LLM response sanitizer. The callback receives `(response, context)`. */
+  registerContextualLlmSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (response: Json, context: LlmSanitizeContext) => Json | null,
+  ): void;
   /** Register an LLM conditional-execution guardrail for this component. */
   registerLlmConditionalExecutionGuardrail(
     name: string,

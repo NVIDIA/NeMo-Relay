@@ -73,6 +73,13 @@ A plugin can install one or more of these runtime surfaces:
   conditional-execution guardrails, request intercepts, execution intercepts,
   and stream execution intercepts.
 
+LLM sanitize guardrails also have a contextual form for provider-aware
+observability policies. A contextual callback receives the request or response
+first, followed by `has_active_codec` and an optional canonical `codec_name`.
+It may omit the LLM event payload by returning no value. Native and
+gRPC worker plugins receive the same JSON-compatible context; legacy sanitizer
+callbacks remain supported unchanged.
+
 Start with one surface. Add a bundle only when one configuration document clearly controls related behavior, such as a subscriber plus the request intercepts needed to add correlation metadata.
 
 ## Registration Lifecycle

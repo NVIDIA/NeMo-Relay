@@ -102,6 +102,14 @@ LlmRequest: TypeAlias = dict[str, Any]
 #: An annotated Relay LLM request represented as a JSON object.
 AnnotatedLlmRequest: TypeAlias = dict[str, Any]
 
+
+class LlmSanitizeContext(TypedDict):
+    """Codec identity provided to a contextual LLM sanitizer."""
+
+    has_active_codec: bool
+    codec_name: str | None
+
+
 WORKER_PROTOCOL = "grpc-v1"
 JSON_SCHEMA = "nemo.relay.Json@1"
 EVENT_SCHEMA = "nemo.relay.Event@1"
@@ -732,6 +740,12 @@ ToolExecutionCallback: TypeAlias = Callable[
 ]
 LlmSanitizeRequestCallback: TypeAlias = Callable[[LlmRequest], LlmRequest | Awaitable[LlmRequest]]
 LlmSanitizeResponseCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
+ContextualLlmSanitizeRequestCallback: TypeAlias = Callable[
+    [LlmRequest, LlmSanitizeContext], LlmRequest | None | Awaitable[LlmRequest | None]
+]
+ContextualLlmSanitizeResponseCallback: TypeAlias = Callable[
+    [Json, LlmSanitizeContext], Json | None | Awaitable[Json | None]
+]
 LlmConditionalCallback: TypeAlias = Callable[[LlmRequest], str | None | Awaitable[str | None]]
 LlmRequestCallback: TypeAlias = Callable[
     [str, LlmRequest, AnnotatedLlmRequest | None],
@@ -758,6 +772,8 @@ class _Handlers:
     tool_executions: dict[str, ToolExecutionCallback]
     llm_sanitize_requests: dict[str, LlmSanitizeRequestCallback]
     llm_sanitize_responses: dict[str, LlmSanitizeResponseCallback]
+    contextual_llm_sanitize_requests: dict[str, ContextualLlmSanitizeRequestCallback]
+    contextual_llm_sanitize_responses: dict[str, ContextualLlmSanitizeResponseCallback]
     llm_conditionals: dict[str, LlmConditionalCallback]
     llm_requests: dict[str, LlmRequestCallback]
     llm_executions: dict[str, LlmExecutionCallback]
@@ -778,6 +794,8 @@ class _Handlers:
             tool_executions={},
             llm_sanitize_requests={},
             llm_sanitize_responses={},
+            contextual_llm_sanitize_requests={},
+            contextual_llm_sanitize_responses={},
             llm_conditionals={},
             llm_requests={},
             llm_executions={},
@@ -1058,6 +1076,38 @@ class PluginContext:
         self._push_registration(name, pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, priority, False)
         self._handlers.llm_sanitize_responses[name] = callback
 
+    def register_contextual_llm_sanitize_request_guardrail(
+        self,
+        name: str,
+        callback: ContextualLlmSanitizeRequestCallback,
+        *,
+        priority: int = 0,
+    ) -> None:
+        """Register a codec-aware LLM request sanitizer.
+
+        ``callback`` is invoked as ``callback(request, context)``. Returning
+        ``None`` omits the recorded LLM payload and annotation without
+        changing the provider request.
+        """
+        self._push_registration(name, pb.LLM_SANITIZE_REQUEST_GUARDRAIL, priority, False, contextual=True)
+        self._handlers.contextual_llm_sanitize_requests[name] = callback
+
+    def register_contextual_llm_sanitize_response_guardrail(
+        self,
+        name: str,
+        callback: ContextualLlmSanitizeResponseCallback,
+        *,
+        priority: int = 0,
+    ) -> None:
+        """Register a codec-aware LLM response sanitizer.
+
+        ``callback`` is invoked as ``callback(response, context)``. Returning
+        ``None`` omits the recorded LLM payload and annotation without
+        changing the provider response.
+        """
+        self._push_registration(name, pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, priority, False, contextual=True)
+        self._handlers.contextual_llm_sanitize_responses[name] = callback
+
     def register_llm_conditional_execution_guardrail(
         self,
         name: str,
@@ -1149,7 +1199,9 @@ class PluginContext:
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
+    def _push_registration(
+        self, name: str, surface: int, priority: int, break_chain: bool, *, contextual: bool = False
+    ) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
@@ -1161,6 +1213,7 @@ class PluginContext:
                 surface=surface,
                 priority=priority,
                 break_chain=break_chain,
+                contextual=contextual,
             )
         )
 
@@ -1907,6 +1960,17 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     )
                 )
             if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
+                if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
+                    result = await _maybe_await(
+                        self._handler(self._handlers.contextual_llm_sanitize_requests, request.registration_name)(
+                            _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA),
+                            {
+                                "has_active_codec": request.llm.has_active_codec,
+                                "codec_name": request.llm.codec_name if request.llm.HasField("codec_name") else None,
+                            },
+                        )
+                    )
+                    return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
                 return _json_response(
                     await _maybe_await(
                         self._handler(self._handlers.llm_sanitize_requests, request.registration_name)(
@@ -1915,6 +1979,17 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     )
                 )
             if request.surface == pb.LLM_SANITIZE_RESPONSE_GUARDRAIL:
+                if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
+                    result = await _maybe_await(
+                        self._handler(self._handlers.contextual_llm_sanitize_responses, request.registration_name)(
+                            _decode_required_envelope(request.llm.response, "llm response"),
+                            {
+                                "has_active_codec": request.llm.has_active_codec,
+                                "codec_name": request.llm.codec_name if request.llm.HasField("codec_name") else None,
+                            },
+                        )
+                    )
+                    return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
                 return _json_response(
                     await _maybe_await(
                         self._handler(self._handlers.llm_sanitize_responses, request.registration_name)(
@@ -2002,6 +2077,12 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             return handlers[name]
         except KeyError as exc:
             raise WorkerSdkError(f"handler {name!r} is not registered") from exc
+
+    def _is_contextual_llm_sanitizer(self, name: str, surface: int) -> bool:
+        return any(
+            registration.local_name == name and registration.surface == surface and registration.contextual
+            for registration in self._handlers.registrations
+        )
 
 
 def _plugin_id(plugin: _SupportsWorkerPlugin) -> str:

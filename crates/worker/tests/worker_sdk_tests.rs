@@ -2317,6 +2317,8 @@ fn llm_invoke(
                 ),
                 annotated_request: annotated_request.map(json_env),
                 response: response.map(json_env),
+                has_active_codec: false,
+                codec_name: None,
             },
         )),
     }
@@ -2340,6 +2342,8 @@ fn llm_invoke_without_request(
                 request: None,
                 annotated_request: None,
                 response: None,
+                has_active_codec: false,
+                codec_name: None,
             },
         )),
     }

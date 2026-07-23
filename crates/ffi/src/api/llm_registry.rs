@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb,
-    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb,
-    NemoRelayStatus, c_char, c_str_to_string, clear_last_error, core_registry_api,
-    core_subscriber_api, status_from_error, wrap_event_subscriber, wrap_llm_conditional_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn,
+    NemoRelayContextualLlmRequestCb, NemoRelayContextualLlmResponseCb, NemoRelayEventSubscriberCb,
+    NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb,
+    NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayStatus, c_char,
+    c_str_to_string, clear_last_error, core_registry_api, core_subscriber_api, status_from_error,
+    wrap_contextual_llm_sanitize_request_fn, wrap_contextual_llm_sanitize_response_fn,
+    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
+    wrap_llm_request_intercept_fn, wrap_llm_response_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_stream_exec_intercept_fn,
 };
 
 // ---------------------------------------------------------------------------
@@ -46,6 +48,34 @@ pub unsafe extern "C" fn nemo_relay_register_llm_sanitize_request_guardrail(
     }
 }
 
+/// Register a codec-aware LLM request sanitizer. The callback receives the
+/// request first and its codec context second; returning null omits the event
+/// payload and annotation.
+///
+/// # Safety
+/// `name` must be a valid C string. `cb` must be a valid function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_contextual_llm_sanitize_request_guardrail(
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayContextualLlmRequestCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_contextual_llm_sanitize_request_fn(cb, user_data, free_fn);
+    match core_registry_api::register_contextual_llm_sanitize_request_guardrail(
+        &name, priority, wrapped,
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
 /// Deregister an LLM request sanitization guardrail by name.
 ///
 /// # Safety
@@ -62,6 +92,34 @@ pub unsafe extern "C" fn nemo_relay_deregister_llm_sanitize_request_guardrail(
     match core_registry_api::deregister_llm_sanitize_request_guardrail(&name) {
         Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
+    }
+}
+
+/// Register a codec-aware LLM response sanitizer. The callback receives the
+/// response first and its codec context second; returning null omits the event
+/// payload and annotation.
+///
+/// # Safety
+/// `name` must be a valid C string. `cb` must be a valid function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_contextual_llm_sanitize_response_guardrail(
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayContextualLlmResponseCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_contextual_llm_sanitize_response_fn(cb, user_data, free_fn);
+    match core_registry_api::register_contextual_llm_sanitize_response_guardrail(
+        &name, priority, wrapped,
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
     }
 }
 
