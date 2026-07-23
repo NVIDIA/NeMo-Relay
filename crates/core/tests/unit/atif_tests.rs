@@ -4890,7 +4890,8 @@ fn test_exporter_user_message_extraction() {
 #[test]
 fn test_exporter_full_agent_loop() {
     // Simulate a complete agent loop: LLM→tool_calls→observations→LLM→final answer
-    // This should produce 5 steps: user, agent+tool_calls, merged obs, user, agent
+    // The second request continues the same user turn after tool work, so it
+    // should not create a duplicate user step.
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm1_uuid = Uuid::now_v7();
     let llm2_uuid = Uuid::now_v7();
@@ -4984,8 +4985,8 @@ fn test_exporter_full_agent_loop() {
 
     let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
-    // Expected: user, agent+tool_calls+observations, user, agent
-    assert_eq!(trajectory.steps.len(), 4);
+    // Expected: user, agent+tool_calls+observations, agent
+    assert_eq!(trajectory.steps.len(), 3);
 
     assert_eq!(trajectory.steps[0].source, "user");
     assert_eq!(trajectory.steps[0].step_id, 1);
@@ -4997,22 +4998,130 @@ fn test_exporter_full_agent_loop() {
     assert_eq!(tcs[0].function_name, "get_weather");
     assert_eq!(tcs[1].function_name, "get_population");
 
-    assert_eq!(trajectory.steps[2].source, "user");
-    assert_eq!(trajectory.steps[2].step_id, 3);
     let obs = trajectory.steps[1].observation.as_ref().unwrap();
     assert_eq!(obs.results.len(), 2);
 
-    assert_eq!(trajectory.steps[3].source, "agent");
-    assert_eq!(trajectory.steps[3].step_id, 4);
+    assert_eq!(trajectory.steps[2].source, "agent");
+    assert_eq!(trajectory.steps[2].step_id, 3);
     assert_eq!(
-        trajectory.steps[3].message,
+        trajectory.steps[2].message,
         json!("The weather in SF is 62°F and foggy. Population is 873,965.")
     );
+    let final_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[2].extra.clone().unwrap()).unwrap();
+    let llm_request = final_extra.llm_request.unwrap();
+    assert_eq!(
+        llm_request["messages"][0]["content"],
+        json!("What is the weather and population of SF?")
+    );
+    assert_eq!(llm_request["messages"][3]["tool_call_id"], json!("c2"));
 
     // Final metrics should aggregate both LLM calls
     let fm = trajectory.final_metrics.as_ref().unwrap();
     assert_eq!(fm.total_prompt_tokens, Some(300));
     assert_eq!(fm.total_completion_tokens, Some(80));
+}
+
+#[test]
+fn test_exporter_skips_duplicate_user_step_for_openai_responses_tool_continuation() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm1_uuid = Uuid::now_v7();
+    let llm2_uuid = Uuid::now_v7();
+
+    let llm1_start = event_builder(llm1_uuid, EventType::Start)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "switchyard",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Fix pip"}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+    let llm1_end = event_builder(llm1_uuid, EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_1",
+            "model": "switchyard",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I will inspect the environment."}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+    let llm2_start = event_builder(llm2_uuid, EventType::Start)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "switchyard",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Fix pip"}]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "pip is missing"
+                }
+            ]
+        }))
+        .model_name("switchyard")
+        .build();
+    let llm2_end = event_builder(llm2_uuid, EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_2",
+            "model": "switchyard",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I found that pip is missing."}]
+            }]
+        }))
+        .model_name("switchyard")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([llm1_start, llm1_end, llm2_start, llm2_end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 3);
+    let user_steps = trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "user")
+        .collect::<Vec<_>>();
+    assert_eq!(user_steps.len(), 1);
+    assert_eq!(user_steps[0].message, json!("Fix pip"));
+
+    let final_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[2].extra.clone().unwrap()).unwrap();
+    let llm_request = final_extra.llm_request.unwrap();
+    assert_eq!(
+        llm_request["input"][2]["type"],
+        json!("function_call_output")
+    );
+    assert_eq!(llm_request["input"][2]["output"], json!("pip is missing"));
 }
 
 #[test]

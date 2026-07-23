@@ -18,7 +18,7 @@
 //!
 //! | NeMo Relay Event     | ATIF Step               | Notes                                |
 //! |-----------------|-------------------------|--------------------------------------|
-//! | LLM Start       | `user` step             | Messages extracted from LlmRequest   |
+//! | LLM Start       | `user` step             | Fresh user turns only; same-turn continuations stay on the agent step |
 //! | LLM End         | `agent` step            | Response content, tool_calls promoted|
 //! | Tool Start      | *(skipped)*             | tool_calls come from LLM End instead |
 //! | Tool End        | agent observation         | Correlated by `source_call_id`       |
@@ -38,7 +38,7 @@ use uuid::Uuid;
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
-use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::error::Result;
 use crate::json::Json;
@@ -285,6 +285,12 @@ pub struct AtifStepExtra {
     /// Per-tool invocation timing, aligned with `tool_calls`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_invocations: Option<Vec<AtifInvocationInfo>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestTurnState {
+    FreshUser,
+    Continuation,
 }
 
 /// A complete ATIF trajectory.
@@ -930,9 +936,10 @@ fn extract_reasoning_content(output: &Json) -> Option<String> {
 /// Extract the latest user-facing message from an LLM request payload.
 ///
 /// LLM start inputs typically contain `{ "messages": [...], "model": "...",
-/// "max_tokens": ..., "tools": [...], "stream": ... }`. For the ATIF user step
-/// we emit a schema-compatible message value (string or content-part array)
-/// and preserve the full LLM request in `Step.extra.llm_request`.
+/// "max_tokens": ..., "tools": [...], "stream": ... }`. For ATIF we emit a
+/// schema-compatible message value (string or content-part array) and preserve
+/// the full LLM request in `Step.extra.llm_request`, either on the user step or
+/// on the matching agent step for same-turn continuations.
 ///
 /// Returns the latest user message content if present, a prompt if present, or
 /// a stringified representation of the input as a last resort.
@@ -962,6 +969,94 @@ fn extract_user_messages(input: &Json) -> Json {
         return atif_content_value(prompt);
     }
     atif_content_value(input)
+}
+
+fn llm_start_user_step_message(event: &Event, input: &Json, has_paired_end: bool) -> Option<Json> {
+    let turn_state = event
+        .annotated_request()
+        .and_then(|request| request_turn_state_from_annotation(request.as_ref()))
+        .or_else(|| request_turn_state_from_raw(input));
+
+    if has_paired_end && matches!(turn_state, Some(RequestTurnState::Continuation)) {
+        return None;
+    }
+
+    event
+        .annotated_request()
+        .and_then(|request| atif_message_from_annotated_request(request.as_ref()))
+        .or_else(|| Some(extract_user_messages(input)))
+}
+
+fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
+    let object = input.as_object()?;
+    if let Some(messages) = object.get("messages").and_then(Json::as_array)
+        && let Some(state) = chat_messages_turn_state(messages)
+    {
+        return Some(state);
+    }
+    if let Some(input_items) = object.get("input")
+        && let Some(state) = openai_responses_turn_state(input_items)
+    {
+        return Some(state);
+    }
+    object.get("prompt").map(|_| RequestTurnState::FreshUser)
+}
+
+fn request_turn_state_from_annotation(request: &AnnotatedLlmRequest) -> Option<RequestTurnState> {
+    request
+        .messages
+        .iter()
+        .rev()
+        .find_map(annotated_message_turn_state)
+}
+
+fn chat_messages_turn_state(messages: &[Json]) -> Option<RequestTurnState> {
+    messages
+        .iter()
+        .rev()
+        .filter_map(Json::as_object)
+        .find_map(|message| match message.get("role").and_then(Json::as_str) {
+            Some("system" | "developer") => None,
+            Some("user") | None => Some(RequestTurnState::FreshUser),
+            Some(_) => Some(RequestTurnState::Continuation),
+        })
+}
+
+fn openai_responses_turn_state(input: &Json) -> Option<RequestTurnState> {
+    if input.is_string() {
+        return Some(RequestTurnState::FreshUser);
+    }
+
+    input
+        .as_array()?
+        .iter()
+        .rev()
+        .filter_map(Json::as_object)
+        .find_map(openai_responses_item_turn_state)
+}
+
+fn openai_responses_item_turn_state(
+    item: &serde_json::Map<String, Json>,
+) -> Option<RequestTurnState> {
+    match item.get("type").and_then(Json::as_str) {
+        Some("message") => match item.get("role").and_then(Json::as_str) {
+            Some("system" | "developer") => None,
+            Some("user") | None => Some(RequestTurnState::FreshUser),
+            Some(_) => Some(RequestTurnState::Continuation),
+        },
+        Some(
+            "function_call"
+            | "custom_tool_call"
+            | "mcp_tool_call"
+            | "tool_call"
+            | "function_call_output"
+            | "custom_tool_call_output"
+            | "mcp_tool_result"
+            | "tool_result"
+            | "reasoning",
+        ) => Some(RequestTurnState::Continuation),
+        _ => None,
+    }
 }
 
 fn openai_responses_input_message(input: &Json) -> Option<Json> {
@@ -1081,6 +1176,64 @@ fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<
     match content {
         MessageContent::Text(text) => Some(Json::String(text.clone())),
         MessageContent::Parts(_) => None,
+    }
+}
+
+fn annotated_message_turn_state(message: &Message) -> Option<RequestTurnState> {
+    match message {
+        Message::System { .. } | Message::Developer { .. } => None,
+        Message::User { content, .. } => Some(if annotated_content_starts_new_turn(content) {
+            RequestTurnState::FreshUser
+        } else {
+            RequestTurnState::Continuation
+        }),
+        Message::Assistant { .. }
+        | Message::Tool { .. }
+        | Message::Function { .. }
+        | Message::ToolCallItem { .. }
+        | Message::ToolResultItem { .. } => Some(RequestTurnState::Continuation),
+        Message::ProviderNative { value, .. } => provider_native_turn_state(value),
+    }
+}
+
+fn annotated_content_starts_new_turn(content: &MessageContent) -> bool {
+    match content {
+        MessageContent::Text(_) => true,
+        MessageContent::Parts(parts) => {
+            let has_user_input = parts.iter().any(|part| {
+                matches!(
+                    part,
+                    ContentPart::Text { .. }
+                        | ContentPart::ImageUrl { .. }
+                        | ContentPart::Image { .. }
+                        | ContentPart::Audio { .. }
+                        | ContentPart::File { .. }
+                )
+            });
+            if has_user_input {
+                return true;
+            }
+            let has_tool_continuation = parts.iter().any(|part| {
+                matches!(
+                    part,
+                    ContentPart::ToolUse { .. } | ContentPart::ToolResult { .. }
+                )
+            });
+            !has_tool_continuation
+        }
+    }
+}
+
+fn provider_native_turn_state(value: &Json) -> Option<RequestTurnState> {
+    let object = value.as_object()?;
+    if object.get("type").is_some() {
+        return openai_responses_item_turn_state(object);
+    }
+    match object.get("role").and_then(Json::as_str) {
+        Some("system" | "developer") => None,
+        Some("user") => Some(RequestTurnState::FreshUser),
+        Some(_) => Some(RequestTurnState::Continuation),
+        None => None,
     }
 }
 
@@ -1380,6 +1533,7 @@ fn json_string_at(value: &Json, path: &[&str]) -> Option<String> {
 struct EventLookupMaps {
     name_map: std::collections::HashMap<Uuid, String>,
     start_ts_map: std::collections::HashMap<Uuid, DateTime<Utc>>,
+    llm_end_uuids: HashSet<Uuid>,
     llm_start_model_names: HashMap<Uuid, String>,
     tool_call_ids: std::collections::HashMap<Uuid, String>,
     suppressed_llm_events: HashSet<Uuid>,
@@ -1407,6 +1561,7 @@ impl EventLookupMaps {
     ) -> Self {
         let mut name_map = std::collections::HashMap::new();
         let mut start_ts_map = std::collections::HashMap::new();
+        let mut llm_end_uuids = HashSet::new();
         let mut llm_start_model_names = HashMap::new();
         for event in events {
             if is_start_event(event) {
@@ -1418,11 +1573,17 @@ impl EventLookupMaps {
                     llm_start_model_names.insert(event.uuid(), model_name);
                 }
             }
+            if event.scope_category() == Some(crate::api::event::ScopeCategory::End)
+                && event.category().map(|category| category.as_str()) == Some("llm")
+            {
+                llm_end_uuids.insert(event.uuid());
+            }
         }
         let llm_dedupe = build_llm_dedupe(llm_dedupe_events);
         Self {
             name_map,
             start_ts_map,
+            llm_end_uuids,
             llm_start_model_names,
             tool_call_ids: build_tool_call_correlations(tool_correlation_events),
             suppressed_llm_events: llm_dedupe.suppressed_events,
@@ -1928,6 +2089,7 @@ struct PendingAgentStep {
     step_idx: Option<usize>,
     ancestry: Option<AtifAncestry>,
     invocation: Option<AtifInvocationInfo>,
+    llm_request: Option<Json>,
     llm_response: Option<Json>,
     tool_ancestry: Vec<AtifAncestry>,
     tool_invocations: Vec<AtifInvocationInfo>,
@@ -1947,7 +2109,7 @@ impl PendingAgentStep {
         let extra = AtifStepExtra {
             ancestry,
             invocation: self.invocation.take(),
-            llm_request: None,
+            llm_request: self.llm_request.take(),
             llm_response: self.llm_response.take(),
             event_payload: None,
             tool_ancestry: std::mem::take(&mut self.tool_ancestry),
@@ -1975,6 +2137,10 @@ impl PendingAgentStep {
         self.tool_ancestry.clear();
         self.tool_invocations.clear();
         self.tool_call_order = tool_call_order;
+    }
+
+    fn stash_llm_request(&mut self, llm_request: Json) {
+        self.llm_request = Some(llm_request);
     }
 
     fn push_tool_metadata(&mut self, ancestry: AtifAncestry, invocation: AtifInvocationInfo) {
@@ -2299,6 +2465,11 @@ impl StepConversionState {
         };
         let content = unwrap_llm_request(input);
         self.current_reasoning_effort = extract_reasoning_effort(&content);
+        let has_paired_end = lookups.llm_end_uuids.contains(&event.uuid());
+        let Some(message) = llm_start_user_step_message(event, &content, has_paired_end) else {
+            self.current_agent.stash_llm_request(content);
+            return;
+        };
         let extra = AtifStepExtra {
             ancestry: build_ancestry(event, &lookups.name_map),
             invocation: None,
@@ -2311,10 +2482,7 @@ impl StepConversionState {
         self.steps.push(AtifStep {
             step_id: 0,
             source: "user".to_string(),
-            message: event
-                .annotated_request()
-                .and_then(|request| atif_message_from_annotated_request(request))
-                .unwrap_or_else(|| extract_user_messages(&content)),
+            message,
             timestamp: Some(event.timestamp().to_rfc3339()),
             model_name: None,
             reasoning_effort: None,
@@ -3382,8 +3550,10 @@ fn events_to_steps_for_agent(
 /// Mapping logic:
 /// 1. Sort events by timestamp.
 /// 2. For each LLM pair:
-///    - Start event → user step (message = extracted `messages` array from
-///      unwrapped LlmRequest content, stripping `max_tokens`/`model`/etc.)
+///    - Start event → user step when the request begins a fresh user turn
+///    - Start events that continue the same turn after tool work stash
+///      `llm_request` on the matching agent step instead of repeating the user
+///      message
 ///    - End event → agent step (message = extracted content, metrics from
 ///      token_usage, tool_calls promoted to AtifToolCall entries with parsed
 ///      JSON arguments)
