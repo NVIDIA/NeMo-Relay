@@ -35,7 +35,7 @@ function makeNative() {
 describe('callback error helpers', () => {
   it('getLastCallbackError and clearLastCallbackError expose malformed sanitize-request failures', async () => {
     clearLastCallbackError();
-    registerLlmSanitizeRequestGuardrail('node_llm_san_req_public_error', 10, () => null);
+    registerLlmSanitizeRequestGuardrail('node_llm_san_req_public_error', 10, () => ({ broken: true }));
     try {
       const result = await llmCallExecute(
         'san_req_public_error_llm',
@@ -107,7 +107,7 @@ describe('callback error helpers', () => {
       response,
     );
     assert.deepEqual(result, response);
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS LLM response callback/i);
+    assert.match(getLastCallbackError() ?? '', /failed to queue JS LLM sanitize response callback/i);
     clearLastCallbackError();
   });
 

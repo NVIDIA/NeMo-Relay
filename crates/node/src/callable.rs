@@ -411,11 +411,12 @@ pub fn wrap_js_llm_sanitize_request_fn(
             "has_active_codec": context.has_active_codec,
             "codec_name": context.codec_name,
         });
+        let fallback_request = request.clone();
         let request = serde_json::to_value(request).unwrap_or(Json::Null);
         let fallback = request.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         if func.call_with_return_value(
-            (request, context),
+            (request.clone(), context),
             ThreadsafeFunctionCallMode::Blocking,
             move |value: Option<Json>| {
                 let _ = tx.send(callback_json(value));
@@ -424,16 +425,25 @@ pub fn wrap_js_llm_sanitize_request_fn(
         ) != napi::Status::Ok
         {
             record_callback_error("nemo_relay: failed to queue JS LLM sanitize request callback");
-            return serde_json::from_value(fallback).ok();
+            return Some(fallback_request.clone());
         }
         let value = recv_middleware_json_or_value(
             rx,
             "nemo_relay: JS LLM request sanitizer callback failed",
             fallback,
         );
-        Some(value)
-            .and_then(|value| (!value.is_null()).then_some(value))
-            .and_then(|value| serde_json::from_value(value).ok())
+        if value.is_null() {
+            return None;
+        }
+        serde_json::from_value(value).map_or_else(
+            |error| {
+                record_callback_error(format!(
+                    "nemo_relay: JS LLM sanitize request callback failed: failed to deserialize LlmRequest: {error}"
+                ));
+                Some(fallback_request.clone())
+            },
+            Some,
+        )
     })
 }
 
