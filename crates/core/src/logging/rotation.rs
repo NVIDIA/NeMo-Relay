@@ -131,9 +131,6 @@ fn rotate_files(base_path: &Path, retained_files: usize) -> io::Result<()> {
         }
 
         let destination = rotated_log_path(base_path, index);
-        if destination.exists() {
-            fs::remove_file(&destination)?;
-        }
         fs::rename(source, destination)?;
     }
     Ok(())
