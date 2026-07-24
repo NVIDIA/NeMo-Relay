@@ -27,7 +27,7 @@ manifest_root = "."
 artifact = "nemo_relay_rampart_worker/worker.py"
 
 [integrity]
-sha256 = "sha256:644863edb1e7aff2907e21f07d633fda60deb0c8dc4b2fecc5b606cd5e40785c"
+sha256 = "sha256:04225da0daae1fa06573f03181cda15c8b6534faf14c254a9e62cbcde3271a28"
 
 [load]
 runtime = "python"

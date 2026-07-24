@@ -8,7 +8,6 @@ from __future__ import annotations
 import ipaddress
 import math
 import re
-import threading
 import unicodedata
 from dataclasses import dataclass
 from numbers import Real
@@ -17,6 +16,7 @@ from typing import Callable, Mapping, Protocol, Sequence
 
 DEFAULT_MIN_SCORE = 0.4
 DEFAULT_MAX_LATENCY_MS = 250
+DEFAULT_MAX_CONTENT_CHARS = 8_192
 MAX_CONTENT_CHARS = 65_536
 FAILURE_REPLACEMENT = "[REDACTED:PII_DETECTION_FAILURE]"
 
@@ -63,7 +63,10 @@ _UUID_PATTERN = re.compile(
 )
 _TRACE_ID_PATTERN = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{16,64}(?![0-9A-Fa-f])")
 _OPERATIONAL_ID_CONTEXT_PATTERN = re.compile(
-    r"(?:trace|span|request|correlation)(?:[ _.-]?id)?\s*[:=]?\s*$",
+    r"(?:"
+    r"(?:trace|span|request|correlation)(?:[ _.-]?id)?"
+    r"|commit|sha(?:1|256)?|checksum|digest"
+    r")\s*[:=]?\s*$",
     re.IGNORECASE,
 )
 _CLOUD_REGION_PATTERN = re.compile(
@@ -223,11 +226,6 @@ def _prefer_non_overlapping(detections: Sequence[Detection]) -> list[Detection]:
 
         previous = accepted[-1]
         winner = _preferred(previous, candidate)
-        previous_contains = previous.start <= candidate.start and previous.end >= candidate.end
-        candidate_contains = candidate.start <= previous.start and candidate.end >= previous.end
-        if previous_contains or candidate_contains:
-            accepted[-1] = winner
-            continue
         accepted[-1] = Detection(
             min(previous.start, candidate.start),
             max(previous.end, candidate.end),
@@ -452,21 +450,29 @@ class RampartSanitizer:
         self,
         classifier: TokenClassifier,
         *,
+        max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         max_latency_ms: int = DEFAULT_MAX_LATENCY_MS,
         clock: Callable[[], float] = monotonic,
     ) -> None:
+        if not 1 <= max_content_chars <= MAX_CONTENT_CHARS:
+            raise ValueError(f"max_content_chars must be between 1 and {MAX_CONTENT_CHARS}")
         if max_latency_ms <= 0:
             raise ValueError("max_latency_ms must be greater than zero")
         self._classifier = classifier
+        self._max_content_chars = max_content_chars
         self._max_latency_ms = max_latency_ms
         self._clock = clock
-        self._lock = threading.Lock()
+
+    @property
+    def max_content_chars(self) -> int:
+        """Maximum aggregate content size accepted by this sanitizer."""
+        return self._max_content_chars
 
     def sanitize(self, text: str) -> str:
         """Return an observability-safe copy of one semantic content string."""
         if not text:
             return text
-        if len(text) > MAX_CONTENT_CHARS:
+        if len(text) > self._max_content_chars:
             return FAILURE_REPLACEMENT
 
         try:
@@ -477,10 +483,9 @@ class RampartSanitizer:
             ]
             operational = _operational_spans(text)
             masked, offsets = _premask(text, [*deterministic, *operational])
-            with self._lock:
-                # Rampart trains and serves with hyphens folded to spaces. The
-                # replacement is one-to-one, so classifier offsets remain valid.
-                raw_model_detections = self._classifier(masked.replace("-", " "))
+            # Rampart trains and serves with hyphens folded to spaces. The
+            # replacement is one-to-one, so classifier offsets remain valid.
+            raw_model_detections = self._classifier(masked.replace("-", " "))
             elapsed_ms = (self._clock() - started_at) * 1_000
             if elapsed_ms > self._max_latency_ms:
                 return FAILURE_REPLACEMENT

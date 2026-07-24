@@ -6,6 +6,8 @@
   "additionalProperties": false,
   "x-nemo-relay-order": [
     "allow_network",
+    "max_concurrency",
+    "max_content_chars",
     "max_latency_ms",
     "priority",
     "input",
@@ -27,10 +29,27 @@
       "default": false
     },
     "max_latency_ms": {
-      "title": "Per-content latency budget",
+      "title": "Per-sanitizer callback latency budget",
+      "description": "Bounds queue wait plus classification for each sanitizer callback. One managed call can invoke both request and response callbacks.",
       "type": "integer",
       "minimum": 1,
       "default": 250
+    },
+    "max_concurrency": {
+      "title": "Maximum concurrent inference callbacks",
+      "description": "Bounds active native inference calls. Saturated callbacks wait within max_latency_ms and fail closed when the deadline expires.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 2
+    },
+    "max_content_chars": {
+      "title": "Maximum aggregate semantic content characters",
+      "description": "Larger sanitizer payloads fail closed before model inference.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65536,
+      "default": 8192
     },
     "priority": {
       "title": "Sanitizer priority",

@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 from nemo_relay_plugin import (
     ConfigDiagnostic,
@@ -19,17 +20,26 @@ from nemo_relay_plugin import (
     serve_plugin,
 )
 
-from ._detectors import DEFAULT_MAX_LATENCY_MS, RampartSanitizer
+from ._detectors import (
+    DEFAULT_MAX_CONTENT_CHARS,
+    DEFAULT_MAX_LATENCY_MS,
+    FAILURE_REPLACEMENT,
+    MAX_CONTENT_CHARS,
+    RampartSanitizer,
+)
 from ._model import DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, load_classifier
 from ._sanitization import sanitize_llm_request, sanitize_llm_response, sanitize_tool_payload
 
 PLUGIN_ID = "nvidia.rampart_pii"
+DEFAULT_MAX_CONCURRENCY = 2
 _MIN_PRIORITY = -(2**31)
 _MAX_PRIORITY = 2**31 - 2
 _CONFIG_FIELDS = frozenset(
     {
         "version",
         "allow_network",
+        "max_concurrency",
+        "max_content_chars",
         "max_latency_ms",
         "priority",
         "input",
@@ -38,6 +48,75 @@ _CONFIG_FIELDS = frozenset(
         "tool_output",
     }
 )
+_T = TypeVar("_T")
+
+
+class _SanitizationExecutor:
+    """Bound CPU work and fail closed after one end-to-end latency budget."""
+
+    def __init__(self, *, max_concurrency: int, max_latency_ms: int) -> None:
+        self._slots = asyncio.Semaphore(max_concurrency)
+        self._max_latency_seconds = max_latency_ms / 1_000
+
+    def _release_when_done(self, task: asyncio.Task[_T]) -> None:
+        def release(completed: asyncio.Task[_T]) -> None:
+            try:
+                completed.exception()
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._slots.release()
+
+        task.add_done_callback(release)
+
+    async def run(
+        self,
+        operation: Callable[..., _T],
+        *args: object,
+        fallback: Callable[[], _T],
+    ) -> _T:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._max_latency_seconds
+        try:
+            await asyncio.wait_for(
+                self._slots.acquire(),
+                timeout=self._max_latency_seconds,
+            )
+        except TimeoutError:
+            return fallback()
+
+        task = asyncio.create_task(asyncio.to_thread(operation, *args))
+        release_when_returning = True
+        try:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                release_when_returning = False
+                self._release_when_done(task)
+                return fallback()
+            return await asyncio.wait_for(asyncio.shield(task), timeout=remaining)
+        except TimeoutError:
+            release_when_returning = False
+            self._release_when_done(task)
+            return fallback()
+        except asyncio.CancelledError:
+            # asyncio cannot preempt a running native inference. Keep the slot
+            # occupied until the thread exits so cancellation cannot exceed the
+            # configured concurrency bound.
+            release_when_returning = False
+            self._release_when_done(task)
+            raise
+        except Exception:
+            return fallback()
+        finally:
+            if release_when_returning:
+                self._slots.release()
+
+
+def _failed_llm_request(request: dict[str, Any]) -> dict[str, Any]:
+    failed = request.copy()
+    failed["headers"] = {}
+    failed["content"] = FAILURE_REPLACEMENT
+    return failed
 
 
 def _diagnostic(field: str, message: str) -> ConfigDiagnostic:
@@ -58,7 +137,7 @@ def _validate_config(config: Json) -> list[ConfigDiagnostic | dict[str, Any]]:
         _diagnostic(field, f"unknown configuration field '{field}'") for field in sorted(set(config) - _CONFIG_FIELDS)
     ]
     version = config.get("version", 1)
-    if version != 1 or isinstance(version, bool):
+    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
         diagnostics.append(_diagnostic("version", "version must be 1"))
 
     allow_network = config.get("allow_network", False)
@@ -71,6 +150,28 @@ def _validate_config(config: Json) -> list[ConfigDiagnostic | dict[str, Any]]:
             _diagnostic(
                 "max_latency_ms",
                 "max_latency_ms must be a positive integer",
+            )
+        )
+
+    max_content_chars = config.get("max_content_chars", DEFAULT_MAX_CONTENT_CHARS)
+    if (
+        not isinstance(max_content_chars, int)
+        or isinstance(max_content_chars, bool)
+        or not 1 <= max_content_chars <= MAX_CONTENT_CHARS
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "max_content_chars",
+                f"max_content_chars must be an integer between 1 and {MAX_CONTENT_CHARS}",
+            )
+        )
+
+    max_concurrency = config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY)
+    if not isinstance(max_concurrency, int) or isinstance(max_concurrency, bool) or not 1 <= max_concurrency <= 64:
+        diagnostics.append(
+            _diagnostic(
+                "max_concurrency",
+                "max_concurrency must be an integer between 1 and 64",
             )
         )
 
@@ -114,6 +215,8 @@ class RampartWorkerPlugin(WorkerPlugin):
 
         allow_network = cast(bool, config.get("allow_network", False))
         max_latency_ms = cast(int, config.get("max_latency_ms", DEFAULT_MAX_LATENCY_MS))
+        max_concurrency = cast(int, config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
+        max_content_chars = cast(int, config.get("max_content_chars", DEFAULT_MAX_CONTENT_CHARS))
         priority = cast(int, config.get("priority", 100))
         classifier = await asyncio.to_thread(
             load_classifier,
@@ -121,7 +224,15 @@ class RampartWorkerPlugin(WorkerPlugin):
             DEFAULT_MODEL_REVISION,
             allow_network,
         )
-        sanitizer = RampartSanitizer(classifier, max_latency_ms=max_latency_ms)
+        sanitizer = RampartSanitizer(
+            classifier,
+            max_content_chars=max_content_chars,
+            max_latency_ms=max_latency_ms,
+        )
+        executor = _SanitizationExecutor(
+            max_concurrency=max_concurrency,
+            max_latency_ms=max_latency_ms,
+        )
 
         def fail_closed_backstop(
             _event: Event,
@@ -145,7 +256,12 @@ class RampartWorkerPlugin(WorkerPlugin):
         if config.get("input", True):
 
             async def sanitize_request(request: dict[str, Any]) -> dict[str, Any]:
-                return await asyncio.to_thread(sanitize_llm_request, request, sanitizer)
+                return await executor.run(
+                    sanitize_llm_request,
+                    request,
+                    sanitizer,
+                    fallback=lambda: _failed_llm_request(request),
+                )
 
             ctx.register_llm_sanitize_request_guardrail(
                 "input",
@@ -156,7 +272,12 @@ class RampartWorkerPlugin(WorkerPlugin):
         if config.get("output", True):
 
             async def sanitize_response(response: Json) -> Json:
-                return await asyncio.to_thread(sanitize_llm_response, response, sanitizer)
+                return await executor.run(
+                    sanitize_llm_response,
+                    response,
+                    sanitizer,
+                    fallback=lambda: FAILURE_REPLACEMENT,
+                )
 
             ctx.register_llm_sanitize_response_guardrail(
                 "output",
@@ -167,7 +288,12 @@ class RampartWorkerPlugin(WorkerPlugin):
         if config.get("tool_input", True):
 
             async def sanitize_tool_input(_name: str, payload: Json) -> Json:
-                return await asyncio.to_thread(sanitize_tool_payload, payload, sanitizer)
+                return await executor.run(
+                    sanitize_tool_payload,
+                    payload,
+                    sanitizer,
+                    fallback=lambda: FAILURE_REPLACEMENT,
+                )
 
             ctx.register_tool_sanitize_request_guardrail(
                 "tool_input",
@@ -178,7 +304,12 @@ class RampartWorkerPlugin(WorkerPlugin):
         if config.get("tool_output", True):
 
             async def sanitize_tool_output(_name: str, payload: Json) -> Json:
-                return await asyncio.to_thread(sanitize_tool_payload, payload, sanitizer)
+                return await executor.run(
+                    sanitize_tool_payload,
+                    payload,
+                    sanitizer,
+                    fallback=lambda: FAILURE_REPLACEMENT,
+                )
 
             ctx.register_tool_sanitize_response_guardrail(
                 "tool_output",

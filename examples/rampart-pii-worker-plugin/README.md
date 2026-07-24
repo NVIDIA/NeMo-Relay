@@ -37,6 +37,12 @@ The worker:
 - Defaults to offline activation after model preparation.
 - Does not register a generic mark sanitizer because model classification is
   limited to semantic content fields.
+- Preserves provider protocol IDs, model names, roles, statuses, and function
+  names while scanning known conversational fields and opaque tool payloads.
+- Removes provider request headers from the observability copy without
+  changing the request sent to the provider.
+- Replaces encoded image, audio, and file payloads with a fixed binary-content
+  marker instead of sending them through the text model.
 - Registers pass-through scope-event sanitizers as a fail-closed backstop.
   Relay clears scope observability fields if the worker becomes unavailable
   instead of retaining the raw payload returned by specialized sanitizer
@@ -47,12 +53,17 @@ The worker:
 From this directory, run:
 
 ```bash
+nemo-relay plugins validate ./relay-plugin.toml
 nemo-relay plugins add --user ./relay-plugin.toml
+nemo-relay plugins edit --user
 nemo-relay plugins enable nvidia.rampart_pii
+nemo-relay plugins validate nvidia.rampart_pii
 ```
 
 `plugins add` creates a managed Python environment and installs the worker and
-its runtime dependencies. It does not download the model.
+its runtime dependencies. It does not download the model. `plugins edit --user`
+uses the manifest's configuration schema to update the user-scoped
+`[[plugins.dynamic]]` record created by `plugins add`.
 
 ## Prepare the Model
 
@@ -74,6 +85,31 @@ model is absent and network access is disabled.
 The model repository and immutable revision are owned by the plugin release.
 Changing them requires a plugin update so validation and attribution remain
 aligned with the implementation.
+
+## Runtime Limits
+
+`max_concurrency` defaults to `2`. `max_content_chars` defaults to `8192`, so
+larger aggregate semantic payloads fail closed before ONNX inference.
+`max_latency_ms` defaults to `250` and
+applies independently to each sanitizer callback, including queue wait and
+classification. A managed LLM call can invoke both request and response
+sanitizers, so its total observability overhead can exceed one callback budget.
+
+When a deadline expires, the callback returns
+`[REDACTED:PII_DETECTION_FAILURE]`. ONNX inference cannot be preempted safely;
+the worker retains the occupied concurrency slot until that native call exits
+so timeouts cannot create unbounded background inference.
+
+The LLM walker scans known semantic provider fields, including `content`,
+`text`, `prompt`, `message`, `query`, `instructions`, and opaque tool
+arguments/results. It preserves protocol IDs and tool/function names. Tool
+payload sanitizers treat every string value as semantic content.
+Encoded media values are replaced with `[REDACTED:BINARY_CONTENT]` and do not
+count against the text inference budget.
+
+Raise `max_content_chars` only after benchmarking the target hardware. The
+schema allows up to `65536`, but larger values can exceed the default latency
+budget and materially increase worker memory.
 
 ## Support Boundary
 
@@ -109,5 +145,21 @@ python benchmark.py \
   --mode worker \
   --manifest ./relay-plugin.toml \
   --environment /path/to/managed/environment \
+  --profile comprehensive \
   --output /tmp/rampart-worker.json
 ```
+
+Each LLM operation includes both request and response sanitization. The
+`failure_replacements` field counts replacement occurrences in emitted
+lifecycle events, not failed application operations.
+
+Run the model-only quality probe separately:
+
+```bash
+PYTHONPATH=. python evaluate.py \
+  --output /tmp/rampart-quality.json
+```
+
+Refer to [EVALUATION.md](./EVALUATION.md) for the measured quality,
+performance, memory, overload, and support-boundary results from the initial
+experiment.

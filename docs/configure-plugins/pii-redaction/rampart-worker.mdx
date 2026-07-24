@@ -45,12 +45,17 @@ The worker source is included at
 directory, register and enable it:
 
 ```bash
+nemo-relay plugins validate ./relay-plugin.toml
 nemo-relay plugins add --user ./relay-plugin.toml
+nemo-relay plugins edit --user
 nemo-relay plugins enable nvidia.rampart_pii
+nemo-relay plugins validate nvidia.rampart_pii
 ```
 
 `plugins add` creates an isolated managed Python environment and installs the
-worker dependencies. It does not download model files.
+worker dependencies. It does not download model files. `plugins edit --user`
+uses the manifest's configuration schema to update the user-scoped
+`[[plugins.dynamic]]` record created by `plugins add`.
 
 ## Prepare the Model
 
@@ -78,6 +83,8 @@ The worker accepts this configuration:
 [plugins.dynamic.config]
 version = 1
 allow_network = false
+max_concurrency = 2
+max_content_chars = 8192
 max_latency_ms = 250
 priority = 100
 input = true
@@ -89,7 +96,9 @@ tool_output = true
 | Field | Behavior |
 |---|---|
 | `allow_network` | Allows the pinned model revision to be downloaded during activation. Defaults to `false`. |
-| `max_latency_ms` | Per-content fail-closed latency threshold. Defaults to `250`. |
+| `max_concurrency` | Maximum active native inference callbacks. Defaults to `2`. |
+| `max_content_chars` | Maximum aggregate semantic content accepted by one sanitizer callback. Defaults to `8192`; the schema permits up to `65536`. |
+| `max_latency_ms` | End-to-end queue and classification budget for each sanitizer callback. Defaults to `250`. |
 | `priority` | Sanitizer execution priority. Lower values run first. Defaults to `100`. |
 | `input` | Sanitizes LLM request events. Defaults to `true`. |
 | `output` | Sanitizes LLM response events. Defaults to `true`. |
@@ -99,10 +108,27 @@ tool_output = true
 At least one sanitization surface must remain enabled. Unknown fields are
 rejected.
 
+The callback budget is not a whole-call budget. A managed LLM call can run one
+request and one response sanitizer, each with its own deadline. ONNX inference
+cannot be preempted safely, so a timed-out native call retains its concurrency
+slot until it exits. Additional callbacks fail closed when their own deadline
+expires instead of creating unbounded inference work.
+
+Payloads over `max_content_chars` fail closed before model inference. Raise the
+limit only after benchmarking the target hardware; large payloads can exceed
+the latency budget and materially increase worker memory.
+
 ## Privacy and Failure Behavior
 
 The worker changes observability events only. Provider and tool callback values
 remain unchanged.
+
+LLM sanitizers scan known conversational fields and opaque tool
+arguments/results while preserving protocol IDs, model names, roles, statuses,
+and tool/function names. Request headers are removed from the observability
+copy without changing the provider request. Tool sanitizers treat every string
+value in the tool payload as semantic content. Encoded image, audio, and file
+values become `[REDACTED:BINARY_CONTENT]` without entering text inference.
 
 The worker returns a failure replacement when classification fails, exceeds
 the configured latency threshold, or receives an oversized content boundary.
