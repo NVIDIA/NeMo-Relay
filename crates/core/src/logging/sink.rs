@@ -10,12 +10,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use spdlog::sink::{AsyncPoolSink, FileSink, OverflowPolicy, StdStreamSink};
+use spdlog::sink::{AsyncPoolSink, FileSink, OverflowPolicy, StdStreamSink, WriteSink};
 use spdlog::terminal_style::StyleMode;
 use spdlog::{Level, LevelFilter, Logger, ThreadPool};
 
 use super::config::{LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES};
 use super::format::RelayFormatter;
+use super::rotation::{SizeRotatingFileWriter, rotated_log_path};
 use crate::error::{FlowError, Result};
 
 pub(crate) fn build_logger(
@@ -24,7 +25,8 @@ pub(crate) fn build_logger(
 ) -> Result<(Arc<Logger>, Vec<Arc<ThreadPool>>)> {
     let mut sinks: Vec<Arc<dyn spdlog::sink::Sink>> = Vec::new();
     let mut thread_pools = Vec::new();
-    let mut resolved_paths: Vec<PathBuf> = Vec::new();
+    let mut active_paths: Vec<PathBuf> = Vec::new();
+    let mut reserved_paths: Vec<PathBuf> = Vec::new();
 
     let stderr_sink = StdStreamSink::builder()
         .stderr()
@@ -44,36 +46,70 @@ pub(crate) fn build_logger(
     for sink in &config.sinks {
         let LogSinkConfig::File(file_sink) = sink;
         let resolved_path = resolve_log_path(&file_sink.path)?;
-        if resolved_paths
-            .iter()
-            .any(|existing| existing == &resolved_path)
-        {
+        if active_paths.contains(&resolved_path) {
             return Err(FlowError::InvalidArgument(format!(
                 "duplicate logging sink path {}",
                 resolved_path.display()
             )));
         }
-        resolved_paths.push(resolved_path.clone());
+        let candidate_paths = reserved_sink_paths(&resolved_path, file_sink.rotation);
+        if let Some(collision) = candidate_paths
+            .iter()
+            .find(|candidate| reserved_paths.contains(candidate))
+        {
+            return Err(FlowError::InvalidArgument(format!(
+                "logging sink path conflicts with another active or rotated file: {}",
+                collision.display()
+            )));
+        }
+        active_paths.push(resolved_path.clone());
+        reserved_paths.extend(candidate_paths);
 
-        // FileSink performs the real open/append. AsyncPoolSink is spdlog's stock bounded queue +
-        // worker pool in front of that file so hot paths enqueue instead of blocking on disk I/O.
-        // Overflow drops incoming records so a stuck disk cannot stall the process.
-        let file = FileSink::builder()
-            .path(&resolved_path)
-            .truncate(false)
-            .formatter(RelayFormatter {
-                format: file_sink.format,
-                root_relay_id: root_relay_id.clone(),
-            })
-            .level_filter(spdlog_level_filter(file_sink.level))
-            .error_handler(stderr_error_handler(&resolved_path.display().to_string()))
-            .build_arc()
-            .map_err(|error| {
-                FlowError::InvalidArgument(format!(
-                    "failed to open logging sink {}: {error}",
-                    resolved_path.display()
-                ))
-            })?;
+        let file: Arc<dyn spdlog::sink::Sink> = match file_sink.rotation {
+            None => FileSink::builder()
+                .path(&resolved_path)
+                .truncate(false)
+                .formatter(RelayFormatter {
+                    format: file_sink.format,
+                    root_relay_id: root_relay_id.clone(),
+                })
+                .level_filter(spdlog_level_filter(file_sink.level))
+                .error_handler(stderr_error_handler(&resolved_path.display().to_string()))
+                .build_arc()
+                .map_err(|error| {
+                    FlowError::InvalidArgument(format!(
+                        "failed to open logging sink {}: {error}",
+                        resolved_path.display()
+                    ))
+                })?,
+            Some(rotation) => WriteSink::builder()
+                .target(
+                    SizeRotatingFileWriter::new(
+                        resolved_path.clone(),
+                        rotation.max_file_size_bytes(),
+                        rotation.retained_files(),
+                    )
+                    .map_err(|error| {
+                        FlowError::InvalidArgument(format!(
+                            "failed to open rotating logging sink {}: {error}",
+                            resolved_path.display()
+                        ))
+                    })?,
+                )
+                .formatter(RelayFormatter {
+                    format: file_sink.format,
+                    root_relay_id: root_relay_id.clone(),
+                })
+                .level_filter(spdlog_level_filter(file_sink.level))
+                .error_handler(stderr_error_handler(&resolved_path.display().to_string()))
+                .build_arc()
+                .map_err(|error| {
+                    FlowError::InvalidArgument(format!(
+                        "failed to open rotating logging sink {}: {error}",
+                        resolved_path.display()
+                    ))
+                })?,
+        };
 
         if file_sink.queue_capacity > MAX_FILE_SINK_QUEUE_ENTRIES {
             return Err(FlowError::InvalidArgument(format!(
@@ -130,6 +166,23 @@ pub(crate) fn build_logger(
     }
 
     Ok((logger, thread_pools))
+}
+
+fn reserved_sink_paths(
+    resolved_path: &Path,
+    rotation: Option<super::config::FileLogRotationConfig>,
+) -> Vec<PathBuf> {
+    let mut paths = vec![resolved_path.to_path_buf()];
+    if let Some(rotation) = rotation {
+        paths.reserve(rotation.retained_files());
+        for index in 1..=rotation.retained_files() {
+            paths.push(logging_path_identity(&rotated_log_path(
+                resolved_path,
+                index,
+            )));
+        }
+    }
+    paths
 }
 
 fn resolve_log_path(path: &Path) -> Result<PathBuf> {

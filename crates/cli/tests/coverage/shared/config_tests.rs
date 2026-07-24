@@ -3272,6 +3272,56 @@ format = "human"
 }
 
 #[test]
+fn logging_rotation_cli_config_preserves_pair_and_rejects_incomplete_pair() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    let log_path = temp.path().join("relay.log.jsonl");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[[logging.sinks]]
+path = {}
+max_file_size_bytes = 1024
+retained_files = 2
+"#,
+            toml_basic_string(log_path.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_server_config(&GatewayOverrides {
+        config: Some(config_path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap();
+    let LogSinkConfig::File(sink) = &resolved.logging.sinks[0];
+    let rotation = sink.rotation.expect("complete rotation configuration");
+    assert_eq!(rotation.max_file_size_bytes(), 1024);
+    assert_eq!(rotation.retained_files(), 2);
+
+    let incomplete_path = isolated_config_path(&temp);
+    std::fs::write(
+        &incomplete_path,
+        r#"
+[[logging.sinks]]
+path = "relay.log.jsonl"
+max_file_size_bytes = 1024
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(incomplete_path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(
+        "logging sink max_file_size_bytes and retained_files must be configured together"
+    ));
+}
+
+#[test]
 fn logging_rejects_invalid_level_format_missing_path_and_zero_queue() {
     let temp = tempfile::tempdir().unwrap();
 
