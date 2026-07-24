@@ -228,7 +228,7 @@ impl LlmStreamWrapper {
         };
         let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
             aggregated,
-            self.sanitize_context,
+            self.sanitize_context.clone(),
             &entries,
         );
         let payload_omitted = sanitized.is_none();

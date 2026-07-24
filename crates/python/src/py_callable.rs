@@ -48,7 +48,7 @@ use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
-    PyToolExecutionInterceptOutcome,
+    PyLlmSanitizeContext, PyToolExecutionInterceptOutcome,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -845,20 +845,12 @@ fn wrap_py_legacy_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeReques
     })
 }
 
-/// Wrap a Python callable `(LlmRequest, context: dict) -> Optional[LlmRequest]`.
+/// Wrap a Python callable `(LlmRequest, LlmSanitizeContext) -> Optional<LlmRequest]`.
 fn wrap_py_contextual_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn {
     Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
         Python::attach(|py| {
-            let context = serde_json::json!({
-                "has_active_codec": context.has_active_codec,
-                "codec_name": context.codec_name,
-            });
-            let py_context = match json_to_py(py, &context) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: failed to serialize LLM sanitize context: {error}");
-                    return None;
-                }
+            let py_context = PyLlmSanitizeContext {
+                codec: context.codec,
             };
             let py_request = PyLLMRequest { inner: request };
             let result = match py_fn.call1(py, (py_request, py_context)) {
@@ -1082,20 +1074,12 @@ fn wrap_py_legacy_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeRespo
     })
 }
 
-/// Wrap a Python callable `(Json, context: dict) -> Optional[Json]`.
+/// Wrap a Python callable `(Json, LlmSanitizeContext) -> Optional[Json]`.
 fn wrap_py_contextual_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponseFn {
     Arc::new(move |response: Json, context: LlmSanitizeContext| {
         Python::attach(|py| {
-            let context = serde_json::json!({
-                "has_active_codec": context.has_active_codec,
-                "codec_name": context.codec_name,
-            });
-            let py_context = match json_to_py(py, &context) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: failed to serialize LLM sanitize context: {error}");
-                    return None;
-                }
+            let py_context = PyLlmSanitizeContext {
+                codec: context.codec,
             };
             let py_response = match json_to_py(py, &response) {
                 Ok(value) => value,

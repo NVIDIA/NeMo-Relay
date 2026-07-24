@@ -14,20 +14,23 @@ use tokio_stream::StreamExt;
 use super::{
     LlmCallExecuteParams, LlmCallParams, LlmHandle, LlmRequest, LlmStreamCallExecuteParams,
     emit_optimization_marks_with, llm_call, llm_call_execute, llm_stream_call_execute,
-    project_llm_request_to_current_user_turn,
+    project_llm_request_to_current_user_turn, sanitize_context_for_request_codec,
+    sanitize_context_for_response_codec,
 };
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::optimization::finalize_optimization_summary;
-use crate::api::runtime::LlmJsonStream;
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream};
 use crate::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
 use crate::api::scope::{COMPACTION_EVENT_NAME, EmitMarkEventParams, event};
 use crate::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use crate::codec::anthropic::AnthropicMessagesCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::{AnnotatedLlmRequest, Message};
-use crate::codec::traits::LlmCodec;
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::FlowError;
 use crate::json::Json;
 use crate::{codec::optimization::LlmOptimizationContribution, codec::response::PricingResolver};
@@ -74,6 +77,71 @@ fn multi_turn_annotation() -> Arc<AnnotatedLlmRequest> {
 
 struct ProjectionFailingCodec {
     projection_attempts: Arc<AtomicUsize>,
+}
+
+struct RuntimeIdentityCodec;
+
+impl LlmCodec for RuntimeIdentityCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Runtime("com.example.chat.v1".into())
+    }
+
+    fn decode(&self, request: &LlmRequest) -> crate::error::Result<AnnotatedLlmRequest> {
+        OpenAIChatCodec.decode(request)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> crate::error::Result<LlmRequest> {
+        OpenAIChatCodec.encode(annotated, original)
+    }
+}
+
+#[test]
+fn sanitizer_context_preserves_all_codec_identity_states() {
+    assert_eq!(
+        sanitize_context_for_request_codec(None).codec,
+        LlmCodecIdentity::None
+    );
+    assert_eq!(
+        sanitize_context_for_request_codec(Some(&OpenAIChatCodec)).codec,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+    );
+    assert_eq!(
+        sanitize_context_for_request_codec(Some(&OpenAIResponsesCodec)).codec,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+    );
+    assert_eq!(
+        sanitize_context_for_request_codec(Some(&AnthropicMessagesCodec)).codec,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+    );
+    assert_eq!(
+        sanitize_context_for_request_codec(Some(&RuntimeIdentityCodec)).codec,
+        LlmCodecIdentity::Runtime("com.example.chat.v1".into())
+    );
+    assert_eq!(
+        sanitize_context_for_request_codec(Some(&ProjectionFailingCodec {
+            projection_attempts: Arc::new(AtomicUsize::new(0)),
+        }))
+        .codec,
+        LlmCodecIdentity::Opaque
+    );
+    assert_eq!(
+        sanitize_context_for_response_codec(Some(&OpenAIChatCodec as &dyn LlmResponseCodec)).codec,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+    );
+    assert_eq!(
+        sanitize_context_for_response_codec(Some(&OpenAIResponsesCodec as &dyn LlmResponseCodec))
+            .codec,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+    );
+    assert_eq!(
+        sanitize_context_for_response_codec(Some(&AnthropicMessagesCodec as &dyn LlmResponseCodec))
+            .codec,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+    );
 }
 
 impl LlmCodec for ProjectionFailingCodec {

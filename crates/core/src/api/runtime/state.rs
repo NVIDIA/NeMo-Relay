@@ -971,7 +971,7 @@ impl NemoRelayContextState {
     ) -> Option<LlmRequest> {
         let mut value = Some(request);
         for entry in entries {
-            value = value.and_then(|value| (entry.payload)(value, context));
+            value = value.and_then(|value| (entry.payload)(value, context.clone()));
         }
         value
     }
@@ -1010,7 +1010,7 @@ impl NemoRelayContextState {
     ) -> Option<Json> {
         let mut value = Some(response);
         for entry in entries {
-            value = value.and_then(|value| (entry.payload)(value, context));
+            value = value.and_then(|value| (entry.payload)(value, context.clone()));
         }
         value
     }

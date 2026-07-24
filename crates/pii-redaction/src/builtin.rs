@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    ToolSanitizeFn,
+    BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, ToolSanitizeFn,
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -285,13 +285,20 @@ impl CompiledBuiltinBackend {
         }
     }
 
-    fn selected_surface(&self, context: LlmSanitizeContext) -> Option<ProviderSurface> {
-        if context.has_active_codec {
-            return context
-                .codec_name
-                .and_then(ProviderSurface::from_codec_name);
+    fn selected_surface(&self, context: &LlmSanitizeContext) -> Option<ProviderSurface> {
+        match &context.codec {
+            LlmCodecIdentity::None => self.legacy_surface,
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat) => {
+                Some(ProviderSurface::OpenAIChat)
+            }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses) => {
+                Some(ProviderSurface::OpenAIResponses)
+            }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages) => {
+                Some(ProviderSurface::AnthropicMessages)
+            }
+            LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => None,
         }
-        self.legacy_surface
     }
 
     fn uses_compatible_legacy_request_codec(&self, request: &LlmRequest) -> bool {
@@ -306,7 +313,7 @@ impl CompiledBuiltinBackend {
 
     fn sanitize_request_with_codec(
         &self,
-        context: LlmSanitizeContext,
+        context: &LlmSanitizeContext,
         request: &LlmRequest,
     ) -> Option<LlmRequest> {
         let codec = build_request_codec(self.selected_surface(context)?);
@@ -356,7 +363,7 @@ impl CompiledBuiltinBackend {
 
     fn sanitize_response_with_codec(
         &self,
-        context: LlmSanitizeContext,
+        context: &LlmSanitizeContext,
         payload: Json,
     ) -> Option<Json> {
         let surface = self.selected_surface(context)?;
@@ -443,15 +450,17 @@ pub(super) fn llm_sanitize_request_callback(
             request.content = backend.sanitize_json_preorder_dfs(request.content);
             return Some(request);
         }
-        if !context.has_active_codec && !backend.uses_compatible_legacy_request_codec(&request) {
-            log_llm_payload_omitted("request", context, "no compatible legacy codec");
+        if matches!(&context.codec, LlmCodecIdentity::None)
+            && !backend.uses_compatible_legacy_request_codec(&request)
+        {
+            log_llm_payload_omitted("request", &context, "no compatible legacy codec");
             return None;
         }
-        let sanitized = backend.sanitize_request_with_codec(context, &request);
+        let sanitized = backend.sanitize_request_with_codec(&context, &request);
         if sanitized.is_none() {
             log_llm_payload_omitted(
                 "request",
-                context,
+                &context,
                 "codec decode, sanitize, or encode failure",
             );
         }
@@ -469,17 +478,19 @@ pub(super) fn llm_sanitize_response_callback(
         if backend.target_paths.is_empty() {
             return Some(backend.sanitize_json_preorder_dfs(payload));
         }
-        if !context.has_active_codec && !backend.uses_compatible_legacy_response_codec(&payload) {
-            log_llm_payload_omitted("response", context, "no compatible legacy codec");
+        if matches!(&context.codec, LlmCodecIdentity::None)
+            && !backend.uses_compatible_legacy_response_codec(&payload)
+        {
+            log_llm_payload_omitted("response", &context, "no compatible legacy codec");
             return None;
         }
         let sanitized = backend
-            .sanitize_response_with_codec(context, payload)
+            .sanitize_response_with_codec(&context, payload)
             .map(|payload| backend.sanitize_json_preorder_dfs(payload));
         if sanitized.is_none() {
             log_llm_payload_omitted(
                 "response",
-                context,
+                &context,
                 "codec decode, sanitize, or encode failure",
             );
         }
@@ -487,12 +498,17 @@ pub(super) fn llm_sanitize_response_callback(
     })
 }
 
-fn log_llm_payload_omitted(direction: &str, context: LlmSanitizeContext, reason: &str) {
+fn log_llm_payload_omitted(direction: &str, context: &LlmSanitizeContext, reason: &str) {
+    let codec_kind = match &context.codec {
+        LlmCodecIdentity::None => "none",
+        LlmCodecIdentity::BuiltIn(_) => "builtin",
+        LlmCodecIdentity::Runtime(_) => "runtime",
+        LlmCodecIdentity::Opaque => "opaque",
+    };
     log::warn!(
         target: "nemo_relay.plugin",
         event = "pii_llm_payload_omitted",
-        codec_name = context.codec_name.unwrap_or("unknown"),
-        has_active_codec = context.has_active_codec,
+        codec_kind,
         reason;
         "PII redaction omitted an LLM {direction} payload"
     );

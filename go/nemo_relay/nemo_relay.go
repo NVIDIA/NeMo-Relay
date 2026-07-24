@@ -38,7 +38,7 @@ typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 typedef struct FfiCodecHandle FfiCodecHandle;
-typedef struct NemoRelayLlmSanitizeContext { bool has_active_codec; const char* codec_name; } NemoRelayLlmSanitizeContext;
+typedef struct NemoRelayLlmSanitizeContext { uint32_t codec_kind; const char* codec_id; } NemoRelayLlmSanitizeContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 

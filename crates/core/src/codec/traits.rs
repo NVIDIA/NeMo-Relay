@@ -4,6 +4,7 @@
 //! LLM codec traits for bidirectional request translation.
 
 use crate::api::llm::LlmRequest;
+use crate::api::runtime::LlmCodecIdentity;
 use crate::error::Result;
 use crate::json::Json;
 
@@ -33,13 +34,13 @@ use super::response::AnnotatedLlmResponse;
 ///   so the Rust core cannot know concrete types at compile time.
 ///   Store as `Arc<dyn LlmCodec>`.
 pub trait LlmCodec: Send + Sync {
-    /// Return the canonical built-in codec name when this codec represents a
-    /// Relay provider surface.
+    /// Return this codec's identity for LLM sanitizer context.
     ///
-    /// Custom codecs should keep the default `None`; callers must not infer a
-    /// provider surface from opaque codec implementations or request shape.
-    fn codec_name(&self) -> Option<&'static str> {
-        None
+    /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless
+    /// they have a stable runtime registration ID. Callers must not infer a
+    /// provider surface from an opaque implementation or request shape.
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Opaque
     }
 
     /// Parse opaque request content into structured form.
@@ -81,12 +82,12 @@ pub trait LlmCodec: Send + Sync {
 /// 1. Deserialize raw JSON into API-specific intermediate structs
 /// 2. Map intermediate structs into the normalized `AnnotatedLlmResponse`
 pub trait LlmResponseCodec: Send + Sync {
-    /// Return the canonical built-in codec name when this codec represents a
-    /// Relay provider surface.
+    /// Return this codec's identity for LLM sanitizer context.
     ///
-    /// Custom codecs should keep the default `None`.
-    fn codec_name(&self) -> Option<&'static str> {
-        None
+    /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless
+    /// they have a stable runtime registration ID.
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Opaque
     }
 
     /// Parse a raw JSON response into normalized structured form.

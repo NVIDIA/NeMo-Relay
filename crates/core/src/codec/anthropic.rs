@@ -19,6 +19,7 @@
 use serde::Deserialize;
 
 use crate::api::llm::LlmRequest;
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
@@ -922,8 +923,8 @@ fn anthropic_usage(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for AnthropicMessagesCodec {
-    fn codec_name(&self) -> Option<&'static str> {
-        Some("anthropic_messages")
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
@@ -972,8 +973,8 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for AnthropicMessagesCodec {
-    fn codec_name(&self) -> Option<&'static str> {
-        Some("anthropic_messages")
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
     }
 
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {

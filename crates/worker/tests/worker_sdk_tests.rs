@@ -2327,6 +2327,8 @@ fn llm_invoke(
                 response: response.map(json_env),
                 has_active_codec: false,
                 codec_name: None,
+                codec_kind: None,
+                codec_id: None,
             },
         )),
     }
@@ -2352,6 +2354,8 @@ fn llm_invoke_without_request(
                 response: None,
                 has_active_codec: false,
                 codec_name: None,
+                codec_kind: None,
+                codec_id: None,
             },
         )),
     }

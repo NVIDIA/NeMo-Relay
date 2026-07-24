@@ -103,20 +103,46 @@ LlmRequest: TypeAlias = dict[str, Any]
 AnnotatedLlmRequest: TypeAlias = dict[str, Any]
 
 
-class LlmSanitizeContext(TypedDict):
-    """Codec identity provided to an LLM sanitizer."""
+@dataclass(frozen=True)
+class LlmCodecIdentity:
+    """Structured identity of the codec active for one worker invocation."""
 
-    has_active_codec: bool
-    codec_name: str | None
+    kind: str
+    id: str | None = None
+
+
+@dataclass(frozen=True)
+class LlmSanitizeContext:
+    """Structured per-call context provided to an LLM sanitizer."""
+
+    codec: LlmCodecIdentity
 
 
 def _llm_sanitize_context(invocation: pb.LlmInvocation) -> LlmSanitizeContext:
     """Return stable contextual-sanitizer codec data from a worker invocation."""
+    if not invocation.HasField("codec_kind"):
+        return _legacy_llm_sanitize_context(invocation)
+
+    codec_id = invocation.codec_id if invocation.HasField("codec_id") else None
+    if invocation.codec_kind == pb.LLM_CODEC_KIND_NONE:
+        codec = LlmCodecIdentity("none")
+    elif invocation.codec_kind == pb.LLM_CODEC_KIND_BUILTIN and codec_id:
+        codec = LlmCodecIdentity("builtin", codec_id)
+    elif invocation.codec_kind == pb.LLM_CODEC_KIND_RUNTIME and codec_id:
+        codec = LlmCodecIdentity("runtime", codec_id)
+    else:
+        codec = LlmCodecIdentity("opaque")
+    return LlmSanitizeContext(codec)
+
+
+def _legacy_llm_sanitize_context(invocation: pb.LlmInvocation) -> LlmSanitizeContext:
+    """Adapt the legacy grpc-v1 codec fields when a host has not sent an identity."""
+    if not invocation.has_active_codec:
+        return LlmSanitizeContext(LlmCodecIdentity("none"))
     codec_name = invocation.codec_name if invocation.HasField("codec_name") else None
-    return {
-        "has_active_codec": invocation.has_active_codec,
-        "codec_name": codec_name or None,
-    }
+    if codec_name in {"openai_chat", "openai_responses", "anthropic_messages"}:
+        return LlmSanitizeContext(LlmCodecIdentity("builtin", codec_name))
+    return LlmSanitizeContext(LlmCodecIdentity("opaque"))
 
 
 def _llm_sanitizer_accepts_context(callback: object) -> bool:
@@ -854,6 +880,13 @@ class PluginContext:
         pb.MARK_SANITIZE_GUARDRAIL: "mark_sanitizers",
         pb.SCOPE_SANITIZE_START_GUARDRAIL: "scope_start_sanitizers",
         pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitizers",
+    }
+    _LLM_HANDLER_ATTRIBUTES: ClassVar[dict[int, str]] = {
+        pb.LLM_SANITIZE_REQUEST_GUARDRAIL: "llm_sanitize_requests",
+        pb.LLM_SANITIZE_RESPONSE_GUARDRAIL: "llm_sanitize_responses",
+        pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL: "llm_conditionals",
+        pb.LLM_REQUEST_INTERCEPT: "llm_requests",
+        pb.LLM_EXECUTION_INTERCEPT: "llm_executions",
     }
 
     def __init__(self, runtime: PluginRuntime | None = None) -> None:
@@ -1900,6 +1933,8 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
 
     async def _invoke_result(self, request: Any) -> Any:
         with _bind_invocation_scope(request):
+            if request.surface in PluginContext._LLM_HANDLER_ATTRIBUTES:
+                return await self._invoke_llm_result(request)
             if request.surface == pb.SUBSCRIBER:
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 await _maybe_await(self._handler(self._handlers.subscribers, request.registration_name)(event))
@@ -1969,67 +2004,70 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         ),
                     )
                 )
-            if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
-                callback = self._handler(self._handlers.llm_sanitize_requests, request.registration_name)
-                payload = _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
-                if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
-                    result = await _maybe_await(callback(payload, _llm_sanitize_context(request.llm)))
-                    return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
-                return _json_response(await _maybe_await(callback(payload)))
-            if request.surface == pb.LLM_SANITIZE_RESPONSE_GUARDRAIL:
-                callback = self._handler(self._handlers.llm_sanitize_responses, request.registration_name)
-                payload = _decode_required_envelope(request.llm.response, "llm response")
-                if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
-                    result = await _maybe_await(callback(payload, _llm_sanitize_context(request.llm)))
-                    return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
-                return _json_response(await _maybe_await(callback(payload)))
-            if request.surface == pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL:
-                result = await _maybe_await(
-                    self._handler(self._handlers.llm_conditionals, request.registration_name)(
-                        _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
-                    )
-                )
-                return pb.InvokeResponse(guardrail=pb.GuardrailResult(block_reason=result or ""))
-            if request.surface == pb.LLM_REQUEST_INTERCEPT:
-                payload = request.llm
-                llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
-                annotated = (
-                    _decode_required_envelope(
-                        payload.annotated_request,
-                        "annotated llm request",
-                        ANNOTATED_LLM_REQUEST_SCHEMA,
-                    )
-                    if payload.HasField("annotated_request")
-                    else None
-                )
-                result = await _maybe_await(
-                    self._handler(self._handlers.llm_requests, request.registration_name)(
-                        payload.model_name,
-                        llm_request,
-                        annotated,
-                    )
-                )
-                if not isinstance(result, LlmRequestInterceptOutcome):
-                    raise WorkerSdkError("LLM request intercept must return LlmRequestInterceptOutcome")
-                return pb.InvokeResponse(
-                    llm_request=pb.LlmRequestInterceptResult(
-                        outcome=_json_envelope(
-                            LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
-                            result.to_json(),
-                        ),
-                    )
-                )
-            if request.surface == pb.LLM_EXECUTION_INTERCEPT:
-                payload = request.llm
-                result = await _maybe_await(
-                    self._handler(self._handlers.llm_executions, request.registration_name)(
-                        payload.model_name,
-                        _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA),
-                        LlmNext(self._runtime, request.continuation_id),
-                    )
-                )
-                return _json_response(result)
             raise WorkerSdkError(f"unsupported registration surface {request.surface}")
+
+    async def _invoke_llm_result(self, request: Any) -> Any:
+        if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
+            callback = self._handler(self._handlers.llm_sanitize_requests, request.registration_name)
+            payload = _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
+            return await self._invoke_llm_sanitizer(callback, payload, request)
+        if request.surface == pb.LLM_SANITIZE_RESPONSE_GUARDRAIL:
+            callback = self._handler(self._handlers.llm_sanitize_responses, request.registration_name)
+            payload = _decode_required_envelope(request.llm.response, "llm response")
+            return await self._invoke_llm_sanitizer(callback, payload, request)
+        if request.surface == pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL:
+            result = await _maybe_await(
+                self._handler(self._handlers.llm_conditionals, request.registration_name)(
+                    _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
+                )
+            )
+            return pb.InvokeResponse(guardrail=pb.GuardrailResult(block_reason=result or ""))
+        if request.surface == pb.LLM_REQUEST_INTERCEPT:
+            payload = request.llm
+            llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+            annotated = (
+                _decode_required_envelope(
+                    payload.annotated_request,
+                    "annotated llm request",
+                    ANNOTATED_LLM_REQUEST_SCHEMA,
+                )
+                if payload.HasField("annotated_request")
+                else None
+            )
+            result = await _maybe_await(
+                self._handler(self._handlers.llm_requests, request.registration_name)(
+                    payload.model_name,
+                    llm_request,
+                    annotated,
+                )
+            )
+            if not isinstance(result, LlmRequestInterceptOutcome):
+                raise WorkerSdkError("LLM request intercept must return LlmRequestInterceptOutcome")
+            return pb.InvokeResponse(
+                llm_request=pb.LlmRequestInterceptResult(
+                    outcome=_json_envelope(
+                        LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+                        result.to_json(),
+                    ),
+                )
+            )
+        if request.surface == pb.LLM_EXECUTION_INTERCEPT:
+            payload = request.llm
+            result = await _maybe_await(
+                self._handler(self._handlers.llm_executions, request.registration_name)(
+                    payload.model_name,
+                    _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA),
+                    LlmNext(self._runtime, request.continuation_id),
+                )
+            )
+            return _json_response(result)
+        raise WorkerSdkError(f"unsupported LLM registration surface {request.surface}")
+
+    async def _invoke_llm_sanitizer(self, callback: Any, payload: Any, request: Any) -> Any:
+        if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
+            result = await _maybe_await(callback(payload, _llm_sanitize_context(request.llm)))
+            return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
+        return _json_response(await _maybe_await(callback(payload)))
 
     def _start_invocation(
         self,

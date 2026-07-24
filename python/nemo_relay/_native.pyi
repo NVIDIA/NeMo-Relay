@@ -39,9 +39,9 @@ class _EventSanitizeFields(TypedDict):
 
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
-_LlmSanitizeRequestWithContext: TypeAlias = Callable[["LLMRequest", _JsonObject], Optional["LLMRequest"]]
+_LlmSanitizeRequestWithContext: TypeAlias = Callable[["LLMRequest", "LlmSanitizeContext"], Optional["LLMRequest"]]
 _LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest"], "LLMRequest"] | _LlmSanitizeRequestWithContext
-_LlmSanitizeResponseWithContext: TypeAlias = Callable[[_JsonObject, _JsonObject], Optional[_JsonObject]]
+_LlmSanitizeResponseWithContext: TypeAlias = Callable[[_JsonObject, "LlmSanitizeContext"], Optional[_JsonObject]]
 _LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject], _JsonObject] | _LlmSanitizeResponseWithContext
 _EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
@@ -62,6 +62,20 @@ _LlmStreamExecutionIntercept: TypeAlias = Callable[
     ["LLMRequest", Callable[["LLMRequest"], Awaitable[AsyncIterator[_Json]]]],
     AsyncIterator[_Json] | Awaitable[AsyncIterator[_Json]],
 ]
+
+class LlmCodecIdentity:
+    """Structured identity of the active managed LLM codec."""
+
+    @property
+    def kind(self) -> Literal["none", "builtin", "runtime", "opaque"]: ...
+    @property
+    def id(self) -> str | None: ...
+
+class LlmSanitizeContext:
+    """Per-call context passed to an LLM sanitizer callback."""
+
+    @property
+    def codec(self) -> LlmCodecIdentity: ...
 
 class ScopeAttributes:
     """Bitflags describing scope properties.

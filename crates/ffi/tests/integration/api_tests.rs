@@ -397,8 +397,8 @@ unsafe extern "C" fn llm_request_intercept_cb(
             ptr::null_mut(),
             request,
             NemoRelayLlmSanitizeContext {
-                has_active_codec: false,
-                codec_name: ptr::null(),
+                codec_kind: NemoRelayLlmSanitizeCodecKind::None,
+                codec_id: ptr::null(),
             },
         ))
     };

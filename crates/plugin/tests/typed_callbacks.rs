@@ -13,19 +13,20 @@ use std::sync::{
 };
 
 use nemo_relay_plugin::{
-    AnnotatedLlmRequest, CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory,
-    EventSanitizeFields, Json, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome,
-    LlmSanitizeContext, LlmStream, LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin,
-    NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
-    NemoRelayNativeHostApiV1, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmSanitizeRequestCb,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolNext,
+    AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
+    Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonStream, LlmNext,
+    LlmRequest, LlmRequestInterceptOutcome, LlmSanitizeContext, LlmStream, LlmStreamNext,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSanitizeCb,
+    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmSanitizeContext,
+    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -1283,6 +1284,13 @@ fn bytes_host_string(host: &NemoRelayNativeHostApiV1, value: &[u8]) -> *mut Nemo
 
 fn json_host_string(host: &NemoRelayNativeHostApiV1, value: Json) -> *mut NemoRelayNativeString {
     host_string(host, &serde_json::to_string(&value).unwrap())
+}
+
+fn native_no_codec_context() -> NemoRelayNativeLlmSanitizeContext {
+    NemoRelayNativeLlmSanitizeContext {
+        codec_kind: NemoRelayNativeLlmCodecKind::None,
+        codec_id: ptr::null(),
+    }
 }
 
 fn read_json_and_free(host: &NemoRelayNativeHostApiV1, value: *mut NemoRelayNativeString) -> Json {
@@ -2810,7 +2818,14 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     let registration = take_llm_request_registration();
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
     assert_eq!(
-        unsafe { (registration.cb)(ptr::null_mut(), request, ptr::null(), &mut out) },
+        unsafe {
+            (registration.cb)(
+                ptr::null_mut(),
+                request,
+                native_no_codec_context(),
+                &mut out,
+            )
+        },
         NemoRelayStatus::NullPointer
     );
     assert_eq!(
@@ -2818,7 +2833,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
             (registration.cb)(
                 registration.user_data as *mut c_void,
                 request,
-                ptr::null(),
+                native_no_codec_context(),
                 ptr::null_mut(),
             )
         },
@@ -2835,7 +2850,14 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     let registration = take_llm_json_registration();
     let response = json_host_string(&host, json!({}));
     assert_eq!(
-        unsafe { (registration.cb)(ptr::null_mut(), response, ptr::null(), &mut out) },
+        unsafe {
+            (registration.cb)(
+                ptr::null_mut(),
+                response,
+                native_no_codec_context(),
+                &mut out,
+            )
+        },
         NemoRelayStatus::NullPointer
     );
     assert_eq!(
@@ -2843,7 +2865,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
             (registration.cb)(
                 registration.user_data as *mut c_void,
                 response,
-                ptr::null(),
+                native_no_codec_context(),
                 ptr::null_mut(),
             )
         },
@@ -3177,10 +3199,7 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
     .unwrap();
     let registration = take_llm_request_registration();
     let request = host_string(&host, "{not json");
-    let context = json_host_string(
-        &host,
-        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
-    );
+    let context = native_no_codec_context();
     let stale_out = host_string(&host, r#"{"stale":true}"#);
     let mut out = stale_out;
     assert_eq!(
@@ -3198,7 +3217,6 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
     unsafe {
         (host.string_free)(stale_out);
         (host.string_free)(request);
-        (host.string_free)(context);
         registration.free();
     }
 
@@ -3207,10 +3225,7 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
         .unwrap();
     let registration = take_llm_json_registration();
     let response = host_string(&host, "{not json");
-    let context = json_host_string(
-        &host,
-        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
-    );
+    let context = native_no_codec_context();
     let stale_out = host_string(&host, r#"{"stale":true}"#);
     let mut out = stale_out;
     assert_eq!(
@@ -3228,7 +3243,6 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
     unsafe {
         (host.string_free)(stale_out);
         (host.string_free)(response);
-        (host.string_free)(context);
         registration.free();
     }
 
@@ -4119,10 +4133,7 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
     assert_eq!(registration.name, "llm-sanitize-request");
     assert_eq!(registration.priority, 12);
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
-    let context = json_host_string(
-        &host,
-        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
-    );
+    let context = native_no_codec_context();
     let mut out = ptr::null_mut();
     let status = unsafe {
         (registration.cb)(
@@ -4138,7 +4149,6 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
     assert_eq!(output["content"]["sanitized"], json!(true));
     unsafe {
         (host.string_free)(request);
-        (host.string_free)(context);
         registration.free();
     }
 
@@ -4157,10 +4167,7 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
     assert_eq!(registration.name, "llm-sanitize-response");
     assert_eq!(registration.priority, 13);
     let response = json_host_string(&host, json!({ "output": true }));
-    let context = json_host_string(
-        &host,
-        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
-    );
+    let context = native_no_codec_context();
     let mut out = ptr::null_mut();
     let status = unsafe {
         (registration.cb)(
@@ -4174,7 +4181,6 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
     assert_eq!(read_json_and_free(&host, out)["sanitized"], json!(true));
     unsafe {
         (host.string_free)(response);
-        (host.string_free)(context);
         registration.free();
     }
 }
@@ -4184,17 +4190,36 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     let _guard = begin_test();
     let host = test_host();
     let context = LlmSanitizeContext {
-        has_active_codec: true,
-        codec_name: Some("openai_chat".into()),
+        codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
     };
+    assert_eq!(
+        serde_json::to_value(&context).unwrap(),
+        json!({"codec": {"kind": "builtin", "id": "openai_chat"}})
+    );
+    assert_eq!(
+        serde_json::to_value(LlmSanitizeContext {
+            codec: LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
+        })
+        .unwrap(),
+        json!({"codec": {"kind": "runtime", "id": "com.example.chat.v1"}})
+    );
+    assert_eq!(
+        serde_json::to_value(LlmSanitizeContext {
+            codec: LlmCodecIdentity::Opaque,
+        })
+        .unwrap(),
+        json!({"codec": {"kind": "opaque"}})
+    );
 
     let mut ctx = test_context(&host);
     ctx.register_llm_sanitize_request_guardrail(
         "contextual-request",
         14,
         |mut request, callback_context| {
-            assert!(callback_context.has_active_codec);
-            assert_eq!(callback_context.codec_name.as_deref(), Some("openai_chat"));
+            assert_eq!(
+                callback_context.codec,
+                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+            );
             request.headers.insert("x-contextual".into(), json!(true));
             Some(request)
         },
@@ -4205,13 +4230,17 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     assert_eq!(registration.name, "contextual-request");
     assert_eq!(registration.priority, 14);
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
-    let context_json = json_host_string(&host, serde_json::to_value(&context).unwrap());
+    let context_id = host_string(&host, "openai_chat");
+    let native_context = NemoRelayNativeLlmSanitizeContext {
+        codec_kind: NemoRelayNativeLlmCodecKind::BuiltIn,
+        codec_id: context_id,
+    };
     let mut out = ptr::null_mut();
     let status = unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             request,
-            context_json,
+            native_context,
             &mut out,
         )
     };
@@ -4222,7 +4251,7 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     );
     unsafe {
         (host.string_free)(request);
-        (host.string_free)(context_json);
+        (host.string_free)(context_id);
         registration.free();
     }
 
@@ -4231,7 +4260,10 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
         "contextual-response",
         15,
         |mut payload, callback_context| {
-            assert_eq!(callback_context.codec_name.as_deref(), Some("openai_chat"));
+            assert_eq!(
+                callback_context.codec,
+                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+            );
             payload["contextual"] = json!(true);
             Some(payload)
         },
@@ -4242,13 +4274,17 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     assert_eq!(registration.name, "contextual-response");
     assert_eq!(registration.priority, 15);
     let response = json_host_string(&host, json!({ "output": true }));
-    let context_json = json_host_string(&host, serde_json::to_value(context).unwrap());
+    let context_id = host_string(&host, "openai_chat");
+    let native_context = NemoRelayNativeLlmSanitizeContext {
+        codec_kind: NemoRelayNativeLlmCodecKind::BuiltIn,
+        codec_id: context_id,
+    };
     let mut out = ptr::null_mut();
     let status = unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             response,
-            context_json,
+            native_context,
             &mut out,
         )
     };
@@ -4256,7 +4292,7 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     assert_eq!(read_json_and_free(&host, out)["contextual"], json!(true));
     unsafe {
         (host.string_free)(response);
-        (host.string_free)(context_json);
+        (host.string_free)(context_id);
         registration.free();
     }
 }
@@ -4271,10 +4307,10 @@ fn typed_contextual_llm_sanitizer_uses_null_output_to_omit_payload() {
 
     let registration = take_llm_json_registration();
     let response = json_host_string(&host, json!({"secret": "value"}));
-    let context = json_host_string(
-        &host,
-        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
-    );
+    let context = NemoRelayNativeLlmSanitizeContext {
+        codec_kind: NemoRelayNativeLlmCodecKind::None,
+        codec_id: ptr::null(),
+    };
     let mut out = ptr::null_mut();
     let status = unsafe {
         (registration.cb)(
@@ -4288,7 +4324,6 @@ fn typed_contextual_llm_sanitizer_uses_null_output_to_omit_payload() {
     assert!(out.is_null(), "null native output must represent omission");
     unsafe {
         (host.string_free)(response);
-        (host.string_free)(context);
         registration.free();
     }
 }

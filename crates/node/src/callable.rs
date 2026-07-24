@@ -15,11 +15,12 @@ use std::sync::Arc;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
+use napi_derive::napi;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
-    ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -41,6 +42,21 @@ use crate::callback_factory;
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
+
+/// Structured codec identity delivered to JavaScript LLM sanitizers.
+#[napi(object)]
+#[derive(Clone)]
+pub(crate) struct JsLlmCodecIdentity {
+    pub kind: String,
+    pub id: Option<String>,
+}
+
+/// Structured per-call context delivered to JavaScript LLM sanitizers.
+#[napi(object)]
+#[derive(Clone)]
+pub(crate) struct JsLlmSanitizeContext {
+    pub codec: JsLlmCodecIdentity,
+}
 
 /// JavaScript-facing pending mark DTO.
 #[derive(Debug, Deserialize, Serialize)]
@@ -403,14 +419,11 @@ pub fn wrap_js_llm_request_intercept_fn(
 /// `(request, context)`; JavaScript callbacks that declare only one parameter
 /// naturally ignore the context argument.
 pub fn wrap_js_llm_sanitize_request_fn(
-    func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
+    func: ThreadsafeFunction<(Json, JsLlmSanitizeContext), ErrorStrategy::Fatal>,
 ) -> LlmSanitizeRequestFn {
     let func = Arc::new(func);
     Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
-        let context = serde_json::json!({
-            "has_active_codec": context.has_active_codec,
-            "codec_name": context.codec_name,
-        });
+        let context = js_llm_sanitize_context(&context);
         let fallback_request = request.clone();
         let request = serde_json::to_value(request).unwrap_or(Json::Null);
         let fallback = request.clone();
@@ -450,14 +463,11 @@ pub fn wrap_js_llm_sanitize_request_fn(
 /// Wrap a JS function for LLM response sanitization. The callback receives
 /// `(response, context)`; returning `null` omits the event payload.
 pub fn wrap_js_llm_sanitize_response_fn(
-    func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
+    func: ThreadsafeFunction<(Json, JsLlmSanitizeContext), ErrorStrategy::Fatal>,
 ) -> LlmSanitizeResponseFn {
     let func = Arc::new(func);
     Arc::new(move |response: Json, context: LlmSanitizeContext| {
-        let context = serde_json::json!({
-            "has_active_codec": context.has_active_codec,
-            "codec_name": context.codec_name,
-        });
+        let context = js_llm_sanitize_context(&context);
         let (tx, rx) = std::sync::mpsc::channel();
         let fallback = response.clone();
         if func.call_with_return_value(
@@ -479,6 +489,28 @@ pub fn wrap_js_llm_sanitize_response_fn(
         );
         Some(value).and_then(|value| (!value.is_null()).then_some(value))
     })
+}
+
+fn js_llm_sanitize_context(context: &LlmSanitizeContext) -> JsLlmSanitizeContext {
+    let codec = match &context.codec {
+        LlmCodecIdentity::None => JsLlmCodecIdentity {
+            kind: "none".into(),
+            id: None,
+        },
+        LlmCodecIdentity::BuiltIn(codec) => JsLlmCodecIdentity {
+            kind: "builtin".into(),
+            id: Some(codec.id().into()),
+        },
+        LlmCodecIdentity::Runtime(id) => JsLlmCodecIdentity {
+            kind: "runtime".into(),
+            id: Some(id.clone()),
+        },
+        LlmCodecIdentity::Opaque => JsLlmCodecIdentity {
+            kind: "opaque".into(),
+            id: None,
+        },
+    };
+    JsLlmSanitizeContext { codec }
 }
 
 /// Wrap a JS function for LLM conditional guardrails: `(request: object) => string | null`.

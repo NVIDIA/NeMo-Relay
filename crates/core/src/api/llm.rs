@@ -18,8 +18,8 @@ use crate::api::optimization::{
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
-    LlmSanitizeContext, LlmStreamExecutionNextFn,
+    EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn,
+    LlmJsonStream, LlmSanitizeContext, LlmStreamExecutionNextFn,
 };
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
@@ -770,10 +770,7 @@ fn llm_call_end_with_behavior(
 
 fn sanitize_context_for_request_codec(codec: Option<&dyn LlmCodec>) -> LlmSanitizeContext {
     LlmSanitizeContext {
-        has_active_codec: codec.is_some(),
-        codec_name: codec
-            .and_then(LlmCodec::codec_name)
-            .filter(|name| !name.is_empty()),
+        codec: codec.map_or(LlmCodecIdentity::None, LlmCodec::codec_identity),
     }
 }
 
@@ -781,10 +778,7 @@ pub(crate) fn sanitize_context_for_response_codec(
     codec: Option<&dyn LlmResponseCodec>,
 ) -> LlmSanitizeContext {
     LlmSanitizeContext {
-        has_active_codec: codec.is_some(),
-        codec_name: codec
-            .and_then(LlmResponseCodec::codec_name)
-            .filter(|name| !name.is_empty()),
+        codec: codec.map_or(LlmCodecIdentity::None, LlmResponseCodec::codec_identity),
     }
 }
 

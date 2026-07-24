@@ -26,7 +26,7 @@ use nemo_relay::api::llm::{
     llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
+    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -160,8 +160,8 @@ struct GatewayRequestCodec {
 }
 
 impl LlmCodec for GatewayRequestCodec {
-    fn codec_name(&self) -> Option<&'static str> {
-        self.inner.codec_name()
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        self.inner.codec_identity()
     }
 
     fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {

@@ -4,7 +4,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::api::event::{BaseEvent, MarkEvent};
-use crate::api::runtime::{LlmSanitizeContext, NemoRelayContextState};
+use crate::api::runtime::{
+    BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeContext, NemoRelayContextState,
+};
 use nemo_relay_worker_proto::json_envelope;
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -554,8 +556,8 @@ async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
             };
             seen.lock().unwrap().push((
                 request.registration_name,
-                invocation.has_active_codec,
-                invocation.codec_name,
+                invocation.codec_kind,
+                invocation.codec_id,
                 invocation.request.is_some(),
                 invocation.response.is_some(),
             ));
@@ -569,12 +571,13 @@ async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
     let contexts = [
         LlmSanitizeContext::default(),
         LlmSanitizeContext {
-            has_active_codec: true,
-            codec_name: Some("openai_responses"),
+            codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
         },
         LlmSanitizeContext {
-            has_active_codec: true,
-            codec_name: None,
+            codec: LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
+        },
+        LlmSanitizeContext {
+            codec: LlmCodecIdentity::Opaque,
         },
     ];
     for context in contexts {
@@ -583,7 +586,7 @@ async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
                 .invoke_contextual_llm_request_json(
                     "contextual_request",
                     valid_llm_request(),
-                    context,
+                    context.clone(),
                 )
                 .expect("empty worker result must represent request omission")
                 .is_none()
@@ -604,24 +607,62 @@ async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
     assert_eq!(
         seen,
         [
-            ("contextual_request".into(), false, None, true, false),
-            ("contextual_response".into(), false, None, false, true),
             (
                 "contextual_request".into(),
+                Some(LlmCodecKind::None as i32),
+                None,
                 true,
+                false,
+            ),
+            (
+                "contextual_response".into(),
+                Some(LlmCodecKind::None as i32),
+                None,
+                false,
+                true,
+            ),
+            (
+                "contextual_request".into(),
+                Some(LlmCodecKind::Builtin as i32),
                 Some("openai_responses".into()),
                 true,
                 false,
             ),
             (
                 "contextual_response".into(),
-                true,
+                Some(LlmCodecKind::Builtin as i32),
                 Some("openai_responses".into()),
                 false,
                 true,
             ),
-            ("contextual_request".into(), true, None, true, false),
-            ("contextual_response".into(), true, None, false, true),
+            (
+                "contextual_request".into(),
+                Some(LlmCodecKind::Runtime as i32),
+                Some("com.example.chat.v1".into()),
+                true,
+                false,
+            ),
+            (
+                "contextual_response".into(),
+                Some(LlmCodecKind::Runtime as i32),
+                Some("com.example.chat.v1".into()),
+                false,
+                true,
+            ),
+            (
+                "contextual_request".into(),
+                Some(LlmCodecKind::Opaque as i32),
+                None,
+                true,
+                false,
+            ),
+            (
+                "contextual_response".into(),
+                Some(LlmCodecKind::Opaque as i32),
+                None,
+                false,
+                true,
+            ),
         ]
     );
 }

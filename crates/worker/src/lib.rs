@@ -52,11 +52,11 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClie
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
     EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmNextRequest,
-    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
-    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck, WorkerError,
+    HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecKind,
+    LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest,
+    PushScopeRequest, RegisterRequest, RegisterResponse, Registration, RegistrationSurface,
+    ScopeContext, ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest,
+    ValidateRequest, ValidateResponse, WorkerAck, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use tokio::net::TcpListener;
@@ -137,13 +137,35 @@ type LlmSanitizeRequestFn =
     Arc<dyn Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync>;
 type LlmSanitizeResponseFn = Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
 
-/// Active codec information supplied to an LLM sanitizer.
+/// Relay built-in codec identities supplied to worker sanitizers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinLlmCodec {
+    /// OpenAI Chat Completions.
+    OpenAiChat,
+    /// OpenAI Responses.
+    OpenAiResponses,
+    /// Anthropic Messages.
+    AnthropicMessages,
+}
+
+/// Per-call LLM codec identity supplied to worker sanitizers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmCodecIdentity {
+    /// No codec was active.
+    None,
+    /// A Relay built-in codec was active.
+    BuiltIn(BuiltinLlmCodec),
+    /// A runtime-registered codec was active, identified by its stable ID.
+    Runtime(String),
+    /// A codec was active but has no registered identity.
+    Opaque,
+}
+
+/// Active codec context supplied to an LLM sanitizer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmSanitizeContext {
-    /// Whether the managed call has a codec for this payload direction.
-    pub has_active_codec: bool,
-    /// Canonical Relay built-in codec name, when recognized.
-    pub codec_name: Option<String>,
+    /// Identity of the active codec.
+    pub codec: LlmCodecIdentity,
 }
 type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
 type LlmRequestFn = Arc<
@@ -1455,123 +1477,27 @@ impl WorkerService {
         let surface = RegistrationSurface::try_from(request.surface)
             .map_err(|_| WorkerSdkError::InvalidInput("unknown registration surface".into()))?;
         match surface {
-            RegistrationSurface::Subscriber => {
-                let event = event_payload(request.payload)?;
-                let handler = self.subscriber(&request.registration_name)?;
-                with_thread_scope(&scope, || handler(&event));
-                Ok(empty_response())
-            }
+            RegistrationSurface::Subscriber => self.invoke_subscriber_response(request, &scope),
             RegistrationSurface::MarkSanitizeGuardrail
             | RegistrationSurface::ScopeSanitizeStartGuardrail
             | RegistrationSurface::ScopeSanitizeEndGuardrail => {
-                let event = event_payload(request.payload)?;
-                let fields = event.sanitize_fields();
-                let handler = self.event_sanitizer(surface, &request.registration_name)?;
-                let fields = with_thread_scope(&scope, || handler(&event, fields));
-                Ok(json_response(
-                    serde_json::to_value(fields)
-                        .expect("event sanitize fields are JSON serializable"),
-                ))
+                self.invoke_event_sanitize_response(request, &scope, surface)
             }
             RegistrationSurface::ToolSanitizeRequestGuardrail => {
-                let payload = tool_payload(request.payload)?;
-                let handler = self.tool_sanitize_request(&request.registration_name)?;
-                Ok(json_response(with_thread_scope(&scope, || {
-                    handler(&payload.tool_name, payload.value)
-                })))
+                self.invoke_tool_response(request, &scope, surface).await
             }
-            RegistrationSurface::ToolSanitizeResponseGuardrail => {
-                let payload = tool_payload(request.payload)?;
-                let handler = self.tool_sanitize_response(&request.registration_name)?;
-                Ok(json_response(with_thread_scope(&scope, || {
-                    handler(&payload.tool_name, payload.value)
-                })))
+            RegistrationSurface::ToolSanitizeResponseGuardrail
+            | RegistrationSurface::ToolConditionalExecutionGuardrail
+            | RegistrationSurface::ToolRequestIntercept
+            | RegistrationSurface::ToolExecutionIntercept => {
+                self.invoke_tool_response(request, &scope, surface).await
             }
-            RegistrationSurface::ToolConditionalExecutionGuardrail => {
-                let payload = tool_payload(request.payload)?;
-                let handler = self.tool_conditional(&request.registration_name)?;
-                Ok(guardrail_response(with_thread_scope(&scope, || {
-                    handler(&payload.tool_name, &payload.value)
-                })?))
-            }
-            RegistrationSurface::ToolRequestIntercept => {
-                let payload = tool_payload(request.payload)?;
-                let handler = self.tool_request(&request.registration_name)?;
-                Ok(json_response(with_thread_scope(&scope, || {
-                    handler(&payload.tool_name, payload.value)
-                })?))
-            }
-            RegistrationSurface::ToolExecutionIntercept => {
-                let payload = tool_payload(request.payload)?;
-                let handler = self.tool_execution(&request.registration_name)?;
-                let next = ToolNext {
-                    runtime: self.runtime.clone(),
-                    continuation_id: request.continuation_id,
-                };
-                let future =
-                    with_thread_scope(&scope, || handler(&payload.tool_name, payload.value, next));
-                Ok(tool_execution_response(future.await?)?)
-            }
-            RegistrationSurface::LlmSanitizeRequestGuardrail => {
-                let payload = llm_payload(request.payload)?;
-                let context = payload.sanitize_context();
-                let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
-                let handler = self.llm_sanitize_request(&request.registration_name)?;
-                match with_thread_scope(&scope, || handler(request_value, context)) {
-                    Some(request) => Ok(json_response(
-                        serde_json::to_value(request).expect("LLM request is JSON serializable"),
-                    )),
-                    None => Ok(empty_response()),
-                }
-            }
-            RegistrationSurface::LlmSanitizeResponseGuardrail => {
-                let payload = llm_payload(request.payload)?;
-                let context = payload.sanitize_context();
-                let response = required_json::<Json>(payload.response, "llm response")?;
-                let handler = self.llm_sanitize_response(&request.registration_name)?;
-                match with_thread_scope(&scope, || handler(response, context)) {
-                    Some(response) => Ok(json_response(response)),
-                    None => Ok(empty_response()),
-                }
-            }
-            RegistrationSurface::LlmConditionalExecutionGuardrail => {
-                let payload = llm_payload(request.payload)?;
-                let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
-                let handler = self.llm_conditional(&request.registration_name)?;
-                Ok(guardrail_response(with_thread_scope(&scope, || {
-                    handler(&request_value)
-                })?))
-            }
-            RegistrationSurface::LlmRequestIntercept => {
-                let payload = llm_payload(request.payload)?;
-                let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
-                let annotated = payload
-                    .annotated_request
-                    .map(|value| {
-                        decode_expected_json_envelope::<AnnotatedLlmRequest>(
-                            &value,
-                            "annotated llm request",
-                            ANNOTATED_LLM_REQUEST_SCHEMA,
-                        )
-                    })
-                    .transpose()?;
-                let handler = self.llm_request(&request.registration_name)?;
-                let outcome = with_thread_scope(&scope, || {
-                    handler(&payload.model_name, request_value, annotated)
-                })?;
-                Ok(llm_request_response(outcome)?)
-            }
-            RegistrationSurface::LlmExecutionIntercept => {
-                let payload = llm_payload(request.payload)?;
-                let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
-                let handler = self.llm_execution(&request.registration_name)?;
-                let next = LlmNext {
-                    runtime: self.runtime.clone(),
-                    continuation_id: request.continuation_id,
-                };
-                let future =
-                    with_thread_scope(&scope, || handler(&payload.model_name, request_value, next));
-                Ok(json_response(future.await?))
+            RegistrationSurface::LlmSanitizeRequestGuardrail
+            | RegistrationSurface::LlmSanitizeResponseGuardrail
+            | RegistrationSurface::LlmConditionalExecutionGuardrail
+            | RegistrationSurface::LlmRequestIntercept
+            | RegistrationSurface::LlmExecutionIntercept => {
+                self.invoke_llm_response(request, &scope, surface).await
             }
             RegistrationSurface::LlmStreamExecutionIntercept | RegistrationSurface::Unspecified => {
                 Err(WorkerSdkError::InvalidInput(
@@ -1579,6 +1505,232 @@ impl WorkerService {
                 ))
             }
         }
+    }
+
+    fn invoke_subscriber_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let event = event_payload(request.payload)?;
+        let handler = self.subscriber(&request.registration_name)?;
+        with_thread_scope(scope, || handler(&event));
+        Ok(empty_response())
+    }
+
+    fn invoke_event_sanitize_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+        surface: RegistrationSurface,
+    ) -> Result<InvokeResponse> {
+        let event = event_payload(request.payload)?;
+        let fields = event.sanitize_fields();
+        let handler = self.event_sanitizer(surface, &request.registration_name)?;
+        let fields = with_thread_scope(scope, || handler(&event, fields));
+        Ok(json_response(
+            serde_json::to_value(fields).expect("event sanitize fields are JSON serializable"),
+        ))
+    }
+
+    async fn invoke_tool_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+        surface: RegistrationSurface,
+    ) -> Result<InvokeResponse> {
+        match surface {
+            RegistrationSurface::ToolSanitizeRequestGuardrail => {
+                self.invoke_tool_sanitize_request_response(request, scope)
+            }
+            RegistrationSurface::ToolSanitizeResponseGuardrail => {
+                self.invoke_tool_sanitize_response_response(request, scope)
+            }
+            RegistrationSurface::ToolConditionalExecutionGuardrail => {
+                self.invoke_tool_conditional_response(request, scope)
+            }
+            RegistrationSurface::ToolRequestIntercept => {
+                self.invoke_tool_request_response(request, scope)
+            }
+            RegistrationSurface::ToolExecutionIntercept => {
+                self.invoke_tool_execution_response(request, scope).await
+            }
+            _ => unreachable!("tool surface was pre-filtered"),
+        }
+    }
+
+    fn invoke_tool_sanitize_request_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = tool_payload(request.payload)?;
+        let handler = self.tool_sanitize_request(&request.registration_name)?;
+        Ok(json_response(with_thread_scope(scope, || {
+            handler(&payload.tool_name, payload.value)
+        })))
+    }
+
+    fn invoke_tool_sanitize_response_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = tool_payload(request.payload)?;
+        let handler = self.tool_sanitize_response(&request.registration_name)?;
+        Ok(json_response(with_thread_scope(scope, || {
+            handler(&payload.tool_name, payload.value)
+        })))
+    }
+
+    fn invoke_tool_conditional_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = tool_payload(request.payload)?;
+        let handler = self.tool_conditional(&request.registration_name)?;
+        Ok(guardrail_response(with_thread_scope(scope, || {
+            handler(&payload.tool_name, &payload.value)
+        })?))
+    }
+
+    fn invoke_tool_request_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = tool_payload(request.payload)?;
+        let handler = self.tool_request(&request.registration_name)?;
+        Ok(json_response(with_thread_scope(scope, || {
+            handler(&payload.tool_name, payload.value)
+        })?))
+    }
+
+    async fn invoke_tool_execution_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = tool_payload(request.payload)?;
+        let handler = self.tool_execution(&request.registration_name)?;
+        let next = ToolNext {
+            runtime: self.runtime.clone(),
+            continuation_id: request.continuation_id,
+        };
+        let future = with_thread_scope(scope, || handler(&payload.tool_name, payload.value, next));
+        tool_execution_response(future.await?)
+    }
+
+    async fn invoke_llm_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+        surface: RegistrationSurface,
+    ) -> Result<InvokeResponse> {
+        match surface {
+            RegistrationSurface::LlmSanitizeRequestGuardrail => {
+                self.invoke_llm_sanitize_request_response(request, scope)
+            }
+            RegistrationSurface::LlmSanitizeResponseGuardrail => {
+                self.invoke_llm_sanitize_response_response(request, scope)
+            }
+            RegistrationSurface::LlmConditionalExecutionGuardrail => {
+                self.invoke_llm_conditional_response(request, scope)
+            }
+            RegistrationSurface::LlmRequestIntercept => {
+                self.invoke_llm_request_response(request, scope)
+            }
+            RegistrationSurface::LlmExecutionIntercept => {
+                self.invoke_llm_execution_response(request, scope).await
+            }
+            _ => unreachable!("LLM surface was pre-filtered"),
+        }
+    }
+
+    fn invoke_llm_sanitize_request_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = llm_payload(request.payload)?;
+        let context = payload.sanitize_context();
+        let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
+        let handler = self.llm_sanitize_request(&request.registration_name)?;
+        match with_thread_scope(scope, || handler(request_value, context)) {
+            Some(request) => Ok(json_response(
+                serde_json::to_value(request).expect("LLM request is JSON serializable"),
+            )),
+            None => Ok(empty_response()),
+        }
+    }
+
+    fn invoke_llm_sanitize_response_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = llm_payload(request.payload)?;
+        let context = payload.sanitize_context();
+        let response = required_json::<Json>(payload.response, "llm response")?;
+        let handler = self.llm_sanitize_response(&request.registration_name)?;
+        match with_thread_scope(scope, || handler(response, context)) {
+            Some(response) => Ok(json_response(response)),
+            None => Ok(empty_response()),
+        }
+    }
+
+    fn invoke_llm_conditional_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = llm_payload(request.payload)?;
+        let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
+        let handler = self.llm_conditional(&request.registration_name)?;
+        Ok(guardrail_response(with_thread_scope(scope, || {
+            handler(&request_value)
+        })?))
+    }
+
+    fn invoke_llm_request_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = llm_payload(request.payload)?;
+        let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
+        let annotated = payload
+            .annotated_request
+            .map(|value| {
+                decode_expected_json_envelope::<AnnotatedLlmRequest>(
+                    &value,
+                    "annotated llm request",
+                    ANNOTATED_LLM_REQUEST_SCHEMA,
+                )
+            })
+            .transpose()?;
+        let handler = self.llm_request(&request.registration_name)?;
+        let outcome = with_thread_scope(scope, || {
+            handler(&payload.model_name, request_value, annotated)
+        })?;
+        llm_request_response(outcome)
+    }
+
+    async fn invoke_llm_execution_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = llm_payload(request.payload)?;
+        let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
+        let handler = self.llm_execution(&request.registration_name)?;
+        let next = LlmNext {
+            runtime: self.runtime.clone(),
+            continuation_id: request.continuation_id,
+        };
+        let future = with_thread_scope(scope, || handler(&payload.model_name, request_value, next));
+        Ok(json_response(future.await?))
     }
 
     fn subscriber(&self, name: &str) -> Result<SubscriberFn> {
@@ -1750,14 +1902,52 @@ struct LlmPayload {
     response: Option<JsonEnvelope>,
     has_active_codec: bool,
     codec_name: Option<String>,
+    codec_kind: Option<i32>,
+    codec_id: Option<String>,
 }
 
 impl LlmPayload {
     fn sanitize_context(&self) -> LlmSanitizeContext {
         LlmSanitizeContext {
-            has_active_codec: self.has_active_codec,
-            codec_name: self.codec_name.clone().filter(|name| !name.is_empty()),
+            codec: self.codec_kind.map_or_else(
+                || codec_identity_from_legacy_proto(self.has_active_codec, self.codec_name.clone()),
+                |codec_kind| codec_identity_from_proto(codec_kind, self.codec_id.clone()),
+            ),
         }
+    }
+}
+
+fn codec_identity_from_legacy_proto(
+    has_active_codec: bool,
+    codec_name: Option<String>,
+) -> LlmCodecIdentity {
+    if !has_active_codec {
+        return LlmCodecIdentity::None;
+    }
+
+    match codec_name.as_deref() {
+        Some("openai_chat") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
+        Some("openai_responses") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
+        Some("anthropic_messages") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages),
+        _ => LlmCodecIdentity::Opaque,
+    }
+}
+
+fn codec_identity_from_proto(codec_kind: i32, codec_id: Option<String>) -> LlmCodecIdentity {
+    match LlmCodecKind::try_from(codec_kind).ok() {
+        Some(LlmCodecKind::None) => LlmCodecIdentity::None,
+        Some(LlmCodecKind::Builtin) => match codec_id.as_deref() {
+            Some("openai_chat") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
+            Some("openai_responses") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
+            Some("anthropic_messages") => {
+                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+            }
+            _ => LlmCodecIdentity::Opaque,
+        },
+        Some(LlmCodecKind::Runtime) => codec_id
+            .filter(|id| !id.is_empty())
+            .map_or(LlmCodecIdentity::Opaque, LlmCodecIdentity::Runtime),
+        Some(LlmCodecKind::Opaque) | None => LlmCodecIdentity::Opaque,
     }
 }
 
@@ -1800,6 +1990,8 @@ fn llm_payload(
             response: value.response,
             has_active_codec: value.has_active_codec,
             codec_name: value.codec_name,
+            codec_kind: value.codec_kind,
+            codec_id: value.codec_id,
         }),
         _ => Err(WorkerSdkError::InvalidInput("expected llm payload".into())),
     }

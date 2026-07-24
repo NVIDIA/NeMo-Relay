@@ -27,8 +27,8 @@ typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct NemoRelayLlmSanitizeContext {
-	bool has_active_codec;
-	const char* codec_name;
+	uint32_t codec_kind;
+	const char* codec_id;
 } NemoRelayLlmSanitizeContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
@@ -167,10 +167,30 @@ type ToolExecutionFunc func(args json.RawMessage) (json.RawMessage, error)
 type ToolExecutionInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error)
 
 // LLMSanitizeContext identifies the codec active for one managed LLM call.
-// CodecName is nil when no recognized built-in codec is available.
+// LLMCodecKind identifies the active codec state supplied to a sanitizer.
+type LLMCodecKind string
+
+const (
+	// LLMCodecNone means no codec was active.
+	LLMCodecNone LLMCodecKind = "none"
+	// LLMCodecBuiltin means a Relay built-in codec was active.
+	LLMCodecBuiltin LLMCodecKind = "builtin"
+	// LLMCodecRuntime means a runtime-registered codec was active.
+	LLMCodecRuntime LLMCodecKind = "runtime"
+	// LLMCodecOpaque means an active codec has no registered identity.
+	LLMCodecOpaque LLMCodecKind = "opaque"
+)
+
+// LLMCodec identifies the codec active for one managed LLM sanitizer callback.
+// ID is present for built-in and runtime codec identities.
+type LLMCodec struct {
+	CodecKind LLMCodecKind
+	CodecID   *string
+}
+
+// LLMSanitizeContext provides structured per-call sanitizer context.
 type LLMSanitizeContext struct {
-	HasActiveCodec bool
-	CodecName      *string
+	Codec LLMCodec
 }
 
 // LLMRequestFunc sanitizes an emitted LLM request. It receives the request
@@ -481,12 +501,27 @@ func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest, c
 }
 
 func llmSanitizeContextFromC(context C.NemoRelayLlmSanitizeContext) LLMSanitizeContext {
-	var codecName *string
-	if context.codec_name != nil {
-		name := C.GoString(context.codec_name)
-		codecName = &name
+	var codecID *string
+	if context.codec_id != nil {
+		id := C.GoString(context.codec_id)
+		codecID = &id
 	}
-	return LLMSanitizeContext{HasActiveCodec: bool(context.has_active_codec), CodecName: codecName}
+	return llmSanitizeContext(uint32(context.codec_kind), codecID)
+}
+
+func llmSanitizeContext(codecKind uint32, codecID *string) LLMSanitizeContext {
+	kind := LLMCodecOpaque
+	switch codecKind {
+	case 0:
+		kind = LLMCodecNone
+	case 1:
+		kind = LLMCodecBuiltin
+	case 2:
+		kind = LLMCodecRuntime
+	case 3:
+		kind = LLMCodecOpaque
+	}
+	return LLMSanitizeContext{Codec: LLMCodec{CodecKind: kind, CodecID: codecID}}
 }
 
 //export goLlmResponseTrampoline
