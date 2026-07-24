@@ -139,7 +139,7 @@ fn rotate_files(base_path: &Path, retained_files: usize) -> io::Result<()> {
 pub(crate) fn rotated_log_path(base_path: &Path, index: usize) -> PathBuf {
     let stem = base_path.file_stem().unwrap_or(base_path.as_os_str());
     let mut file_name = stem.to_os_string();
-    file_name.push(format!("_{index}"));
+    file_name.push(format!(".{index}"));
     if let Some(extension) = base_path.extension() {
         file_name.push(".");
         file_name.push(extension);

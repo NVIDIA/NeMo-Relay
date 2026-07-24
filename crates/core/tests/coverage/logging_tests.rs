@@ -578,13 +578,13 @@ fn logging_rotation_retains_newest_backups_and_complete_records() {
     runtime.shutdown();
 
     let active = read_single_jsonl_record(&path);
-    let newest_backup = read_single_jsonl_record(&temp.path().join("relay.log_1.jsonl"));
-    let oldest_backup = read_single_jsonl_record(&temp.path().join("relay.log_2.jsonl"));
+    let newest_backup = read_single_jsonl_record(&temp.path().join("relay.log.1.jsonl"));
+    let oldest_backup = read_single_jsonl_record(&temp.path().join("relay.log.2.jsonl"));
 
     assert_eq!(active["event"], "logging_shutdown_started");
     assert_eq!(newest_backup["event"], "rotation_three");
     assert_eq!(oldest_backup["event"], "rotation_two");
-    assert!(!temp.path().join("relay.log_3.jsonl").exists());
+    assert!(!temp.path().join("relay.log.3.jsonl").exists());
 }
 
 #[test]
@@ -607,7 +607,7 @@ fn logging_rotation_rotates_existing_file_at_boundary() {
     runtime.shutdown();
 
     assert_eq!(
-        std::fs::read_to_string(temp.path().join("relay.log_2.jsonl")).unwrap(),
+        std::fs::read_to_string(temp.path().join("relay.log.2.jsonl")).unwrap(),
         existing_record
     );
     assert_eq!(
@@ -621,7 +621,7 @@ fn logging_rotation_preserves_historical_backups_outside_retention_window() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("relay.log.jsonl");
-    let historical_path = temp.path().join("relay.log_3.jsonl");
+    let historical_path = temp.path().join("relay.log.3.jsonl");
     let historical_contents = "historical backup outside current retention window\n";
     std::fs::write(&historical_path, historical_contents).unwrap();
     let config = LoggingConfig {
@@ -655,7 +655,7 @@ fn logging_rotation_rejects_generated_backup_path_collision() {
                 ..FileLogSinkConfig::default()
             }),
             LogSinkConfig::File(FileLogSinkConfig {
-                path: temp.path().join("relay.log_1.jsonl"),
+                path: temp.path().join("relay.log.1.jsonl"),
                 ..FileLogSinkConfig::default()
             }),
         ],
@@ -668,7 +668,7 @@ fn logging_rotation_rejects_generated_backup_path_collision() {
         .to_string();
 
     assert!(error.contains("conflicts with another active or rotated file"));
-    assert!(error.contains("relay.log_1.jsonl"));
+    assert!(error.contains("relay.log.1.jsonl"));
 }
 
 #[test]
