@@ -6,9 +6,15 @@
 import type { EventSanitizeFields, Json } from './index';
 
 /** Codec identity available while a managed LLM event is sanitized. */
+export type LlmCodecIdentity =
+  | { kind: 'none' }
+  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' }
+  | { kind: 'runtime'; id: string }
+  | { kind: 'opaque' };
+
+/** Codec identity available while a managed LLM event is sanitized. */
 export interface LlmSanitizeContext {
-  has_active_codec: boolean;
-  codec_name: string | null;
+  codec: LlmCodecIdentity;
 }
 
 /** Policy behavior for unsupported configuration. */

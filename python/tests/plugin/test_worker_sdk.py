@@ -705,11 +705,11 @@ def test_plugin_context_registers_contextual_llm_sanitizers_under_standard_names
 
     context.register_llm_sanitize_request_guardrail(
         "request",
-        lambda request, codec_context: request if codec_context["has_active_codec"] else None,
+        lambda request, codec_context: request if codec_context.codec.kind != "none" else None,
     )
     context.register_llm_sanitize_response_guardrail(
         "response",
-        lambda response, codec_context: response if codec_context["codec_name"] else None,
+        lambda response, codec_context: response if codec_context.codec.kind == "builtin" else None,
     )
 
     assert [
@@ -743,16 +743,18 @@ async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payl
 
     service = _service(ContextualSanitizerPlugin(), RecordingHostStub())
     await _register(service)
-    for has_active_codec, codec_name in [
-        (False, None),
-        (True, "openai_responses"),
-        (True, None),
-        (True, ""),
+    for codec_kind, codec_id in [
+        (pb.LLM_CODEC_KIND_NONE, None),
+        (pb.LLM_CODEC_KIND_BUILTIN, "openai_chat"),
+        (pb.LLM_CODEC_KIND_BUILTIN, "openai_responses"),
+        (pb.LLM_CODEC_KIND_BUILTIN, "anthropic_messages"),
+        (pb.LLM_CODEC_KIND_RUNTIME, "com.example.chat.v1"),
+        (pb.LLM_CODEC_KIND_OPAQUE, None),
     ]:
         payload = _llm_payload(request={"content": {"prompt": "secret"}}, response={"secret": "value"})
-        payload.has_active_codec = has_active_codec
-        if codec_name is not None:
-            payload.codec_name = codec_name
+        payload.codec_kind = codec_kind
+        if codec_id is not None:
+            payload.codec_id = codec_id
 
         request_response = await service.Invoke(
             _invoke_request("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, llm=payload), AbortContext()
@@ -764,14 +766,24 @@ async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payl
         assert response_response.WhichOneof("result") == "empty"
 
     assert seen == [
-        ("request", {"has_active_codec": False, "codec_name": None}),
-        ("response", {"has_active_codec": False, "codec_name": None}),
-        ("request", {"has_active_codec": True, "codec_name": "openai_responses"}),
-        ("response", {"has_active_codec": True, "codec_name": "openai_responses"}),
-        ("request", {"has_active_codec": True, "codec_name": None}),
-        ("response", {"has_active_codec": True, "codec_name": None}),
-        ("request", {"has_active_codec": True, "codec_name": None}),
-        ("response", {"has_active_codec": True, "codec_name": None}),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("none"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("none"))),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_chat"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_chat"))),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_responses"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_responses"))),
+        (
+            "request",
+            LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "anthropic_messages")),
+        ),
+        (
+            "response",
+            LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "anthropic_messages")),
+        ),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("opaque"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("opaque"))),
     ]
 
 

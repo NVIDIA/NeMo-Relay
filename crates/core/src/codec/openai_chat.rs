@@ -9,6 +9,7 @@
 use serde::Deserialize;
 
 use crate::api::llm::LlmRequest;
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
@@ -1116,8 +1117,8 @@ fn patch_chat_api_fields(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OpenAIChatCodec {
-    fn codec_name(&self) -> Option<&'static str> {
-        Some("openai_chat")
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
@@ -1209,8 +1210,8 @@ impl LlmResponseCodec for OpenAIChatCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OpenAIChatCodec {
-    fn codec_name(&self) -> Option<&'static str> {
-        Some("openai_chat")
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     }
 
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {

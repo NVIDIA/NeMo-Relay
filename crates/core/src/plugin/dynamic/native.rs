@@ -17,14 +17,14 @@ use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmSanitizeRequestCb,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmSanitizeContext,
+    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
+    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
+    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
@@ -35,10 +35,10 @@ use tokio_stream::{Stream, StreamExt};
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn,
+    LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeContext,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
+    ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -1761,21 +1761,17 @@ fn call_llm_sanitize_request_callback(
     context: LlmSanitizeContext,
 ) -> FlowResult<Option<LlmRequest>> {
     clear_native_last_error();
-    let context_json = serde_json::json!({
-        "has_active_codec": context.has_active_codec,
-        "codec_name": context.codec_name,
-    });
-    let context_string = native_string_from_json(&context_json).ok_or_else(|| {
-        FlowError::Internal("failed to allocate native LLM sanitize context".into())
-    })?;
+    let (context, context_id) = native_llm_sanitize_context(&context)?;
     let request_json = serde_json::to_value(request)
         .map_err(|err| FlowError::Internal(format!("failed to serialize LLM request: {err}")))?;
     let request_string = native_string_from_json(&request_json)
         .ok_or_else(|| FlowError::Internal("failed to allocate native LLM request".into()))?;
     let mut out = ptr::null_mut();
-    let status = unsafe { cb(user_data, request_string, context_string, &mut out) };
+    let status = unsafe { cb(user_data, request_string, context, &mut out) };
     unsafe {
-        native_string_free(context_string);
+        if let Some(context_id) = context_id {
+            native_string_free(context_id);
+        }
         native_string_free(request_string);
     }
     if status != NemoRelayStatus::Ok {
@@ -1804,19 +1800,15 @@ fn call_llm_sanitize_response_callback(
     context: LlmSanitizeContext,
 ) -> FlowResult<Option<Json>> {
     clear_native_last_error();
-    let context_json = serde_json::json!({
-        "has_active_codec": context.has_active_codec,
-        "codec_name": context.codec_name,
-    });
-    let context_string = native_string_from_json(&context_json).ok_or_else(|| {
-        FlowError::Internal("failed to allocate native LLM sanitize context".into())
-    })?;
+    let (context, context_id) = native_llm_sanitize_context(&context)?;
     let payload_string = native_string_from_json(payload)
         .ok_or_else(|| FlowError::Internal("failed to allocate native LLM response".into()))?;
     let mut out = ptr::null_mut();
-    let status = unsafe { cb(user_data, payload_string, context_string, &mut out) };
+    let status = unsafe { cb(user_data, payload_string, context, &mut out) };
     unsafe {
-        native_string_free(context_string);
+        if let Some(context_id) = context_id {
+            native_string_free(context_id);
+        }
         native_string_free(payload_string);
     }
     if status != NemoRelayStatus::Ok {
@@ -1833,6 +1825,36 @@ fn call_llm_sanitize_response_callback(
     }
     take_json_from_native_string(out, "native LLM sanitize-response returned invalid JSON")
         .map(Some)
+}
+
+fn native_llm_sanitize_context(
+    context: &LlmSanitizeContext,
+) -> FlowResult<(
+    NemoRelayNativeLlmSanitizeContext,
+    Option<*mut NemoRelayNativeString>,
+)> {
+    let (codec_kind, codec_id) = match &context.codec {
+        LlmCodecIdentity::None => (NemoRelayNativeLlmCodecKind::None, None),
+        LlmCodecIdentity::BuiltIn(codec) => {
+            (NemoRelayNativeLlmCodecKind::BuiltIn, Some(codec.id()))
+        }
+        LlmCodecIdentity::Runtime(id) => (NemoRelayNativeLlmCodecKind::Runtime, Some(id.as_str())),
+        LlmCodecIdentity::Opaque => (NemoRelayNativeLlmCodecKind::Opaque, None),
+    };
+    let codec_id =
+        match codec_id {
+            Some(codec_id) => Some(native_string_from_str(codec_id).ok_or_else(|| {
+                FlowError::Internal("failed to allocate native LLM codec ID".into())
+            })?),
+            None => None,
+        };
+    Ok((
+        NemoRelayNativeLlmSanitizeContext {
+            codec_kind,
+            codec_id: codec_id.map_or(ptr::null(), |value| value.cast_const()),
+        },
+        codec_id,
+    ))
 }
 
 fn wrap_llm_conditional_fn(

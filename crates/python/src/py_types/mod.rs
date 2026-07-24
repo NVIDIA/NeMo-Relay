@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use nemo_relay::api::event::{MarkEvent, ScopeEvent};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_relay::api::runtime::ScopeStackHandle;
+use nemo_relay::api::runtime::{LlmCodecIdentity, ScopeStackHandle};
 use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType as CoreScopeType};
 use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
 use nemo_relay::codec::request::{
@@ -138,6 +138,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolHandle>()?;
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
+    m.add_class::<PyLlmCodecIdentity>()?;
+    m.add_class::<PyLlmSanitizeContext>()?;
     m.add_class::<PyPendingMarkSpec>()?;
     m.add_class::<PyLLMRequestInterceptOutcome>()?;
     m.add_class::<PyToolExecutionInterceptOutcome>()?;

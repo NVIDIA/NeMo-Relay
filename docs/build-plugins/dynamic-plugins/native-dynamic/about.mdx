@@ -116,7 +116,7 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
-## Native ABI v1
+## Native ABI v2
 
 The host passes a `NemoRelayNativeHostApiV1` table to the entry symbol. The
 plugin returns a `NemoRelayNativePluginV1` descriptor:
@@ -142,6 +142,15 @@ ABI callbacks can register these runtime surfaces:
 
 Relay keeps the library alive while those registrations exist and deregisters
 them before unloading it.
+
+LLM sanitize callbacks receive their request or response JSON first, followed
+by `NemoRelayNativeLlmSanitizeContext`. Its `codec_kind` is `None`, `BuiltIn`,
+`Runtime`, or `Opaque`. `codec_id` is a host-owned, callback-lifetime string:
+it is present for `BuiltIn` (one of `openai_chat`, `openai_responses`, or
+`anthropic_messages`) and `Runtime`, and null for `None` and `Opaque`. A
+successful null sanitizer output omits the LLM observability payload and its
+annotation. The Rust SDK converts this ABI structure into
+`LlmSanitizeContext { codec: LlmCodecIdentity }` automatically.
 
 Use the `nemo-relay-plugin` crate rather than the host `nemo-relay` runtime
 crate. Refer to [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)

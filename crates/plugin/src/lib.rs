@@ -38,13 +38,42 @@ use serde_json::Map;
 /// Native plugin ABI version supported by this crate.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 2;
 
+/// Built-in LLM codec identities available to native plugins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinLlmCodec {
+    /// OpenAI Chat Completions.
+    #[serde(rename = "openai_chat")]
+    OpenAiChat,
+    /// OpenAI Responses.
+    #[serde(rename = "openai_responses")]
+    OpenAiResponses,
+    /// Anthropic Messages.
+    #[serde(rename = "anthropic_messages")]
+    AnthropicMessages,
+}
+
+/// Per-call LLM codec identity delivered to native plugins.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum LlmCodecIdentity {
+    /// No codec was active.
+    #[default]
+    None,
+    /// A Relay built-in codec was active.
+    #[serde(rename = "builtin")]
+    BuiltIn(BuiltinLlmCodec),
+    /// A runtime-registered codec was active, identified by its stable ID.
+    Runtime(String),
+    /// A codec was active but has no registered identity.
+    Opaque,
+}
+
 /// Per-call codec context delivered to LLM sanitizer callbacks.
 #[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 pub struct LlmSanitizeContext {
-    /// Whether the managed call supplied a codec for this payload direction.
-    pub has_active_codec: bool,
-    /// Canonical built-in codec name, when the active codec is recognized.
-    pub codec_name: Option<String>,
+    /// Identity of the active codec.
+    pub codec: LlmCodecIdentity,
 }
 
 /// Status codes returned by stable native ABI functions.
@@ -80,6 +109,35 @@ pub enum NemoRelayStatus {
 pub struct NemoRelayNativeString {
     _private: [u8; 0],
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Discriminator for the codec supplied to an LLM sanitizer over the native ABI.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemoRelayNativeLlmCodecKind {
+    /// No codec was active for this call.
+    None = 0,
+    /// A Relay built-in codec was active.
+    BuiltIn = 1,
+    /// A runtime-registered codec was active.
+    Runtime = 2,
+    /// A codec was active but has no registered identity.
+    Opaque = 3,
+}
+
+/// Per-call LLM sanitizer context passed over the native ABI.
+///
+/// `codec_id` is borrowed for the duration of the callback. It is null for
+/// [`NemoRelayNativeLlmCodecKind::None`] and
+/// [`NemoRelayNativeLlmCodecKind::Opaque`]. For `BuiltIn`, it is one of the
+/// stable built-in codec IDs; for `Runtime`, it is the registered codec ID.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NemoRelayNativeLlmSanitizeContext {
+    /// Discriminator for the active codec.
+    pub codec_kind: NemoRelayNativeLlmCodecKind,
+    /// Optional borrowed codec identifier.
+    pub codec_id: *const NemoRelayNativeString,
 }
 
 /// Opaque plugin registration context borrowed from the host during registration.
@@ -255,7 +313,7 @@ pub type NemoRelayNativeToolExecutionCb = unsafe extern "C" fn(
 pub type NemoRelayNativeLlmSanitizeRequestCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
-    context_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeContext,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
@@ -264,7 +322,7 @@ pub type NemoRelayNativeLlmSanitizeRequestCb = unsafe extern "C" fn(
 pub type NemoRelayNativeLlmSanitizeResponseCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     payload_json: *const NemoRelayNativeString,
-    context_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeContext,
     out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
@@ -2287,7 +2345,7 @@ where
 unsafe extern "C" fn typed_llm_sanitize_request_trampoline<F>(
     user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
-    context_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeContext,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus
 where
@@ -2299,8 +2357,7 @@ where
     unsafe { *out_request_json = ptr::null_mut() };
     let state = unsafe { &*(user_data as *const TypedCallback<F>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let context: LlmSanitizeContext =
-            read_json_value(&state.host, context_json, "LLM sanitize context")?;
+        let context = llm_sanitize_context_from_native(&state.host, context)?;
         let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
         match (state.callback)(request, context) {
             Some(output) => {
@@ -2319,7 +2376,7 @@ where
 unsafe extern "C" fn typed_llm_sanitize_response_trampoline<F>(
     user_data: *mut c_void,
     payload_json: *const NemoRelayNativeString,
-    context_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeContext,
     out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus
 where
@@ -2331,8 +2388,7 @@ where
     unsafe { *out_json = ptr::null_mut() };
     let state = unsafe { &*(user_data as *const TypedCallback<F>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let context: LlmSanitizeContext =
-            read_json_value(&state.host, context_json, "LLM sanitize context")?;
+        let context = llm_sanitize_context_from_native(&state.host, context)?;
         let payload: Json = read_json_value(&state.host, payload_json, "LLM response")?;
         match (state.callback)(payload, context) {
             Some(output) => Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json)),
@@ -2788,6 +2844,33 @@ fn read_optional_json_value<T: DeserializeOwned>(
     } else {
         read_json_value(host, value, label).map(Some)
     }
+}
+
+fn llm_sanitize_context_from_native(
+    host: &NemoRelayNativeHostApiV1,
+    context: NemoRelayNativeLlmSanitizeContext,
+) -> std::result::Result<LlmSanitizeContext, NemoRelayStatus> {
+    let codec = match context.codec_kind {
+        NemoRelayNativeLlmCodecKind::None => LlmCodecIdentity::None,
+        NemoRelayNativeLlmCodecKind::Opaque => LlmCodecIdentity::Opaque,
+        NemoRelayNativeLlmCodecKind::BuiltIn => {
+            let id = read_required_host_string(host, context.codec_id, "LLM built-in codec ID")?;
+            let builtin = match id.as_str() {
+                "openai_chat" => BuiltinLlmCodec::OpenAiChat,
+                "openai_responses" => BuiltinLlmCodec::OpenAiResponses,
+                "anthropic_messages" => BuiltinLlmCodec::AnthropicMessages,
+                _ => {
+                    set_last_error(host, &format!("unknown built-in LLM codec ID: {id}"));
+                    return Err(NemoRelayStatus::InvalidArg);
+                }
+            };
+            LlmCodecIdentity::BuiltIn(builtin)
+        }
+        NemoRelayNativeLlmCodecKind::Runtime => LlmCodecIdentity::Runtime(
+            read_required_host_string(host, context.codec_id, "LLM runtime codec ID")?,
+        ),
+    };
+    Ok(LlmSanitizeContext { codec })
 }
 
 enum HostStringReadError {

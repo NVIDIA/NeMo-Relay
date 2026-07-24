@@ -384,8 +384,8 @@ describe('LLM guardrails', () => {
     try {
       const result = await llmCallExecute('contextual_sanitize_llm', makeNative(), () => ({ ok: true }));
       assert.deepEqual(result, { ok: true });
-      assert.deepEqual(requestContext, { has_active_codec: false, codec_name: null });
-      assert.deepEqual(responseContext, { has_active_codec: false, codec_name: null });
+      assert.deepEqual(requestContext, { codec: { kind: 'none' } });
+      assert.deepEqual(responseContext, { codec: { kind: 'none' } });
       await flushSubscriberCallbacks();
       const start = events.find((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start');
       const end = events.find((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'end');

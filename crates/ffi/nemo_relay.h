@@ -59,6 +59,29 @@ enum NemoRelayStatus {
 typedef int32_t NemoRelayStatus;
 
 /**
+ * Codec identity kind supplied to an LLM sanitizer.
+ */
+enum NemoRelayLlmSanitizeCodecKind {
+  /**
+   * No codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_NONE = 0,
+  /**
+   * A Relay built-in codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_BUILT_IN = 1,
+  /**
+   * A runtime-registered codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_RUNTIME = 2,
+  /**
+   * A codec was active but has no registered identity.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_OPAQUE = 3,
+};
+typedef uint32_t NemoRelayLlmSanitizeCodecKind;
+
+/**
  * The type of scope in the agent execution hierarchy.
  */
 enum NemoRelayScopeType {
@@ -248,19 +271,18 @@ typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
                                         const struct FfiLLMRequest *original_request);
 
 /**
- * Codec identity supplied to an LLM sanitizer. `codec_name` is null
- * when no recognized built-in codec is active and is valid only for the
- * duration of the callback.
+ * Codec identity supplied to an LLM sanitizer. `codec_id` is null for
+ * `None` and `Opaque`, and is valid only for the duration of the callback.
  */
 typedef struct NemoRelayLlmSanitizeContext {
   /**
-   * Whether this managed call supplied a response/request codec.
+   * Kind of active codec identity.
    */
-  bool has_active_codec;
+  NemoRelayLlmSanitizeCodecKind codec_kind;
   /**
-   * Canonical built-in codec name, or null for no or unknown codec.
+   * Built-in or runtime codec ID, when applicable.
    */
-  const char *codec_name;
+  const char *codec_id;
 } NemoRelayLlmSanitizeContext;
 
 /**

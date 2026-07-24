@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -98,15 +98,28 @@ pub type NemoRelayToolExecInterceptCb = unsafe extern "C" fn(
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
-/// Codec identity supplied to an LLM sanitizer. `codec_name` is null
-/// when no recognized built-in codec is active and is valid only for the
-/// duration of the callback.
+/// Codec identity kind supplied to an LLM sanitizer.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemoRelayLlmSanitizeCodecKind {
+    /// No codec was active.
+    None = 0,
+    /// A Relay built-in codec was active.
+    BuiltIn = 1,
+    /// A runtime-registered codec was active.
+    Runtime = 2,
+    /// A codec was active but has no registered identity.
+    Opaque = 3,
+}
+
+/// Codec identity supplied to an LLM sanitizer. `codec_id` is null for
+/// `None` and `Opaque`, and is valid only for the duration of the callback.
 #[repr(C)]
 pub struct NemoRelayLlmSanitizeContext {
-    /// Whether this managed call supplied a response/request codec.
-    pub has_active_codec: bool,
-    /// Canonical built-in codec name, or null for no or unknown codec.
-    pub codec_name: *const c_char,
+    /// Kind of active codec identity.
+    pub codec_kind: NemoRelayLlmSanitizeCodecKind,
+    /// Built-in or runtime codec ID, when applicable.
+    pub codec_id: *const c_char,
 }
 
 /// LLM request sanitizer. It receives the request first and its
@@ -657,10 +670,10 @@ pub fn wrap_llm_sanitize_request_fn(
 ) -> LlmSanitizeRequestFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
-        let codec_name = context.codec_name.and_then(|name| CString::new(name).ok());
+        let (codec_kind, codec_id) = ffi_codec_identity(&context.codec);
         let ffi_context = NemoRelayLlmSanitizeContext {
-            has_active_codec: context.has_active_codec,
-            codec_name: codec_name
+            codec_kind,
+            codec_id: codec_id
                 .as_ref()
                 .map_or(std::ptr::null(), |name| name.as_ptr()),
         };
@@ -679,10 +692,10 @@ pub fn wrap_llm_sanitize_response_fn(
 ) -> LlmSanitizeResponseFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |response: Json, context: LlmSanitizeContext| {
-        let codec_name = context.codec_name.and_then(|name| CString::new(name).ok());
+        let (codec_kind, codec_id) = ffi_codec_identity(&context.codec);
         let ffi_context = NemoRelayLlmSanitizeContext {
-            has_active_codec: context.has_active_codec,
-            codec_name: codec_name
+            codec_kind,
+            codec_id: codec_id
                 .as_ref()
                 .map_or(std::ptr::null(), |name| name.as_ptr()),
         };
@@ -696,6 +709,23 @@ pub fn wrap_llm_sanitize_response_fn(
         unsafe { nemo_relay_string_free_internal(result_ptr) };
         Some(result)
     })
+}
+
+fn ffi_codec_identity(
+    identity: &LlmCodecIdentity,
+) -> (NemoRelayLlmSanitizeCodecKind, Option<CString>) {
+    match identity {
+        LlmCodecIdentity::None => (NemoRelayLlmSanitizeCodecKind::None, None),
+        LlmCodecIdentity::BuiltIn(codec) => (
+            NemoRelayLlmSanitizeCodecKind::BuiltIn,
+            CString::new(codec.id()).ok(),
+        ),
+        LlmCodecIdentity::Runtime(id) => (
+            NemoRelayLlmSanitizeCodecKind::Runtime,
+            CString::new(id.as_str()).ok(),
+        ),
+        LlmCodecIdentity::Opaque => (NemoRelayLlmSanitizeCodecKind::Opaque, None),
+    }
 }
 
 /// Wrap a C LLM conditional callback into a Rust closure.

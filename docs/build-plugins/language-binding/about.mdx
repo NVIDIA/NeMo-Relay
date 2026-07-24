@@ -74,8 +74,8 @@ A plugin can install one or more of these runtime surfaces:
   and stream execution intercepts.
 
 LLM sanitize guardrails always receive the request or response first, followed
-by `has_active_codec` and an optional canonical `codec_name`. They may omit the
-LLM event payload by returning no value. Native plugins use ABI v2 and Rust
+by a structured context whose `codec` is `none`, `builtin(id)`, `runtime(id)`,
+or `opaque`. They may omit the LLM event payload by returning no value. Native plugins use ABI v2 and Rust
 worker plugins use the two-parameter callback directly. The worker protocol
 retains internal compatibility metadata only to dispatch existing Python worker
 handlers safely. Python source callbacks may still accept one parameter, and

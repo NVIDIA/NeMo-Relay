@@ -13,7 +13,8 @@ use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
 use crate::callable::{
-    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeContext, NemoRelayToolExecNextFn,
+    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeContext,
+    NemoRelayToolExecNextFn,
 };
 use crate::convert::nemo_relay_string_free;
 use crate::error::{NemoRelayStatus, nemo_relay_last_error};
@@ -394,8 +395,8 @@ unsafe extern "C" fn llm_request_intercept_cb(
             ptr::null_mut(),
             request,
             NemoRelayLlmSanitizeContext {
-                has_active_codec: false,
-                codec_name: ptr::null(),
+                codec_kind: NemoRelayLlmSanitizeCodecKind::None,
+                codec_id: ptr::null(),
             },
         ))
     };

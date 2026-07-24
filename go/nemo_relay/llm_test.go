@@ -406,8 +406,8 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 
 	if err := RegisterLlmSanitizeRequestGuardrail("go_contextual_llm_request", 1,
 		func(request LLMRequestDTO, context LLMSanitizeContext) (LLMRequestDTO, bool) {
-			if context.HasActiveCodec {
-				t.Fatal("manual registration should not receive an active codec")
+			if context.Codec.CodecKind != LLMCodecNone {
+				t.Fatal("manual registration should not receive an active codec identity")
 			}
 			return request, true
 		},
@@ -418,8 +418,8 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 
 	if err := RegisterLlmSanitizeResponseGuardrail("go_contextual_llm_response", 1,
 		func(response json.RawMessage, context LLMSanitizeContext) (json.RawMessage, bool) {
-			if context.CodecName != nil {
-				t.Fatal("manual registration should not receive a codec name")
+			if context.Codec.CodecID != nil {
+				t.Fatal("manual registration should not receive a codec ID")
 			}
 			return response, true
 		},

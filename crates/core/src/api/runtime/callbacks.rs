@@ -141,24 +141,59 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
 /// # Parameters
 /// - First argument: LLM request payload to sanitize for observability.
 ///
+/// Relay's built-in LLM codec identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinLlmCodec {
+    /// OpenAI Chat Completions request and response payloads.
+    OpenAiChat,
+    /// OpenAI Responses request and response payloads.
+    OpenAiResponses,
+    /// Anthropic Messages request and response payloads.
+    AnthropicMessages,
+}
+
+impl BuiltinLlmCodec {
+    /// Stable identifier used in configuration and language bindings.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::OpenAiChat => "openai_chat",
+            Self::OpenAiResponses => "openai_responses",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+}
+
+/// Per-call LLM codec identity supplied to sanitize guardrails.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LlmCodecIdentity {
+    /// No codec was active for this payload direction.
+    #[default]
+    None,
+    /// A Relay built-in codec was active.
+    BuiltIn(BuiltinLlmCodec),
+    /// A runtime-registered codec was active, identified by its stable ID.
+    Runtime(String),
+    /// A codec was active but does not expose a registered identity.
+    Opaque,
+}
+
 /// Per-call codec context for first-party LLM sanitize guardrails.
 ///
-/// The context distinguishes no active codec from an active custom codec that
-/// does not identify a Relay built-in provider surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The context distinguishes no codec, Relay built-ins, runtime-registered
+/// codecs, and active codecs with no stable identity.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LlmSanitizeContext {
-    /// Whether the managed call supplied a codec for this payload direction.
-    pub has_active_codec: bool,
-    /// Canonical built-in codec name, when the active codec identifies one.
-    pub codec_name: Option<&'static str>,
+    /// Identity of the codec active for this payload direction.
+    pub codec: LlmCodecIdentity,
 }
 
 /// # Returns
 /// `Some` contains the sanitized request for the emitted event. `None` omits
 /// both the raw request payload and its annotation from that event.
 ///
-/// The context is always supplied for managed LLM calls. Its fields distinguish
-/// no active codec from a recognized built-in codec and an active custom codec.
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
 pub type LlmSanitizeRequestFn =
     Arc<dyn Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync>;
 /// Sanitize an LLM response before the runtime records it.
@@ -173,8 +208,8 @@ pub type LlmSanitizeRequestFn =
 /// `Some` contains the sanitized response for the emitted event. `None` omits
 /// both the raw response payload and its annotation from that event.
 ///
-/// The context is always supplied for managed LLM calls. Its fields distinguish
-/// no active codec from a recognized built-in codec and an active custom codec.
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
 pub type LlmSanitizeResponseFn =
     Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
 /// Decide whether an LLM call is allowed to continue.

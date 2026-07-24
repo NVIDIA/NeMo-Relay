@@ -51,6 +51,13 @@ enum RegistrationSurface {
   SCOPE_SANITIZE_END_GUARDRAIL = 32;
 }
 
+enum LlmCodecKind {
+  LLM_CODEC_KIND_NONE = 0;
+  LLM_CODEC_KIND_BUILTIN = 1;
+  LLM_CODEC_KIND_RUNTIME = 2;
+  LLM_CODEC_KIND_OPAQUE = 3;
+}
+
 enum ScopeType {
   SCOPE_TYPE_UNSPECIFIED = 0;
   AGENT = 1;
@@ -162,8 +169,12 @@ message LlmInvocation {
   JsonEnvelope request = 2;
   JsonEnvelope annotated_request = 3;
   JsonEnvelope response = 4;
+  // Compatibility fields for existing grpc-v1 workers. New workers should
+  // prefer codec_kind and codec_id below.
   bool has_active_codec = 5;
   optional string codec_name = 6;
+  optional LlmCodecKind codec_kind = 7;
+  optional string codec_id = 8;
 }
 
 message InvokeResponse {

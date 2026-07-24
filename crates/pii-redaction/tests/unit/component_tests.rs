@@ -14,8 +14,9 @@ use crate::api::llm::{
     llm_call_execute, llm_stream_call_execute,
 };
 use crate::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmSanitizeContext, LlmStreamExecutionNextFn,
-    NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
+    BuiltinLlmCodec, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmSanitizeContext,
+    LlmStreamExecutionNextFn, NemoRelayContextState, create_scope_stack, global_context,
+    set_thread_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
@@ -294,8 +295,7 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
             }),
         },
         LlmSanitizeContext {
-            has_active_codec: true,
-            codec_name: Some("openai_responses"),
+            codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
         },
     )
     .expect("the active OpenAI Responses codec must override the legacy fallback");
@@ -317,8 +317,7 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
     let active_responses = sanitize_response(
         responses_payload.clone(),
         LlmSanitizeContext {
-            has_active_codec: true,
-            codec_name: Some("openai_responses"),
+            codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
         },
     )
     .expect("the active OpenAI Responses codec must override the legacy fallback");
@@ -336,12 +335,25 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
         sanitize_response(
             responses_payload,
             LlmSanitizeContext {
-                has_active_codec: true,
-                codec_name: None,
+                codec: LlmCodecIdentity::Opaque,
             },
         )
         .is_none(),
         "a normalized-path policy must omit an unknown active provider payload"
+    );
+
+    assert!(
+        sanitize_response(
+            json!({
+                "id": "resp_123",
+                "output": [{"content": [{"type": "output_text", "text": "sk-runtime-secret"}]}]
+            }),
+            LlmSanitizeContext {
+                codec: LlmCodecIdentity::Runtime("com.example.chat.v1".to_owned()),
+            },
+        )
+        .is_none(),
+        "a normalized-path policy must omit a runtime codec until it has a compatible projection"
     );
 }
 

@@ -96,9 +96,11 @@ from nemo_relay._native import (
     AtofExporterMode,
     AtofStreamSinkConfig,
     LLMAttributes,
+    LlmCodecIdentity,
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
+    LlmSanitizeContext,
     MarkEvent,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
@@ -167,8 +169,6 @@ LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest] | _L
 #: observability payload and annotation without changing the caller response.
 _LlmSanitizeResponseWithContext: TypeAlias = Callable[[JsonObject, "LlmSanitizeContext"], Optional[JsonObject]]
 LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject] | _LlmSanitizeResponseWithContext
-#: Codec identity supplied to an LLM sanitizer for a managed call.
-LlmSanitizeContext: TypeAlias = JsonObject
 #: Guardrail callback that can block an LLM call by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
@@ -503,6 +503,7 @@ __all__ = [
     "ToolConditionalExecutionGuardrail",
     "LlmSanitizeRequestGuardrail",
     "LlmSanitizeResponseGuardrail",
+    "LlmCodecIdentity",
     "LlmSanitizeContext",
     "LlmConditionalExecutionGuardrail",
     "ToolRequestIntercept",

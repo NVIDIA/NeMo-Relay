@@ -10,7 +10,7 @@ package nemo_relay
 
 typedef struct FfiPluginContext FfiPluginContext;
 typedef struct FfiPluginActivation FfiPluginActivation;
-typedef struct NemoRelayLlmSanitizeContext { bool has_active_codec; const char* codec_name; } NemoRelayLlmSanitizeContext;
+typedef struct NemoRelayLlmSanitizeContext { uint32_t codec_kind; const char* codec_id; } NemoRelayLlmSanitizeContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayPluginValidateCb)(void* user_data, const char* plugin_config_json);

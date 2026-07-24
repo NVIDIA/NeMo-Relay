@@ -10,11 +10,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay_plugin::{
-    NemoRelayNativeLlmNextFn, NemoRelayNativeLlmStreamNextFn, NemoRelayNativeToolNextFn,
+    NemoRelayNativeLlmNextFn, NemoRelayNativeLlmSanitizeContext, NemoRelayNativeLlmStreamNextFn,
+    NemoRelayNativeToolNextFn,
 };
 use serde_json::json;
 
-use crate::api::runtime::{NemoRelayContextState, global_context};
+use crate::api::runtime::{BuiltinLlmCodec, NemoRelayContextState, global_context};
 
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
@@ -512,7 +513,7 @@ unsafe extern "C" fn noop_tool_execution(
 unsafe extern "C" fn noop_llm_request(
     _user_data: *mut c_void,
     _request_json: *const NemoRelayNativeString,
-    _context_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeContext,
     _out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -521,7 +522,7 @@ unsafe extern "C" fn noop_llm_request(
 unsafe extern "C" fn noop_json(
     _user_data: *mut c_void,
     _payload_json: *const NemoRelayNativeString,
-    _context_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeContext,
     _out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -732,7 +733,7 @@ unsafe extern "C" fn tool_json_error(
 unsafe extern "C" fn llm_request_echo(
     _user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
-    _context_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeContext,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     let request = read_native_string(request_json).unwrap();
@@ -762,14 +763,60 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             llm_request_echo,
             ptr::null_mut(),
             &request,
-            LlmSanitizeContext {
-                has_active_codec: false,
-                codec_name: None
-            },
+            LlmSanitizeContext::default(),
         )
         .unwrap(),
         Some(request)
     );
+}
+
+#[test]
+fn native_llm_sanitize_context_preserves_all_codec_identity_states() {
+    let cases = [
+        (
+            LlmCodecIdentity::None,
+            NemoRelayNativeLlmCodecKind::None,
+            None,
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("openai_chat"),
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("openai_responses"),
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("anthropic_messages"),
+        ),
+        (
+            LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
+            NemoRelayNativeLlmCodecKind::Runtime,
+            Some("com.example.chat.v1"),
+        ),
+        (
+            LlmCodecIdentity::Opaque,
+            NemoRelayNativeLlmCodecKind::Opaque,
+            None,
+        ),
+    ];
+
+    for (codec, expected_kind, expected_id) in cases {
+        let (context, context_id) = native_llm_sanitize_context(&LlmSanitizeContext { codec })
+            .expect("native context conversion should succeed");
+        assert_eq!(context.codec_kind, expected_kind);
+        assert_eq!(
+            (!context.codec_id.is_null()).then(|| read_native_string(context.codec_id).unwrap()),
+            expected_id.map(str::to_owned),
+        );
+        if let Some(context_id) = context_id {
+            unsafe { native_string_free(context_id) };
+        }
+    }
 }
 
 fn tool_next(output: FlowResult<Json>) -> ToolExecutionNextFn {
