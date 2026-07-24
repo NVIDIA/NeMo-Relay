@@ -24,9 +24,9 @@ use std::sync::Arc;
 use libc::c_char;
 use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -115,11 +115,24 @@ pub enum NemoRelayLlmSanitizeCodecKind {
 /// Codec identity supplied to an LLM sanitizer. `codec_id` is null for
 /// `None` and `Opaque`, and is valid only for the duration of the callback.
 #[repr(C)]
-pub struct NemoRelayLlmSanitizeContext {
+pub struct NemoRelayLlmSanitizeRequestContext {
     /// Kind of active codec identity.
     pub codec_kind: NemoRelayLlmSanitizeCodecKind,
     /// Built-in or runtime codec ID, when applicable.
     pub codec_id: *const c_char,
+    /// Borrowed request codec capability, or null when no codec is active.
+    pub codec: *const crate::types::FfiLlmSanitizeRequestCodec,
+}
+
+/// Directional codec context supplied to an LLM response sanitizer.
+#[repr(C)]
+pub struct NemoRelayLlmSanitizeResponseContext {
+    /// Kind of active codec identity.
+    pub codec_kind: NemoRelayLlmSanitizeCodecKind,
+    /// Built-in or runtime codec ID, when applicable.
+    pub codec_id: *const c_char,
+    /// Borrowed response codec capability, or null when no codec is active.
+    pub codec: *const crate::types::FfiLlmSanitizeResponseCodec,
 }
 
 /// LLM request sanitizer. It receives the request first and its
@@ -127,7 +140,7 @@ pub struct NemoRelayLlmSanitizeContext {
 pub type NemoRelayLlmSanitizeRequestCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
-    context: NemoRelayLlmSanitizeContext,
+    context: NemoRelayLlmSanitizeRequestContext,
 ) -> *mut FfiLLMRequest;
 
 /// LLM response sanitizer. It receives response JSON first and its
@@ -135,7 +148,7 @@ pub type NemoRelayLlmSanitizeRequestCb = unsafe extern "C" fn(
 pub type NemoRelayLlmSanitizeResponseCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     response_json: *const c_char,
-    context: NemoRelayLlmSanitizeContext,
+    context: NemoRelayLlmSanitizeResponseContext,
 ) -> *mut c_char;
 
 /// Callback for LLM conditional execution guardrails.
@@ -669,19 +682,25 @@ pub fn wrap_llm_sanitize_request_fn(
     free_fn: NemoRelayFreeFn,
 ) -> LlmSanitizeRequestFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
-        let (codec_kind, codec_id) = ffi_codec_identity(&context.codec);
-        let ffi_context = NemoRelayLlmSanitizeContext {
-            codec_kind,
-            codec_id: codec_id
-                .as_ref()
-                .map_or(std::ptr::null(), |name| name.as_ptr()),
-        };
-        let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
-        let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
-        unsafe { drop(Box::from_raw(ffi_req)) };
-        (!result_ptr.is_null()).then(|| unsafe { Box::from_raw(result_ptr) }.0)
-    })
+    Arc::new(
+        move |request: LlmRequest, context: LlmSanitizeRequestContext| {
+            let (codec_kind, codec_id) = ffi_codec_identity(&context.codec);
+            let codec = context
+                .resolve_codec()
+                .map(crate::types::FfiLlmSanitizeRequestCodec);
+            let ffi_context = NemoRelayLlmSanitizeRequestContext {
+                codec_kind,
+                codec_id: codec_id
+                    .as_ref()
+                    .map_or(std::ptr::null(), |name| name.as_ptr()),
+                codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
+            };
+            let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+            let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
+            unsafe { drop(Box::from_raw(ffi_req)) };
+            (!result_ptr.is_null()).then(|| unsafe { Box::from_raw(result_ptr) }.0)
+        },
+    )
 }
 
 /// Wrap a C LLM response sanitizer into a Rust closure.
@@ -691,13 +710,17 @@ pub fn wrap_llm_sanitize_response_fn(
     free_fn: NemoRelayFreeFn,
 ) -> LlmSanitizeResponseFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |response: Json, context: LlmSanitizeContext| {
+    Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         let (codec_kind, codec_id) = ffi_codec_identity(&context.codec);
-        let ffi_context = NemoRelayLlmSanitizeContext {
+        let codec = context
+            .resolve_codec()
+            .map(crate::types::FfiLlmSanitizeResponseCodec);
+        let ffi_context = NemoRelayLlmSanitizeResponseContext {
             codec_kind,
             codec_id: codec_id
                 .as_ref()
                 .map_or(std::ptr::null(), |name| name.as_ptr()),
+            codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
         };
         let response_json = json_to_c_string(&response);
         let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };

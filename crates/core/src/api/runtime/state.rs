@@ -22,10 +22,10 @@ use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs,
-    ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
@@ -966,7 +966,7 @@ impl NemoRelayContextState {
     /// The sanitized [`LlmRequest`] after every provided guardrail has run.
     pub(crate) fn llm_sanitize_request_snapshot_chain(
         request: LlmRequest,
-        context: LlmSanitizeContext,
+        context: LlmSanitizeRequestContext,
         entries: &[Guardrail<LlmSanitizeRequestFn>],
     ) -> Option<LlmRequest> {
         let mut value = Some(request);
@@ -1005,7 +1005,7 @@ impl NemoRelayContextState {
     /// The sanitized response payload after every provided guardrail has run.
     pub(crate) fn llm_sanitize_response_snapshot_chain(
         response: Json,
-        context: LlmSanitizeContext,
+        context: LlmSanitizeResponseContext,
         entries: &[Guardrail<LlmSanitizeResponseFn>],
     ) -> Option<Json> {
         let mut value = Some(response);

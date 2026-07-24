@@ -602,10 +602,20 @@ class TestScopeLocalLlmWrappers:
             )
             assert scope_local.deregister_tool_execution(handle, "sl_tool_exec_cov") is True
 
-            scope_local.register_llm_sanitize_request(handle, "sl_llm_req_cov", 1, lambda req: req)
+            scope_local.register_llm_sanitize_request(
+                handle,
+                "sl_llm_req_cov",
+                1,
+                lambda req, _context: req,
+            )
             assert scope_local.deregister_llm_sanitize_request(handle, "sl_llm_req_cov") is True
 
-            scope_local.register_llm_sanitize_response(handle, "sl_llm_resp_cov", 1, lambda response: response)
+            scope_local.register_llm_sanitize_response(
+                handle,
+                "sl_llm_resp_cov",
+                1,
+                lambda response, _context: response,
+            )
             assert scope_local.deregister_llm_sanitize_response(handle, "sl_llm_resp_cov") is True
 
             scope_local.register_llm_conditional_execution(handle, "sl_llm_cond_cov", 1, lambda req: None)
@@ -635,7 +645,8 @@ class TestScopeLocalLlmBehavior:
         events = []
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        def sanitize_request(req):
+        def sanitize_request(req, context):
+            del context
             return LLMRequest({"X-Scope-Local": "yes"}, req.content)
 
         with scope.scope("sl_llm_sanitize_scope", ScopeType.Agent) as handle:

@@ -384,8 +384,10 @@ describe('LLM guardrails', () => {
     try {
       const result = await llmCallExecute('contextual_sanitize_llm', makeNative(), () => ({ ok: true }));
       assert.deepEqual(result, { ok: true });
-      assert.deepEqual(requestContext, { codec: { kind: 'none' } });
-      assert.deepEqual(responseContext, { codec: { kind: 'none' } });
+      assert.deepEqual(requestContext.codec, { kind: 'none' });
+      assert.equal(requestContext.resolveCodec(), null);
+      assert.deepEqual(responseContext.codec, { kind: 'none' });
+      assert.equal(responseContext.resolveCodec(), null);
       await flushSubscriberCallbacks();
       const start = events.find((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start');
       const end = events.find((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'end');
@@ -395,6 +397,61 @@ describe('LLM guardrails', () => {
       deregisterLlmSanitizeRequestGuardrail('node_contextual_llm_sanitize_request');
       deregisterLlmSanitizeResponseGuardrail('node_contextual_llm_sanitize_response');
       deregisterSubscriber('node_contextual_llm_sanitize_events');
+    }
+  });
+
+  it('resolved sanitizer codecs expose directional operations', async () => {
+    const codec = new lib.OpenAIChatCodec();
+    let requestDecoded = false;
+    let responseDecoded = false;
+    registerLlmSanitizeRequestGuardrail('node_resolved_llm_request_codec', 10, (request, context) => {
+      assert.deepEqual(context.codec, { kind: 'opaque' });
+      const resolved = context.resolveCodec();
+      assert.notEqual(resolved, null);
+      const annotated = resolved.decode(request);
+      requestDecoded = annotated.model === 'test-model';
+      return resolved.encode(annotated, request);
+    });
+    registerLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec', 10, (response, context) => {
+      assert.deepEqual(context.codec, { kind: 'opaque' });
+      const resolved = context.resolveCodec();
+      assert.notEqual(resolved, null);
+      const annotated = resolved.decodeResponse(response);
+      responseDecoded = annotated.model === 'test-model';
+      return response;
+    });
+
+    try {
+      const response = {
+        id: 'chatcmpl-test',
+        model: 'test-model',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          },
+        ],
+      };
+      const result = await llmCallExecute(
+        'resolved_sanitizer_codec_llm',
+        makeNative(),
+        () => response,
+        null,
+        null,
+        null,
+        null,
+        null,
+        codec.decode.bind(codec),
+        ({ annotated, original }) => codec.encode(annotated, original),
+        codec.decodeResponse.bind(codec),
+      );
+      assert.deepEqual(result, response);
+      assert.equal(requestDecoded, true);
+      assert.equal(responseDecoded, true);
+    } finally {
+      deregisterLlmSanitizeRequestGuardrail('node_resolved_llm_request_codec');
+      deregisterLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec');
     }
   });
 
@@ -462,7 +519,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize request guardrail falls back on malformed return', async () => {
+  it('sanitize request guardrail can omit the observability payload', async () => {
     registerLlmSanitizeRequestGuardrail('node_llm_san_req_bad', 10, () => null);
     try {
       const result = await llmCallExecute(
@@ -487,7 +544,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize request guardrail failures preserve the payload and remain usable', async () => {
+  it('sanitize request guardrail failures omit the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_req_throw_sub', (event) => events.push(event));
@@ -505,7 +562,7 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'start',
       );
-      assert.deepEqual(start.data, request);
+      assert.equal(start.data, null);
       assert.match(getLastCallbackError() ?? '', /JavaScript callback threw/i);
 
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_throw');
@@ -609,7 +666,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize response guardrail failures preserve the payload and remain usable', async () => {
+  it('sanitize response guardrail failures omit the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_resp_throw_sub', (event) => events.push(event));
@@ -627,7 +684,7 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'end',
       );
-      assert.deepEqual(end.data, response);
+      assert.equal(end.data, null);
       assert.match(getLastCallbackError() ?? '', /response sanitizer boom/i);
 
       deregisterLlmSanitizeResponseGuardrail('node_llm_san_resp_throw');

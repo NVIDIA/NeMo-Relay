@@ -52,11 +52,12 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClie
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
     EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecKind,
-    LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest,
-    PushScopeRequest, RegisterRequest, RegisterResponse, Registration, RegistrationSurface,
-    ScopeContext, ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest,
-    ValidateRequest, ValidateResponse, WorkerAck, WorkerError,
+    HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
+    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
+    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
+    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
+    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
+    ValidateResponse, WorkerAck, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use tokio::net::TcpListener;
@@ -126,16 +127,20 @@ pub trait WorkerPlugin: Send + Sync + 'static {
 
 type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 type EventSanitizeFn =
-    Arc<dyn Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync>;
-type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
+    Arc<dyn Fn(&Event, EventSanitizeFields) -> BoxFutureResult<EventSanitizeFields> + Send + Sync>;
+type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> BoxFutureResult<Json> + Send + Sync>;
 type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
 type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
 type ToolExecutionFn = Arc<
     dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
 >;
-type LlmSanitizeRequestFn =
-    Arc<dyn Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync>;
-type LlmSanitizeResponseFn = Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
+type LlmSanitizeRequestFn = Arc<
+    dyn Fn(LlmRequest, LlmSanitizeRequestContext) -> BoxFutureResult<Option<LlmRequest>>
+        + Send
+        + Sync,
+>;
+type LlmSanitizeResponseFn =
+    Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> BoxFutureResult<Option<Json>> + Send + Sync>;
 
 /// Relay built-in codec identities supplied to worker sanitizers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +154,7 @@ pub enum BuiltinLlmCodec {
 }
 
 /// Per-call LLM codec identity supplied to worker sanitizers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum LlmCodecIdentity {
     /// No codec was active.
     None,
@@ -161,11 +166,86 @@ pub enum LlmCodecIdentity {
     Opaque,
 }
 
-/// Active codec context supplied to an LLM sanitizer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LlmSanitizeContext {
+/// Active codec context supplied to an LLM request sanitizer.
+#[derive(Clone)]
+pub struct LlmSanitizeRequestContext {
     /// Identity of the active codec.
     pub codec: LlmCodecIdentity,
+    runtime: Option<PluginRuntime>,
+    codec_capability_id: Option<String>,
+}
+
+/// Active codec context supplied to an LLM response sanitizer.
+#[derive(Clone)]
+pub struct LlmSanitizeResponseContext {
+    /// Identity of the active codec.
+    pub codec: LlmCodecIdentity,
+    runtime: Option<PluginRuntime>,
+    codec_capability_id: Option<String>,
+}
+
+impl LlmSanitizeRequestContext {
+    /// Resolves the active request codec for this callback.
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<WorkerRequestCodec> {
+        Some(WorkerRequestCodec {
+            runtime: self.runtime.clone()?,
+            capability_id: self.codec_capability_id.clone()?,
+        })
+    }
+}
+
+impl LlmSanitizeResponseContext {
+    /// Resolves the active response codec for this callback.
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<WorkerResponseCodec> {
+        Some(WorkerResponseCodec {
+            runtime: self.runtime.clone()?,
+            capability_id: self.codec_capability_id.clone()?,
+        })
+    }
+}
+
+/// Invocation-scoped proxy for the active LLM request codec.
+#[derive(Clone)]
+pub struct WorkerRequestCodec {
+    runtime: PluginRuntime,
+    capability_id: String,
+}
+
+impl WorkerRequestCodec {
+    /// Decodes an opaque request into its normalized representation.
+    pub async fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
+        self.runtime
+            .decode_llm_codec_request(&self.capability_id, request)
+            .await
+    }
+    /// Encodes normalized request changes onto the original opaque request.
+    pub async fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> Result<LlmRequest> {
+        self.runtime
+            .encode_llm_codec_request(&self.capability_id, annotated, original)
+            .await
+    }
+}
+
+/// Invocation-scoped proxy for the active LLM response codec.
+#[derive(Clone)]
+pub struct WorkerResponseCodec {
+    runtime: PluginRuntime,
+    capability_id: String,
+}
+
+impl WorkerResponseCodec {
+    /// Decodes an opaque response into its normalized representation.
+    pub async fn decode(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
+        self.runtime
+            .decode_llm_codec_response(&self.capability_id, response)
+            .await
+    }
 }
 type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
 type LlmRequestFn = Arc<
@@ -236,14 +316,15 @@ impl PluginContext {
             .insert(name.into(), Arc::new(callback));
     }
 
-    fn register_event_sanitizer<F>(
+    fn register_event_sanitizer<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         surface: RegistrationSurface,
         callback: F,
     ) where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+        F: Fn(&Event, EventSanitizeFields) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<EventSanitizeFields>> + Send + 'static,
     {
         self.push_registration(name, surface, priority, false);
         let sanitizers = match surface {
@@ -256,13 +337,21 @@ impl PluginContext {
             }
             _ => unreachable!("event sanitizer registration requires an event sanitizer surface"),
         };
-        sanitizers.insert(name.into(), Arc::new(callback));
+        sanitizers.insert(
+            name.into(),
+            Arc::new(move |event, fields| Box::pin(callback(event, fields))),
+        );
     }
 
     /// Registers a mark event sanitizer.
-    pub fn register_mark_sanitize_guardrail<F>(&mut self, name: &str, priority: i32, callback: F)
-    where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    pub fn register_mark_sanitize_guardrail<F, Fut>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) where
+        F: Fn(&Event, EventSanitizeFields) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<EventSanitizeFields>> + Send + 'static,
     {
         self.register_event_sanitizer(
             name,
@@ -273,13 +362,14 @@ impl PluginContext {
     }
 
     /// Registers a scope-start event sanitizer.
-    pub fn register_scope_sanitize_start_guardrail<F>(
+    pub fn register_scope_sanitize_start_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+        F: Fn(&Event, EventSanitizeFields) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<EventSanitizeFields>> + Send + 'static,
     {
         self.register_event_sanitizer(
             name,
@@ -290,13 +380,14 @@ impl PluginContext {
     }
 
     /// Registers a scope-end event sanitizer.
-    pub fn register_scope_sanitize_end_guardrail<F>(
+    pub fn register_scope_sanitize_end_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+        F: Fn(&Event, EventSanitizeFields) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<EventSanitizeFields>> + Send + 'static,
     {
         self.register_event_sanitizer(
             name,
@@ -307,13 +398,14 @@ impl PluginContext {
     }
 
     /// Registers a tool sanitize-request guardrail.
-    pub fn register_tool_sanitize_request_guardrail<F>(
+    pub fn register_tool_sanitize_request_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&str, Json) -> Json + Send + Sync + 'static,
+        F: Fn(&str, Json) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Json>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -321,19 +413,21 @@ impl PluginContext {
             priority,
             false,
         );
-        self.handlers
-            .tool_sanitize_requests
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.tool_sanitize_requests.insert(
+            name.into(),
+            Arc::new(move |tool_name, value| Box::pin(callback(tool_name, value))),
+        );
     }
 
     /// Registers a tool sanitize-response guardrail.
-    pub fn register_tool_sanitize_response_guardrail<F>(
+    pub fn register_tool_sanitize_response_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&str, Json) -> Json + Send + Sync + 'static,
+        F: Fn(&str, Json) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Json>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -341,9 +435,10 @@ impl PluginContext {
             priority,
             false,
         );
-        self.handlers
-            .tool_sanitize_responses
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.tool_sanitize_responses.insert(
+            name.into(),
+            Arc::new(move |tool_name, value| Box::pin(callback(tool_name, value))),
+        );
     }
 
     /// Registers a tool conditional-execution guardrail.
@@ -414,45 +509,47 @@ impl PluginContext {
     }
 
     /// Registers an LLM sanitize-request guardrail.
-    pub fn register_llm_sanitize_request_guardrail<F>(
+    pub fn register_llm_sanitize_request_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync + 'static,
+        F: Fn(LlmRequest, LlmSanitizeRequestContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<LlmRequest>>> + Send + 'static,
     {
-        self.push_registration_with_context(
+        self.push_registration(
             name,
             RegistrationSurface::LlmSanitizeRequestGuardrail,
             priority,
             false,
-            true,
         );
-        self.handlers
-            .llm_sanitize_requests
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.llm_sanitize_requests.insert(
+            name.into(),
+            Arc::new(move |request, context| Box::pin(callback(request, context))),
+        );
     }
 
     /// Registers an LLM sanitize-response guardrail.
-    pub fn register_llm_sanitize_response_guardrail<F>(
+    pub fn register_llm_sanitize_response_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync + 'static,
+        F: Fn(Json, LlmSanitizeResponseContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<Json>>> + Send + 'static,
     {
-        self.push_registration_with_context(
+        self.push_registration(
             name,
             RegistrationSurface::LlmSanitizeResponseGuardrail,
             priority,
             false,
-            true,
         );
-        self.handlers
-            .llm_sanitize_responses
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.llm_sanitize_responses.insert(
+            name.into(),
+            Arc::new(move |response, context| Box::pin(callback(response, context))),
+        );
     }
 
     /// Registers an LLM conditional-execution guardrail.
@@ -550,23 +647,11 @@ impl PluginContext {
         priority: i32,
         break_chain: bool,
     ) {
-        self.push_registration_with_context(name, surface, priority, break_chain, false);
-    }
-
-    fn push_registration_with_context(
-        &mut self,
-        name: &str,
-        surface: RegistrationSurface,
-        priority: i32,
-        break_chain: bool,
-        contextual: bool,
-    ) {
         self.handlers.registrations.push(Registration {
             local_name: name.into(),
             surface: surface as i32,
             priority,
             break_chain,
-            contextual,
         });
     }
 }
@@ -587,6 +672,67 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    async fn decode_llm_codec_request(
+        &self,
+        capability_id: &str,
+        request: &LlmRequest,
+    ) -> Result<AnnotatedLlmRequest> {
+        let mut client = self.host_client().await?;
+        let response = client
+            .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+                activation_id: self.activation_id.clone(),
+                auth_token: self.auth_token.clone(),
+                codec_capability_id: capability_id.into(),
+                request: Some(json_envelope("nemo.relay.LlmRequest@1", request)?),
+            }))
+            .await
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .into_inner();
+        decode_typed_json_result(response, "nemo.relay.AnnotatedLlmRequest@2")
+    }
+
+    async fn encode_llm_codec_request(
+        &self,
+        capability_id: &str,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> Result<LlmRequest> {
+        let mut client = self.host_client().await?;
+        let response = client
+            .encode_llm_codec_request(Request::new(LlmCodecEncodeRequest {
+                activation_id: self.activation_id.clone(),
+                auth_token: self.auth_token.clone(),
+                codec_capability_id: capability_id.into(),
+                annotated_request: Some(json_envelope(
+                    "nemo.relay.AnnotatedLlmRequest@2",
+                    annotated,
+                )?),
+                original_request: Some(json_envelope("nemo.relay.LlmRequest@1", original)?),
+            }))
+            .await
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .into_inner();
+        decode_typed_json_result(response, "nemo.relay.LlmRequest@1")
+    }
+
+    async fn decode_llm_codec_response(
+        &self,
+        capability_id: &str,
+        response: &Json,
+    ) -> Result<AnnotatedLlmResponse> {
+        let mut client = self.host_client().await?;
+        let response = client
+            .decode_llm_codec_response(Request::new(LlmCodecDecodeResponse {
+                activation_id: self.activation_id.clone(),
+                auth_token: self.auth_token.clone(),
+                codec_capability_id: capability_id.into(),
+                response: Some(json_envelope("nemo.relay.Json@1", response)?),
+            }))
+            .await
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .into_inner();
+        decode_typed_json_result(response, "nemo.relay.Json@1")
+    }
     /// Emits a mark event through the host runtime.
     pub async fn emit_mark(
         &self,
@@ -1482,6 +1628,7 @@ impl WorkerService {
             | RegistrationSurface::ScopeSanitizeStartGuardrail
             | RegistrationSurface::ScopeSanitizeEndGuardrail => {
                 self.invoke_event_sanitize_response(request, &scope, surface)
+                    .await
             }
             RegistrationSurface::ToolSanitizeRequestGuardrail => {
                 self.invoke_tool_response(request, &scope, surface).await
@@ -1518,7 +1665,7 @@ impl WorkerService {
         Ok(empty_response())
     }
 
-    fn invoke_event_sanitize_response(
+    async fn invoke_event_sanitize_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
@@ -1527,7 +1674,7 @@ impl WorkerService {
         let event = event_payload(request.payload)?;
         let fields = event.sanitize_fields();
         let handler = self.event_sanitizer(surface, &request.registration_name)?;
-        let fields = with_thread_scope(scope, || handler(&event, fields));
+        let fields = with_thread_scope(scope, || handler(&event, fields)).await?;
         Ok(json_response(
             serde_json::to_value(fields).expect("event sanitize fields are JSON serializable"),
         ))
@@ -1542,9 +1689,11 @@ impl WorkerService {
         match surface {
             RegistrationSurface::ToolSanitizeRequestGuardrail => {
                 self.invoke_tool_sanitize_request_response(request, scope)
+                    .await
             }
             RegistrationSurface::ToolSanitizeResponseGuardrail => {
                 self.invoke_tool_sanitize_response_response(request, scope)
+                    .await
             }
             RegistrationSurface::ToolConditionalExecutionGuardrail => {
                 self.invoke_tool_conditional_response(request, scope)
@@ -1559,28 +1708,28 @@ impl WorkerService {
         }
     }
 
-    fn invoke_tool_sanitize_request_response(
+    async fn invoke_tool_sanitize_request_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
         let handler = self.tool_sanitize_request(&request.registration_name)?;
-        Ok(json_response(with_thread_scope(scope, || {
-            handler(&payload.tool_name, payload.value)
-        })))
+        Ok(json_response(
+            with_thread_scope(scope, || handler(&payload.tool_name, payload.value)).await?,
+        ))
     }
 
-    fn invoke_tool_sanitize_response_response(
+    async fn invoke_tool_sanitize_response_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
         let handler = self.tool_sanitize_response(&request.registration_name)?;
-        Ok(json_response(with_thread_scope(scope, || {
-            handler(&payload.tool_name, payload.value)
-        })))
+        Ok(json_response(
+            with_thread_scope(scope, || handler(&payload.tool_name, payload.value)).await?,
+        ))
     }
 
     fn invoke_tool_conditional_response(
@@ -1631,9 +1780,11 @@ impl WorkerService {
         match surface {
             RegistrationSurface::LlmSanitizeRequestGuardrail => {
                 self.invoke_llm_sanitize_request_response(request, scope)
+                    .await
             }
             RegistrationSurface::LlmSanitizeResponseGuardrail => {
                 self.invoke_llm_sanitize_response_response(request, scope)
+                    .await
             }
             RegistrationSurface::LlmConditionalExecutionGuardrail => {
                 self.invoke_llm_conditional_response(request, scope)
@@ -1648,16 +1799,17 @@ impl WorkerService {
         }
     }
 
-    fn invoke_llm_sanitize_request_response(
+    async fn invoke_llm_sanitize_request_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
-        let context = payload.sanitize_context();
+        let mut context = payload.sanitize_request_context();
+        context.runtime = Some(self.runtime.clone());
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let handler = self.llm_sanitize_request(&request.registration_name)?;
-        match with_thread_scope(scope, || handler(request_value, context)) {
+        match with_thread_scope(scope, || handler(request_value, context)).await? {
             Some(request) => Ok(json_response(
                 serde_json::to_value(request).expect("LLM request is JSON serializable"),
             )),
@@ -1665,16 +1817,17 @@ impl WorkerService {
         }
     }
 
-    fn invoke_llm_sanitize_response_response(
+    async fn invoke_llm_sanitize_response_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
-        let context = payload.sanitize_context();
+        let mut context = payload.sanitize_response_context();
+        context.runtime = Some(self.runtime.clone());
         let response = required_json::<Json>(payload.response, "llm response")?;
         let handler = self.llm_sanitize_response(&request.registration_name)?;
-        match with_thread_scope(scope, || handler(response, context)) {
+        match with_thread_scope(scope, || handler(response, context)).await? {
             Some(response) => Ok(json_response(response)),
             None => Ok(empty_response()),
         }
@@ -1900,40 +2053,48 @@ struct LlmPayload {
     request: Option<JsonEnvelope>,
     annotated_request: Option<JsonEnvelope>,
     response: Option<JsonEnvelope>,
-    has_active_codec: bool,
-    codec_name: Option<String>,
-    codec_kind: Option<i32>,
-    codec_id: Option<String>,
+    sanitize_context: Option<nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext>,
 }
 
 impl LlmPayload {
-    fn sanitize_context(&self) -> LlmSanitizeContext {
-        LlmSanitizeContext {
-            codec: self.codec_kind.map_or_else(
-                || codec_identity_from_legacy_proto(self.has_active_codec, self.codec_name.clone()),
-                |codec_kind| codec_identity_from_proto(codec_kind, self.codec_id.clone()),
-            ),
+    fn sanitize_request_context(&self) -> LlmSanitizeRequestContext {
+        let codec = match self.sanitize_context.as_ref() {
+            Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
+            _ => None,
+        };
+        LlmSanitizeRequestContext {
+            codec: codec_identity_from_proto(codec),
+            runtime: None,
+            codec_capability_id: match self.sanitize_context.as_ref() {
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec_capability_id.clone(),
+                _ => None,
+            },
+        }
+    }
+
+    fn sanitize_response_context(&self) -> LlmSanitizeResponseContext {
+        let codec = match self.sanitize_context.as_ref() {
+            Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
+            _ => None,
+        };
+        LlmSanitizeResponseContext {
+            codec: codec_identity_from_proto(codec),
+            runtime: None,
+            codec_capability_id: match self.sanitize_context.as_ref() {
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec_capability_id.clone(),
+                _ => None,
+            },
         }
     }
 }
 
-fn codec_identity_from_legacy_proto(
-    has_active_codec: bool,
-    codec_name: Option<String>,
+fn codec_identity_from_proto(
+    codec: Option<&nemo_relay_worker_proto::v1::LlmCodecIdentity>,
 ) -> LlmCodecIdentity {
-    if !has_active_codec {
-        return LlmCodecIdentity::None;
-    }
-
-    match codec_name.as_deref() {
-        Some("openai_chat") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
-        Some("openai_responses") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
-        Some("anthropic_messages") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages),
-        _ => LlmCodecIdentity::Opaque,
-    }
-}
-
-fn codec_identity_from_proto(codec_kind: i32, codec_id: Option<String>) -> LlmCodecIdentity {
+    let codec_kind = codec
+        .map(|codec| codec.kind)
+        .unwrap_or(LlmCodecKind::None as i32);
+    let codec_id = codec.and_then(|codec| codec.id.clone());
     match LlmCodecKind::try_from(codec_kind).ok() {
         Some(LlmCodecKind::None) => LlmCodecIdentity::None,
         Some(LlmCodecKind::Builtin) => match codec_id.as_deref() {
@@ -1988,10 +2149,7 @@ fn llm_payload(
             request: value.request,
             annotated_request: value.annotated_request,
             response: value.response,
-            has_active_codec: value.has_active_codec,
-            codec_name: value.codec_name,
-            codec_kind: value.codec_kind,
-            codec_id: value.codec_id,
+            sanitize_context: value.sanitize_context,
         }),
         _ => Err(WorkerSdkError::InvalidInput("expected llm payload".into())),
     }
@@ -2095,6 +2253,19 @@ fn json_result_to_sdk(result: JsonResult) -> Result<Json> {
         return Err(worker_error_to_sdk(error));
     }
     required_json(result.value, "json result")
+}
+
+fn decode_typed_json_result<T: serde::de::DeserializeOwned>(
+    result: JsonResult,
+    expected_schema: &str,
+) -> Result<T> {
+    if let Some(error) = result.error {
+        return Err(worker_error_to_sdk(error));
+    }
+    let value = result
+        .value
+        .ok_or_else(|| WorkerSdkError::InvalidInput("json result is missing".into()))?;
+    decode_expected_json_envelope(&value, "json result", expected_schema)
 }
 
 fn optional_json_envelope(value: Option<Json>) -> Result<Option<JsonEnvelope>> {

@@ -13,8 +13,8 @@ use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
 use crate::callable::{
-    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeContext,
-    NemoRelayToolExecNextFn,
+    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
+    NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecNextFn,
 };
 use crate::convert::nemo_relay_string_free;
 use crate::error::{NemoRelayStatus, nemo_relay_last_error};
@@ -343,7 +343,7 @@ unsafe extern "C" fn tool_exec_intercept_cb(
 unsafe extern "C" fn llm_request_cb(
     _user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
-    _context: NemoRelayLlmSanitizeContext,
+    _context: NemoRelayLlmSanitizeRequestContext,
 ) -> *mut FfiLLMRequest {
     let request = unsafe { &*request };
     let mut content = request.0.content.clone();
@@ -357,7 +357,7 @@ unsafe extern "C" fn llm_request_cb(
 unsafe extern "C" fn llm_response_cb(
     _user_data: *mut libc::c_void,
     response_json: *const c_char,
-    _context: NemoRelayLlmSanitizeContext,
+    _context: NemoRelayLlmSanitizeResponseContext,
 ) -> *mut c_char {
     let mut response: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(response_json) }
@@ -394,9 +394,10 @@ unsafe extern "C" fn llm_request_intercept_cb(
         Box::from_raw(llm_request_cb(
             ptr::null_mut(),
             request,
-            NemoRelayLlmSanitizeContext {
+            NemoRelayLlmSanitizeRequestContext {
                 codec_kind: NemoRelayLlmSanitizeCodecKind::None,
                 codec_id: ptr::null(),
+                codec: ptr::null(),
             },
         ))
     };

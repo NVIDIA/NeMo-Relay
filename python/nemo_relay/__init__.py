@@ -100,7 +100,10 @@ from nemo_relay._native import (
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
-    LlmSanitizeContext,
+    LlmSanitizeRequestCodec,
+    LlmSanitizeRequestContext,
+    LlmSanitizeResponseCodec,
+    LlmSanitizeResponseContext,
     MarkEvent,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
@@ -159,16 +162,13 @@ EventSanitizeGuardrail: TypeAlias = Callable[["Event", EventSanitizeFields], Eve
 #: message. Returning ``None`` allows execution to continue.
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
 #: Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
-#: New callbacks receive ``(request, context)``; inspectable one-argument
-#: callbacks remain compatible. Returning ``None`` omits the LLM observability
+#: Callbacks receive ``(request, context)``. Returning ``None`` omits the LLM observability
 #: payload and annotation without changing the caller-visible request.
-_LlmSanitizeRequestWithContext: TypeAlias = Callable[[LLMRequest, "LlmSanitizeContext"], Optional[LLMRequest]]
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest] | _LlmSanitizeRequestWithContext
-#: Guardrail callback that sanitizes an emitted JSON LLM response payload. New
-#: callbacks receive ``(response, context)`` and can return ``None`` to omit
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeRequestContext"], Optional[LLMRequest]]
+#: Guardrail callback that sanitizes an emitted JSON LLM response payload.
+#: Callbacks receive ``(response, context)`` and can return ``None`` to omit
 #: observability payload and annotation without changing the caller response.
-_LlmSanitizeResponseWithContext: TypeAlias = Callable[[JsonObject, "LlmSanitizeContext"], Optional[JsonObject]]
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject] | _LlmSanitizeResponseWithContext
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject, "LlmSanitizeResponseContext"], Optional[JsonObject]]
 #: Guardrail callback that can block an LLM call by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
@@ -504,7 +504,10 @@ __all__ = [
     "LlmSanitizeRequestGuardrail",
     "LlmSanitizeResponseGuardrail",
     "LlmCodecIdentity",
-    "LlmSanitizeContext",
+    "LlmSanitizeRequestContext",
+    "LlmSanitizeResponseContext",
+    "LlmSanitizeRequestCodec",
+    "LlmSanitizeResponseCodec",
     "LlmConditionalExecutionGuardrail",
     "ToolRequestIntercept",
     "ToolExecutionIntercept",

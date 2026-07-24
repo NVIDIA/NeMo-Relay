@@ -69,11 +69,18 @@ pub enum LlmCodecIdentity {
     Opaque,
 }
 
-/// Per-call codec context delivered to LLM sanitizer callbacks.
-#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
-pub struct LlmSanitizeContext {
+/// Per-call request codec context delivered to an LLM sanitizer.
+pub struct LlmSanitizeRequestContext<'a> {
     /// Identity of the active codec.
     pub codec: LlmCodecIdentity,
+    resolved: Option<LlmSanitizeRequestCodec<'a>>,
+}
+
+/// Per-call response codec context delivered to an LLM sanitizer.
+pub struct LlmSanitizeResponseContext<'a> {
+    /// Identity of the active codec.
+    pub codec: LlmCodecIdentity,
+    resolved: Option<LlmSanitizeResponseCodec<'a>>,
 }
 
 /// Status codes returned by stable native ABI functions.
@@ -111,6 +118,20 @@ pub struct NemoRelayNativeString {
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
+/// Opaque callback-scoped request codec capability owned by the host.
+#[repr(C)]
+pub struct NemoRelayNativeLlmRequestCodec {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Opaque callback-scoped response codec capability owned by the host.
+#[repr(C)]
+pub struct NemoRelayNativeLlmResponseCodec {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
 /// Discriminator for the codec supplied to an LLM sanitizer over the native ABI.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,11 +154,106 @@ pub enum NemoRelayNativeLlmCodecKind {
 /// stable built-in codec IDs; for `Runtime`, it is the registered codec ID.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NemoRelayNativeLlmSanitizeContext {
+pub struct NemoRelayNativeLlmSanitizeRequestContext {
     /// Discriminator for the active codec.
     pub codec_kind: NemoRelayNativeLlmCodecKind,
     /// Optional borrowed codec identifier.
     pub codec_id: *const NemoRelayNativeString,
+    /// Borrowed request codec capability, or null when no codec is active.
+    pub codec: *const NemoRelayNativeLlmRequestCodec,
+}
+
+/// Per-call response sanitizer context passed over the native ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NemoRelayNativeLlmSanitizeResponseContext {
+    /// Discriminator for the active codec.
+    pub codec_kind: NemoRelayNativeLlmCodecKind,
+    /// Optional borrowed codec identifier.
+    pub codec_id: *const NemoRelayNativeString,
+    /// Borrowed response codec capability, or null when no codec is active.
+    pub codec: *const NemoRelayNativeLlmResponseCodec,
+}
+
+/// Safe callback-scoped request codec facade for typed native plugins.
+pub struct LlmSanitizeRequestCodec<'a> {
+    host: NemoRelayNativeHostApiV1,
+    handle: *const NemoRelayNativeLlmRequestCodec,
+    _lifetime: PhantomData<&'a NemoRelayNativeLlmRequestCodec>,
+}
+
+impl LlmSanitizeRequestCodec<'_> {
+    /// Decode an opaque request into Relay's normalized request model.
+    pub fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
+        native_codec_call(&self.host, |out| unsafe {
+            let request = HostString::from_json(&self.host, request)
+                .ok_or_else(|| "failed to serialize LLM request".to_string())?;
+            codec_status(
+                &self.host,
+                (self.host.llm_request_codec_decode)(self.handle, request.as_ptr(), out),
+            )
+        })
+    }
+
+    /// Encode normalized changes onto the original opaque request.
+    pub fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> Result<LlmRequest> {
+        native_codec_call(&self.host, |out| unsafe {
+            let annotated = HostString::from_json(&self.host, annotated)
+                .ok_or_else(|| "failed to serialize annotated request".to_string())?;
+            let original = HostString::from_json(&self.host, original)
+                .ok_or_else(|| "failed to serialize original request".to_string())?;
+            codec_status(
+                &self.host,
+                (self.host.llm_request_codec_encode)(
+                    self.handle,
+                    annotated.as_ptr(),
+                    original.as_ptr(),
+                    out,
+                ),
+            )
+        })
+    }
+}
+
+/// Safe callback-scoped response codec facade for typed native plugins.
+pub struct LlmSanitizeResponseCodec<'a> {
+    host: NemoRelayNativeHostApiV1,
+    handle: *const NemoRelayNativeLlmResponseCodec,
+    _lifetime: PhantomData<&'a NemoRelayNativeLlmResponseCodec>,
+}
+
+impl LlmSanitizeResponseCodec<'_> {
+    /// Decode an opaque response into Relay's normalized response model.
+    pub fn decode(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
+        native_codec_call(&self.host, |out| unsafe {
+            let response = HostString::from_json(&self.host, response)
+                .ok_or_else(|| "failed to serialize LLM response".to_string())?;
+            codec_status(
+                &self.host,
+                (self.host.llm_response_codec_decode)(self.handle, response.as_ptr(), out),
+            )
+        })
+    }
+}
+
+impl<'a> LlmSanitizeRequestContext<'a> {
+    /// Resolve the active request codec capability.
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<&LlmSanitizeRequestCodec<'a>> {
+        self.resolved.as_ref()
+    }
+}
+
+impl<'a> LlmSanitizeResponseContext<'a> {
+    /// Resolve the active response codec capability.
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<&LlmSanitizeResponseCodec<'a>> {
+        self.resolved.as_ref()
+    }
 }
 
 /// Opaque plugin registration context borrowed from the host during registration.
@@ -313,7 +429,7 @@ pub type NemoRelayNativeToolExecutionCb = unsafe extern "C" fn(
 pub type NemoRelayNativeLlmSanitizeRequestCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
-    context: NemoRelayNativeLlmSanitizeContext,
+    context: NemoRelayNativeLlmSanitizeRequestContext,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
@@ -322,7 +438,7 @@ pub type NemoRelayNativeLlmSanitizeRequestCb = unsafe extern "C" fn(
 pub type NemoRelayNativeLlmSanitizeResponseCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     payload_json: *const NemoRelayNativeString,
-    context: NemoRelayNativeLlmSanitizeContext,
+    context: NemoRelayNativeLlmSanitizeResponseContext,
     out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
@@ -405,6 +521,25 @@ pub struct NemoRelayNativeHostApiV1 {
     pub last_error_clear: unsafe extern "C" fn(),
     /// Sets the host thread-local native ABI error message.
     pub last_error_set: unsafe extern "C" fn(message: *const NemoRelayNativeString),
+    /// Decodes an LLM request through a callback-scoped codec capability.
+    pub llm_request_codec_decode: unsafe extern "C" fn(
+        codec: *const NemoRelayNativeLlmRequestCodec,
+        request_json: *const NemoRelayNativeString,
+        out: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Encodes normalized request changes through a callback-scoped codec capability.
+    pub llm_request_codec_encode: unsafe extern "C" fn(
+        codec: *const NemoRelayNativeLlmRequestCodec,
+        annotated_json: *const NemoRelayNativeString,
+        original_json: *const NemoRelayNativeString,
+        out: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Decodes an LLM response through a callback-scoped codec capability.
+    pub llm_response_codec_decode: unsafe extern "C" fn(
+        codec: *const NemoRelayNativeLlmResponseCodec,
+        response_json: *const NemoRelayNativeString,
+        out: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
     /// Registers an event subscriber through the plugin context.
     pub plugin_context_register_subscriber: unsafe extern "C" fn(
         ctx: *mut NemoRelayNativePluginContext,
@@ -1597,7 +1732,10 @@ impl<'a> PluginContext<'a> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync + 'static,
+        F: for<'ctx> Fn(LlmRequest, LlmSanitizeRequestContext<'ctx>) -> Option<LlmRequest>
+            + Send
+            + Sync
+            + 'static,
     {
         let user_data = typed_callback_user_data(self.host, callback);
         let status = unsafe {
@@ -1625,7 +1763,10 @@ impl<'a> PluginContext<'a> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync + 'static,
+        F: for<'ctx> Fn(Json, LlmSanitizeResponseContext<'ctx>) -> Option<Json>
+            + Send
+            + Sync
+            + 'static,
     {
         let user_data = typed_callback_user_data(self.host, callback);
         let status = unsafe {
@@ -1726,7 +1867,7 @@ impl<'a> PluginContext<'a> {
 
     /// Registers a typed LLM stream execution intercept.
     ///
-    /// Native ABI v1 represents stream execution as one JSON result. The host
+    /// Native ABI v2 represents stream execution as one JSON result. The host
     /// wraps that result as a one-chunk stream.
     pub fn register_llm_stream_execution_intercept<F>(
         &mut self,
@@ -2345,11 +2486,14 @@ where
 unsafe extern "C" fn typed_llm_sanitize_request_trampoline<F>(
     user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
-    context: NemoRelayNativeLlmSanitizeContext,
+    context: NemoRelayNativeLlmSanitizeRequestContext,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus
 where
-    F: Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync + 'static,
+    F: for<'a> Fn(LlmRequest, LlmSanitizeRequestContext<'a>) -> Option<LlmRequest>
+        + Send
+        + Sync
+        + 'static,
 {
     if user_data.is_null() || out_request_json.is_null() {
         return NemoRelayStatus::NullPointer;
@@ -2357,7 +2501,7 @@ where
     unsafe { *out_request_json = ptr::null_mut() };
     let state = unsafe { &*(user_data as *const TypedCallback<F>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let context = llm_sanitize_context_from_native(&state.host, context)?;
+        let context = llm_sanitize_request_context_from_native(&state.host, context)?;
         let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
         match (state.callback)(request, context) {
             Some(output) => {
@@ -2376,11 +2520,11 @@ where
 unsafe extern "C" fn typed_llm_sanitize_response_trampoline<F>(
     user_data: *mut c_void,
     payload_json: *const NemoRelayNativeString,
-    context: NemoRelayNativeLlmSanitizeContext,
+    context: NemoRelayNativeLlmSanitizeResponseContext,
     out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus
 where
-    F: Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync + 'static,
+    F: for<'a> Fn(Json, LlmSanitizeResponseContext<'a>) -> Option<Json> + Send + Sync + 'static,
 {
     if user_data.is_null() || out_json.is_null() {
         return NemoRelayStatus::NullPointer;
@@ -2388,7 +2532,7 @@ where
     unsafe { *out_json = ptr::null_mut() };
     let state = unsafe { &*(user_data as *const TypedCallback<F>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let context = llm_sanitize_context_from_native(&state.host, context)?;
+        let context = llm_sanitize_response_context_from_native(&state.host, context)?;
         let payload: Json = read_json_value(&state.host, payload_json, "LLM response")?;
         match (state.callback)(payload, context) {
             Some(output) => Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json)),
@@ -2706,6 +2850,29 @@ impl Drop for HostString<'_> {
     }
 }
 
+fn codec_status(host: &NemoRelayNativeHostApiV1, status: NemoRelayStatus) -> Result<()> {
+    if status == NemoRelayStatus::Ok {
+        Ok(())
+    } else {
+        Err(status_error(host, status, "LLM codec operation"))
+    }
+}
+
+fn native_codec_call<T: DeserializeOwned>(
+    host: &NemoRelayNativeHostApiV1,
+    call: impl FnOnce(*mut *mut NemoRelayNativeString) -> Result<()>,
+) -> Result<T> {
+    let mut out = ptr::null_mut();
+    call(&mut out)?;
+    if out.is_null() {
+        return Err("LLM codec operation returned null".into());
+    }
+    let out = HostString { host, ptr: out };
+    let text = read_host_string(host, out.as_ptr())
+        .map_err(|_| "LLM codec operation returned invalid UTF-8".to_string())?;
+    serde_json::from_str(&text).map_err(|error| format!("invalid LLM codec result: {error}"))
+}
+
 struct OptionalHostJson<'a>(Option<HostString<'a>>);
 
 impl<'a> OptionalHostJson<'a> {
@@ -2846,15 +3013,16 @@ fn read_optional_json_value<T: DeserializeOwned>(
     }
 }
 
-fn llm_sanitize_context_from_native(
+fn llm_codec_identity_from_native(
     host: &NemoRelayNativeHostApiV1,
-    context: NemoRelayNativeLlmSanitizeContext,
-) -> std::result::Result<LlmSanitizeContext, NemoRelayStatus> {
-    let codec = match context.codec_kind {
+    codec_kind: NemoRelayNativeLlmCodecKind,
+    codec_id: *const NemoRelayNativeString,
+) -> std::result::Result<LlmCodecIdentity, NemoRelayStatus> {
+    let codec = match codec_kind {
         NemoRelayNativeLlmCodecKind::None => LlmCodecIdentity::None,
         NemoRelayNativeLlmCodecKind::Opaque => LlmCodecIdentity::Opaque,
         NemoRelayNativeLlmCodecKind::BuiltIn => {
-            let id = read_required_host_string(host, context.codec_id, "LLM built-in codec ID")?;
+            let id = read_required_host_string(host, codec_id, "LLM built-in codec ID")?;
             let builtin = match id.as_str() {
                 "openai_chat" => BuiltinLlmCodec::OpenAiChat,
                 "openai_responses" => BuiltinLlmCodec::OpenAiResponses,
@@ -2867,10 +3035,36 @@ fn llm_sanitize_context_from_native(
             LlmCodecIdentity::BuiltIn(builtin)
         }
         NemoRelayNativeLlmCodecKind::Runtime => LlmCodecIdentity::Runtime(
-            read_required_host_string(host, context.codec_id, "LLM runtime codec ID")?,
+            read_required_host_string(host, codec_id, "LLM runtime codec ID")?,
         ),
     };
-    Ok(LlmSanitizeContext { codec })
+    Ok(codec)
+}
+
+fn llm_sanitize_request_context_from_native<'a>(
+    host: &NemoRelayNativeHostApiV1,
+    context: NemoRelayNativeLlmSanitizeRequestContext,
+) -> std::result::Result<LlmSanitizeRequestContext<'a>, NemoRelayStatus> {
+    let codec = llm_codec_identity_from_native(host, context.codec_kind, context.codec_id)?;
+    let resolved = (!context.codec.is_null()).then_some(LlmSanitizeRequestCodec {
+        host: *host,
+        handle: context.codec,
+        _lifetime: PhantomData,
+    });
+    Ok(LlmSanitizeRequestContext { codec, resolved })
+}
+
+fn llm_sanitize_response_context_from_native<'a>(
+    host: &NemoRelayNativeHostApiV1,
+    context: NemoRelayNativeLlmSanitizeResponseContext,
+) -> std::result::Result<LlmSanitizeResponseContext<'a>, NemoRelayStatus> {
+    let codec = llm_codec_identity_from_native(host, context.codec_kind, context.codec_id)?;
+    let resolved = (!context.codec.is_null()).then_some(LlmSanitizeResponseCodec {
+        host: *host,
+        handle: context.codec,
+        _lifetime: PhantomData,
+    });
+    Ok(LlmSanitizeResponseContext { codec, resolved })
 }
 
 enum HostStringReadError {

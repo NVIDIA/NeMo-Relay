@@ -76,7 +76,16 @@ from nemo_relay._native import (
     LLMRequestInterceptOutcome as LLMRequestInterceptOutcome,
 )
 from nemo_relay._native import (
-    LlmSanitizeContext as LlmSanitizeContext,
+    LlmSanitizeRequestCodec as LlmSanitizeRequestCodec,
+)
+from nemo_relay._native import (
+    LlmSanitizeRequestContext as LlmSanitizeRequestContext,
+)
+from nemo_relay._native import (
+    LlmSanitizeResponseCodec as LlmSanitizeResponseCodec,
+)
+from nemo_relay._native import (
+    LlmSanitizeResponseContext as LlmSanitizeResponseContext,
 )
 from nemo_relay._native import (
     MarkEvent as MarkEvent,
@@ -178,29 +187,27 @@ Arguments:
 Return:
     ``None`` to allow execution, or a rejection message to block it.
 """
-_LlmSanitizeRequestWithContext: TypeAlias = Callable[[LLMRequest, "LlmSanitizeContext"], Optional[LLMRequest]]
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest] | _LlmSanitizeRequestWithContext
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeRequestContext"], Optional[LLMRequest]]
 """Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 
 Arguments:
     The current LLM request and a context object containing a tagged ``codec``
     identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
-    ``builtin`` and ``runtime`` identities include ``id``. One-argument
-    callbacks remain supported for compatibility.
+    ``builtin`` and ``runtime`` identities include ``id``. Use
+    ``context.resolve_request_codec()`` to access the active in-process codec.
 
 Return:
     Request object recorded on the emitted lifecycle event, or ``None`` to omit
     the LLM observability payload and annotation.
 """
-_LlmSanitizeResponseWithContext: TypeAlias = Callable[[JsonObject, "LlmSanitizeContext"], Optional[JsonObject]]
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject] | _LlmSanitizeResponseWithContext
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject, "LlmSanitizeResponseContext"], Optional[JsonObject]]
 """Guardrail callback that sanitizes an emitted JSON LLM response payload.
 
 Arguments:
     The response object and a context object containing a tagged ``codec``
     identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
-    ``builtin`` and ``runtime`` identities include ``id``. One-argument
-    callbacks remain supported for compatibility.
+    ``builtin`` and ``runtime`` identities include ``id``. Use
+    ``context.resolve_response_codec()`` to access the active in-process codec.
 
 Return:
     Response object recorded on the emitted lifecycle event, or ``None`` to

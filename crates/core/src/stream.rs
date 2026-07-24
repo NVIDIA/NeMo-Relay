@@ -33,10 +33,10 @@ use std::task::{Context, Poll};
 use tokio_stream::Stream;
 
 use crate::api::event::{BaseEvent, MarkEvent};
+use crate::api::llm::LlmHandle;
 use crate::api::llm::emit_optimization_marks;
-use crate::api::llm::{LlmHandle, sanitize_context_for_response_codec};
 use crate::api::optimization::finalize_optimization_summary;
-use crate::api::runtime::LlmSanitizeContext;
+use crate::api::runtime::LlmSanitizeResponseContext;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
@@ -72,7 +72,7 @@ pub struct LlmStreamWrapper {
     collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
     finalizer: Option<Box<dyn FnOnce() -> Json + Send>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
-    sanitize_context: LlmSanitizeContext,
+    sanitize_context: LlmSanitizeResponseContext,
     metadata: Option<Json>,
     subscribers: Vec<EventSubscriberFn>,
     chunk_index: u64,
@@ -142,7 +142,8 @@ impl LlmStreamWrapper {
         subscribers: Vec<EventSubscriberFn>,
     ) -> Self {
         let scope_stack = handle.captured_scope_stack().clone();
-        let sanitize_context = sanitize_context_for_response_codec(response_codec.as_deref());
+        let sanitize_context =
+            LlmSanitizeResponseContext::for_response_codec(response_codec.clone());
         Self {
             inner,
             handle,

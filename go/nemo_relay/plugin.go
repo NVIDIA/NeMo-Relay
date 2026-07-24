@@ -10,7 +10,10 @@ package nemo_relay
 
 typedef struct FfiPluginContext FfiPluginContext;
 typedef struct FfiPluginActivation FfiPluginActivation;
-typedef struct NemoRelayLlmSanitizeContext { uint32_t codec_kind; const char* codec_id; } NemoRelayLlmSanitizeContext;
+typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
+typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
+typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeRequestCodec* codec; } NemoRelayLlmSanitizeRequestContext;
+typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayPluginValidateCb)(void* user_data, const char* plugin_config_json);
@@ -19,8 +22,8 @@ typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const void* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const void* event, const char* fields_json);
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, const char* args_json);
-typedef void* (*NemoRelayLlmSanitizeRequestCb)(void* user_data, const void* request, NemoRelayLlmSanitizeContext context);
-typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeContext context);
+typedef void* (*NemoRelayLlmSanitizeRequestCb)(void* user_data, const void* request, NemoRelayLlmSanitizeRequestContext context);
+typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeResponseContext context);
 typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const void* request);
 typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* name, const void* request, const char* annotated_json, char** out_outcome_json);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
@@ -63,8 +66,8 @@ extern char* goEventSanitizeTrampoline(void*, const void*, const char*);
 extern void goFreeTrampoline(void*);
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
-extern void* goLlmRequestTrampoline(void*, const void*, NemoRelayLlmSanitizeContext);
-extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeContext);
+extern void* goLlmRequestTrampoline(void*, const void*, NemoRelayLlmSanitizeRequestContext);
+extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeResponseContext);
 extern char* goLlmConditionalTrampoline(void*, const void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
 extern int32_t goLlmRequestInterceptTrampoline(void*, const char*, const void*, const char*, char**);

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 
+use super::codecs::{PyLlmSanitizeRequestCodec, PyLlmSanitizeResponseCodec};
 use super::{
     AnnotatedLLMRequest, Bound, CoreScopeType, FlowResult, LlmAttributes, LlmCodecIdentity,
     LlmHandle, LlmRequest, PyAnnotatedLLMRequest, PyAny, PyErr, PyRef, PyResult, Python,
@@ -13,6 +14,7 @@ use super::{
 };
 use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 
 /// Structured identity of the codec active during LLM sanitization.
@@ -45,20 +47,51 @@ impl PyLlmCodecIdentity {
     }
 }
 
-/// Structured per-call context delivered to LLM sanitizer callbacks.
-#[pyclass(name = "LlmSanitizeContext", frozen)]
-pub struct PyLlmSanitizeContext {
-    pub(crate) codec: LlmCodecIdentity,
+/// Structured per-call context delivered to LLM request sanitizer callbacks.
+#[pyclass(name = "LlmSanitizeRequestContext", frozen)]
+pub struct PyLlmSanitizeRequestContext {
+    pub(crate) inner: LlmSanitizeRequestContext,
 }
 
 #[pymethods]
-impl PyLlmSanitizeContext {
+impl PyLlmSanitizeRequestContext {
     /// The active codec identity for this request or response payload.
     #[getter]
     fn codec(&self) -> PyLlmCodecIdentity {
         PyLlmCodecIdentity {
-            inner: self.codec.clone(),
+            inner: self.inner.codec.clone(),
         }
+    }
+
+    /// Resolve the active request codec.
+    fn resolve_codec(&self) -> Option<PyLlmSanitizeRequestCodec> {
+        self.inner
+            .resolve_codec()
+            .map(|inner| PyLlmSanitizeRequestCodec { inner })
+    }
+}
+
+/// Structured per-call context delivered to LLM response sanitizer callbacks.
+#[pyclass(name = "LlmSanitizeResponseContext", frozen)]
+pub struct PyLlmSanitizeResponseContext {
+    pub(crate) inner: LlmSanitizeResponseContext,
+}
+
+#[pymethods]
+impl PyLlmSanitizeResponseContext {
+    /// The active codec identity for this request or response payload.
+    #[getter]
+    fn codec(&self) -> PyLlmCodecIdentity {
+        PyLlmCodecIdentity {
+            inner: self.inner.codec.clone(),
+        }
+    }
+
+    /// Resolve the active response codec.
+    fn resolve_codec(&self) -> Option<PyLlmSanitizeResponseCodec> {
+        self.inner
+            .resolve_codec()
+            .map(|inner| PyLlmSanitizeResponseCodec { inner })
     }
 }
 

@@ -282,6 +282,102 @@ func TestLlmCallExecuteWithRequestAndResponseCodecs(t *testing.T) {
 	}
 }
 
+func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
+	const requestGuard = "go_llm_resolved_request_codec"
+	const responseGuard = "go_llm_resolved_response_codec"
+	_ = DeregisterLlmSanitizeRequestGuardrail(requestGuard)
+	_ = DeregisterLlmSanitizeResponseGuardrail(responseGuard)
+	defer DeregisterLlmSanitizeRequestGuardrail(requestGuard)
+	defer DeregisterLlmSanitizeResponseGuardrail(responseGuard)
+
+	var requestResolved, responseResolved bool
+	var retainedRequestCodec *LLMRequestSanitizeCodec
+	var retainedResponseCodec *LLMResponseSanitizeCodec
+	var retainedRequest LLMRequestDTO
+	if err := RegisterLlmSanitizeRequestGuardrail(
+		requestGuard,
+		0,
+		func(request LLMRequestDTO, context LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+			if context.Codec.CodecKind != LLMCodecOpaque ||
+				context.Codec.CodecID != nil {
+				t.Fatalf("unexpected request codec identity: %#v", context.Codec)
+			}
+			codec := context.ResolveCodec()
+			if codec == nil {
+				t.Fatal("active request codec did not resolve")
+			}
+			retainedRequestCodec = codec
+			retainedRequest = request
+			annotated, err := codec.Decode(request)
+			if err != nil {
+				t.Fatalf("request codec decode failed: %v", err)
+			}
+			encoded, err := codec.Encode(annotated, request)
+			if err != nil {
+				t.Fatalf("request codec encode failed: %v", err)
+			}
+			requestResolved = true
+			return encoded, false
+		},
+	); err != nil {
+		t.Fatalf("request sanitizer registration failed: %v", err)
+	}
+	if err := RegisterLlmSanitizeResponseGuardrail(
+		responseGuard,
+		0,
+		func(response json.RawMessage, context LLMSanitizeResponseContext) (json.RawMessage, bool) {
+			codec := context.ResolveCodec()
+			if codec == nil {
+				t.Fatal("active response codec did not resolve")
+			}
+			retainedResponseCodec = codec
+			if _, err := codec.Decode(response); err != nil {
+				t.Fatalf("response codec decode failed: %v", err)
+			}
+			responseResolved = true
+			return response, false
+		},
+	); err != nil {
+		t.Fatalf("response sanitizer registration failed: %v", err)
+	}
+
+	response := json.RawMessage(`{
+		"id":"chatcmpl-test",
+		"model":"test-model",
+		"choices":[{
+			"index":0,
+			"message":{"role":"assistant","content":"ok"},
+			"finish_reason":"stop"
+		}]
+	}`)
+	_, err := LlmCallExecute(
+		"resolved_codec_llm",
+		makeRequest(),
+		func(json.RawMessage) (json.RawMessage, error) { return response, nil },
+		WithLLMCodec(llmRequestResponseCodec()),
+		WithLLMResponseCodec(NewOpenAIChatCodec()),
+	)
+	if err != nil {
+		t.Fatalf(llmCallExecuteFailed, err)
+	}
+	if !requestResolved || !responseResolved {
+		t.Fatalf(
+			"expected both codec capabilities to resolve, request=%t response=%t",
+			requestResolved,
+			responseResolved,
+		)
+	}
+	if _, err := retainedRequestCodec.Decode(retainedRequest); !errors.Is(err, ErrLLMSanitizeCodecExpired) {
+		t.Fatalf("retained request codec must expire after callback, got %v", err)
+	}
+	if _, err := retainedRequestCodec.Encode(json.RawMessage(`{}`), retainedRequest); !errors.Is(err, ErrLLMSanitizeCodecExpired) {
+		t.Fatalf("retained request codec encode must expire after callback, got %v", err)
+	}
+	if _, err := retainedResponseCodec.Decode(response); !errors.Is(err, ErrLLMSanitizeCodecExpired) {
+		t.Fatalf("retained response codec must expire after callback, got %v", err)
+	}
+}
+
 func llmRequestResponseCodec() CodecFunc {
 	return CodecFunc{
 		Decode: func(headersJSON, contentJSON json.RawMessage) (json.RawMessage, error) {
@@ -365,7 +461,7 @@ func requireLlmScopeEvents(t *testing.T, events []Event) (*ScopeEvent, *ScopeEve
 
 func TestLlmSanitizeRequestGuardrail(t *testing.T) {
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_san_req", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			return request, false
 		},
 	)
@@ -377,7 +473,7 @@ func TestLlmSanitizeRequestGuardrail(t *testing.T) {
 
 func TestLlmSanitizeResponseGuardrail(t *testing.T) {
 	err := RegisterLlmSanitizeResponseGuardrail("go_llm_san_resp", 1,
-		func(responseJSON json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) {
+		func(responseJSON json.RawMessage, _ LLMSanitizeResponseContext) (json.RawMessage, bool) {
 			return responseJSON, false
 		},
 	)
@@ -405,7 +501,7 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	defer DeregisterSubscriber("go_contextual_llm_sanitize_events")
 
 	if err := RegisterLlmSanitizeRequestGuardrail("go_contextual_llm_request", 1,
-		func(request LLMRequestDTO, context LLMSanitizeContext) (LLMRequestDTO, bool) {
+		func(request LLMRequestDTO, context LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			if context.Codec.CodecKind != LLMCodecNone {
 				t.Fatal("manual registration should not receive an active codec identity")
 			}
@@ -417,7 +513,7 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	defer DeregisterLlmSanitizeRequestGuardrail("go_contextual_llm_request")
 
 	if err := RegisterLlmSanitizeResponseGuardrail("go_contextual_llm_response", 1,
-		func(response json.RawMessage, context LLMSanitizeContext) (json.RawMessage, bool) {
+		func(response json.RawMessage, context LLMSanitizeResponseContext) (json.RawMessage, bool) {
 			if context.Codec.CodecID != nil {
 				t.Fatal("manual registration should not receive a codec ID")
 			}
@@ -463,12 +559,12 @@ func TestLlmConditionalExecutionGuardrail(t *testing.T) {
 
 func TestLlmDuplicateGuardrailFails(t *testing.T) {
 	RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			return request, false
 		},
 	)
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			return request, false
 		},
 	)
@@ -724,7 +820,7 @@ func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	defer DeregisterSubscriber("go_llm_san_evt_sub")
 
 	RegisterLlmSanitizeRequestGuardrail("go_llm_content_mod", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			var m map[string]interface{}
 			json.Unmarshal(request.Content, &m)
 			m["system_prompt_injected"] = true

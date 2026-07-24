@@ -76,7 +76,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, Protocol, TypeAlias, TypedDict, cast
+from typing import Any, ClassVar, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 grpc: Any = importlib.import_module("grpc")
@@ -112,61 +112,83 @@ class LlmCodecIdentity:
 
 
 @dataclass(frozen=True)
-class LlmSanitizeContext:
-    """Structured per-call context provided to an LLM sanitizer."""
+class LlmSanitizeRequestContext:
+    """Structured per-call context provided to an LLM request sanitizer."""
 
     codec: LlmCodecIdentity
+    _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
+    _capability_id: str | None = field(default=None, repr=False, compare=False)
+
+    def resolve_codec(self) -> "WorkerRequestCodec | None":
+        """Return the active request-codec proxy for this invocation."""
+        if self._runtime is None or self._capability_id is None:
+            return None
+        return WorkerRequestCodec(self._runtime, self._capability_id)
 
 
-def _llm_sanitize_context(invocation: pb.LlmInvocation) -> LlmSanitizeContext:
-    """Return stable contextual-sanitizer codec data from a worker invocation."""
-    if not invocation.HasField("codec_kind"):
-        return _legacy_llm_sanitize_context(invocation)
+@dataclass(frozen=True)
+class LlmSanitizeResponseContext:
+    """Structured per-call context provided to an LLM response sanitizer."""
 
-    codec_id = invocation.codec_id if invocation.HasField("codec_id") else None
-    if invocation.codec_kind == pb.LLM_CODEC_KIND_NONE:
+    codec: LlmCodecIdentity
+    _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
+    _capability_id: str | None = field(default=None, repr=False, compare=False)
+
+    def resolve_codec(self) -> "WorkerResponseCodec | None":
+        """Return the active response-codec proxy for this invocation."""
+        if self._runtime is None or self._capability_id is None:
+            return None
+        return WorkerResponseCodec(self._runtime, self._capability_id)
+
+
+@dataclass(frozen=True)
+class WorkerRequestCodec:
+    """Invocation-scoped async proxy for an active request codec."""
+
+    _runtime: "PluginRuntime"
+    _capability_id: str
+
+    async def decode(self, request: LlmRequest) -> AnnotatedLlmRequest:
+        """Decode a wire request with the active host codec."""
+        return await self._runtime._decode_llm_codec_request(self._capability_id, request)
+
+    async def encode(self, annotated: AnnotatedLlmRequest, original: LlmRequest) -> LlmRequest:
+        """Encode an annotated request with the active host codec."""
+        return await self._runtime._encode_llm_codec_request(self._capability_id, annotated, original)
+
+
+@dataclass(frozen=True)
+class WorkerResponseCodec:
+    """Invocation-scoped async proxy for an active response codec."""
+
+    _runtime: "PluginRuntime"
+    _capability_id: str
+
+    async def decode(self, response: Json) -> Json:
+        """Decode a wire response with the active host codec."""
+        return await self._runtime._decode_llm_codec_response(self._capability_id, response)
+
+
+def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
+    """Return the codec identity from a worker invocation."""
+    context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
+    codec = context.codec if context is not None and context.HasField("codec") else None
+    codec_id = codec.id if codec is not None and codec.HasField("id") else None
+    codec_kind = codec.kind if codec is not None else pb.LLM_CODEC_KIND_NONE
+    if codec_kind == pb.LLM_CODEC_KIND_NONE:
         codec = LlmCodecIdentity("none")
-    elif invocation.codec_kind == pb.LLM_CODEC_KIND_BUILTIN and codec_id:
+    elif codec_kind == pb.LLM_CODEC_KIND_BUILTIN and codec_id:
         codec = LlmCodecIdentity("builtin", codec_id)
-    elif invocation.codec_kind == pb.LLM_CODEC_KIND_RUNTIME and codec_id:
+    elif codec_kind == pb.LLM_CODEC_KIND_RUNTIME and codec_id:
         codec = LlmCodecIdentity("runtime", codec_id)
     else:
         codec = LlmCodecIdentity("opaque")
-    return LlmSanitizeContext(codec)
+    return codec
 
 
-def _legacy_llm_sanitize_context(invocation: pb.LlmInvocation) -> LlmSanitizeContext:
-    """Adapt the legacy grpc-v1 codec fields when a host has not sent an identity."""
-    if not invocation.has_active_codec:
-        return LlmSanitizeContext(LlmCodecIdentity("none"))
-    codec_name = invocation.codec_name if invocation.HasField("codec_name") else None
-    if codec_name in {"openai_chat", "openai_responses", "anthropic_messages"}:
-        return LlmSanitizeContext(LlmCodecIdentity("builtin", codec_name))
-    return LlmSanitizeContext(LlmCodecIdentity("opaque"))
-
-
-def _llm_sanitizer_accepts_context(callback: object) -> bool:
-    """Return whether a sanitizer accepts payload and context.
-
-    Signature binding happens at registration time so invocation does not mask
-    callback ``TypeError`` exceptions as an arity fallback.
-    """
-    try:
-        signature = inspect.signature(cast(Callable[..., object], callback))
-    except (TypeError, ValueError) as exc:
-        raise WorkerSdkError(
-            "LLM sanitizer callback signature cannot be inspected; use a callable "
-            "that accepts `(payload)` or `(payload, context)`"
-        ) from exc
-    try:
-        signature.bind(None, None)
-    except TypeError:
-        try:
-            signature.bind(None)
-        except TypeError as exc:
-            raise WorkerSdkError("LLM sanitizer callback must accept `(payload)` or `(payload, context)`") from exc
-        return False
-    return True
+def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
+    context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
+    return context.codec_capability_id if context is not None and context.HasField("codec_capability_id") else None
 
 
 WORKER_PROTOCOL = "grpc-v1"
@@ -797,14 +819,12 @@ ToolExecutionCallback: TypeAlias = Callable[
     [str, Json, "ToolNext"],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
-LlmSanitizeRequestCallback: TypeAlias = (
-    Callable[[LlmRequest], LlmRequest | Awaitable[LlmRequest]]
-    | Callable[[LlmRequest, LlmSanitizeContext], LlmRequest | None | Awaitable[LlmRequest | None]]
-)
-LlmSanitizeResponseCallback: TypeAlias = (
-    Callable[[Json], Json | Awaitable[Json]]
-    | Callable[[Json, LlmSanitizeContext], Json | None | Awaitable[Json | None]]
-)
+LlmSanitizeRequestCallback: TypeAlias = Callable[
+    [LlmRequest, LlmSanitizeRequestContext], LlmRequest | None | Awaitable[LlmRequest | None]
+]
+LlmSanitizeResponseCallback: TypeAlias = Callable[
+    [Json, LlmSanitizeResponseContext], Json | None | Awaitable[Json | None]
+]
 LlmConditionalCallback: TypeAlias = Callable[[LlmRequest], str | None | Awaitable[str | None]]
 LlmRequestCallback: TypeAlias = Callable[
     [str, LlmRequest, AnnotatedLlmRequest | None],
@@ -1113,16 +1133,9 @@ class PluginContext:
             callback: Function receiving ``(request, context)`` and returning
                 the request recorded on the LLM start event, directly or
                 through an awaitable. Return ``None`` to omit observability.
-                Existing one-parameter callbacks remain supported.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(
-            name,
-            pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
-            priority,
-            False,
-            contextual=_llm_sanitizer_accepts_context(callback),
-        )
+        self._push_registration(name, pb.LLM_SANITIZE_REQUEST_GUARDRAIL, priority, False)
         self._handlers.llm_sanitize_requests[name] = callback
 
     def register_llm_sanitize_response_guardrail(
@@ -1138,17 +1151,10 @@ class PluginContext:
             name: Component-local registration name.
             callback: Function receiving ``(response, context)`` and returning
                 the value recorded on the LLM end event, directly or through an
-                awaitable. Return ``None`` to omit observability. Existing
-                one-parameter callbacks remain supported.
+                awaitable. Return ``None`` to omit observability.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(
-            name,
-            pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
-            priority,
-            False,
-            contextual=_llm_sanitizer_accepts_context(callback),
-        )
+        self._push_registration(name, pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, priority, False)
         self._handlers.llm_sanitize_responses[name] = callback
 
     def register_llm_conditional_execution_guardrail(
@@ -1242,9 +1248,7 @@ class PluginContext:
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(
-        self, name: str, surface: int, priority: int, break_chain: bool, *, contextual: bool = False
-    ) -> None:
+    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
@@ -1256,7 +1260,6 @@ class PluginContext:
                 surface=surface,
                 priority=priority,
                 break_chain=break_chain,
-                contextual=contextual,
             )
         )
 
@@ -1285,6 +1288,42 @@ class PluginRuntime:
         self._activation_id = activation_id
         self._auth_token = auth_token
         self._host_stub = host_stub
+
+    async def _decode_llm_codec_request(self, capability_id: str, request: LlmRequest) -> AnnotatedLlmRequest:
+        result = await self._host_stub.DecodeLlmCodecRequest(
+            pb.LlmCodecDecodeRequest(
+                activation_id=self._activation_id,
+                auth_token=self._auth_token,
+                codec_capability_id=capability_id,
+                request=_json_envelope(LLM_REQUEST_SCHEMA, request),
+            )
+        )
+        return _json_result_to_value(result, ANNOTATED_LLM_REQUEST_SCHEMA)
+
+    async def _encode_llm_codec_request(
+        self, capability_id: str, annotated: AnnotatedLlmRequest, original: LlmRequest
+    ) -> LlmRequest:
+        result = await self._host_stub.EncodeLlmCodecRequest(
+            pb.LlmCodecEncodeRequest(
+                activation_id=self._activation_id,
+                auth_token=self._auth_token,
+                codec_capability_id=capability_id,
+                annotated_request=_json_envelope(ANNOTATED_LLM_REQUEST_SCHEMA, annotated),
+                original_request=_json_envelope(LLM_REQUEST_SCHEMA, original),
+            )
+        )
+        return _json_result_to_value(result, LLM_REQUEST_SCHEMA)
+
+    async def _decode_llm_codec_response(self, capability_id: str, response: Json) -> Json:
+        result = await self._host_stub.DecodeLlmCodecResponse(
+            pb.LlmCodecDecodeResponse(
+                activation_id=self._activation_id,
+                auth_token=self._auth_token,
+                codec_capability_id=capability_id,
+                response=_json_envelope(JSON_SCHEMA, response),
+            )
+        )
+        return _json_result_to_value(result)
 
     async def emit_mark(
         self,
@@ -2064,10 +2103,17 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
         raise WorkerSdkError(f"unsupported LLM registration surface {request.surface}")
 
     async def _invoke_llm_sanitizer(self, callback: Any, payload: Any, request: Any) -> Any:
-        if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
-            result = await _maybe_await(callback(payload, _llm_sanitize_context(request.llm)))
-            return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
-        return _json_response(await _maybe_await(callback(payload)))
+        context = (
+            LlmSanitizeRequestContext(
+                _llm_codec_identity(request.llm), self._runtime, _llm_codec_capability(request.llm)
+            )
+            if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL
+            else LlmSanitizeResponseContext(
+                _llm_codec_identity(request.llm), self._runtime, _llm_codec_capability(request.llm)
+            )
+        )
+        result = await _maybe_await(callback(payload, context))
+        return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
 
     def _start_invocation(
         self,
@@ -2101,12 +2147,6 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             return handlers[name]
         except KeyError as exc:
             raise WorkerSdkError(f"handler {name!r} is not registered") from exc
-
-    def _is_contextual_llm_sanitizer(self, name: str, surface: int) -> bool:
-        return any(
-            registration.local_name == name and registration.surface == surface and registration.contextual
-            for registration in self._handlers.registrations
-        )
 
 
 def _plugin_id(plugin: _SupportsWorkerPlugin) -> str:
@@ -2221,10 +2261,10 @@ def _json_response(value: Json) -> Any:
     return pb.InvokeResponse(json=pb.JsonResult(value=_json_envelope(JSON_SCHEMA, value)))
 
 
-def _json_result_to_value(result: Any) -> Json:
+def _json_result_to_value(result: Any, expected_schema: str = JSON_SCHEMA) -> Json:
     if result.HasField("error"):
         raise _worker_error_to_sdk(result.error)
-    return _decode_required_envelope(result.value, "json result")
+    return _decode_required_envelope(result.value, "json result", expected_schema)
 
 
 def _stream_chunk_to_value(chunk: Any) -> Json:

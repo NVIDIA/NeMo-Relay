@@ -61,22 +61,26 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         let runtime = ctx
             .runtime()
             .ok_or_else(|| WorkerSdkError::Callback("runtime handle missing".into()))?;
-        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| {
-            mark_event_fields(fields, "worker_plugin_mark")
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| async move {
+            Ok(mark_event_fields(fields, "worker_plugin_mark"))
         });
-        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize_data", 1, |_, mut fields| {
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize_data", 1, |_, mut fields| async move {
             fields.data = Some(json!({"worker_plugin_mark_data": true}));
-            fields
+            Ok(fields)
         });
         ctx.register_scope_sanitize_start_guardrail(
             "fixture_scope_start_sanitize",
             0,
-            |_, fields| mark_event_fields(fields, "worker_plugin_scope_start"),
+            |_, fields| async move {
+                Ok(mark_event_fields(fields, "worker_plugin_scope_start"))
+            },
         );
         ctx.register_scope_sanitize_end_guardrail(
             "fixture_scope_end_sanitize",
             0,
-            |_, fields| mark_event_fields(fields, "worker_plugin_scope_end"),
+            |_, fields| async move {
+                Ok(mark_event_fields(fields, "worker_plugin_scope_end"))
+            },
         );
         register_fixture_subscriber(ctx, runtime.clone());
         register_fixture_tool_hooks(
@@ -135,12 +139,16 @@ fn register_fixture_tool_hooks(
     ctx.register_tool_sanitize_request_guardrail(
         "fixture_tool_sanitize_request",
         0,
-        |_name, args| mark_json(args, "worker_plugin_tool_sanitize_request"),
+        |_name, args| async move {
+            Ok(mark_json(args, "worker_plugin_tool_sanitize_request"))
+        },
     );
     ctx.register_tool_sanitize_response_guardrail(
         "fixture_tool_sanitize_response",
         0,
-        |_name, result| mark_json(result, "worker_plugin_tool_sanitize_response"),
+        |_name, result| async move {
+            Ok(mark_json(result, "worker_plugin_tool_sanitize_response"))
+        },
     );
     ctx.register_tool_conditional_execution_guardrail(
         "fixture_tool_conditional",
@@ -198,12 +206,22 @@ fn register_fixture_llm_hooks(
     ctx.register_llm_sanitize_request_guardrail(
         "fixture_llm_sanitize_request",
         0,
-        |request, _context| Some(mark_llm_request(request, "worker_plugin_llm_sanitize_request")),
+        |request, _context| async move {
+            Ok(Some(mark_llm_request(
+                request,
+                "worker_plugin_llm_sanitize_request",
+            )))
+        },
     );
     ctx.register_llm_sanitize_response_guardrail(
         "fixture_llm_sanitize_response",
         0,
-        |response, _context| Some(mark_json(response, "worker_plugin_llm_sanitize_response")),
+        |response, _context| async move {
+            Ok(Some(mark_json(
+                response,
+                "worker_plugin_llm_sanitize_response",
+            )))
+        },
     );
     ctx.register_llm_conditional_execution_guardrail(
         "fixture_llm_conditional",

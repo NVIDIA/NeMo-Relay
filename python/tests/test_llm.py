@@ -116,7 +116,8 @@ class TestLLMAsync:
 
 class TestLLMGuardrails:
     def test_sanitize_request_guardrail(self):
-        def sanitizer(request):
+        def sanitizer(request, context):
+            del context
             # request is an LLMRequest object; must return a new LLMRequest
             headers = request.headers
             headers["X-Sanitized"] = "true"
@@ -126,7 +127,8 @@ class TestLLMGuardrails:
         guardrails.deregister_llm_sanitize_request("py_llm_san_req")
 
     def test_sanitize_response_guardrail(self):
-        def sanitizer(response):
+        def sanitizer(response, context):
+            del context
             # response is a plain dict
             response["cleaned"] = True
             return response
@@ -175,18 +177,18 @@ class TestLLMGuardrails:
         guardrails.deregister_llm_conditional_execution("py_llm_cond_direct")
 
     def test_duplicate_raises(self):
-        guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r: r)
+        guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r, context: r)
         with pytest.raises(RuntimeError):
-            guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r: r)
+            guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r, context: r)
         guardrails.deregister_llm_sanitize_request("py_llm_dup")
 
-    def test_sanitize_request_callable_error_falls_back_to_original_input(self):
+    def test_sanitize_request_callable_error_omits_observability_input(self):
         events = []
         subscribers.register("py_llm_sanitize_req_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
             "py_llm_sanitize_req_fail",
             1,
-            lambda request: raise_runtime_error("boom"),
+            lambda request, context: raise_runtime_error("boom"),
         )
         try:
             request = make_request()
@@ -200,16 +202,16 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_sub")
 
         start = _llm_event(events, "llm_sanitize_req_fail", "start")
-        request = make_request()
-        assert start.data == {"headers": request.headers, "content": request.content}
+        assert start.data is None
+        assert start.annotated_request is None
 
-    def test_sanitize_request_invalid_return_falls_back_to_original_input(self):
+    def test_sanitize_request_invalid_return_omits_observability_input(self):
         events = []
         subscribers.register("py_llm_sanitize_req_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
             "py_llm_sanitize_req_bad",
             1,
-            cast(guardrails.LlmSanitizeRequestGuardrail, lambda request: object()),
+            cast(guardrails.LlmSanitizeRequestGuardrail, lambda request, context: object()),
         )
         try:
             request = make_request()
@@ -223,16 +225,16 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_bad_sub")
 
         start = _llm_event(events, "llm_sanitize_req_bad", "start")
-        request = make_request()
-        assert start.data == {"headers": request.headers, "content": request.content}
+        assert start.data is None
+        assert start.annotated_request is None
 
-    def test_sanitize_response_callable_error_falls_back_to_original_output(self):
+    def test_sanitize_response_callable_error_omits_observability_output(self):
         events = []
         subscribers.register("py_llm_sanitize_resp_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
             "py_llm_sanitize_resp_fail",
             1,
-            lambda response: raise_runtime_error("boom"),
+            lambda response, context: raise_runtime_error("boom"),
         )
         try:
             handle = llm.call("llm_sanitize_resp_fail", make_request())
@@ -245,15 +247,16 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_resp_sub")
 
         end = _llm_event(events, "llm_sanitize_resp_fail", "end")
-        assert end.data == {"ok": True}
+        assert end.data is None
+        assert end.annotated_response is None
 
-    def test_sanitize_response_invalid_return_falls_back_to_original_output(self):
+    def test_sanitize_response_invalid_return_omits_observability_output(self):
         events = []
         subscribers.register("py_llm_sanitize_resp_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
             "py_llm_sanitize_resp_bad",
             1,
-            cast(guardrails.LlmSanitizeResponseGuardrail, lambda response: object()),
+            cast(guardrails.LlmSanitizeResponseGuardrail, lambda response, context: object()),
         )
         try:
             handle = llm.call("llm_sanitize_resp_bad", make_request())
@@ -266,7 +269,8 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_resp_bad_sub")
 
         end = _llm_event(events, "llm_sanitize_resp_bad", "end")
-        assert end.data == {"ok": True}
+        assert end.data is None
+        assert end.annotated_response is None
 
     def test_deregister_nonexistent(self):
         assert not guardrails.deregister_llm_sanitize_request("nope")

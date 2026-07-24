@@ -192,7 +192,7 @@ class RaisingResponseCodec:
         assert_eq!(
             llm_response(
                 json!({"ok": true}),
-                nemo_relay::api::runtime::LlmSanitizeContext::default()
+                nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
             ),
             Some(json!({"ok": true}))
         );

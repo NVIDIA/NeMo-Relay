@@ -5,8 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::runtime::{
-    BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeContext, NemoRelayContextState,
+    BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
+    NemoRelayContextState,
 };
+use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay_worker_proto::json_envelope;
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -14,10 +17,10 @@ use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
     EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, JsonEnvelope, JsonResult, LlmNextRequest, LlmRequestInterceptResult,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, Registration, ScopeContext,
-    ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck,
+    HealthResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest, LlmCodecDecodeResponse,
+    LlmCodecEncodeRequest, LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, Registration, ScopeContext, ScopeType as ProtoScopeType,
+    ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
 };
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -243,7 +246,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Subscriber as i32,
                 priority: 0,
                 break_chain: false,
-                contextual: false,
             }],
             error: None,
         },
@@ -259,7 +261,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: 999,
                 priority: 0,
                 break_chain: false,
-                contextual: false,
             }],
             error: None,
         },
@@ -279,7 +280,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Unspecified as i32,
                 priority: 0,
                 break_chain: false,
-                contextual: false,
             }],
             error: None,
         },
@@ -469,13 +469,10 @@ async fn callback_helpers_cover_worker_response_edges() {
     );
 
     let error = callback
-        .invoke_llm_request_json(
+        .invoke_llm_sanitize_request(
             "llm_json_invalid",
-            RegistrationSurface::LlmSanitizeRequestGuardrail,
-            "model",
             valid_llm_request(),
-            None,
-            None,
+            LlmSanitizeRequestContext::default(),
         )
         .expect_err("invalid LLM JSON result should fail");
     assert!(error.to_string().contains("invalid type"));
@@ -543,7 +540,7 @@ async fn callback_helpers_cover_worker_response_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
+async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
     enable_operational_logs();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let (callback, _shutdown) = fake_callback_service({
@@ -552,12 +549,17 @@ async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
             let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
                 request.payload
             else {
-                panic!("contextual LLM sanitizer must receive an LLM invocation");
+                panic!("LLM sanitizer must receive an LLM invocation");
+            };
+            let codec = match invocation.sanitize_context.as_ref() {
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
+                None => None,
             };
             seen.lock().unwrap().push((
                 request.registration_name,
-                invocation.codec_kind,
-                invocation.codec_id,
+                codec.map(|codec| codec.kind).unwrap_or(LlmCodecKind::None as i32),
+                codec.and_then(|codec| codec.id.clone()),
                 invocation.request.is_some(),
                 invocation.response.is_some(),
             ));
@@ -568,35 +570,29 @@ async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
     })
     .await;
 
-    let contexts = [
-        LlmSanitizeContext::default(),
-        LlmSanitizeContext {
-            codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
-        },
-        LlmSanitizeContext {
-            codec: LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
-        },
-        LlmSanitizeContext {
-            codec: LlmCodecIdentity::Opaque,
-        },
+    let identities = [
+        LlmCodecIdentity::None,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
+        LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
+        LlmCodecIdentity::Opaque,
     ];
-    for context in contexts {
+    for identity in identities {
         assert!(
             callback
-                .invoke_contextual_llm_request_json(
-                    "contextual_request",
+                .invoke_llm_sanitize_request(
+                    "request",
                     valid_llm_request(),
-                    context.clone(),
+                    LlmSanitizeRequestContext::with_identity(identity.clone()),
                 )
                 .expect("empty worker result must represent request omission")
                 .is_none()
         );
         assert!(
             callback
-                .invoke_contextual_llm_response_json(
-                    "contextual_response",
+                .invoke_llm_sanitize_response(
+                    "response",
                     json!({"secret": "value"}),
-                    context,
+                    LlmSanitizeResponseContext::with_identity(identity),
                 )
                 .expect("empty worker result must represent response omission")
                 .is_none()
@@ -608,57 +604,57 @@ async fn contextual_llm_worker_callbacks_forward_codec_context_and_omission() {
         seen,
         [
             (
-                "contextual_request".into(),
-                Some(LlmCodecKind::None as i32),
+                "request".into(),
+                LlmCodecKind::None as i32,
                 None,
                 true,
                 false,
             ),
             (
-                "contextual_response".into(),
-                Some(LlmCodecKind::None as i32),
+                "response".into(),
+                LlmCodecKind::None as i32,
                 None,
                 false,
                 true,
             ),
             (
-                "contextual_request".into(),
-                Some(LlmCodecKind::Builtin as i32),
+                "request".into(),
+                LlmCodecKind::Builtin as i32,
                 Some("openai_responses".into()),
                 true,
                 false,
             ),
             (
-                "contextual_response".into(),
-                Some(LlmCodecKind::Builtin as i32),
+                "response".into(),
+                LlmCodecKind::Builtin as i32,
                 Some("openai_responses".into()),
                 false,
                 true,
             ),
             (
-                "contextual_request".into(),
-                Some(LlmCodecKind::Runtime as i32),
+                "request".into(),
+                LlmCodecKind::Runtime as i32,
                 Some("com.example.chat.v1".into()),
                 true,
                 false,
             ),
             (
-                "contextual_response".into(),
-                Some(LlmCodecKind::Runtime as i32),
+                "response".into(),
+                LlmCodecKind::Runtime as i32,
                 Some("com.example.chat.v1".into()),
                 false,
                 true,
             ),
             (
-                "contextual_request".into(),
-                Some(LlmCodecKind::Opaque as i32),
+                "request".into(),
+                LlmCodecKind::Opaque as i32,
                 None,
                 true,
                 false,
             ),
             (
-                "contextual_response".into(),
-                Some(LlmCodecKind::Opaque as i32),
+                "response".into(),
+                LlmCodecKind::Opaque as i32,
                 None,
                 false,
                 true,
@@ -1294,24 +1290,24 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             tool_response
         );
         let entries = state.llm_sanitize_request_entries(&[]);
-        assert_eq!(
+        assert!(
             NemoRelayContextState::llm_sanitize_request_snapshot_chain(
                 llm_request.clone(),
-                crate::api::runtime::LlmSanitizeContext::default(),
+                crate::api::runtime::LlmSanitizeRequestContext::default(),
                 &entries,
             )
-            .expect("an empty sanitizer chain must retain the request"),
-            llm_request
+            .is_none(),
+            "a worker request sanitizer failure must omit the observability payload"
         );
         let entries = state.llm_sanitize_response_entries(&[]);
-        assert_eq!(
+        assert!(
             NemoRelayContextState::llm_sanitize_response_snapshot_chain(
                 llm_response.clone(),
-                crate::api::runtime::LlmSanitizeContext::default(),
+                crate::api::runtime::LlmSanitizeResponseContext::default(),
                 &entries,
             )
-            .expect("an empty sanitizer chain must retain the response"),
-            llm_response
+            .is_none(),
+            "a worker response sanitizer failure must omit the observability payload"
         );
     }
     crate::api::subscriber::flush_subscribers().expect("subscriber callback should flush");
@@ -1478,6 +1474,132 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             .expect("empty explicit stack id should run without binding"),
         7
     );
+}
+
+#[tokio::test]
+async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemeral() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let codec = Arc::new(OpenAIChatCodec);
+    let request_codec: Arc<dyn LlmCodec> = codec.clone();
+    let response_codec: Arc<dyn LlmResponseCodec> = codec.clone();
+    let request_capability = state.insert_request_codec(request_codec);
+    let response_capability = state.insert_response_codec(response_codec);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}],
+            "preserve": true
+        }),
+    };
+
+    let unauthorized = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: "wrong".into(),
+            codec_capability_id: request_capability.clone(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("wrong activation credentials must be rejected");
+    assert_eq!(unauthorized.code(), tonic::Code::PermissionDenied);
+
+    let forged = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: "codec-forged".into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("forged capability must be rejected");
+    assert_eq!(forged.code(), tonic::Code::NotFound);
+
+    let wrong_direction = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: response_capability.clone(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("response capability cannot decode requests");
+    assert_eq!(wrong_direction.code(), tonic::Code::InvalidArgument);
+
+    let decoded = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect("active request capability decodes")
+        .into_inner();
+    assert!(decoded.error.is_none());
+    let decoded = decoded.value.expect("decoded request value");
+    assert_eq!(decoded.schema, "nemo.relay.AnnotatedLlmRequest@2");
+    let annotated: AnnotatedLlmRequest = decode_json_envelope(&decoded).unwrap();
+    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+
+    let encoded = service
+        .encode_llm_codec_request(Request::new(LlmCodecEncodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            annotated_request: Some(
+                json_envelope("nemo.relay.AnnotatedLlmRequest@2", &annotated).unwrap(),
+            ),
+            original_request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect("active request capability encodes")
+        .into_inner();
+    assert!(encoded.error.is_none());
+    let encoded = encoded.value.expect("encoded request value");
+    assert_eq!(encoded.schema, "nemo.relay.LlmRequest@1");
+    let encoded: LlmRequest = decode_json_envelope(&encoded).unwrap();
+    assert_eq!(encoded.content["preserve"], json!(true));
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let decoded = service
+        .decode_llm_codec_response(Request::new(LlmCodecDecodeResponse {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: response_capability.clone(),
+            response: Some(json_envelope(JSON_SCHEMA, &response).unwrap()),
+        }))
+        .await
+        .expect("active response capability decodes")
+        .into_inner();
+    assert!(decoded.error.is_none());
+
+    state.remove_codec(&request_capability);
+    state.remove_codec(&response_capability);
+    let expired = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability,
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("removed capability must expire");
+    assert_eq!(expired.code(), tonic::Code::NotFound);
 }
 
 #[tokio::test]
@@ -1849,7 +1971,6 @@ fn registration(surface: RegistrationSurface, local_name: &str) -> Registration 
         surface: surface as i32,
         priority: 0,
         break_chain: false,
-        contextual: false,
     }
 }
 

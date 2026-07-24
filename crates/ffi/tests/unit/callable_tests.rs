@@ -152,7 +152,7 @@ unsafe extern "C" fn llm_request_intercept_cb(
 unsafe extern "C" fn llm_request_null_cb(
     _user_data: *mut libc::c_void,
     _request: *const FfiLLMRequest,
-    _context: NemoRelayLlmSanitizeContext,
+    _context: NemoRelayLlmSanitizeRequestContext,
 ) -> *mut FfiLLMRequest {
     std::ptr::null_mut()
 }
@@ -171,7 +171,7 @@ unsafe extern "C" fn llm_conditional_cb(
 unsafe extern "C" fn json_cb(
     _user_data: *mut libc::c_void,
     json: *const c_char,
-    _context: NemoRelayLlmSanitizeContext,
+    _context: NemoRelayLlmSanitizeResponseContext,
 ) -> *mut c_char {
     let mut value: Json =
         serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().unwrap()).unwrap();
@@ -387,7 +387,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     assert_eq!(
         sanitize_request(
             make_request(),
-            nemo_relay::api::runtime::LlmSanitizeContext::default(),
+            nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
         ),
         None
     );
@@ -407,7 +407,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     assert_eq!(
         wrapped_response(
             json!({"value": 2}),
-            nemo_relay::api::runtime::LlmSanitizeContext::default(),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
         )
         .unwrap()["wrapped"],
         json!(true)

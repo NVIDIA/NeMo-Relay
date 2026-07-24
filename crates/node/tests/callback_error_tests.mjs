@@ -83,7 +83,7 @@ describe('callback error helpers', () => {
     clearLastCallbackError();
   });
 
-  it('closed llm sanitize-request callbacks fall back to the original request and record the queue failure', () => {
+  it('closed llm sanitize-request callbacks omit the payload and record the queue failure', () => {
     const request = makeNative();
     const result = __testClosedLlmSanitizeRequestCallback(
       () => ({
@@ -91,12 +91,12 @@ describe('callback error helpers', () => {
       }),
       request,
     );
-    assert.deepEqual(result, request);
+    assert.equal(result, null);
     assert.match(getLastCallbackError() ?? '', /failed to queue JS LLM sanitize request callback/i);
     clearLastCallbackError();
   });
 
-  it('closed llm sanitize-response callbacks fall back to the original response and record the queue failure', () => {
+  it('closed llm sanitize-response callbacks omit the payload and record the queue failure', () => {
     const response = {
       ok: true,
     };
@@ -106,7 +106,7 @@ describe('callback error helpers', () => {
       }),
       response,
     );
-    assert.deepEqual(result, response);
+    assert.equal(result, null);
     assert.match(getLastCallbackError() ?? '', /failed to queue JS LLM sanitize response callback/i);
     clearLastCallbackError();
   });

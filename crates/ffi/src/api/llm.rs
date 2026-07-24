@@ -2,16 +2,108 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    Arc, FfiCodecHandle, FfiLLMHandle, FfiScopeHandle, FlowResult, LlmAttributes,
-    LlmExecutionNextFn, LlmRequest, LlmStreamExecutionNextFn, NemoRelayCodecDecodeFn,
-    NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayFinalizerCb, NemoRelayFreeFn,
-    NemoRelayLlmExecCb, NemoRelayStatus, TASK_SCOPE_STACK, c_char, c_str_to_json,
-    c_str_to_opt_json, c_str_to_string, clear_last_error, core_llm_api, current_scope_stack,
-    json_to_c_string, set_last_error, status_from_error, tokio_runtime,
-    unix_micros_to_opt_timestamp, wrap_codec_fn, wrap_collector_fn, wrap_finalizer_fn,
-    wrap_llm_exec_fn, wrap_llm_stream_exec_fn,
+    Arc, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest, FfiLlmSanitizeRequestCodec,
+    FfiLlmSanitizeResponseCodec, FfiScopeHandle, FlowResult, LlmAttributes, LlmExecutionNextFn,
+    LlmRequest, LlmStreamExecutionNextFn, NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn,
+    NemoRelayCollectorCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmExecCb,
+    NemoRelayStatus, TASK_SCOPE_STACK, c_char, c_str_to_json, c_str_to_opt_json, c_str_to_string,
+    clear_last_error, core_llm_api, current_scope_stack, json_to_c_string, set_last_error,
+    status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
+    wrap_collector_fn, wrap_finalizer_fn, wrap_llm_exec_fn, wrap_llm_stream_exec_fn,
 };
 use tokio_stream::StreamExt;
+
+/// Decode a request through a callback-scoped sanitizer codec capability.
+///
+/// The returned JSON string must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// Both pointers must be non-null and valid only during the sanitizer callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_sanitize_request_codec_decode(
+    codec: *const FfiLlmSanitizeRequestCodec,
+    request: *const FfiLLMRequest,
+) -> *mut c_char {
+    clear_last_error();
+    if codec.is_null() || request.is_null() {
+        set_last_error("null sanitizer request codec argument");
+        return std::ptr::null_mut();
+    }
+    match unsafe { &*codec }.0.decode(&unsafe { &*request }.0) {
+        Ok(annotated) => json_to_c_string(&serde_json::to_value(annotated).unwrap_or_default()),
+        Err(error) => {
+            set_last_error(&error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Encode normalized request changes through a callback-scoped codec capability.
+///
+/// # Safety
+/// All pointers must be non-null and valid only during the sanitizer callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_sanitize_request_codec_encode(
+    codec: *const FfiLlmSanitizeRequestCodec,
+    annotated_json: *const c_char,
+    original: *const FfiLLMRequest,
+) -> *mut FfiLLMRequest {
+    clear_last_error();
+    if codec.is_null() || annotated_json.is_null() || original.is_null() {
+        set_last_error("null sanitizer request codec argument");
+        return std::ptr::null_mut();
+    }
+    let annotated =
+        match c_str_to_json(annotated_json).and_then(|value| serde_json::from_value(value).ok()) {
+            Some(value) => value,
+            None => {
+                set_last_error("invalid annotated request JSON");
+                return std::ptr::null_mut();
+            }
+        };
+    match unsafe { &*codec }
+        .0
+        .encode(&annotated, &unsafe { &*original }.0)
+    {
+        Ok(request) => Box::into_raw(Box::new(FfiLLMRequest(request))),
+        Err(error) => {
+            set_last_error(&error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Decode a response through a callback-scoped sanitizer codec capability.
+///
+/// The returned JSON string must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// All pointers must be non-null and valid only during the sanitizer callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_sanitize_response_codec_decode(
+    codec: *const FfiLlmSanitizeResponseCodec,
+    response_json: *const c_char,
+) -> *mut c_char {
+    clear_last_error();
+    if codec.is_null() || response_json.is_null() {
+        set_last_error("null sanitizer response codec argument");
+        return std::ptr::null_mut();
+    }
+    let response = match c_str_to_json(response_json) {
+        Some(value) => value,
+        None => {
+            set_last_error("invalid response JSON");
+            return std::ptr::null_mut();
+        }
+    };
+    match unsafe { &*codec }.0.decode_response(&response) {
+        Ok(annotated) => json_to_c_string(&serde_json::to_value(annotated).unwrap_or_default()),
+        Err(error) => {
+            set_last_error(&error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LLM lifecycle

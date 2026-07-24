@@ -90,7 +90,7 @@ func registerLifecycleGuardrails(ctx *PluginContext) error {
 	if err := ctx.RegisterLlmSanitizeRequestGuardrail(
 		"llm_sanitize_request",
 		7,
-		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			return request, false
 		},
 	); err != nil {
@@ -99,7 +99,7 @@ func registerLifecycleGuardrails(ctx *PluginContext) error {
 	if err := ctx.RegisterLlmSanitizeResponseGuardrail(
 		"llm_sanitize_response",
 		7,
-		func(responseJSON json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) {
+		func(responseJSON json.RawMessage, _ LLMSanitizeResponseContext) (json.RawMessage, bool) {
 			return responseJSON, false
 		},
 	); err != nil {
@@ -534,10 +534,12 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			return closed.RegisterToolConditionalExecutionGuardrail("tool_conditional", 1, func(name string, args json.RawMessage) *string { return nil })
 		}},
 		{"llm sanitize request", func() error {
-			return closed.RegisterLlmSanitizeRequestGuardrail("llm_sanitize_request", 1, func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) { return request, false })
+			return closed.RegisterLlmSanitizeRequestGuardrail("llm_sanitize_request", 1, func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) { return request, false })
 		}},
 		{"llm sanitize response", func() error {
-			return closed.RegisterLlmSanitizeResponseGuardrail("llm_sanitize_response", 1, func(response json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) { return response, false })
+			return closed.RegisterLlmSanitizeResponseGuardrail("llm_sanitize_response", 1, func(response json.RawMessage, _ LLMSanitizeResponseContext) (json.RawMessage, bool) {
+				return response, false
+			})
 		}},
 		{"llm conditional", func() error {
 			return closed.RegisterLlmConditionalExecutionGuardrail("llm_conditional", 1, func(headers, content json.RawMessage) *string { return nil })

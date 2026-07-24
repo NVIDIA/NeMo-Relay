@@ -179,10 +179,10 @@ async def tool_exec_intercept(name, args, next):
     result["tool_intercepted"] = True
     return ToolExecutionInterceptOutcome(result)
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     updated = dict(response)
     updated["llm_sanitized_response"] = True
     return updated

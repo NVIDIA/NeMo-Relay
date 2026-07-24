@@ -430,10 +430,10 @@ def tool_passthrough(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):
@@ -686,7 +686,7 @@ def event_fail(event):
         assert_eq!(
             llm_sanitize(
                 request.clone(),
-                nemo_relay::api::runtime::LlmSanitizeContext::default(),
+                nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
             )
             .unwrap()
             .content,
@@ -728,7 +728,7 @@ def event_fail(event):
         assert_eq!(
             llm_resp(
                 json!({"ok": true}),
-                nemo_relay::api::runtime::LlmSanitizeContext::default(),
+                nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
             ),
             Some(json!({"ok": true}))
         );

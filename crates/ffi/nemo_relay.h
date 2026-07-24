@@ -173,6 +173,16 @@ typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 
 /**
+ * Borrowed, callback-scoped request codec capability supplied to an LLM sanitizer.
+ */
+typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
+
+/**
+ * Borrowed, callback-scoped response codec capability supplied to an LLM sanitizer.
+ */
+typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
+
+/**
  * Opaque OpenInference subscriber handle.
  */
 typedef struct FfiOpenInferenceSubscriber FfiOpenInferenceSubscriber;
@@ -274,7 +284,7 @@ typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
  * Codec identity supplied to an LLM sanitizer. `codec_id` is null for
  * `None` and `Opaque`, and is valid only for the duration of the callback.
  */
-typedef struct NemoRelayLlmSanitizeContext {
+typedef struct NemoRelayLlmSanitizeRequestContext {
   /**
    * Kind of active codec identity.
    */
@@ -283,7 +293,11 @@ typedef struct NemoRelayLlmSanitizeContext {
    * Built-in or runtime codec ID, when applicable.
    */
   const char *codec_id;
-} NemoRelayLlmSanitizeContext;
+  /**
+   * Borrowed request codec capability, or null when no codec is active.
+   */
+  const struct FfiLlmSanitizeRequestCodec *codec;
+} NemoRelayLlmSanitizeRequestContext;
 
 /**
  * LLM request sanitizer. It receives the request first and its
@@ -291,7 +305,25 @@ typedef struct NemoRelayLlmSanitizeContext {
  */
 typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
                                                                const struct FfiLLMRequest *request,
-                                                               struct NemoRelayLlmSanitizeContext context);
+                                                               struct NemoRelayLlmSanitizeRequestContext context);
+
+/**
+ * Directional codec context supplied to an LLM response sanitizer.
+ */
+typedef struct NemoRelayLlmSanitizeResponseContext {
+  /**
+   * Kind of active codec identity.
+   */
+  NemoRelayLlmSanitizeCodecKind codec_kind;
+  /**
+   * Built-in or runtime codec ID, when applicable.
+   */
+  const char *codec_id;
+  /**
+   * Borrowed response codec capability, or null when no codec is active.
+   */
+  const struct FfiLlmSanitizeResponseCodec *codec;
+} NemoRelayLlmSanitizeResponseContext;
 
 /**
  * LLM response sanitizer. It receives response JSON first and its
@@ -299,7 +331,7 @@ typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
  */
 typedef char *(*NemoRelayLlmSanitizeResponseCb)(void *user_data,
                                                 const char *response_json,
-                                                struct NemoRelayLlmSanitizeContext context);
+                                                struct NemoRelayLlmSanitizeResponseContext context);
 
 /**
  * Callback for LLM conditional execution guardrails.
@@ -743,6 +775,38 @@ NemoRelayStatus nemo_relay_scope_register_scope_sanitize_end_guardrail(const cha
  */
 NemoRelayStatus nemo_relay_scope_deregister_scope_sanitize_end_guardrail(const char *scope_uuid,
                                                                          const char *name);
+
+/**
+ * Decode a request through a callback-scoped sanitizer codec capability.
+ *
+ * The returned JSON string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * Both pointers must be non-null and valid only during the sanitizer callback.
+ */
+char *nemo_relay_llm_sanitize_request_codec_decode(const struct FfiLlmSanitizeRequestCodec *codec,
+                                                   const struct FfiLLMRequest *request);
+
+/**
+ * Encode normalized request changes through a callback-scoped codec capability.
+ *
+ * # Safety
+ * All pointers must be non-null and valid only during the sanitizer callback.
+ */
+struct FfiLLMRequest *nemo_relay_llm_sanitize_request_codec_encode(const struct FfiLlmSanitizeRequestCodec *codec,
+                                                                   const char *annotated_json,
+                                                                   const struct FfiLLMRequest *original);
+
+/**
+ * Decode a response through a callback-scoped sanitizer codec capability.
+ *
+ * The returned JSON string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * All pointers must be non-null and valid only during the sanitizer callback.
+ */
+char *nemo_relay_llm_sanitize_response_codec_decode(const struct FfiLlmSanitizeResponseCodec *codec,
+                                                    const char *response_json);
 
 /**
  * Begin a manual LLM call lifecycle span.

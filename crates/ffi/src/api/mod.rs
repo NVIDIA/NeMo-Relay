@@ -36,8 +36,9 @@ use crate::error::{
 };
 use crate::types::{
     FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest,
-    FfiOpenInferenceSubscriber, FfiOpenTelemetrySubscriber, FfiPluginActivation, FfiPluginContext,
-    FfiScopeHandle, FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
+    FfiLlmSanitizeRequestCodec, FfiLlmSanitizeResponseCodec, FfiOpenInferenceSubscriber,
+    FfiOpenTelemetrySubscriber, FfiPluginActivation, FfiPluginContext, FfiScopeHandle,
+    FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
 };
 pub use crate::types::{nemo_relay_openinference_subscriber_free, nemo_relay_otel_subscriber_free};
 use libc::c_char;

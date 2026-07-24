@@ -12,9 +12,10 @@ pub mod subscriber_dispatcher;
 pub use callbacks::{
     BuiltinLlmCodec, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn,
     LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 pub use global::global_context;
 pub use scope_stack::{

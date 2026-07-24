@@ -10,12 +10,17 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay_plugin::{
-    NemoRelayNativeLlmNextFn, NemoRelayNativeLlmSanitizeContext, NemoRelayNativeLlmStreamNextFn,
+    NemoRelayNativeLlmNextFn, NemoRelayNativeLlmSanitizeRequestContext,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamNextFn,
     NemoRelayNativeToolNextFn,
 };
 use serde_json::json;
 
-use crate::api::runtime::{BuiltinLlmCodec, NemoRelayContextState, global_context};
+use crate::api::runtime::{
+    BuiltinLlmCodec, LlmSanitizeRequestContext, LlmSanitizeResponseContext, NemoRelayContextState,
+    global_context,
+};
+use crate::codec::openai_chat::OpenAIChatCodec;
 
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
@@ -513,7 +518,7 @@ unsafe extern "C" fn noop_tool_execution(
 unsafe extern "C" fn noop_llm_request(
     _user_data: *mut c_void,
     _request_json: *const NemoRelayNativeString,
-    _context: NemoRelayNativeLlmSanitizeContext,
+    _context: NemoRelayNativeLlmSanitizeRequestContext,
     _out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -522,7 +527,7 @@ unsafe extern "C" fn noop_llm_request(
 unsafe extern "C" fn noop_json(
     _user_data: *mut c_void,
     _payload_json: *const NemoRelayNativeString,
-    _context: NemoRelayNativeLlmSanitizeContext,
+    _context: NemoRelayNativeLlmSanitizeResponseContext,
     _out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -733,11 +738,50 @@ unsafe extern "C" fn tool_json_error(
 unsafe extern "C" fn llm_request_echo(
     _user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
-    _context: NemoRelayNativeLlmSanitizeContext,
+    _context: NemoRelayNativeLlmSanitizeRequestContext,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     let request = read_native_string(request_json).unwrap();
     unsafe { *out_request_json = native_string(&request) };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn llm_request_codec_round_trip(
+    _user_data: *mut c_void,
+    request_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeRequestContext,
+    out_request_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    assert!(!context.codec.is_null());
+    let mut annotated = ptr::null_mut();
+    let status =
+        unsafe { native_llm_request_codec_decode(context.codec, request_json, &mut annotated) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    let status = unsafe {
+        native_llm_request_codec_encode(context.codec, annotated, request_json, out_request_json)
+    };
+    unsafe { native_string_free(annotated) };
+    status
+}
+
+unsafe extern "C" fn llm_response_codec_decode_and_echo(
+    _user_data: *mut c_void,
+    response_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeResponseContext,
+    out_response_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    assert!(!context.codec.is_null());
+    let mut annotated = ptr::null_mut();
+    let status =
+        unsafe { native_llm_response_codec_decode(context.codec, response_json, &mut annotated) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    unsafe { native_string_free(annotated) };
+    let response = read_native_string(response_json).unwrap();
+    unsafe { *out_response_json = native_string(&response) };
     NemoRelayStatus::Ok
 }
 
@@ -763,11 +807,52 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             llm_request_echo,
             ptr::null_mut(),
             &request,
-            LlmSanitizeContext::default(),
+            LlmSanitizeRequestContext::default(),
         )
         .unwrap(),
         Some(request)
     );
+}
+
+#[test]
+fn native_sanitizer_context_resolves_directional_codecs() {
+    let codec = Arc::new(OpenAIChatCodec);
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}],
+            "preserve": true
+        }),
+    };
+    let sanitized = call_llm_sanitize_request_callback(
+        llm_request_codec_round_trip,
+        ptr::null_mut(),
+        &request,
+        LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+    )
+    .unwrap()
+    .expect("native request sanitizer returns a request");
+    assert_eq!(sanitized, request);
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let sanitized = call_llm_sanitize_response_callback(
+        llm_response_codec_decode_and_echo,
+        ptr::null_mut(),
+        &response,
+        LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+    )
+    .unwrap()
+    .expect("native response sanitizer returns a response");
+    assert_eq!(sanitized, response);
 }
 
 #[test]
@@ -806,11 +891,11 @@ fn native_llm_sanitize_context_preserves_all_codec_identity_states() {
     ];
 
     for (codec, expected_kind, expected_id) in cases {
-        let (context, context_id) = native_llm_sanitize_context(&LlmSanitizeContext { codec })
-            .expect("native context conversion should succeed");
-        assert_eq!(context.codec_kind, expected_kind);
+        let (codec_kind, context_id) =
+            native_llm_codec_identity(&codec).expect("native context conversion should succeed");
+        assert_eq!(codec_kind, expected_kind);
         assert_eq!(
-            (!context.codec_id.is_null()).then(|| read_native_string(context.codec_id).unwrap()),
+            context_id.map(|id| read_native_string(id).unwrap()),
             expected_id.map(str::to_owned),
         );
         if let Some(context_id) = context_id {

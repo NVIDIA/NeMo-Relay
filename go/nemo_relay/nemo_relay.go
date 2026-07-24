@@ -38,7 +38,10 @@ typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 typedef struct FfiCodecHandle FfiCodecHandle;
-typedef struct NemoRelayLlmSanitizeContext { uint32_t codec_kind; const char* codec_id; } NemoRelayLlmSanitizeContext;
+typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
+typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
+typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeRequestCodec* codec; } NemoRelayLlmSanitizeRequestContext;
+typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
@@ -136,11 +139,11 @@ extern int32_t nemo_relay_register_tool_execution_intercept(const char* name, in
 extern int32_t nemo_relay_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
-typedef FfiLLMRequest* (*NemoRelayLlmSanitizeRequestCb)(void* user_data, const FfiLLMRequest* request, NemoRelayLlmSanitizeContext context);
+typedef FfiLLMRequest* (*NemoRelayLlmSanitizeRequestCb)(void* user_data, const FfiLLMRequest* request, NemoRelayLlmSanitizeRequestContext context);
 extern int32_t nemo_relay_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NemoRelayLlmSanitizeRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_sanitize_request_guardrail(const char* name);
 
-typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeContext context);
+typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeResponseContext context);
 extern int32_t nemo_relay_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NemoRelayLlmSanitizeResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_sanitize_response_guardrail(const char* name);
 
@@ -275,8 +278,8 @@ extern char* goToolConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
 extern void goFreeTrampoline(void*);
-extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*, NemoRelayLlmSanitizeContext);
-extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeContext);
+extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*, NemoRelayLlmSanitizeRequestContext);
+extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeResponseContext);
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);

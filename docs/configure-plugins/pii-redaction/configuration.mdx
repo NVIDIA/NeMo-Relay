@@ -116,7 +116,10 @@ target_paths = ["/messages/0/content", "/message"]
 
 Use `codec = "openai_chat"` only as a compatibility fallback for a legacy
 manual call where Relay cannot identify an active codec. It is ignored when a
-managed call supplies a recognized provider codec.
+managed call supplies any active codec. Request policies use that codec's
+resolved decode/encode capability, including runtime and opaque codecs.
+Normalized response projection currently requires a recognized built-in codec
+because response codec capabilities are decode-only.
 
 ## Backend Support
 
@@ -317,7 +320,9 @@ The plugin uses different payload boundaries for tools and LLMs:
 
 - Tools use JSON-native payloads. Paths point into the emitted tool args or
   tool result shape directly.
-- LLMs use the active built-in codec for that managed call. Prefer normalized Relay paths such as:
+- LLM requests use the active resolved codec for that managed call. LLM
+  responses use the active built-in codec for normalized projection. Prefer
+  normalized Relay paths such as:
   - `/messages/0/content` for request message content
   - `/message` for the normalized assistant response text
 - Marks and non-tool, non-LLM scopes sanitize `data`, `category_profile`, and
@@ -326,11 +331,12 @@ The plugin uses different payload boundaries for tools and LLMs:
   `/metadata`.
 
 The current implementation also preserves provider-shaped response-path
-compatibility for the supported codecs, but normalized LLM paths are the
-recommended contract for new configuration. If normalized paths are configured
-and Relay has neither an active recognized codec nor a configured compatibility
-fallback, the LLM event payload and its annotation are omitted rather than
-emitting unsanitized content.
+compatibility for the supported built-in codecs, but normalized LLM paths are
+the recommended contract for new configuration. If normalized paths are
+configured and Relay cannot resolve a request codec or cannot project a
+response through a recognized built-in or compatible fallback codec, the LLM
+event payload and its annotation are omitted rather than emitting unsanitized
+content.
 
 ## Decision Rule
 

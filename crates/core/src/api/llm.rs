@@ -15,11 +15,13 @@ use crate::api::event::{
 use crate::api::optimization::{
     LlmOptimizationRecorder, finalize_optimization_summary, scope_llm_optimization_recorder,
 };
+#[cfg(test)]
+use crate::api::runtime::LlmCodecIdentity;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn,
-    LlmJsonStream, LlmSanitizeContext, LlmStreamExecutionNextFn,
+    EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
 };
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
@@ -391,7 +393,7 @@ fn emit_llm_start(
     handle: &LlmHandle,
     request: &LlmRequest,
     annotated_request: Option<Arc<AnnotatedLlmRequest>>,
-    request_codec: Option<&dyn LlmCodec>,
+    request_codec: Option<Arc<dyn LlmCodec>>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let subscribers = {
@@ -412,7 +414,7 @@ fn emit_llm_start_with_subscribers(
     handle: &LlmHandle,
     request: &LlmRequest,
     annotated_request: Option<Arc<AnnotatedLlmRequest>>,
-    request_codec: Option<&dyn LlmCodec>,
+    request_codec: Option<Arc<dyn LlmCodec>>,
     subscribers: &[EventSubscriberFn],
 ) -> Result<()> {
     ensure_runtime_owner()?;
@@ -430,10 +432,10 @@ fn emit_llm_start_with_subscribers(
     };
     let mut sanitized_request = NemoRelayContextState::llm_sanitize_request_snapshot_chain(
         request.clone(),
-        sanitize_context_for_request_codec(request_codec),
+        LlmSanitizeRequestContext::for_request_codec(request_codec.clone()),
         &entries,
     );
-    let mut annotated_request = match (sanitized_request.as_ref(), request_codec) {
+    let mut annotated_request = match (sanitized_request.as_ref(), request_codec.as_deref()) {
         (Some(sanitized_request), Some(codec))
             if sanitized_request.headers != request.headers
                 || sanitized_request.content != request.content =>
@@ -452,7 +454,7 @@ fn emit_llm_start_with_subscribers(
         project_llm_request_to_current_user_turn(
             sanitized_request,
             &mut annotated_request,
-            request_codec,
+            request_codec.as_deref(),
         );
     }
     let input = sanitized_request
@@ -701,7 +703,7 @@ fn llm_call_end_with_behavior(
     };
     let sanitized_response = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
         response,
-        sanitize_context_for_response_codec(response_codec.as_deref()),
+        LlmSanitizeResponseContext::for_response_codec(response_codec.clone()),
         &entries,
     );
     let payload_omitted = sanitized_response.is_none();
@@ -768,18 +770,20 @@ fn llm_call_end_with_behavior(
     }
 }
 
-fn sanitize_context_for_request_codec(codec: Option<&dyn LlmCodec>) -> LlmSanitizeContext {
-    LlmSanitizeContext {
-        codec: codec.map_or(LlmCodecIdentity::None, LlmCodec::codec_identity),
-    }
+#[cfg(test)]
+fn sanitize_context_for_request_codec(codec: Option<&dyn LlmCodec>) -> LlmSanitizeRequestContext {
+    LlmSanitizeRequestContext::with_identity(
+        codec.map_or(LlmCodecIdentity::None, LlmCodec::codec_identity),
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn sanitize_context_for_response_codec(
     codec: Option<&dyn LlmResponseCodec>,
-) -> LlmSanitizeContext {
-    LlmSanitizeContext {
-        codec: codec.map_or(LlmCodecIdentity::None, LlmResponseCodec::codec_identity),
-    }
+) -> LlmSanitizeResponseContext {
+    LlmSanitizeResponseContext::with_identity(
+        codec.map_or(LlmCodecIdentity::None, LlmResponseCodec::codec_identity),
+    )
 }
 
 fn resolve_llm_end_annotation(
@@ -979,7 +983,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         &handle,
         &intercepted_request,
         annotated_request.clone(),
-        request_codec.as_deref(),
+        request_codec.clone(),
         &lifecycle_subscribers,
     )?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;
@@ -1165,7 +1169,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         &handle,
         &intercepted_request,
         annotated_request,
-        request_codec.as_deref(),
+        request_codec.clone(),
         &lifecycle_subscribers,
     )?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;

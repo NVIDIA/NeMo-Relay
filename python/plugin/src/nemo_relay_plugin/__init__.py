@@ -21,7 +21,10 @@ Public data types:
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
     LlmCodecIdentity: Typed discriminator for the active LLM codec.
-    LlmSanitizeContext: Codec identity supplied to an LLM sanitizer.
+    LlmSanitizeRequestContext: Codec identity supplied to an LLM request sanitizer.
+    LlmSanitizeResponseContext: Codec identity supplied to an LLM response sanitizer.
+    WorkerRequestCodec: Invocation-scoped async proxy for an active request codec.
+    WorkerResponseCodec: Invocation-scoped async proxy for an active response codec.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
@@ -87,9 +90,10 @@ from ._api import (
     LlmRequest,
     LlmRequestCallback,
     LlmRequestInterceptOutcome,
-    LlmSanitizeContext,
     LlmSanitizeRequestCallback,
+    LlmSanitizeRequestContext,
     LlmSanitizeResponseCallback,
+    LlmSanitizeResponseContext,
     LlmStreamExecutionCallback,
     LlmStreamNext,
     PendingMarkSpec,
@@ -104,6 +108,8 @@ from ._api import (
     ToolRequestCallback,
     ToolSanitizeCallback,
     WorkerPlugin,
+    WorkerRequestCodec,
+    WorkerResponseCodec,
     WorkerSdkError,
     serve_plugin,
 )
@@ -128,7 +134,8 @@ __all__ = [
     "LlmOptimizationTokens",
     "LlmNext",
     "LlmRequest",
-    "LlmSanitizeContext",
+    "LlmSanitizeRequestContext",
+    "LlmSanitizeResponseContext",
     "LlmRequestCallback",
     "LlmRequestInterceptOutcome",
     "LlmSanitizeRequestCallback",
@@ -146,6 +153,8 @@ __all__ = [
     "ToolNext",
     "ToolRequestCallback",
     "ToolSanitizeCallback",
+    "WorkerRequestCodec",
+    "WorkerResponseCodec",
     "WorkerPlugin",
     "WorkerSdkError",
     "serve_plugin",

@@ -120,7 +120,7 @@ func runGlobalLLMGuardrailShorthandChecks(t *testing.T, output func() json.RawMe
 	t.Helper()
 
 	if err := guardrails.RegisterLlmSanitizeRequest("guardrails_llm_req", 1,
-		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeContext) (nemo_relay.LLMRequestDTO, bool) {
+		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeRequestContext) (nemo_relay.LLMRequestDTO, bool) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(request.Content, &payload)
 			payload["request_sanitized"] = true
@@ -136,7 +136,7 @@ func runGlobalLLMGuardrailShorthandChecks(t *testing.T, output func() json.RawMe
 	})
 
 	if err := guardrails.RegisterLlmSanitizeResponse("guardrails_llm_resp", 1,
-		func(response json.RawMessage, _ nemo_relay.LLMSanitizeContext) (json.RawMessage, bool) {
+		func(response json.RawMessage, _ nemo_relay.LLMSanitizeResponseContext) (json.RawMessage, bool) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(response, &payload)
 			payload["guarded"] = true
@@ -213,14 +213,14 @@ func runScopeLocalLLMGuardrailShorthandChecks(t *testing.T, scopeUUID string) {
 	t.Helper()
 
 	if err := guardrails.ScopeRegisterLlmSanitizeRequest(scopeUUID, "guardrails_scope_llm_req", 1,
-		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeContext) (nemo_relay.LLMRequestDTO, bool) {
+		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeRequestContext) (nemo_relay.LLMRequestDTO, bool) {
 			return request, false
 		},
 	); err != nil {
 		t.Fatalf("ScopeRegisterLlmSanitizeRequest failed: %v", err)
 	}
 	if err := guardrails.ScopeRegisterLlmSanitizeResponse(scopeUUID, "guardrails_scope_llm_resp", 1,
-		func(response json.RawMessage, _ nemo_relay.LLMSanitizeContext) (json.RawMessage, bool) {
+		func(response json.RawMessage, _ nemo_relay.LLMSanitizeResponseContext) (json.RawMessage, bool) {
 			return response, false
 		},
 	); err != nil {

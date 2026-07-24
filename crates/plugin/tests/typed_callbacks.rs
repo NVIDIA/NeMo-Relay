@@ -15,18 +15,20 @@ use std::sync::{
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
     Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonStream, LlmNext,
-    LlmRequest, LlmRequestInterceptOutcome, LlmSanitizeContext, LlmStream, LlmStreamNext,
+    LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
     NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmSanitizeContext,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeResponseCb,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
-    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
+    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
+    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
+    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -298,7 +300,7 @@ static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestInte
     Mutex::new(None);
 
 #[test]
-fn native_abi_v1_struct_sizes_are_self_describing() {
+fn native_abi_v2_struct_sizes_are_self_describing() {
     assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 2);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
@@ -317,13 +319,13 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 296);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 320);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
                 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272,
-                280, 288,
+                280, 288, 296, 304, 312,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
@@ -337,13 +339,13 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 156);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 160);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80,
                 84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 148,
-                152,
+                152, 156,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
@@ -355,7 +357,7 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_offsets() -> [usize; 37] {
+fn host_api_offsets() -> [usize; 40] {
     [
         offset_of!(NemoRelayNativeHostApiV1, abi_version),
         offset_of!(NemoRelayNativeHostApiV1, struct_size),
@@ -366,6 +368,9 @@ fn host_api_offsets() -> [usize; 37] {
         offset_of!(NemoRelayNativeHostApiV1, string_free),
         offset_of!(NemoRelayNativeHostApiV1, last_error_clear),
         offset_of!(NemoRelayNativeHostApiV1, last_error_set),
+        offset_of!(NemoRelayNativeHostApiV1, llm_request_codec_decode),
+        offset_of!(NemoRelayNativeHostApiV1, llm_request_codec_encode),
+        offset_of!(NemoRelayNativeHostApiV1, llm_response_codec_decode),
         offset_of!(NemoRelayNativeHostApiV1, plugin_context_register_subscriber),
         offset_of!(
             NemoRelayNativeHostApiV1,
@@ -1128,6 +1133,57 @@ unsafe extern "C" fn true_scope_stack_active() -> bool {
     true
 }
 
+unsafe extern "C" fn unavailable_request_codec_decode(
+    _codec: *const NemoRelayNativeLlmRequestCodec,
+    _request: *const NemoRelayNativeString,
+    _out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Internal
+}
+
+unsafe extern "C" fn unavailable_request_codec_encode(
+    _codec: *const NemoRelayNativeLlmRequestCodec,
+    _annotated: *const NemoRelayNativeString,
+    _original: *const NemoRelayNativeString,
+    _out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Internal
+}
+
+unsafe extern "C" fn unavailable_response_codec_decode(
+    _codec: *const NemoRelayNativeLlmResponseCodec,
+    _response: *const NemoRelayNativeString,
+    _out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Internal
+}
+
+unsafe extern "C" fn successful_request_codec_decode(
+    _codec: *const NemoRelayNativeLlmRequestCodec,
+    _request: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { test_string_new(c"{}".as_ptr().cast(), 2, out) }
+}
+
+unsafe extern "C" fn successful_request_codec_encode(
+    _codec: *const NemoRelayNativeLlmRequestCodec,
+    _annotated: *const NemoRelayNativeString,
+    original: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let bytes = unsafe { &*(original.cast::<TestString>()) }.0.as_slice();
+    unsafe { test_string_new(bytes.as_ptr(), bytes.len(), out) }
+}
+
+unsafe extern "C" fn successful_response_codec_decode(
+    _codec: *const NemoRelayNativeLlmResponseCodec,
+    _response: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { test_string_new(c"{}".as_ptr().cast(), 2, out) }
+}
+
 fn test_host() -> NemoRelayNativeHostApiV1 {
     NemoRelayNativeHostApiV1 {
         abi_version: NEMO_RELAY_NATIVE_ABI_VERSION,
@@ -1139,6 +1195,9 @@ fn test_host() -> NemoRelayNativeHostApiV1 {
         string_free: test_string_free,
         last_error_clear: test_last_error_clear,
         last_error_set: test_last_error_set,
+        llm_request_codec_decode: unavailable_request_codec_decode,
+        llm_request_codec_encode: unavailable_request_codec_encode,
+        llm_response_codec_decode: unavailable_response_codec_decode,
         plugin_context_register_subscriber: capture_register_subscriber,
         plugin_context_register_tool_sanitize_request_guardrail: capture_tool_json,
         plugin_context_register_tool_sanitize_response_guardrail: capture_tool_json,
@@ -1286,10 +1345,19 @@ fn json_host_string(host: &NemoRelayNativeHostApiV1, value: Json) -> *mut NemoRe
     host_string(host, &serde_json::to_string(&value).unwrap())
 }
 
-fn native_no_codec_context() -> NemoRelayNativeLlmSanitizeContext {
-    NemoRelayNativeLlmSanitizeContext {
+fn native_no_codec_context() -> NemoRelayNativeLlmSanitizeRequestContext {
+    NemoRelayNativeLlmSanitizeRequestContext {
         codec_kind: NemoRelayNativeLlmCodecKind::None,
         codec_id: ptr::null(),
+        codec: ptr::null(),
+    }
+}
+
+fn native_no_response_codec_context() -> NemoRelayNativeLlmSanitizeResponseContext {
+    NemoRelayNativeLlmSanitizeResponseContext {
+        codec_kind: NemoRelayNativeLlmCodecKind::None,
+        codec_id: ptr::null(),
+        codec: ptr::null(),
     }
 }
 
@@ -2854,7 +2922,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
             (registration.cb)(
                 ptr::null_mut(),
                 response,
-                native_no_codec_context(),
+                native_no_response_codec_context(),
                 &mut out,
             )
         },
@@ -2865,7 +2933,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
             (registration.cb)(
                 registration.user_data as *mut c_void,
                 response,
-                native_no_codec_context(),
+                native_no_response_codec_context(),
                 ptr::null_mut(),
             )
         },
@@ -3225,7 +3293,7 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
         .unwrap();
     let registration = take_llm_json_registration();
     let response = host_string(&host, "{not json");
-    let context = native_no_codec_context();
+    let context = native_no_response_codec_context();
     let stale_out = host_string(&host, r#"{"stale":true}"#);
     let mut out = stale_out;
     assert_eq!(
@@ -4167,7 +4235,7 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
     assert_eq!(registration.name, "llm-sanitize-response");
     assert_eq!(registration.priority, 13);
     let response = json_host_string(&host, json!({ "output": true }));
-    let context = native_no_codec_context();
+    let context = native_no_response_codec_context();
     let mut out = ptr::null_mut();
     let status = unsafe {
         (registration.cb)(
@@ -4188,29 +4256,10 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
 #[test]
 fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     let _guard = begin_test();
-    let host = test_host();
-    let context = LlmSanitizeContext {
-        codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
-    };
-    assert_eq!(
-        serde_json::to_value(&context).unwrap(),
-        json!({"codec": {"kind": "builtin", "id": "openai_chat"}})
-    );
-    assert_eq!(
-        serde_json::to_value(LlmSanitizeContext {
-            codec: LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
-        })
-        .unwrap(),
-        json!({"codec": {"kind": "runtime", "id": "com.example.chat.v1"}})
-    );
-    assert_eq!(
-        serde_json::to_value(LlmSanitizeContext {
-            codec: LlmCodecIdentity::Opaque,
-        })
-        .unwrap(),
-        json!({"codec": {"kind": "opaque"}})
-    );
-
+    let mut host = test_host();
+    host.llm_request_codec_decode = successful_request_codec_decode;
+    host.llm_request_codec_encode = successful_request_codec_encode;
+    host.llm_response_codec_decode = successful_response_codec_decode;
     let mut ctx = test_context(&host);
     ctx.register_llm_sanitize_request_guardrail(
         "contextual-request",
@@ -4220,6 +4269,13 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
                 callback_context.codec,
                 LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
             );
+            let codec = callback_context
+                .resolve_codec()
+                .expect("active request codec must resolve");
+            let annotated = codec.decode(&request).expect("request decode succeeds");
+            request = codec
+                .encode(&annotated, &request)
+                .expect("request encode succeeds");
             request.headers.insert("x-contextual".into(), json!(true));
             Some(request)
         },
@@ -4231,9 +4287,10 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     assert_eq!(registration.priority, 14);
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
     let context_id = host_string(&host, "openai_chat");
-    let native_context = NemoRelayNativeLlmSanitizeContext {
+    let native_context = NemoRelayNativeLlmSanitizeRequestContext {
         codec_kind: NemoRelayNativeLlmCodecKind::BuiltIn,
         codec_id: context_id,
+        codec: NonNull::<NemoRelayNativeLlmRequestCodec>::dangling().as_ptr(),
     };
     let mut out = ptr::null_mut();
     let status = unsafe {
@@ -4264,6 +4321,11 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
                 callback_context.codec,
                 LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
             );
+            callback_context
+                .resolve_codec()
+                .expect("active response codec must resolve")
+                .decode(&payload)
+                .expect("response decode succeeds");
             payload["contextual"] = json!(true);
             Some(payload)
         },
@@ -4275,9 +4337,10 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     assert_eq!(registration.priority, 15);
     let response = json_host_string(&host, json!({ "output": true }));
     let context_id = host_string(&host, "openai_chat");
-    let native_context = NemoRelayNativeLlmSanitizeContext {
+    let native_context = NemoRelayNativeLlmSanitizeResponseContext {
         codec_kind: NemoRelayNativeLlmCodecKind::BuiltIn,
         codec_id: context_id,
+        codec: NonNull::<NemoRelayNativeLlmResponseCodec>::dangling().as_ptr(),
     };
     let mut out = ptr::null_mut();
     let status = unsafe {
@@ -4307,9 +4370,10 @@ fn typed_contextual_llm_sanitizer_uses_null_output_to_omit_payload() {
 
     let registration = take_llm_json_registration();
     let response = json_host_string(&host, json!({"secret": "value"}));
-    let context = NemoRelayNativeLlmSanitizeContext {
+    let context = NemoRelayNativeLlmSanitizeResponseContext {
         codec_kind: NemoRelayNativeLlmCodecKind::None,
         codec_id: ptr::null(),
+        codec: ptr::null(),
     };
     let mut out = ptr::null_mut();
     let status = unsafe {

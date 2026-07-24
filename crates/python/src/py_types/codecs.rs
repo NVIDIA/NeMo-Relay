@@ -26,6 +26,53 @@ use super::{
 };
 use nemo_relay::codec::response::FinishReason;
 
+/// A resolved request codec available while an LLM request sanitizer runs.
+#[pyclass(name = "LlmSanitizeRequestCodec")]
+pub struct PyLlmSanitizeRequestCodec {
+    pub(crate) inner: Arc<dyn LlmCodec>,
+}
+
+#[pymethods]
+impl PyLlmSanitizeRequestCodec {
+    /// Parse an opaque request into its normalized representation.
+    fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
+        self.inner
+            .decode(&request.inner)
+            .map(|inner| PyAnnotatedLLMRequest { inner })
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// Merge a normalized request back into its provider representation.
+    fn encode(
+        &self,
+        annotated: &PyAnnotatedLLMRequest,
+        original: &PyLLMRequest,
+    ) -> PyResult<PyLLMRequest> {
+        self.inner
+            .encode(&annotated.inner, &original.inner)
+            .map(|inner| PyLLMRequest { inner })
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+}
+
+/// A resolved response codec available while an LLM response sanitizer runs.
+#[pyclass(name = "LlmSanitizeResponseCodec")]
+pub struct PyLlmSanitizeResponseCodec {
+    pub(crate) inner: Arc<dyn LlmResponseCodec>,
+}
+
+#[pymethods]
+impl PyLlmSanitizeResponseCodec {
+    /// Parse an opaque response into its normalized representation.
+    fn decode_response(&self, response: &Bound<'_, PyAny>) -> PyResult<PyAnnotatedLLMResponse> {
+        let response = py_to_json(response)?;
+        self.inner
+            .decode_response(&response)
+            .map(|inner| PyAnnotatedLLMResponse { inner })
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AnnotatedLLMRequest
 // ---------------------------------------------------------------------------

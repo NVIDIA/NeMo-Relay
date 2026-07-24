@@ -5,8 +5,39 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 )
+
+func TestLLMSanitizeCodecInvocationInvalidationWaitsForInflightCall(t *testing.T) {
+	invocation := newLLMSanitizeCodecInvocation()
+	release, err := invocation.acquire()
+	if err != nil {
+		t.Fatalf("acquire active invocation: %v", err)
+	}
+
+	invalidated := make(chan struct{})
+	go func() {
+		invocation.invalidate()
+		close(invalidated)
+	}()
+
+	select {
+	case <-invalidated:
+		t.Fatal("invalidation returned while a codec operation was in flight")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("invalidation did not finish after the codec operation completed")
+	}
+	if _, err := invocation.acquire(); !errors.Is(err, ErrLLMSanitizeCodecExpired) {
+		t.Fatalf("expired invocation acquire returned %v", err)
+	}
+}
 
 func toolExecutionOutcome(result json.RawMessage, err error) (ToolExecutionInterceptOutcome, error) {
 	return ToolExecutionInterceptOutcome{Result: result}, err
@@ -37,7 +68,7 @@ func TestRegisterAndUnregisterClosure(t *testing.T) {
 	}
 }
 
-func TestLlmSanitizeContextPreservesEveryCodecIdentity(t *testing.T) {
+func TestLlmSanitizeDirectionalContextsPreserveEveryCodecIdentity(t *testing.T) {
 	openAIChat := "openai_chat"
 	openAIResponses := "openai_responses"
 	anthropicMessages := "anthropic_messages"
@@ -60,15 +91,15 @@ func TestLlmSanitizeContextPreservesEveryCodecIdentity(t *testing.T) {
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			context := llmSanitizeContext(test.kind, test.id)
-			if context.Codec.CodecKind != test.want {
-				t.Fatalf("codec kind = %q, want %q", context.Codec.CodecKind, test.want)
+			codec := llmCodecIdentity(test.kind, test.id)
+			if codec.CodecKind != test.want {
+				t.Fatalf("codec kind = %q, want %q", codec.CodecKind, test.want)
 			}
-			if context.Codec.CodecID == nil && test.id != nil {
+			if codec.CodecID == nil && test.id != nil {
 				t.Fatal("codec ID was lost")
 			}
-			if context.Codec.CodecID != nil && test.id != nil && *context.Codec.CodecID != *test.id {
-				t.Fatalf("codec ID = %q, want %q", *context.Codec.CodecID, *test.id)
+			if codec.CodecID != nil && test.id != nil && *codec.CodecID != *test.id {
+				t.Fatalf("codec ID = %q, want %q", *codec.CodecID, *test.id)
 			}
 		})
 	}

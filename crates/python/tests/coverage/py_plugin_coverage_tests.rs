@@ -148,10 +148,10 @@ def tool_fn(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):
@@ -628,10 +628,10 @@ def tool_fn(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):
@@ -912,10 +912,10 @@ def tool_fn(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):

@@ -39,10 +39,8 @@ class _EventSanitizeFields(TypedDict):
 
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
-_LlmSanitizeRequestWithContext: TypeAlias = Callable[["LLMRequest", "LlmSanitizeContext"], Optional["LLMRequest"]]
-_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest"], "LLMRequest"] | _LlmSanitizeRequestWithContext
-_LlmSanitizeResponseWithContext: TypeAlias = Callable[[_JsonObject, "LlmSanitizeContext"], Optional[_JsonObject]]
-_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject], _JsonObject] | _LlmSanitizeResponseWithContext
+_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest", "LlmSanitizeRequestContext"], Optional["LLMRequest"]]
+_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject, "LlmSanitizeResponseContext"], Optional[_JsonObject]]
 _EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
@@ -71,11 +69,26 @@ class LlmCodecIdentity:
     @property
     def id(self) -> str | None: ...
 
-class LlmSanitizeContext:
-    """Per-call context passed to an LLM sanitizer callback."""
+class LlmSanitizeRequestContext:
+    """Per-call context passed to an LLM request sanitizer callback."""
 
     @property
     def codec(self) -> LlmCodecIdentity: ...
+    def resolve_codec(self) -> LlmSanitizeRequestCodec | None: ...
+
+class LlmSanitizeResponseContext:
+    """Per-call context passed to an LLM response sanitizer callback."""
+
+    @property
+    def codec(self) -> LlmCodecIdentity: ...
+    def resolve_codec(self) -> LlmSanitizeResponseCodec | None: ...
+
+class LlmSanitizeRequestCodec:
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
+
+class LlmSanitizeResponseCodec:
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse: ...
 
 class ScopeAttributes:
     """Bitflags describing scope properties.

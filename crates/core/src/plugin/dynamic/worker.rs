@@ -19,10 +19,14 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
     DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HealthRequest,
-    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecKind, LlmInvocation,
-    LlmNextRequest, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
-    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
+    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
+    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecIdentity as ProtoLlmCodecIdentity,
+    LlmCodecKind, LlmInvocation, LlmNextRequest,
+    LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
+    LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
+    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
+    ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use semver::{Version, VersionReq};
@@ -55,8 +59,9 @@ use tower::service_fn;
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::{
-    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmSanitizeContext,
-    LlmStreamExecutionNextFn, ToolExecutionNextFn, current_scope_stack, with_scope_stack,
+    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmSanitizeRequestContext,
+    LlmSanitizeResponseContext, LlmStreamExecutionNextFn, ToolExecutionNextFn, current_scope_stack,
+    with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -64,6 +69,7 @@ use crate::api::scope::{
 };
 use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
@@ -1235,58 +1241,16 @@ impl WorkerPluginInstance {
         let instance = Arc::new(self.clone_for_callback());
         let callback_name = name.to_owned();
         match surface {
-            RegistrationSurface::LlmSanitizeRequestGuardrail if registration.contextual => ctx
+            RegistrationSurface::LlmSanitizeRequestGuardrail => ctx
                 .register_llm_sanitize_request_guardrail(
                     name,
                     priority,
                     Arc::new(move |request, context| {
                         instance
-                            .invoke_contextual_llm_request_json(
-                                &callback_name,
-                                request.clone(),
-                                context,
-                            )
+                            .invoke_llm_sanitize_request(&callback_name, request.clone(), context)
                             .unwrap_or_else(|_| {
                                 instance.log_callback_fallback(&callback_name, surface);
-                                Some(request)
-                            })
-                    }),
-                ),
-            RegistrationSurface::LlmSanitizeRequestGuardrail => ctx
-                .register_llm_sanitize_request_guardrail(
-                    name,
-                    priority,
-                    Arc::new(move |request, _context| {
-                        instance
-                            .invoke_llm_request_json(
-                                &callback_name,
-                                surface,
-                                "",
-                                request.clone(),
-                                None,
-                                None,
-                            )
-                            .map(Some)
-                            .unwrap_or_else(|_| {
-                                instance.log_callback_fallback(&callback_name, surface);
-                                Some(request)
-                            })
-                    }),
-                ),
-            RegistrationSurface::LlmSanitizeResponseGuardrail if registration.contextual => ctx
-                .register_llm_sanitize_response_guardrail(
-                    name,
-                    priority,
-                    Arc::new(move |value, context| {
-                        instance
-                            .invoke_contextual_llm_response_json(
-                                &callback_name,
-                                value.clone(),
-                                context,
-                            )
-                            .unwrap_or_else(|_| {
-                                instance.log_callback_fallback(&callback_name, surface);
-                                Some(value)
+                                None
                             })
                     }),
                 ),
@@ -1294,13 +1258,12 @@ impl WorkerPluginInstance {
                 .register_llm_sanitize_response_guardrail(
                     name,
                     priority,
-                    Arc::new(move |value, _context| {
+                    Arc::new(move |value, context| {
                         instance
-                            .invoke_llm_response_json(&callback_name, surface, "", value.clone())
-                            .map(Some)
+                            .invoke_llm_sanitize_response(&callback_name, value.clone(), context)
                             .unwrap_or_else(|_| {
                                 instance.log_callback_fallback(&callback_name, surface);
-                                Some(value)
+                                None
                             })
                     }),
                 ),
@@ -1603,59 +1566,15 @@ impl WorkerPluginCallback {
         }
     }
 
-    fn invoke_llm_request_json(
-        &self,
-        registration_name: &str,
-        surface: RegistrationSurface,
-        model_name: &str,
-        request: LlmRequest,
-        annotated: Option<AnnotatedLlmRequest>,
-        continuation_id: Option<String>,
-    ) -> FlowResult<LlmRequest> {
-        let invoke = self.base_request(
-            registration_name,
-            surface,
-            continuation_id,
-            Some(invoke_request_payload_llm(
-                model_name,
-                Some(request),
-                annotated,
-                None,
-            )),
-        );
-        let value = json_from_invoke_response(self.invoke_blocking(invoke)?)?;
-        serde_json::from_value(value).map_err(|err| {
-            FlowError::Internal(format!("worker returned invalid LLM request: {err}"))
-        })
-    }
-
-    fn invoke_llm_response_json(
-        &self,
-        registration_name: &str,
-        surface: RegistrationSurface,
-        model_name: &str,
-        response: Json,
-    ) -> FlowResult<Json> {
-        let invoke = self.base_request(
-            registration_name,
-            surface,
-            None,
-            Some(invoke_request_payload_llm(
-                model_name,
-                None,
-                None,
-                Some(response),
-            )),
-        );
-        json_from_invoke_response(self.invoke_blocking(invoke)?)
-    }
-
-    fn invoke_contextual_llm_request_json(
+    fn invoke_llm_sanitize_request(
         &self,
         registration_name: &str,
         request: LlmRequest,
-        context: LlmSanitizeContext,
+        context: LlmSanitizeRequestContext,
     ) -> FlowResult<Option<LlmRequest>> {
+        let capability_id = context
+            .resolve_codec()
+            .map(|codec| self.host_state.insert_request_codec(codec));
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmSanitizeRequestGuardrail,
@@ -1665,10 +1584,19 @@ impl WorkerPluginCallback {
                 Some(request),
                 None,
                 None,
-                context,
+                llm_invocation::SanitizeContext::RequestSanitizeContext(
+                    ProtoLlmSanitizeRequestContext {
+                        codec: Some(codec_identity_to_proto(&context.codec)),
+                        codec_capability_id: capability_id.clone(),
+                    },
+                ),
             )),
         );
-        optional_json_from_invoke_response(self.invoke_blocking(invoke)?)?
+        let response = self.invoke_blocking(invoke);
+        if let Some(capability_id) = capability_id {
+            self.host_state.remove_codec(&capability_id);
+        }
+        optional_json_from_invoke_response(response?)?
             .map(serde_json::from_value)
             .transpose()
             .map_err(|err| {
@@ -1676,12 +1604,15 @@ impl WorkerPluginCallback {
             })
     }
 
-    fn invoke_contextual_llm_response_json(
+    fn invoke_llm_sanitize_response(
         &self,
         registration_name: &str,
         response: Json,
-        context: LlmSanitizeContext,
+        context: LlmSanitizeResponseContext,
     ) -> FlowResult<Option<Json>> {
+        let capability_id = context
+            .resolve_codec()
+            .map(|codec| self.host_state.insert_response_codec(codec));
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmSanitizeResponseGuardrail,
@@ -1691,10 +1622,19 @@ impl WorkerPluginCallback {
                 None,
                 None,
                 Some(response),
-                context,
+                llm_invocation::SanitizeContext::ResponseSanitizeContext(
+                    ProtoLlmSanitizeResponseContext {
+                        codec: Some(codec_identity_to_proto(&context.codec)),
+                        codec_capability_id: capability_id.clone(),
+                    },
+                ),
             )),
         );
-        optional_json_from_invoke_response(self.invoke_blocking(invoke)?)
+        let response = self.invoke_blocking(invoke);
+        if let Some(capability_id) = capability_id {
+            self.host_state.remove_codec(&capability_id);
+        }
+        optional_json_from_invoke_response(response?)
     }
 
     fn invoke_llm_guardrail(
@@ -2068,6 +2008,12 @@ struct WorkerHostRuntimeState {
     scope_stack_cleanup_complete: Condvar,
     scope_handles: Mutex<HashMap<String, StoredScopeHandle>>,
     continuations: Mutex<HashMap<String, Continuation>>,
+    codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
+}
+
+enum WorkerCodecCapability {
+    Request(Arc<dyn LlmCodec>),
+    Response(Arc<dyn LlmResponseCodec>),
 }
 
 struct StoredScopeStack {
@@ -2119,6 +2065,57 @@ impl WorkerHostRuntimeState {
             scope_stack_cleanup_complete: Condvar::new(),
             scope_handles: Mutex::new(HashMap::new()),
             continuations: Mutex::new(HashMap::new()),
+            codecs: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn insert_request_codec(&self, codec: Arc<dyn LlmCodec>) -> String {
+        self.insert_codec(WorkerCodecCapability::Request(codec))
+    }
+
+    fn insert_response_codec(&self, codec: Arc<dyn LlmResponseCodec>) -> String {
+        self.insert_codec(WorkerCodecCapability::Response(codec))
+    }
+
+    fn insert_codec(&self, codec: WorkerCodecCapability) -> String {
+        let id = format!("codec-{}", Uuid::now_v7());
+        if let Ok(mut codecs) = self.codecs.lock() {
+            codecs.insert(id.clone(), codec);
+        }
+        id
+    }
+
+    fn remove_codec(&self, id: &str) {
+        if let Ok(mut codecs) = self.codecs.lock() {
+            codecs.remove(id);
+        }
+    }
+
+    fn request_codec(&self, id: &str) -> Result<Arc<dyn LlmCodec>, Status> {
+        let codecs = self
+            .codecs
+            .lock()
+            .map_err(|err| Status::internal(format!("codec lock poisoned: {err}")))?;
+        match codecs.get(id) {
+            Some(WorkerCodecCapability::Request(codec)) => Ok(codec.clone()),
+            Some(WorkerCodecCapability::Response(_)) => Err(Status::invalid_argument(
+                "codec capability is response-only",
+            )),
+            None => Err(Status::not_found("codec capability is unavailable")),
+        }
+    }
+
+    fn response_codec(&self, id: &str) -> Result<Arc<dyn LlmResponseCodec>, Status> {
+        let codecs = self
+            .codecs
+            .lock()
+            .map_err(|err| Status::internal(format!("codec lock poisoned: {err}")))?;
+        match codecs.get(id) {
+            Some(WorkerCodecCapability::Response(codec)) => Ok(codec.clone()),
+            Some(WorkerCodecCapability::Request(_)) => {
+                Err(Status::invalid_argument("codec capability is request-only"))
+            }
+            None => Err(Status::not_found("codec capability is unavailable")),
         }
     }
 
@@ -2520,6 +2517,73 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         });
         Ok(Response::new(Box::pin(mapped)))
     }
+
+    async fn decode_llm_codec_request(
+        &self,
+        request: Request<LlmCodecDecodeRequest>,
+    ) -> Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let codec = self.state.request_codec(&request.codec_capability_id)?;
+        let request = required_envelope(request.request, "codec request")
+            .and_then(|value| {
+                decode_json_envelope::<LlmRequest>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        Ok(Response::new(typed_json_result(
+            ANNOTATED_LLM_REQUEST_SCHEMA,
+            codec.decode(&request),
+        )))
+    }
+
+    async fn encode_llm_codec_request(
+        &self,
+        request: Request<LlmCodecEncodeRequest>,
+    ) -> Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let codec = self.state.request_codec(&request.codec_capability_id)?;
+        let annotated = required_envelope(request.annotated_request, "annotated codec request")
+            .and_then(|value| {
+                decode_json_envelope::<AnnotatedLlmRequest>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        let original = required_envelope(request.original_request, "original codec request")
+            .and_then(|value| {
+                decode_json_envelope::<LlmRequest>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        Ok(Response::new(typed_json_result(
+            LLM_REQUEST_SCHEMA,
+            codec.encode(&annotated, &original),
+        )))
+    }
+
+    async fn decode_llm_codec_response(
+        &self,
+        request: Request<LlmCodecDecodeResponse>,
+    ) -> Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let codec = self.state.response_codec(&request.codec_capability_id)?;
+        let response = required_envelope(request.response, "codec response")
+            .and_then(|value| {
+                decode_json_envelope::<Json>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        Ok(Response::new(json_result(
+            codec.decode_response(&response).and_then(|value| {
+                serde_json::to_value(value).map_err(|err| FlowError::Internal(err.to_string()))
+            }),
+        )))
+    }
 }
 
 impl WorkerHostRuntimeService {
@@ -2544,6 +2608,10 @@ impl WorkerHostRuntimeService {
 
 mod invoke_request_payload {
     pub(crate) use nemo_relay_worker_proto::v1::invoke_request::Payload;
+}
+
+mod llm_invocation {
+    pub(crate) use nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext;
 }
 
 mod invoke_response_result {
@@ -2582,10 +2650,7 @@ fn invoke_request_payload_llm(
         response: response
             .as_ref()
             .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
-        has_active_codec: false,
-        codec_name: None,
-        codec_kind: Some(LlmCodecKind::None as i32),
-        codec_id: None,
+        sanitize_context: None,
     })
 }
 
@@ -2594,10 +2659,8 @@ fn invoke_request_payload_llm_context(
     request: Option<LlmRequest>,
     annotated_request: Option<AnnotatedLlmRequest>,
     response: Option<Json>,
-    context: LlmSanitizeContext,
+    context: impl Into<llm_invocation::SanitizeContext>,
 ) -> invoke_request_payload::Payload {
-    let (codec_kind, codec_id) = codec_identity_to_proto(&context.codec);
-    let (has_active_codec, codec_name) = codec_identity_to_legacy_proto(&context.codec);
     invoke_request_payload::Payload::Llm(LlmInvocation {
         model_name: model_name.into(),
         request: request
@@ -2609,30 +2672,20 @@ fn invoke_request_payload_llm_context(
         response: response
             .as_ref()
             .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
-        has_active_codec,
-        codec_name,
-        codec_kind: Some(codec_kind),
-        codec_id,
+        sanitize_context: Some(context.into()),
     })
 }
 
-fn codec_identity_to_proto(identity: &LlmCodecIdentity) -> (i32, Option<String>) {
-    match identity {
+fn codec_identity_to_proto(identity: &LlmCodecIdentity) -> ProtoLlmCodecIdentity {
+    let (kind, id) = match identity {
         LlmCodecIdentity::None => (LlmCodecKind::None as i32, None),
         LlmCodecIdentity::BuiltIn(codec) => {
             (LlmCodecKind::Builtin as i32, Some(codec.id().to_owned()))
         }
         LlmCodecIdentity::Runtime(id) => (LlmCodecKind::Runtime as i32, Some(id.clone())),
         LlmCodecIdentity::Opaque => (LlmCodecKind::Opaque as i32, None),
-    }
-}
-
-fn codec_identity_to_legacy_proto(identity: &LlmCodecIdentity) -> (bool, Option<String>) {
-    match identity {
-        LlmCodecIdentity::None => (false, None),
-        LlmCodecIdentity::BuiltIn(codec) => (true, Some(codec.id().to_owned())),
-        LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => (true, None),
-    }
+    };
+    ProtoLlmCodecIdentity { kind, id }
 }
 
 fn json_envelope_infallible<T: serde::Serialize>(schema: &str, value: &T) -> JsonEnvelope {
@@ -2673,7 +2726,7 @@ fn optional_json_from_invoke_response(response: InvokeResponse) -> FlowResult<Op
         }
         Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
         _ => Err(FlowError::Internal(
-            "worker returned unexpected contextual sanitizer result".into(),
+            "worker returned unexpected LLM sanitizer result".into(),
         )),
     }
 }
@@ -2729,6 +2782,19 @@ fn json_result(result: FlowResult<Json>) -> JsonResult {
     match result {
         Ok(value) => JsonResult {
             value: Some(json_envelope_infallible(JSON_SCHEMA, &value)),
+            error: None,
+        },
+        Err(err) => JsonResult {
+            value: None,
+            error: Some(flow_error_to_worker(err)),
+        },
+    }
+}
+
+fn typed_json_result<T: serde::Serialize>(schema: &str, result: FlowResult<T>) -> JsonResult {
+    match result {
+        Ok(value) => JsonResult {
+            value: Some(json_envelope_infallible(schema, &value)),
             error: None,
         },
         Err(err) => JsonResult {

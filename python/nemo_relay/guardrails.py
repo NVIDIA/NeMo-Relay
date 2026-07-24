@@ -251,10 +251,11 @@ def register_llm_sanitize_request(name: str, priority: int, guardrail: LlmSaniti
         guardrail: Callable invoked as ``guardrail(request, context)`` that
             returns the sanitized request, or ``None`` to omit the LLM
             observability payload and its annotation. ``context`` contains
-            a ``LlmSanitizeContext`` whose ``codec`` is a structured identity
+            a ``LlmSanitizeRequestContext`` whose ``codec`` is a structured identity
             with ``kind`` of ``none``, ``builtin``, ``runtime``, or ``opaque``.
-            ``builtin`` and ``runtime`` identities include ``id``. Inspectable one-argument
-            callbacks remain supported for compatibility.
+            ``builtin`` and ``runtime`` identities include ``id``. Use
+            ``context.resolve_codec()`` to access the active codec for normalized
+            processing.
 
     Returns:
         None: This function returns after the guardrail is registered.
@@ -303,10 +304,11 @@ def register_llm_sanitize_response(name: str, priority: int, guardrail: LlmSanit
         guardrail: Callable invoked as ``guardrail(response, context)`` that
             returns the sanitized payload, or ``None`` to omit the LLM
             observability payload and its annotation. ``context`` contains
-            a ``LlmSanitizeContext`` whose ``codec`` is a structured identity
+            a ``LlmSanitizeResponseContext`` whose ``codec`` is a structured identity
             with ``kind`` of ``none``, ``builtin``, ``runtime``, or ``opaque``.
-            ``builtin`` and ``runtime`` identities include ``id``. Inspectable one-argument
-            callbacks remain supported for compatibility.
+            ``builtin`` and ``runtime`` identities include ``id``. Use
+            ``context.resolve_codec()`` to access the active codec for normalized
+            processing.
 
     Returns:
         None: This function returns after the guardrail is registered.

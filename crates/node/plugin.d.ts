@@ -4,6 +4,7 @@
 /// <reference lib="esnext.disposable" />
 
 import type { EventSanitizeFields, Json } from './index';
+import type { LlmCodec, LlmResponseCodec } from './typed';
 
 /** Codec identity available while a managed LLM event is sanitized. */
 export type LlmCodecIdentity =
@@ -13,8 +14,15 @@ export type LlmCodecIdentity =
   | { kind: 'opaque' };
 
 /** Codec identity available while a managed LLM event is sanitized. */
-export interface LlmSanitizeContext {
+export interface LlmSanitizeRequestContext {
   codec: LlmCodecIdentity;
+  resolveCodec(): LlmCodec | null;
+}
+
+/** Codec context available while an LLM response is sanitized. */
+export interface LlmSanitizeResponseContext {
+  codec: LlmCodecIdentity;
+  resolveCodec(): LlmResponseCodec | null;
 }
 
 /** Policy behavior for unsupported configuration. */
@@ -221,13 +229,13 @@ export interface PluginContext {
   registerLlmSanitizeRequestGuardrail(
     name: string,
     priority: number,
-    callback: (request: Json, context: LlmSanitizeContext) => Json | null,
+    callback: (request: Json, context: LlmSanitizeRequestContext) => Json | null,
   ): void;
   /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
   registerLlmSanitizeResponseGuardrail(
     name: string,
     priority: number,
-    callback: (response: Json, context: LlmSanitizeContext) => Json | null,
+    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null,
   ): void;
   /** Register an LLM conditional-execution guardrail for this component. */
   registerLlmConditionalExecutionGuardrail(

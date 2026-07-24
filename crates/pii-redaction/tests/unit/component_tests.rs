@@ -14,9 +14,9 @@ use crate::api::llm::{
     llm_call_execute, llm_stream_call_execute,
 };
 use crate::api::runtime::{
-    BuiltinLlmCodec, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmSanitizeContext,
-    LlmStreamExecutionNextFn, NemoRelayContextState, create_scope_stack, global_context,
-    set_thread_scope_stack,
+    BuiltinLlmCodec, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
+    NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
@@ -25,6 +25,7 @@ use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::api::tool::{ToolCallEndParams, ToolCallParams, tool_call, tool_call_end};
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
+use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
     ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
@@ -264,8 +265,35 @@ fn trajectory_backend(codec: Option<&str>, policy: &str) -> crate::builtin::Comp
     .unwrap()
 }
 
-fn no_codec_context() -> LlmSanitizeContext {
-    LlmSanitizeContext::default()
+fn no_codec_context() -> LlmSanitizeResponseContext {
+    LlmSanitizeResponseContext::default()
+}
+
+fn no_codec_request_context() -> LlmSanitizeRequestContext {
+    LlmSanitizeRequestContext::default()
+}
+
+struct IdentifiedRequestCodec {
+    identity: LlmCodecIdentity,
+    inner: OpenAIResponsesCodec,
+}
+
+impl LlmCodec for IdentifiedRequestCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        self.identity.clone()
+    }
+
+    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+        self.inner.decode(request)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        self.inner.encode(annotated, original)
+    }
 }
 
 #[test]
@@ -294,15 +322,40 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
                 "input": [{"role": "user", "content": [{"type": "input_text", "text": "sk-request-secret"}]}]
             }),
         },
-        LlmSanitizeContext {
-            codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
-        },
+        LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIResponsesCodec))),
     )
     .expect("the active OpenAI Responses codec must override the legacy fallback");
     assert_eq!(
         active_request.content["input"][0]["content"][0]["text"],
         json!("[REDACTED]")
     );
+
+    for identity in [
+        LlmCodecIdentity::Runtime("com.example.responses.v1".to_owned()),
+        LlmCodecIdentity::Opaque,
+    ] {
+        let active_request = sanitize_request(
+            LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "gpt-4.1-mini",
+                    "input": [{
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "sk-request-secret"}]
+                    }]
+                }),
+            },
+            LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(IdentifiedRequestCodec {
+                identity,
+                inner: OpenAIResponsesCodec,
+            }))),
+        )
+        .expect("an active runtime or opaque request codec must remain usable");
+        assert_eq!(
+            active_request.content["input"][0]["content"][0]["text"],
+            json!("[REDACTED]")
+        );
+    }
 
     let responses_payload = json!({
         "id": "resp_123",
@@ -316,9 +369,9 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
 
     let active_responses = sanitize_response(
         responses_payload.clone(),
-        LlmSanitizeContext {
-            codec: LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
-        },
+        LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::BuiltIn(
+            BuiltinLlmCodec::OpenAiResponses,
+        )),
     )
     .expect("the active OpenAI Responses codec must override the legacy fallback");
     assert_eq!(
@@ -334,9 +387,7 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
     assert!(
         sanitize_response(
             responses_payload,
-            LlmSanitizeContext {
-                codec: LlmCodecIdentity::Opaque,
-            },
+            LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::Opaque),
         )
         .is_none(),
         "a normalized-path policy must omit an unknown active provider payload"
@@ -348,9 +399,9 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
                 "id": "resp_123",
                 "output": [{"content": [{"type": "output_text", "text": "sk-runtime-secret"}]}]
             }),
-            LlmSanitizeContext {
-                codec: LlmCodecIdentity::Runtime("com.example.chat.v1".to_owned()),
-            },
+            LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::Runtime(
+                "com.example.chat.v1".to_owned(),
+            )),
         )
         .is_none(),
         "a normalized-path policy must omit a runtime codec until it has a compatible projection"
@@ -379,7 +430,7 @@ fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
                 headers: serde_json::Map::new(),
                 content: json!({"messages": "sk-request-secret"}),
             },
-            no_codec_context(),
+            no_codec_request_context(),
         )
         .is_none(),
         "a shallow legacy surface match must not enable a raw-payload fallback"
@@ -425,7 +476,7 @@ fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
             "participant": {"name": "Alice Example", "username": "alice"},
             "person_name": "Alice Example"
         }),
-    }, no_codec_context())
+    }, no_codec_request_context())
     .unwrap();
 
     assert_eq!(request.content["model"], "claude-sonnet-4-6");
@@ -534,7 +585,7 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
             "reasoning": {"effort": "high", "summary": "private reasoning"},
             "max_output_tokens": 100
         }),
-    }, no_codec_context())
+    }, no_codec_request_context())
     .unwrap();
     assert_eq!(responses_request.content["model"], "gpt-5");
     assert_eq!(responses_request.content["input"][0]["role"], "user");
@@ -583,7 +634,7 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
             ]}],
             "max_tokens": 128
         }),
-    }, no_codec_context())
+    }, no_codec_request_context())
     .unwrap();
     assert_eq!(anthropic_request.content["model"], "claude-sonnet-4-6");
     assert_eq!(anthropic_request.content["system"], "[REDACTED]");
