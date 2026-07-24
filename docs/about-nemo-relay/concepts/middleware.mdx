@@ -191,6 +191,90 @@ guardrails important:
 - If you need to change the real execution path, use an intercept
 - If you need to change only the emitted payload, use a sanitize guardrail
 
+## Contextual LLM Sanitizers
+
+Every LLM sanitize guardrail receives the payload first and a required
+per-call context second:
+
+```text
+request:  (LlmRequest, context) -> Option<LlmRequest>
+response: (Json, context) -> Option<Json>
+```
+
+`context.codec` is a binding-native codec identity object. Its `kind` and,
+when applicable, `id` fields are available as ordinary Rust, Python, Node, Go,
+or native-plugin properties rather than as a JSON payload.
+
+`codec.kind` is `none` for a legacy/manual call with no codec, `builtin` for
+Relay's built-in `openai_chat`, `openai_responses`, and `anthropic_messages`
+codecs, `runtime` for a named runtime-registered codec, and `opaque` for an
+active codec without a registered identity. `codec.id` is present only for
+`builtin` and `runtime`. Do not infer a provider from an opaque request shape.
+
+Return a payload to continue the sanitizer chain. Return `None` (or `null` in
+JavaScript) only when observing the payload would be unsafe: Relay omits the
+LLM event payload and its annotation, while leaving the client-visible request
+and response unchanged. Omission short-circuits later LLM sanitizers.
+
+Rust, Go, raw C FFI, native plugins, and Rust worker plugins must implement
+this two-parameter contract. Python accepts an inspectable one-parameter
+callback as a compatibility form and supplies no context to it. Node.js always
+calls the callback with two arguments; JavaScript one-parameter callbacks
+naturally ignore the extra argument. In both languages, new callbacks should
+declare both parameters.
+
+### Rust
+
+```rust
+use std::sync::Arc;
+use nemo_relay::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay::api::registry::register_llm_sanitize_request_guardrail;
+
+register_llm_sanitize_request_guardrail(
+    "redact-openai-chat",
+    10,
+    Arc::new(|mut request, context| {
+        if context.codec == LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat) {
+            request.content["messages"] = serde_json::json!([]);
+        }
+        Some(request)
+    }),
+)?;
+```
+
+### Python
+
+```python
+import nemo_relay
+from nemo_relay import LLMRequest
+from nemo_relay import guardrails
+
+def redact_request(request: LLMRequest, context: nemo_relay.LlmSanitizeContext) -> LLMRequest | None:
+    if context.codec.kind == "builtin" and context.codec.id == "openai_chat":
+        return LLMRequest(request.headers, {"messages": []})
+    return request
+
+guardrails.register_llm_sanitize_request("redact-openai-chat", 10, redact_request)
+```
+
+### Node.js
+
+```js
+const relay = require("nemo-relay-node");
+
+relay.registerLlmSanitizeRequestGuardrail(
+  "redact-openai-chat",
+  10,
+  (request, context) =>
+    context.codec.kind === "builtin" && context.codec.id === "openai_chat"
+      ? { ...request, content: { ...request.content, messages: [] } }
+      : request,
+);
+```
+
+The same registration names support scope-local and plugin-context
+registrations. Priority and name tie-break ordering are unchanged.
+
 ## Detailed Execution Flow
 
 <MermaidStyles />

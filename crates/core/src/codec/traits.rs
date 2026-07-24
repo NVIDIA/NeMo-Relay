@@ -4,6 +4,7 @@
 //! LLM codec traits for bidirectional request translation.
 
 use crate::api::llm::LlmRequest;
+use crate::api::runtime::LlmCodecIdentity;
 use crate::error::Result;
 use crate::json::Json;
 
@@ -33,6 +34,15 @@ use super::response::AnnotatedLlmResponse;
 ///   so the Rust core cannot know concrete types at compile time.
 ///   Store as `Arc<dyn LlmCodec>`.
 pub trait LlmCodec: Send + Sync {
+    /// Return this codec's identity for LLM sanitizer context.
+    ///
+    /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless
+    /// they have a stable runtime registration ID. Callers must not infer a
+    /// provider surface from an opaque implementation or request shape.
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Opaque
+    }
+
     /// Parse opaque request content into structured form.
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest>;
 
@@ -72,6 +82,14 @@ pub trait LlmCodec: Send + Sync {
 /// 1. Deserialize raw JSON into API-specific intermediate structs
 /// 2. Map intermediate structs into the normalized `AnnotatedLlmResponse`
 pub trait LlmResponseCodec: Send + Sync {
+    /// Return this codec's identity for LLM sanitizer context.
+    ///
+    /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless
+    /// they have a stable runtime registration ID.
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Opaque
+    }
+
     /// Parse a raw JSON response into normalized structured form.
     ///
     /// Implementations should return `Err` only for genuinely unparseable input.

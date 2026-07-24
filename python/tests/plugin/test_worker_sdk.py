@@ -29,6 +29,7 @@ from nemo_relay_plugin import (  # noqa: E402
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
+    LlmSanitizeContext,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
@@ -697,6 +698,93 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
     assert registrations.count(("duplicate", pb.TOOL_REQUEST_INTERCEPT)) == 1
     assert ("shared", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL) in registrations
     assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
+
+
+def test_plugin_context_registers_contextual_llm_sanitizers_under_standard_names():
+    context = PluginContext()
+
+    context.register_llm_sanitize_request_guardrail(
+        "request",
+        lambda request, codec_context: request if codec_context.codec.kind != "none" else None,
+    )
+    context.register_llm_sanitize_response_guardrail(
+        "response",
+        lambda response, codec_context: response if codec_context.codec.kind == "builtin" else None,
+    )
+
+    assert [
+        (registration.local_name, registration.surface, registration.contextual)
+        for registration in context._handlers.registrations
+    ] == [
+        ("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, True),
+        ("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, True),
+    ]
+
+
+async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
+    seen: list[tuple[str, LlmSanitizeContext]] = []
+
+    class ContextualSanitizerPlugin(WorkerPlugin):
+        plugin_id = "tests.contextual_sanitizer"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def request_sanitizer(request: Json, codec_context: LlmSanitizeContext) -> None:
+                del request
+                seen.append(("request", codec_context))
+
+            def response_sanitizer(response: Json, codec_context: LlmSanitizeContext) -> None:
+                del response
+                seen.append(("response", codec_context))
+
+            ctx.register_llm_sanitize_request_guardrail("request", request_sanitizer)
+            ctx.register_llm_sanitize_response_guardrail("response", response_sanitizer)
+
+    service = _service(ContextualSanitizerPlugin(), RecordingHostStub())
+    await _register(service)
+    for codec_kind, codec_id in [
+        (pb.LLM_CODEC_KIND_NONE, None),
+        (pb.LLM_CODEC_KIND_BUILTIN, "openai_chat"),
+        (pb.LLM_CODEC_KIND_BUILTIN, "openai_responses"),
+        (pb.LLM_CODEC_KIND_BUILTIN, "anthropic_messages"),
+        (pb.LLM_CODEC_KIND_RUNTIME, "com.example.chat.v1"),
+        (pb.LLM_CODEC_KIND_OPAQUE, None),
+    ]:
+        payload = _llm_payload(request={"content": {"prompt": "secret"}}, response={"secret": "value"})
+        payload.codec_kind = codec_kind
+        if codec_id is not None:
+            payload.codec_id = codec_id
+
+        request_response = await service.Invoke(
+            _invoke_request("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, llm=payload), AbortContext()
+        )
+        response_response = await service.Invoke(
+            _invoke_request("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, llm=payload), AbortContext()
+        )
+        assert request_response.WhichOneof("result") == "empty"
+        assert response_response.WhichOneof("result") == "empty"
+
+    assert seen == [
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("none"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("none"))),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_chat"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_chat"))),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_responses"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "openai_responses"))),
+        (
+            "request",
+            LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "anthropic_messages")),
+        ),
+        (
+            "response",
+            LlmSanitizeContext(plugin_api.LlmCodecIdentity("builtin", "anthropic_messages")),
+        ),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
+        ("request", LlmSanitizeContext(plugin_api.LlmCodecIdentity("opaque"))),
+        ("response", LlmSanitizeContext(plugin_api.LlmCodecIdentity("opaque"))),
+    ]
 
 
 @pytest.mark.parametrize(

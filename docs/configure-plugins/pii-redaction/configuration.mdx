@@ -72,7 +72,7 @@ The top-level PII redaction object contains:
 | `tool_input` | Enables sanitization of emitted tool-request observability payloads. Defaults to `true`. |
 | `tool_output` | Enables sanitization of emitted tool-response observability payloads. Defaults to `true`. |
 | `priority` | Guardrail priority. Lower values run earlier. Defaults to `100`. |
-| `codec` | Managed LLM provider codec. Required when `input` or `output` is enabled. |
+| `codec` | Optional compatibility fallback for legacy/manual managed LLM calls that do not expose an active codec. |
 | `profiles` | Ordered redaction profiles. Each profile selects `builtin` or `local_model`; enabled profiles cover every supported sanitization surface. |
 | `builtin` | Built-in backend settings used when `mode = "builtin"`. |
 | `local` | Local-backend settings used when `mode = "local_model"`. |
@@ -89,6 +89,34 @@ order to break ties. Relay assigns internal names such as `profile_0`, so
 profiles do not require IDs. Disabled profiles are validated but do not
 register callbacks. The complete array is replaced as one value during config
 layering.
+
+### Mixed-Provider Gateway Example
+
+For a gateway that routes requests to more than one supported provider, omit
+`codec`. Relay selects the active codec for each managed call, so the same
+policy safely applies to OpenAI Chat, OpenAI Responses, and Anthropic Messages
+traffic:
+
+```toml
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[components.config]
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_paths = ["/messages/0/content", "/message"]
+```
+
+Use `codec = "openai_chat"` only as a compatibility fallback for a legacy
+manual call where Relay cannot identify an active codec. It is ignored when a
+managed call supplies a recognized provider codec.
 
 ## Backend Support
 
@@ -120,7 +148,7 @@ paths, and supported codecs.
 To use `mode = "builtin"`:
 
 - `builtin` settings are required.
-- `codec` is required when `input` or `output` is enabled.
+- Set `codec` only when legacy/manual managed LLM calls need a fallback codec.
 - `builtin.action` must be `remove`, `redact`, `regex_replace`, `hash`, or `mask`.
 - `builtin.pattern` or `builtin.detector` is required when `builtin.action = "regex_replace"` or `builtin.action = "redact"`.
 
@@ -140,7 +168,6 @@ enabled = true
 
 [components.config]
 version = 1
-codec = "openai_chat"
 
 [[components.config.profiles]]
 mode = "builtin"
@@ -290,7 +317,7 @@ The plugin uses different payload boundaries for tools and LLMs:
 
 - Tools use JSON-native payloads. Paths point into the emitted tool args or
   tool result shape directly.
-- LLMs use the selected built-in codec. Prefer normalized Relay paths such as:
+- LLMs use the active built-in codec for that managed call. Prefer normalized Relay paths such as:
   - `/messages/0/content` for request message content
   - `/message` for the normalized assistant response text
 - Marks and non-tool, non-LLM scopes sanitize `data`, `category_profile`, and
@@ -300,7 +327,10 @@ The plugin uses different payload boundaries for tools and LLMs:
 
 The current implementation also preserves provider-shaped response-path
 compatibility for the supported codecs, but normalized LLM paths are the
-recommended contract for new configuration.
+recommended contract for new configuration. If normalized paths are configured
+and Relay has neither an active recognized codec nor a configured compatibility
+fallback, the LLM event payload and its annotation are omitted rather than
+emitting unsanitized content.
 
 ## Decision Rule
 
@@ -355,7 +385,7 @@ That means:
 - The emitted NeMo Relay start, end, or mark event observability fields are
   sanitized.
 - `annotated_response` is regenerated from the sanitized end-event payload when
-  the configured response codec can decode that payload.
+  the active response codec can decode that payload.
 - Subscribers and exporters consume only the sanitized canonical event stream.
   Each exporter can omit or transform fields as part of its normal projection,
   but raw values removed by the plugin do not bypass the sanitizer.

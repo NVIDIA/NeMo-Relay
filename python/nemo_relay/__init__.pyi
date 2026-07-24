@@ -64,6 +64,9 @@ from nemo_relay._native import (
     LLMAttributes as LLMAttributes,
 )
 from nemo_relay._native import (
+    LlmCodecIdentity as LlmCodecIdentity,
+)
+from nemo_relay._native import (
     LLMHandle as LLMHandle,
 )
 from nemo_relay._native import (
@@ -71,6 +74,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     LLMRequestInterceptOutcome as LLMRequestInterceptOutcome,
+)
+from nemo_relay._native import (
+    LlmSanitizeContext as LlmSanitizeContext,
 )
 from nemo_relay._native import (
     MarkEvent as MarkEvent,
@@ -172,23 +178,33 @@ Arguments:
 Return:
     ``None`` to allow execution, or a rejection message to block it.
 """
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest]
+_LlmSanitizeRequestWithContext: TypeAlias = Callable[[LLMRequest, "LlmSanitizeContext"], Optional[LLMRequest]]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest] | _LlmSanitizeRequestWithContext
 """Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 
 Arguments:
-    The current LLM request.
+    The current LLM request and a context object containing a tagged ``codec``
+    identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
+    ``builtin`` and ``runtime`` identities include ``id``. One-argument
+    callbacks remain supported for compatibility.
 
 Return:
-    Request object recorded on the emitted lifecycle event.
+    Request object recorded on the emitted lifecycle event, or ``None`` to omit
+    the LLM observability payload and annotation.
 """
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject]
+_LlmSanitizeResponseWithContext: TypeAlias = Callable[[JsonObject, "LlmSanitizeContext"], Optional[JsonObject]]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject] | _LlmSanitizeResponseWithContext
 """Guardrail callback that sanitizes an emitted JSON LLM response payload.
 
 Arguments:
-    The response object to sanitize for observability.
+    The response object and a context object containing a tagged ``codec``
+    identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
+    ``builtin`` and ``runtime`` identities include ``id``. One-argument
+    callbacks remain supported for compatibility.
 
 Return:
-    Response object recorded on the emitted lifecycle event.
+    Response object recorded on the emitted lifecycle event, or ``None`` to
+    omit the LLM observability payload and annotation.
 """
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
 """Guardrail callback that can block an LLM call.

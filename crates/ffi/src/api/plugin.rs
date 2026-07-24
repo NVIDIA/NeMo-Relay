@@ -4,19 +4,19 @@
 use super::{
     Arc, CStr, ConfigDiagnostic, DiagnosticLevel, DynamicPluginActivationSpec, FfiPluginActivation,
     FfiPluginContext, Future, NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb,
-    NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb,
-    NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb,
-    NemoRelayPluginValidateCb, NemoRelayStatus, NemoRelayToolConditionalCb,
-    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError,
-    PluginHostActivation, PluginRegistrationContext, active_plugin_report, c_char, c_str_to_json,
-    c_str_to_string, clear_last_error, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
-    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
-    status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_sanitize_fn,
-    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
-    wrap_llm_request_intercept_fn, wrap_llm_response_fn, wrap_llm_sanitize_request_fn,
-    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
-    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayFreeFn, NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb,
+    NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
+    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayStatus,
+    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin,
+    PluginConfig, PluginError, PluginHostActivation, PluginRegistrationContext,
+    active_plugin_report, c_char, c_str_to_json, c_str_to_string, clear_last_error,
+    clear_plugin_configuration, deregister_plugin, initialize_plugins, json_to_c_string,
+    last_error_message, list_plugin_kinds, nemo_relay_string_free, register_adaptive_component,
+    register_plugin, set_last_error, status_from_plugin_error, tokio_runtime,
+    validate_plugin_config, wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -731,7 +731,7 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_sanitize_request
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoRelayLlmRequestCb,
+    cb: NemoRelayLlmSanitizeRequestCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
@@ -763,7 +763,7 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_sanitize_respons
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoRelayJsonCb,
+    cb: NemoRelayLlmSanitizeResponseCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
@@ -776,7 +776,7 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_sanitize_respons
         Ok(value) => value,
         Err(status) => return status,
     };
-    let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
+    let wrapped = wrap_llm_sanitize_response_fn(cb, user_data, free_fn);
     match unsafe { &mut *((*ctx).0) }
         .register_llm_sanitize_response_guardrail(&name, priority, wrapped)
     {

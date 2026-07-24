@@ -134,6 +134,33 @@ class TestLLMGuardrails:
         guardrails.register_llm_sanitize_response("py_llm_san_resp", 1, sanitizer)
         guardrails.deregister_llm_sanitize_response("py_llm_san_resp")
 
+    def test_sanitizers_receive_a_structured_codec_context(self):
+        request_contexts = []
+        response_contexts = []
+
+        def sanitize_request(request, context):
+            request_contexts.append(context)
+            return request
+
+        def sanitize_response(response, context):
+            response_contexts.append(context)
+            return response
+
+        guardrails.register_llm_sanitize_request("py_llm_structured_context_request", 1, sanitize_request)
+        guardrails.register_llm_sanitize_response("py_llm_structured_context_response", 1, sanitize_response)
+        try:
+            handle = llm.call("py_llm_structured_context", make_request())
+            llm.call_end(handle, {"response": "ok"})
+        finally:
+            guardrails.deregister_llm_sanitize_request("py_llm_structured_context_request")
+            guardrails.deregister_llm_sanitize_response("py_llm_structured_context_response")
+
+        assert len(request_contexts) == 1
+        assert len(response_contexts) == 1
+        for context in [*request_contexts, *response_contexts]:
+            assert context.codec.kind == "none"
+            assert context.codec.id is None
+
     def test_conditional_execution_guardrail(self):
         def checker(request):
             return None

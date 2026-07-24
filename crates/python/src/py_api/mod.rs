@@ -1091,7 +1091,7 @@ fn register_llm_sanitize_request_guardrail(
     core_registry_api::register_llm_sanitize_request_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1114,7 +1114,7 @@ fn register_llm_sanitize_response_guardrail(
     core_registry_api::register_llm_sanitize_response_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1542,7 +1542,7 @@ fn scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1568,7 +1568,7 @@ fn scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }

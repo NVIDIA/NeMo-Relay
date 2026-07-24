@@ -5,6 +5,18 @@
 
 import type { EventSanitizeFields, Json } from './index';
 
+/** Codec identity available while a managed LLM event is sanitized. */
+export type LlmCodecIdentity =
+  | { kind: 'none' }
+  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' }
+  | { kind: 'runtime'; id: string }
+  | { kind: 'opaque' };
+
+/** Codec identity available while a managed LLM event is sanitized. */
+export interface LlmSanitizeContext {
+  codec: LlmCodecIdentity;
+}
+
 /** Policy behavior for unsupported configuration. */
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
 
@@ -205,10 +217,18 @@ export interface PluginContext {
     priority: number,
     callback: (name: string, args: Json) => string | null,
   ): void;
-  /** Register an LLM sanitize-request guardrail for this component. */
-  registerLlmSanitizeRequestGuardrail(name: string, priority: number, callback: (request: Json) => Json): void;
-  /** Register an LLM sanitize-response guardrail for this component. */
-  registerLlmSanitizeResponseGuardrail(name: string, priority: number, callback: (response: Json) => Json): void;
+  /** Register an LLM sanitize-request guardrail. The callback receives `(request, context)`. */
+  registerLlmSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: Json, context: LlmSanitizeContext) => Json | null,
+  ): void;
+  /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
+  registerLlmSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (response: Json, context: LlmSanitizeContext) => Json | null,
+  ): void;
   /** Register an LLM conditional-execution guardrail for this component. */
   registerLlmConditionalExecutionGuardrail(
     name: string,

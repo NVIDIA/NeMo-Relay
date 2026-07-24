@@ -73,6 +73,15 @@ A plugin can install one or more of these runtime surfaces:
   conditional-execution guardrails, request intercepts, execution intercepts,
   and stream execution intercepts.
 
+LLM sanitize guardrails always receive the request or response first, followed
+by a structured context whose `codec` is `none`, `builtin(id)`, `runtime(id)`,
+or `opaque`. They may omit the LLM event payload by returning no value. Native plugins use ABI v2 and Rust
+worker plugins use the two-parameter callback directly. The worker protocol
+retains internal compatibility metadata only to dispatch existing Python worker
+handlers safely. Python source callbacks may still accept one parameter, and
+Node.js one-parameter callbacks ignore the second argument, but new code should
+declare `(payload, context)` under the ordinary registration name.
+
 Start with one surface. Add a bundle only when one configuration document clearly controls related behavior, such as a subscriber plus the request intercepts needed to add correlation metadata.
 
 ## Registration Lifecycle

@@ -141,9 +141,61 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
 /// # Parameters
 /// - First argument: LLM request payload to sanitize for observability.
 ///
+/// Relay's built-in LLM codec identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinLlmCodec {
+    /// OpenAI Chat Completions request and response payloads.
+    OpenAiChat,
+    /// OpenAI Responses request and response payloads.
+    OpenAiResponses,
+    /// Anthropic Messages request and response payloads.
+    AnthropicMessages,
+}
+
+impl BuiltinLlmCodec {
+    /// Stable identifier used in configuration and language bindings.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::OpenAiChat => "openai_chat",
+            Self::OpenAiResponses => "openai_responses",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+}
+
+/// Per-call LLM codec identity supplied to sanitize guardrails.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LlmCodecIdentity {
+    /// No codec was active for this payload direction.
+    #[default]
+    None,
+    /// A Relay built-in codec was active.
+    BuiltIn(BuiltinLlmCodec),
+    /// A runtime-registered codec was active, identified by its stable ID.
+    Runtime(String),
+    /// A codec was active but does not expose a registered identity.
+    Opaque,
+}
+
+/// Per-call codec context for first-party LLM sanitize guardrails.
+///
+/// The context distinguishes no codec, Relay built-ins, runtime-registered
+/// codecs, and active codecs with no stable identity.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LlmSanitizeContext {
+    /// Identity of the codec active for this payload direction.
+    pub codec: LlmCodecIdentity,
+}
+
 /// # Returns
-/// Sanitized [`LlmRequest`] for the emitted event.
-pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
+/// `Some` contains the sanitized request for the emitted event. `None` omits
+/// both the raw request payload and its annotation from that event.
+///
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
+pub type LlmSanitizeRequestFn =
+    Arc<dyn Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync>;
 /// Sanitize an LLM response before the runtime records it.
 ///
 /// These callbacks rewrite the JSON response payload captured on LLM-end
@@ -153,8 +205,13 @@ pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sy
 /// - First argument: JSON response payload to sanitize for observability.
 ///
 /// # Returns
-/// Sanitized JSON response payload for the emitted event.
-pub type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
+/// `Some` contains the sanitized response for the emitted event. `None` omits
+/// both the raw response payload and its annotation from that event.
+///
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
+pub type LlmSanitizeResponseFn =
+    Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,

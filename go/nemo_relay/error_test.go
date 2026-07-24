@@ -126,7 +126,7 @@ func TestAlreadyExistsErrorOnDuplicateSubscriber(t *testing.T) {
 func TestAlreadyExistsErrorOnDuplicateLlmGuardrails(t *testing.T) {
 	t.Run("LlmSanitizeRequest", func(t *testing.T) {
 		name := "go_err_dup_llm_san_req"
-		fn := func(h, c json.RawMessage) (json.RawMessage, json.RawMessage) { return h, c }
+		fn := func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) { return request, false }
 
 		err := RegisterLlmSanitizeRequestGuardrail(name, 1, fn)
 		if err != nil {
@@ -142,7 +142,7 @@ func TestAlreadyExistsErrorOnDuplicateLlmGuardrails(t *testing.T) {
 
 	t.Run("LlmSanitizeResponse", func(t *testing.T) {
 		name := "go_err_dup_llm_san_resp"
-		fn := func(r json.RawMessage) json.RawMessage { return r }
+		fn := func(r json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) { return r, false }
 
 		err := RegisterLlmSanitizeResponseGuardrail(name, 1, fn)
 		if err != nil {

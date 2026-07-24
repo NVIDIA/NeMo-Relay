@@ -320,8 +320,12 @@ fn context_state_supports_extensions_events_and_builders() {
         content: json!({"messages": []}),
     };
     let entries = state.llm_sanitize_request_entries(&[]);
-    let sanitized =
-        NemoRelayContextState::llm_sanitize_request_snapshot_chain(request.clone(), &entries);
+    let sanitized = NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+        request.clone(),
+        crate::api::runtime::LlmSanitizeContext::default(),
+        &entries,
+    )
+    .expect("an empty sanitizer chain must retain the request");
     assert!(sanitized.headers.is_empty());
 
     let events = Arc::new(Mutex::new(Vec::<String>::new()));

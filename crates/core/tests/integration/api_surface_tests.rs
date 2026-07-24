@@ -903,14 +903,18 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     .unwrap();
     assert!(deregister_tool_execution_intercept("tool-execution").unwrap());
 
-    register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, Arc::new(|request| request))
-        .unwrap();
+    register_llm_sanitize_request_guardrail(
+        "llm-sanitize-request",
+        1,
+        Arc::new(|request, _context| Some(request)),
+    )
+    .unwrap();
     assert!(deregister_llm_sanitize_request_guardrail("llm-sanitize-request").unwrap());
 
     register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     assert!(deregister_llm_sanitize_response_guardrail("llm-sanitize-response").unwrap());
@@ -1134,7 +1138,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "llm-sanitize-request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Some(request)),
     )
     .unwrap();
     assert!(
@@ -1146,7 +1150,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     assert!(
@@ -1486,21 +1490,21 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|mut request| {
+        Arc::new(|mut request, _context| {
             request.headers.insert("x-sanitized".into(), json!(true));
-            request
+            Some(request)
         }),
     )
     .unwrap();
     register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|mut response| {
+        Arc::new(|mut response, _context| {
             response
                 .as_object_mut()
                 .unwrap()
                 .insert("sanitized_response".into(), json!(true));
-            response
+            Some(response)
         }),
     )
     .unwrap();

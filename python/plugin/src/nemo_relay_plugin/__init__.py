@@ -20,6 +20,8 @@ Public data types:
     Event: A Relay event represented as a JSON object.
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
+    LlmCodecIdentity: Typed discriminator for the active LLM codec.
+    LlmSanitizeContext: Codec identity supplied to an LLM sanitizer.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
@@ -71,6 +73,7 @@ from ._api import (
     EventSanitizeCallback,
     EventSanitizeFields,
     Json,
+    LlmCodecIdentity,
     LlmConditionalCallback,
     LlmExecutionCallback,
     LlmNext,
@@ -84,6 +87,7 @@ from ._api import (
     LlmRequest,
     LlmRequestCallback,
     LlmRequestInterceptOutcome,
+    LlmSanitizeContext,
     LlmSanitizeRequestCallback,
     LlmSanitizeResponseCallback,
     LlmStreamExecutionCallback,
@@ -113,6 +117,7 @@ __all__ = [
     "EventSanitizeFields",
     "Json",
     "LlmConditionalCallback",
+    "LlmCodecIdentity",
     "LlmExecutionCallback",
     "LlmOptimizationContribution",
     "LlmOptimizationDataSchema",
@@ -123,6 +128,7 @@ __all__ = [
     "LlmOptimizationTokens",
     "LlmNext",
     "LlmRequest",
+    "LlmSanitizeContext",
     "LlmRequestCallback",
     "LlmRequestInterceptOutcome",
     "LlmSanitizeRequestCallback",

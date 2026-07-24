@@ -484,7 +484,15 @@ async fn worker_service_invokes_every_registration_surface() {
     let plugin = Arc::new(SurfacePlugin::default());
     let events = plugin.events.clone();
     let (worker_handle, mut client) = spawn_worker(plugin, tcp_endpoint(&host_endpoint)).await;
-    register_plugin(&mut client).await;
+    let registrations = register_plugin(&mut client).await;
+    for name in ["llm-sanitize-request", "llm-sanitize-response"] {
+        assert!(
+            registrations
+                .iter()
+                .any(|registration| registration.local_name == name && registration.contextual),
+            "{name} must announce codec-context support"
+        );
+    }
 
     let subscriber_response = client
         .invoke(Request::new(event_invoke("subscriber")))
@@ -1730,11 +1738,11 @@ impl WorkerPlugin for SurfacePlugin {
             }
         });
 
-        ctx.register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, |request| {
-            set_llm_phase(request, "llm_sanitize_request")
+        ctx.register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, |request, _| {
+            Some(set_llm_phase(request, "llm_sanitize_request"))
         });
-        ctx.register_llm_sanitize_response_guardrail("llm-sanitize-response", 1, |value| {
-            set_json_field(value, "phase", "llm_sanitize_response")
+        ctx.register_llm_sanitize_response_guardrail("llm-sanitize-response", 1, |value, _| {
+            Some(set_json_field(value, "phase", "llm_sanitize_response"))
         });
         ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, |request| {
             Ok(request
@@ -2317,6 +2325,10 @@ fn llm_invoke(
                 ),
                 annotated_request: annotated_request.map(json_env),
                 response: response.map(json_env),
+                has_active_codec: false,
+                codec_name: None,
+                codec_kind: None,
+                codec_id: None,
             },
         )),
     }
@@ -2340,6 +2352,10 @@ fn llm_invoke_without_request(
                 request: None,
                 annotated_request: None,
                 response: None,
+                has_active_codec: false,
+                codec_name: None,
+                codec_kind: None,
+                codec_id: None,
             },
         )),
     }

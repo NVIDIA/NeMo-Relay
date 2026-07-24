@@ -388,14 +388,11 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
+        let callback = wrap_py_llm_sanitize_request_fn(callback)?;
         self.register_callback(
             name,
             |qualified_name| {
-                register_llm_sanitize_request_guardrail(
-                    qualified_name,
-                    priority,
-                    wrap_py_llm_sanitize_request_fn(callback),
-                )
+                register_llm_sanitize_request_guardrail(qualified_name, priority, callback)
             },
             deregister_llm_sanitize_request_guardrail,
             "llm sanitize request guardrail",
@@ -409,14 +406,11 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
+        let callback = wrap_py_llm_sanitize_response_fn(callback)?;
         self.register_callback(
             name,
             |qualified_name| {
-                register_llm_sanitize_response_guardrail(
-                    qualified_name,
-                    priority,
-                    wrap_py_llm_sanitize_response_fn(callback),
-                )
+                register_llm_sanitize_response_guardrail(qualified_name, priority, callback)
             },
             deregister_llm_sanitize_response_guardrail,
             "llm sanitize response guardrail",

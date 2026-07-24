@@ -248,8 +248,13 @@ def register_llm_sanitize_request(name: str, priority: int, guardrail: LlmSaniti
     Args:
         name: Unique guardrail name used for later replacement or removal.
         priority: Execution order for the guardrail. Lower values run first.
-        guardrail: Callable invoked as ``guardrail(request)`` that must return
-            the sanitized request recorded on the emitted start event.
+        guardrail: Callable invoked as ``guardrail(request, context)`` that
+            returns the sanitized request, or ``None`` to omit the LLM
+            observability payload and its annotation. ``context`` contains
+            a ``LlmSanitizeContext`` whose ``codec`` is a structured identity
+            with ``kind`` of ``none``, ``builtin``, ``runtime``, or ``opaque``.
+            ``builtin`` and ``runtime`` identities include ``id``. Inspectable one-argument
+            callbacks remain supported for compatibility.
 
     Returns:
         None: This function returns after the guardrail is registered.
@@ -263,7 +268,7 @@ def register_llm_sanitize_request(name: str, priority: int, guardrail: LlmSaniti
 
         import nemo_relay
 
-        def strip_auth(request):
+        def strip_auth(request, context):
             headers = {k: v for k, v in request.headers.items() if k.lower() != "authorization"}
             return nemo_relay.LLMRequest(headers, request.content)
 
@@ -295,8 +300,13 @@ def register_llm_sanitize_response(name: str, priority: int, guardrail: LlmSanit
     Args:
         name: Unique guardrail name used for later replacement or removal.
         priority: Execution order for the guardrail. Lower values run first.
-        guardrail: Callable invoked as ``guardrail(response)`` that must return
-            the sanitized payload recorded on the emitted end event.
+        guardrail: Callable invoked as ``guardrail(response, context)`` that
+            returns the sanitized payload, or ``None`` to omit the LLM
+            observability payload and its annotation. ``context`` contains
+            a ``LlmSanitizeContext`` whose ``codec`` is a structured identity
+            with ``kind`` of ``none``, ``builtin``, ``runtime``, or ``opaque``.
+            ``builtin`` and ``runtime`` identities include ``id``. Inspectable one-argument
+            callbacks remain supported for compatibility.
 
     Returns:
         None: This function returns after the guardrail is registered.

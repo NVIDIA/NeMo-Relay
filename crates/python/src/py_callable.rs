@@ -27,8 +27,9 @@ use std::task::{Context, Poll};
 
 use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
-    LlmStreamInner, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
@@ -47,10 +48,33 @@ use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
-    PyToolExecutionInterceptOutcome,
+    PyLlmSanitizeContext, PyToolExecutionInterceptOutcome,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
+
+fn python_callback_accepts_context(py_fn: &Py<PyAny>) -> PyResult<bool> {
+    Python::attach(|py| {
+        let inspect = py.import("inspect")?;
+        let signature = inspect.call_method1("signature", (py_fn.bind(py),)).map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "LLM sanitizer callback signature cannot be inspected; use a callable with an inspectable one- or two-parameter signature",
+            )
+        })?;
+        if signature
+            .call_method1("bind", (py.None(), py.None()))
+            .is_ok()
+        {
+            return Ok(true);
+        }
+        if signature.call_method1("bind", (py.None(),)).is_ok() {
+            return Ok(false);
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "LLM sanitizer callback must accept `(payload)` or `(payload, context)`",
+        ))
+    })
+}
 
 fn split_json_or_future(
     py: Python<'_>,
@@ -792,9 +816,9 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
     )
 }
 
-/// Wrap a Python callable `(LlmRequest) -> LlmRequest` for LLM sanitize request guardrails.
-pub fn wrap_py_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn {
-    Arc::new(move |request: LlmRequest| {
+/// Wrap a legacy Python callable `(LlmRequest) -> LlmRequest`.
+fn wrap_py_legacy_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn {
+    Arc::new(move |request: LlmRequest, _context: LlmSanitizeContext| {
         Python::attach(|py| {
             let py_req = PyLLMRequest {
                 inner: request.clone(),
@@ -803,18 +827,51 @@ pub fn wrap_py_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("nemo_relay: LLM sanitize request guardrail callable failed: {e}");
-                    return request;
+                    return Some(request);
                 }
             };
             let extracted = result.extract::<PyLLMRequest>(py);
             match extracted {
-                Ok(r) => r.inner,
+                Ok(r) => Some(r.inner),
                 Err(e) => {
                     eprintln!(
                         "nemo_relay: LLM sanitize request guardrail returned unexpected type \
                          (expected LlmRequest): {e}"
                     );
-                    request
+                    Some(request)
+                }
+            }
+        })
+    })
+}
+
+/// Wrap a Python callable `(LlmRequest, LlmSanitizeContext) -> Optional<LlmRequest]`.
+fn wrap_py_contextual_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn {
+    Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
+        Python::attach(|py| {
+            let py_context = PyLlmSanitizeContext {
+                codec: context.codec,
+            };
+            let py_request = PyLLMRequest { inner: request };
+            let result = match py_fn.call1(py, (py_request, py_context)) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: contextual LLM sanitize request callable failed: {error}"
+                    );
+                    return None;
+                }
+            };
+            if result.is_none(py) {
+                return None;
+            }
+            match result.extract::<PyLLMRequest>(py) {
+                Ok(request) => Some(request.inner),
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: contextual LLM sanitize request callable returned unexpected type: {error}"
+                    );
+                    None
                 }
             }
         })
@@ -989,9 +1046,9 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
     })
 }
 
-/// Wrap a Python callable `(dict) -> dict` for LLM sanitize response guardrails.
-pub fn wrap_py_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponseFn {
-    Arc::new(move |response: Json| {
+/// Wrap a legacy Python callable `(dict) -> dict`.
+fn wrap_py_legacy_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponseFn {
+    Arc::new(move |response: Json, _context: LlmSanitizeContext| {
         Python::attach(|py| {
             let py_resp = match json_to_py(py, &response) {
                 Ok(v) => v,
@@ -999,22 +1056,83 @@ pub fn wrap_py_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponse
                     eprintln!(
                         "nemo_relay: json_to_py failed in LLM sanitize response guardrail: {e}"
                     );
-                    return response.clone();
+                    return Some(response.clone());
                 }
             };
             let result = match py_fn.call1(py, (py_resp,)) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("nemo_relay: LLM sanitize response guardrail callable failed: {e}");
-                    return response.clone();
+                    return Some(response.clone());
                 }
             };
-            py_to_json(result.bind(py)).unwrap_or_else(|e| {
+            Some(py_to_json(result.bind(py)).unwrap_or_else(|e| {
                 eprintln!("nemo_relay: py_to_json failed in LLM sanitize response guardrail: {e}");
                 response.clone()
-            })
+            }))
         })
     })
+}
+
+/// Wrap a Python callable `(Json, LlmSanitizeContext) -> Optional[Json]`.
+fn wrap_py_contextual_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponseFn {
+    Arc::new(move |response: Json, context: LlmSanitizeContext| {
+        Python::attach(|py| {
+            let py_context = PyLlmSanitizeContext {
+                codec: context.codec,
+            };
+            let py_response = match json_to_py(py, &response) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: json_to_py failed in contextual LLM sanitize response: {error}"
+                    );
+                    return None;
+                }
+            };
+            let result = match py_fn.call1(py, (py_response, py_context)) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: contextual LLM sanitize response callable failed: {error}"
+                    );
+                    return None;
+                }
+            };
+            if result.is_none(py) {
+                return None;
+            }
+            match py_to_json(result.bind(py)) {
+                Ok(response) => Some(response),
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: py_to_json failed in contextual LLM sanitize response: {error}"
+                    );
+                    None
+                }
+            }
+        })
+    })
+}
+
+/// Wrap a Python LLM sanitize-request callback. One-parameter callbacks retain
+/// legacy behavior; two-parameter callbacks receive per-call context.
+pub fn wrap_py_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> PyResult<LlmSanitizeRequestFn> {
+    if python_callback_accepts_context(&py_fn)? {
+        Ok(wrap_py_contextual_llm_sanitize_request_fn(py_fn))
+    } else {
+        Ok(wrap_py_legacy_llm_sanitize_request_fn(py_fn))
+    }
+}
+
+/// Wrap a Python LLM sanitize-response callback. One-parameter callbacks retain
+/// legacy behavior; two-parameter callbacks receive per-call context.
+pub fn wrap_py_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> PyResult<LlmSanitizeResponseFn> {
+    if python_callback_accepts_context(&py_fn)? {
+        Ok(wrap_py_contextual_llm_sanitize_response_fn(py_fn))
+    } else {
+        Ok(wrap_py_legacy_llm_sanitize_response_fn(py_fn))
+    }
 }
 
 /// Wrap a Python callable `(Event) -> None` for event subscribers.

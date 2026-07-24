@@ -18,8 +18,8 @@ use crate::api::optimization::{
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
-    LlmStreamExecutionNextFn,
+    EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn,
+    LlmJsonStream, LlmSanitizeContext, LlmStreamExecutionNextFn,
 };
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
@@ -428,36 +428,42 @@ fn emit_llm_start_with_subscribers(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.llm_sanitize_request_entries(&scope_locals)
     };
-    let mut sanitized_request =
-        NemoRelayContextState::llm_sanitize_request_snapshot_chain(request.clone(), &entries);
-    let mut annotated_request = match request_codec {
-        Some(codec)
+    let mut sanitized_request = NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+        request.clone(),
+        sanitize_context_for_request_codec(request_codec),
+        &entries,
+    );
+    let mut annotated_request = match (sanitized_request.as_ref(), request_codec) {
+        (Some(sanitized_request), Some(codec))
             if sanitized_request.headers != request.headers
                 || sanitized_request.content != request.content =>
         {
-            codec.decode(&sanitized_request).ok().map(Arc::new)
+            codec.decode(sanitized_request).ok().map(Arc::new)
         }
-        _ => annotated_request,
+        (Some(_), _) => annotated_request,
+        (None, _) => None,
     };
     let scope_stack = handle.captured_scope_stack();
     let agent_is_fresh = {
         let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
         scope_guard.take_agent_freshness(handle.parent_uuid)
     };
-    if !agent_is_fresh {
+    if !agent_is_fresh && let Some(sanitized_request) = sanitized_request.as_mut() {
         project_llm_request_to_current_user_turn(
-            &mut sanitized_request,
+            sanitized_request,
             &mut annotated_request,
             request_codec,
         );
     }
-    let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
+    let input = sanitized_request
+        .as_ref()
+        .and_then(|sanitized_request| serde_json::to_value(sanitized_request).ok());
     let event = {
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.build_llm_start_event(handle, Some(input), annotated_request)
+        state.build_llm_start_event(handle, input, annotated_request)
     };
     if let Some(event) = sanitize_event_with_scope_stack(event, scope_stack) {
         NemoRelayContextState::emit_event(&event, subscribers);
@@ -693,20 +699,28 @@ fn llm_call_end_with_behavior(
         let entries = state.llm_sanitize_response_entries(&scope_locals);
         (entries, subscribers)
     };
-    let sanitized_response =
-        NemoRelayContextState::llm_sanitize_response_snapshot_chain(response, &entries);
-    let data = if sanitized_response.is_null() {
-        data
-    } else {
-        Some(sanitized_response)
-    };
-    let (mut annotated_response, decode_error) = resolve_llm_end_annotation(
-        annotated_response,
-        response_codec,
-        data.as_ref(),
-        &behavior,
-        &handle.name,
+    let sanitized_response = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+        response,
+        sanitize_context_for_response_codec(response_codec.as_deref()),
+        &entries,
     );
+    let payload_omitted = sanitized_response.is_none();
+    let data = match sanitized_response {
+        None => None,
+        Some(sanitized_response) if sanitized_response.is_null() => data,
+        Some(sanitized_response) => Some(sanitized_response),
+    };
+    let (mut annotated_response, decode_error) = if payload_omitted {
+        (None, None)
+    } else {
+        resolve_llm_end_annotation(
+            annotated_response,
+            response_codec,
+            data.as_ref(),
+            &behavior,
+            &handle.name,
+        )
+    };
     handle.optimization_recorder.close_for_finalization(None);
     emit_optimization_marks(handle, &subscribers);
     let pricing = crate::codec::response::active_pricing_resolver();
@@ -716,7 +730,8 @@ fn llm_call_end_with_behavior(
         handle.model_name.as_deref(),
         &pricing,
     );
-    if annotated_response.is_none()
+    if !payload_omitted
+        && annotated_response.is_none()
         && let Some(summary) = summary
     {
         annotated_response = Some(AnnotatedLlmResponse {
@@ -750,6 +765,20 @@ fn llm_call_end_with_behavior(
         Err(error)
     } else {
         Ok(())
+    }
+}
+
+fn sanitize_context_for_request_codec(codec: Option<&dyn LlmCodec>) -> LlmSanitizeContext {
+    LlmSanitizeContext {
+        codec: codec.map_or(LlmCodecIdentity::None, LlmCodec::codec_identity),
+    }
+}
+
+pub(crate) fn sanitize_context_for_response_codec(
+    codec: Option<&dyn LlmResponseCodec>,
+) -> LlmSanitizeContext {
+    LlmSanitizeContext {
+        codec: codec.map_or(LlmCodecIdentity::None, LlmResponseCodec::codec_identity),
     }
 }
 

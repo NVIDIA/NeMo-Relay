@@ -33,9 +33,10 @@ use std::task::{Context, Poll};
 use tokio_stream::Stream;
 
 use crate::api::event::{BaseEvent, MarkEvent};
-use crate::api::llm::LlmHandle;
 use crate::api::llm::emit_optimization_marks;
+use crate::api::llm::{LlmHandle, sanitize_context_for_response_codec};
 use crate::api::optimization::finalize_optimization_summary;
+use crate::api::runtime::LlmSanitizeContext;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
@@ -71,6 +72,7 @@ pub struct LlmStreamWrapper {
     collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
     finalizer: Option<Box<dyn FnOnce() -> Json + Send>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
+    sanitize_context: LlmSanitizeContext,
     metadata: Option<Json>,
     subscribers: Vec<EventSubscriberFn>,
     chunk_index: u64,
@@ -140,6 +142,7 @@ impl LlmStreamWrapper {
         subscribers: Vec<EventSubscriberFn>,
     ) -> Self {
         let scope_stack = handle.captured_scope_stack().clone();
+        let sanitize_context = sanitize_context_for_response_codec(response_codec.as_deref());
         Self {
             inner,
             handle,
@@ -147,6 +150,7 @@ impl LlmStreamWrapper {
             collector,
             finalizer: Some(finalizer),
             response_codec,
+            sanitize_context,
             metadata,
             subscribers,
             chunk_index: 0,
@@ -222,19 +226,28 @@ impl LlmStreamWrapper {
         let Some(entries) = snapshot else {
             return;
         };
-        let sanitized =
-            NemoRelayContextState::llm_sanitize_response_snapshot_chain(aggregated, &entries);
-        let data = if sanitized.is_null() {
-            self.handle.data.clone()
-        } else {
-            Some(sanitized)
+        let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+            aggregated,
+            self.sanitize_context.clone(),
+            &entries,
+        );
+        let payload_omitted = sanitized.is_none();
+        let data = match sanitized {
+            None => None,
+            Some(sanitized) if sanitized.is_null() => self.handle.data.clone(),
+            Some(sanitized) => Some(sanitized),
         };
-        let mut annotated_response: Option<AnnotatedLlmResponse> =
-            self.response_codec.as_ref().and_then(|codec| {
-                let mut decoded = codec.decode_response(data.as_ref()?).ok()?;
-                attach_estimated_cost_for_provider(&mut decoded, Some(&self.handle.name));
-                Some(decoded)
-            });
+        let mut annotated_response: Option<AnnotatedLlmResponse> = (!payload_omitted)
+            .then(|| {
+                data.as_ref().and_then(|response| {
+                    self.response_codec.as_ref().and_then(|codec| {
+                        let mut decoded = codec.decode_response(response).ok()?;
+                        attach_estimated_cost_for_provider(&mut decoded, Some(&self.handle.name));
+                        Some(decoded)
+                    })
+                })
+            })
+            .flatten();
         let interruption = (interrupted
             && !has_authoritative_final_usage(annotated_response.as_ref()))
         .then_some("stream_interrupted");
@@ -249,7 +262,8 @@ impl LlmStreamWrapper {
             self.handle.model_name.as_deref(),
             &pricing,
         );
-        if annotated_response.is_none()
+        if !payload_omitted
+            && annotated_response.is_none()
             && let Some(summary) = summary
         {
             annotated_response = Some(AnnotatedLlmResponse {

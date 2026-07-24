@@ -120,12 +120,13 @@ func runGlobalLLMGuardrailShorthandChecks(t *testing.T, output func() json.RawMe
 	t.Helper()
 
 	if err := guardrails.RegisterLlmSanitizeRequest("guardrails_llm_req", 1,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeContext) (nemo_relay.LLMRequestDTO, bool) {
 			var payload map[string]interface{}
-			_ = json.Unmarshal(content, &payload)
+			_ = json.Unmarshal(request.Content, &payload)
 			payload["request_sanitized"] = true
 			out, _ := json.Marshal(payload)
-			return headers, out
+			request.Content = out
+			return request, false
 		},
 	); err != nil {
 		t.Fatalf("RegisterLlmSanitizeRequest failed: %v", err)
@@ -135,12 +136,12 @@ func runGlobalLLMGuardrailShorthandChecks(t *testing.T, output func() json.RawMe
 	})
 
 	if err := guardrails.RegisterLlmSanitizeResponse("guardrails_llm_resp", 1,
-		func(response json.RawMessage) json.RawMessage {
+		func(response json.RawMessage, _ nemo_relay.LLMSanitizeContext) (json.RawMessage, bool) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(response, &payload)
 			payload["guarded"] = true
 			out, _ := json.Marshal(payload)
-			return out
+			return out, false
 		},
 	); err != nil {
 		t.Fatalf("RegisterLlmSanitizeResponse failed: %v", err)
@@ -212,14 +213,16 @@ func runScopeLocalLLMGuardrailShorthandChecks(t *testing.T, scopeUUID string) {
 	t.Helper()
 
 	if err := guardrails.ScopeRegisterLlmSanitizeRequest(scopeUUID, "guardrails_scope_llm_req", 1,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
-			return headers, content
+		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeContext) (nemo_relay.LLMRequestDTO, bool) {
+			return request, false
 		},
 	); err != nil {
 		t.Fatalf("ScopeRegisterLlmSanitizeRequest failed: %v", err)
 	}
 	if err := guardrails.ScopeRegisterLlmSanitizeResponse(scopeUUID, "guardrails_scope_llm_resp", 1,
-		func(response json.RawMessage) json.RawMessage { return response },
+		func(response json.RawMessage, _ nemo_relay.LLMSanitizeContext) (json.RawMessage, bool) {
+			return response, false
+		},
 	); err != nil {
 		t.Fatalf("ScopeRegisterLlmSanitizeResponse failed: %v", err)
 	}

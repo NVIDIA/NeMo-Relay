@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb,
-    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb,
-    NemoRelayStatus, NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb,
-    NemoRelayToolSanitizeCb, c_char, c_str_to_string, clear_last_error, core_registry_api,
-    core_subscriber_api, set_last_error, status_from_error, wrap_event_subscriber,
-    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
-    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
-    wrap_tool_sanitize_fn,
+    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb,
+    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb,
+    NemoRelayLlmSanitizeResponseCb, NemoRelayStatus, NemoRelayToolConditionalCb,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, c_char, c_str_to_string,
+    clear_last_error, core_registry_api, core_subscriber_api, set_last_error, status_from_error,
+    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
+    wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn,
+    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
+    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 
 // ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ pub unsafe extern "C" fn nemo_relay_scope_register_llm_sanitize_request_guardrai
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NemoRelayLlmRequestCb,
+    cb: NemoRelayLlmSanitizeRequestCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
@@ -426,7 +426,7 @@ pub unsafe extern "C" fn nemo_relay_scope_register_llm_sanitize_response_guardra
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NemoRelayJsonCb,
+    cb: NemoRelayLlmSanitizeResponseCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
@@ -439,7 +439,7 @@ pub unsafe extern "C" fn nemo_relay_scope_register_llm_sanitize_response_guardra
         Ok(s) => s,
         Err(status) => return status,
     };
-    let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
+    let wrapped = wrap_llm_sanitize_response_fn(cb, user_data, free_fn);
     match core_registry_api::scope_register_llm_sanitize_response_guardrail(
         &uuid, &name, priority, wrapped,
     ) {

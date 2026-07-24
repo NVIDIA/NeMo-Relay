@@ -74,6 +74,18 @@ invocation, or LLM invocation. `InvokeResponse` returns an empty result, JSON
 result, guardrail result, LLM request-intercept result, tool-execution result,
 or `WorkerError`. `InvokeStream` emits JSON chunks or `WorkerError` chunks.
 
+Every LLM sanitizer invocation includes a tagged codec identity alongside the
+request or response JSON: `none`, `builtin(id)`, `runtime(id)`, or `opaque`.
+A two-parameter worker handler receives a structured `LlmSanitizeContext` with
+that identity at `context.codec`, and returns normal JSON to continue or an
+empty result to omit the LLM observability payload and annotation. The
+`Registration.contextual` field is protocol-internal compatibility metadata:
+Python worker SDK registration detects legacy one-parameter handlers and sets
+it only so Relay can dispatch those handlers without context. New worker
+handlers should use `(payload, context)` and never set the field directly.
+The wire schema retains `has_active_codec` and `codec_name` for older workers;
+new workers should consume `codec_kind` and `codec_id`.
+
 ## RelayHostRuntime RPCs
 
 Relay implements these RPCs for worker callbacks:
