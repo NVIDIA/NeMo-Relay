@@ -133,3 +133,69 @@ fn anthropic_overlay_preserves_full_multiline_text_in_single_text_block() {
 
     assert_eq!(blocks[0]["text"], json!("line one\nline two"));
 }
+
+#[test]
+fn oci_genai_overlay_rewrites_generic_text_and_tool_calls() {
+    let payload = json!({
+        "modelId": "meta.llama-3.3-70b-instruct",
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [{"type": "TEXT", "text": "raw secret"}],
+                    "toolCalls": [
+                        {"id": "call_1", "type": "FUNCTION", "name": "one", "arguments": "{\"secret\":\"raw-1\"}"},
+                        {"id": "call_2", "type": "FUNCTION", "name": "two", "arguments": "{\"secret\":\"raw-2\"}"}
+                    ]
+                },
+                "finishReason": "tool_calls"
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        model: Some("meta.llama-3.3-70b-instruct".into()),
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        tool_calls: Some(vec![tool_call(
+            "call_1",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let message = &overlaid["chatResponse"]["choices"][0]["message"];
+    assert_eq!(message["content"][0]["text"], json!("[REDACTED]"));
+    let calls = message["toolCalls"].as_array().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["arguments"], json!("{\"secret\":\"[REDACTED]\"}"));
+    assert_eq!(
+        overlaid["chatResponse"]["choices"][0]["finishReason"],
+        json!("tool_calls")
+    );
+}
+
+#[test]
+fn oci_genai_overlay_rewrites_cohere_text() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "COHERE",
+            "text": "raw secret",
+            "finishReason": "COMPLETE"
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        finish_reason: Some(FinishReason::Complete),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    assert_eq!(overlaid["chatResponse"]["text"], json!("[REDACTED]"));
+    assert_eq!(overlaid["chatResponse"]["finishReason"], json!("COMPLETE"));
+}

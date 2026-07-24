@@ -23,6 +23,7 @@ fn builtin_provider_surface_registry_keeps_request_priority() {
     assert_eq!(
         surfaces,
         vec![
+            ProviderSurface::OCIGenAI,
             ProviderSurface::OpenAIResponses,
             ProviderSurface::AnthropicMessages,
             ProviderSurface::OpenAIChat,
@@ -423,6 +424,7 @@ fn codec_name_uses_canonical_spellings() {
         ProviderSurface::AnthropicMessages.codec_name(),
         "anthropic_messages"
     );
+    assert_eq!(ProviderSurface::OCIGenAI.codec_name(), "oci_genai");
 }
 
 #[test]
@@ -436,7 +438,12 @@ fn from_codec_name_is_none_for_unknown_names() {
 fn supported_codec_names_track_the_builtin_registry() {
     assert_eq!(
         supported_codec_names(),
-        vec!["openai_responses", "anthropic_messages", "openai_chat"]
+        vec![
+            "oci_genai",
+            "openai_responses",
+            "anthropic_messages",
+            "openai_chat"
+        ]
     );
     let from_registry: Vec<_> = BUILTIN_PROVIDER_SURFACES
         .iter()

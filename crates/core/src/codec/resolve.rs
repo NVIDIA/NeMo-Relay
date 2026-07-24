@@ -14,7 +14,7 @@ use super::request::AnnotatedLlmRequest;
 use super::response::AnnotatedLlmResponse;
 use super::streaming::StreamingCodec;
 use super::traits::{LlmCodec, LlmResponseCodec};
-use super::{anthropic, openai_chat, openai_responses};
+use super::{anthropic, oci_genai, openai_chat, openai_responses};
 
 /// A built-in provider request/response surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +25,8 @@ pub enum ProviderSurface {
     OpenAIResponses,
     /// Anthropic Messages.
     AnthropicMessages,
+    /// OCI Generative AI chat.
+    OCIGenAI,
 }
 
 /// Request shape detector; the optional `&str` is a provider hint a codec may use
@@ -64,6 +66,9 @@ pub(crate) struct ProviderSurfaceDescriptor {
 /// surface it could shadow. Response detection requires exactly one match
 /// before decoding.
 pub(crate) static BUILTIN_PROVIDER_SURFACES: &[ProviderSurfaceDescriptor] = &[
+    // OCI GenAI goes first: its ChatDetails envelope and apiFormat markers are
+    // the strongest signal and never appear in the other surfaces' shapes.
+    oci_genai::PROVIDER_SURFACE,
     openai_responses::PROVIDER_SURFACE,
     anthropic::PROVIDER_SURFACE,
     openai_chat::PROVIDER_SURFACE,
@@ -152,6 +157,7 @@ fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescripto
         ProviderSurface::OpenAIChat => &openai_chat::PROVIDER_SURFACE,
         ProviderSurface::OpenAIResponses => &openai_responses::PROVIDER_SURFACE,
         ProviderSurface::AnthropicMessages => &anthropic::PROVIDER_SURFACE,
+        ProviderSurface::OCIGenAI => &oci_genai::PROVIDER_SURFACE,
     }
 }
 

@@ -891,6 +891,7 @@ enum LocalGuardrailsCodec {
     OpenAIChat,
     OpenAIResponses,
     AnthropicMessages,
+    OCIGenAI,
 }
 
 impl LocalGuardrailsCodec {
@@ -899,6 +900,7 @@ impl LocalGuardrailsCodec {
             Self::OpenAIChat => ProviderSurface::OpenAIChat,
             Self::OpenAIResponses => ProviderSurface::OpenAIResponses,
             Self::AnthropicMessages => ProviderSurface::AnthropicMessages,
+            Self::OCIGenAI => ProviderSurface::OCIGenAI,
         }
     }
 
@@ -907,6 +909,7 @@ impl LocalGuardrailsCodec {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+            ProviderSurface::OCIGenAI => Self::OCIGenAI,
         }
     }
 
@@ -1262,6 +1265,29 @@ fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<Stri
                 .and_then(Json::as_str)
                 .filter(|text| !text.is_empty())
                 .map(str::to_string)
+        }
+        LocalGuardrailsCodec::OCIGenAI => {
+            // OCI GENERIC stream events carry choice deltas whose message
+            // content is a TEXT part list; COHERE stream events carry a bare
+            // `text` fragment. Events may arrive wrapped in `chatResponse`.
+            let chunk = chunk
+                .get("chatResponse")
+                .and_then(Json::as_object)
+                .unwrap_or(chunk);
+            if let Some(text) = chunk.get("text").and_then(Json::as_str) {
+                return (!text.is_empty()).then(|| text.to_string());
+            }
+            let message = chunk.get("message").and_then(Json::as_object)?;
+            let parts = message.get("content")?.as_array()?;
+            let mut collected = String::new();
+            for part in parts {
+                if part.get("type").and_then(Json::as_str) == Some("TEXT")
+                    && let Some(text) = part.get("text").and_then(Json::as_str)
+                {
+                    collected.push_str(text);
+                }
+            }
+            (!collected.is_empty()).then_some(collected)
         }
     }
 }

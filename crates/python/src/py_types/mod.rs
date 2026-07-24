@@ -157,6 +157,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOpenAIChatCodec>()?;
     m.add_class::<PyOpenAIResponsesCodec>()?;
     m.add_class::<PyAnthropicMessagesCodec>()?;
+    m.add_class::<PyOCIGenAIChatCodec>()?;
     Ok(())
 }
 

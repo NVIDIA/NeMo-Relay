@@ -1192,6 +1192,26 @@ class AnthropicMessagesCodec:
         """Decode an Anthropic response into a normalized response view."""
         ...
 
+class OCIGenAIChatCodec:
+    """Built-in codec for OCI Generative AI chat requests and responses.
+
+    Summary:
+        Native codec bridge for OCI Generative AI chat payloads.
+    """
+
+    def __init__(self) -> None:
+        """Create an OCI Generative AI chat codec."""
+        ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode an OCI GenAI chat request into a normalized request view."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode a normalized request back into OCI GenAI chat shape."""
+        ...
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
+        """Decode an OCI GenAI chat response into a normalized response view."""
+        ...
+
 class AdaptiveRuntime:
     """Hosted adaptive runtime bridge implemented by the native extension.
 

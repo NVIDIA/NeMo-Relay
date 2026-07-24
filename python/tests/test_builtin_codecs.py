@@ -4,7 +4,8 @@
 """Tests for built-in codec Python classes and LlmResponseCodec protocol.
 
 Covers:
-- Built-in codec construction (OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec)
+- Built-in codec construction (OpenAIChatCodec, OpenAIResponsesCodec,
+  AnthropicMessagesCodec, OCIGenAIChatCodec)
 - Built-in codec decode/encode/decode_response methods
 - LlmResponseCodec protocol
 - response_codec parameter accepts object (not string)
@@ -24,7 +25,12 @@ from nemo_relay import (
     llm,
     subscribers,
 )
-from nemo_relay.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_relay.codecs import (
+    AnthropicMessagesCodec,
+    OCIGenAIChatCodec,
+    OpenAIChatCodec,
+    OpenAIResponsesCodec,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Built-in codec construction
@@ -64,6 +70,18 @@ class TestBuiltinCodecConstruction:
     def test_anthropic_messages_codec_has_methods(self):
         """AnthropicMessagesCodec has decode, encode, decode_response methods."""
         codec = AnthropicMessagesCodec()
+        assert hasattr(codec, "decode")
+        assert hasattr(codec, "encode")
+        assert hasattr(codec, "decode_response")
+
+    def test_oci_genai_chat_codec_constructable(self):
+        """OCIGenAIChatCodec() is constructable."""
+        codec = OCIGenAIChatCodec()
+        assert codec is not None
+
+    def test_oci_genai_chat_codec_has_methods(self):
+        """OCIGenAIChatCodec has decode, encode, decode_response methods."""
+        codec = OCIGenAIChatCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
@@ -274,6 +292,32 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.model == "claude-3-sonnet-20240229"
         assert annotated.response_text() == "Hello!"
 
+    def test_oci_genai_decode_response(self):
+        """OCIGenAIChatCodec.decode_response() returns AnnotatedLLMResponse."""
+        codec = OCIGenAIChatCodec()
+        response = {
+            "modelId": "meta.llama-3.3-70b-instruct",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "Hello!"}],
+                        },
+                        "finishReason": "stop",
+                    }
+                ],
+                "usage": {"promptTokens": 10, "completionTokens": 5, "totalTokens": 15},
+            },
+        }
+        annotated = codec.decode_response(response)
+        assert isinstance(annotated, AnnotatedLLMResponse)
+        assert annotated.model == "meta.llama-3.3-70b-instruct"
+        assert annotated.response_text() == "Hello!"
+        assert annotated.finish_reason == "complete"
+
 
 # ---------------------------------------------------------------------------
 # 4. LlmResponseCodec protocol
@@ -294,6 +338,7 @@ class TestLlmResponseCodecProtocol:
         assert isinstance(OpenAIChatCodec(), LlmResponseCodec)
         assert isinstance(OpenAIResponsesCodec(), LlmResponseCodec)
         assert isinstance(AnthropicMessagesCodec(), LlmResponseCodec)
+        assert isinstance(OCIGenAIChatCodec(), LlmResponseCodec)
 
 
 # ---------------------------------------------------------------------------
