@@ -3,15 +3,29 @@
 
 //! Built-in codec for the Oracle Cloud Infrastructure (OCI) Generative AI chat API.
 //!
-//! Implements [`LlmResponseCodec`] (response decode) for the OCI Generative AI
-//! chat format.
+//! Implements [`LlmCodec`] (request decode/encode) and [`LlmResponseCodec`]
+//! (response decode) for the OCI Generative AI chat format.
 //!
 //! # OCI-specific patterns handled
 //!
-//! - **Three API formats** selected by the response `apiFormat`: `GENERIC`
-//!   (`choices`-based, OpenAI-style), `COHERE` (`text`-based), and `COHEREV2`
-//!   (single `message` with typed content parts and nested `function` tool
-//!   calls, per the OCI `CohereChatResponseV2` schema).
+//! - **ChatDetails envelope**: Requests may arrive as a full envelope
+//!   (`compartmentId`, `servingMode`, `chatRequest`) or as a bare `chatRequest`
+//!   payload; both are accepted and the envelope is preserved on encode.
+//! - **API formats** selected by `apiFormat`:
+//!   - `GENERIC`: OpenAI-style `messages` with UPPERCASE roles
+//!     (`USER`/`ASSISTANT`/`SYSTEM`/`TOOL`) whose `content` is a list of typed
+//!     parts (`{"type": "TEXT", "text": ...}`), flat `toolCalls`
+//!     (`{id, type: "FUNCTION", name, arguments}`), and `toolCallId` on tool
+//!     messages. Used by Meta Llama, Google, xAI, OpenAI, and imported
+//!     open-weights models hosted on dedicated AI clusters.
+//!   - `COHERE`: a single `message` string plus `chatHistory` turns with
+//!     `USER`/`CHATBOT`/`SYSTEM` roles and an optional `preambleOverride`.
+//!     Used by Cohere Command models.
+//!   - `COHEREV2` (responses): a single assistant `message` with typed content
+//!     parts and nested `function` tool calls, per the OCI
+//!     `CohereChatResponseV2` schema.
+//! - **Model identity**: Carried in `servingMode.modelId` (on-demand) or
+//!   `servingMode.endpointId` (dedicated), not in the chat request body.
 //! - **Responses**: `ChatResult` payloads (`modelId`, `chatResponse`); `usage`
 //!   counters are `promptTokens`/`completionTokens`/`totalTokens`.
 //! - **Unmodeled fields are preserved**: envelope and chat-response fields the
@@ -28,14 +42,18 @@
 //! (the CLI's kebab-case `data` envelope, `oci.util.to_dict()` snake_case
 //! dicts) are the caller's responsibility to convert.
 
+use crate::api::llm::LlmRequest;
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
-use super::request::{ContentPart, MessageContent, ProviderNativeComponent};
+use super::request::{
+    AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, GenerationParams, Message,
+    MessageContent, ProviderNativeComponent, ToolCall, ToolChoice, ToolDefinition,
+};
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, ResponseToolCall, Usage,
 };
-use super::traits::LlmResponseCodec;
+use super::traits::{LlmCodec, LlmResponseCodec};
 
 // ---------------------------------------------------------------------------
 // Public codec struct
@@ -43,6 +61,64 @@ use super::traits::LlmResponseCodec;
 
 /// Built-in codec for the OCI Generative AI chat API.
 pub struct OCIGenAIChatCodec;
+
+// ---------------------------------------------------------------------------
+// Optional-field helpers
+// ---------------------------------------------------------------------------
+
+/// Lookup of an optional list of strings (stop sequences).
+fn optional_string_list(
+    obj: &serde_json::Map<String, Json>,
+    key: &str,
+    surface: &str,
+) -> Result<Option<Vec<String>>> {
+    let Some(value) = obj.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value::<Vec<String>>(value.clone())
+        .map(Some)
+        .map_err(|error| {
+            FlowError::InvalidArgument(format!("{surface} {key} must be a string array: {error}"))
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Modeled-key bookkeeping
+// ---------------------------------------------------------------------------
+
+/// Chat-request keys modeled in [`AnnotatedLlmRequest`] for the GENERIC format.
+const MODELED_GENERIC_REQUEST_KEYS: &[&str] = &[
+    "apiFormat",
+    "messages",
+    "maxTokens",
+    "temperature",
+    "topP",
+    "stop",
+    "tools",
+    "toolChoice",
+];
+
+/// Chat-request keys modeled in [`AnnotatedLlmRequest`] for the COHERE format.
+const MODELED_COHERE_REQUEST_KEYS: &[&str] = &[
+    "apiFormat",
+    "message",
+    "chatHistory",
+    "preambleOverride",
+    "maxTokens",
+    "temperature",
+    "topP",
+    "stopSequences",
+    "tools",
+    "toolChoice",
+];
+
+/// Whether `key` is one of the modeled keys.
+fn is_modeled_key(key: &str, modeled: &[&str]) -> bool {
+    modeled.contains(&key)
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -72,6 +148,40 @@ fn unmodeled_fields(
         .filter(|(key, _)| !modeled.contains(&key.as_str()))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
+}
+
+/// Helper to construct a [`Json`] number from an `f64`.
+fn json_f64(v: f64) -> Json {
+    serde_json::Number::from_f64(v)
+        .map(Json::Number)
+        .unwrap_or(Json::Null)
+}
+
+fn insert_json(obj: &mut serde_json::Map<String, Json>, key: &str, value: Json) {
+    obj.insert(key.to_string(), value);
+}
+
+fn set_or_remove_json(obj: &mut serde_json::Map<String, Json>, key: &str, value: Option<Json>) {
+    if let Some(value) = value {
+        obj.insert(key.into(), value);
+    } else {
+        obj.remove(key);
+    }
+}
+
+fn patch_extra_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    baseline: &serde_json::Map<String, Json>,
+    edited: &serde_json::Map<String, Json>,
+) {
+    for key in baseline.keys().filter(|key| !edited.contains_key(*key)) {
+        obj.remove(key);
+    }
+    for (key, value) in edited {
+        if baseline.get(key) != Some(value) {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
 }
 
 fn native_component(value: &Json) -> ProviderNativeComponent {
@@ -165,6 +275,807 @@ fn decode_generic_content_part(value: &Json) -> Result<ContentPart> {
                 kind: native.kind,
                 value: native.value,
             })
+        }
+    }
+}
+
+/// Wrap normalized content back into the GENERIC typed content-part list.
+fn encode_generic_content(content: &MessageContent) -> Result<Json> {
+    match content {
+        MessageContent::Text(text) => Ok(serde_json::json!([{"type": "TEXT", "text": text}])),
+        MessageContent::Parts(parts) => Ok(Json::Array(
+            parts
+                .iter()
+                .map(encode_generic_content_part)
+                .collect::<Result<Vec<_>>>()?,
+        )),
+    }
+}
+
+fn encode_generic_content_part(part: &ContentPart) -> Result<Json> {
+    match part {
+        ContentPart::Text { text, extra } => {
+            let mut obj = extra.clone();
+            obj.insert("type".into(), Json::String("TEXT".into()));
+            obj.insert("text".into(), Json::String(text.clone()));
+            Ok(Json::Object(obj))
+        }
+        ContentPart::ProviderNative {
+            provider, value, ..
+        } if provider == "oci_genai" => Ok(value.clone()),
+        other => Err(FlowError::InvalidArgument(format!(
+            "content part {other:?} cannot be encoded for OCI GenAI"
+        ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool call conversion
+// ---------------------------------------------------------------------------
+
+/// Convert a flat OCI `toolCalls` entry into the normalized nested [`ToolCall`].
+fn decode_oci_tool_call(value: &Json) -> Result<ToolCall> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("OCI GenAI toolCalls entry must be an object".into())
+    })?;
+    // A nested `function` object means the entry is already normalized.
+    let function = obj.get("function").and_then(Json::as_object);
+    let (name, arguments) = match function {
+        Some(function) => (function.get("name"), function.get("arguments")),
+        None => (obj.get("name"), obj.get("arguments")),
+    };
+    Ok(ToolCall {
+        id: obj
+            .get("id")
+            .and_then(Json::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: name.and_then(Json::as_str).unwrap_or_default().to_string(),
+            arguments: match arguments {
+                Some(Json::String(text)) => text.clone(),
+                Some(other) => other.to_string(),
+                None => String::new(),
+            },
+        },
+    })
+}
+
+/// Convert a normalized nested [`ToolCall`] back into the flat OCI shape.
+fn encode_oci_tool_call(tool_call: &ToolCall) -> Json {
+    serde_json::json!({
+        "id": tool_call.id,
+        "type": "FUNCTION",
+        "name": tool_call.function.name,
+        "arguments": tool_call.function.arguments,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// GENERIC message decode/encode
+// ---------------------------------------------------------------------------
+
+fn decode_generic_message(value: &Json) -> Result<Message> {
+    let obj = value.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("OCI GenAI GENERIC message must be an object".into())
+    })?;
+    let role = obj
+        .get("role")
+        .and_then(Json::as_str)
+        .unwrap_or("USER")
+        .to_lowercase();
+    let content = decode_generic_content(obj.get("content"))?;
+    let tool_calls = match obj.get("toolCalls") {
+        None | Some(Json::Null) => None,
+        Some(Json::Array(calls)) => Some(
+            calls
+                .iter()
+                .map(decode_oci_tool_call)
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        Some(_) => {
+            return Err(FlowError::InvalidArgument(
+                "OCI GenAI GENERIC toolCalls must be an array".into(),
+            ));
+        }
+    };
+    let tool_call_id = obj
+        .get("toolCallId")
+        .and_then(Json::as_str)
+        .map(str::to_string);
+    match role.as_str() {
+        "system" => match content {
+            Some(content) => Ok(Message::System {
+                content,
+                name: None,
+            }),
+            None => Ok(provider_native_message(&role, value)),
+        },
+        "user" => match content {
+            Some(content) => Ok(Message::User {
+                content,
+                name: None,
+            }),
+            None => Ok(provider_native_message(&role, value)),
+        },
+        "assistant" => Ok(Message::Assistant {
+            content,
+            tool_calls,
+            name: None,
+        }),
+        "tool" => match (content, tool_call_id) {
+            (Some(content), Some(tool_call_id)) => Ok(Message::Tool {
+                content,
+                tool_call_id,
+            }),
+            _ => Ok(provider_native_message(&role, value)),
+        },
+        _ => Ok(provider_native_message(&role, value)),
+    }
+}
+
+fn provider_native_message(kind: &str, value: &Json) -> Message {
+    Message::ProviderNative {
+        provider: "oci_genai".into(),
+        kind: kind.to_string(),
+        value: value.clone(),
+    }
+}
+
+fn encode_generic_message(message: &Message) -> Result<Json> {
+    let mut obj = serde_json::Map::new();
+    match message {
+        Message::System { content, .. } => {
+            obj.insert("role".into(), Json::String("SYSTEM".into()));
+            obj.insert("content".into(), encode_generic_content(content)?);
+        }
+        Message::User { content, .. } => {
+            obj.insert("role".into(), Json::String("USER".into()));
+            obj.insert("content".into(), encode_generic_content(content)?);
+        }
+        Message::Assistant {
+            content,
+            tool_calls,
+            ..
+        } => {
+            obj.insert("role".into(), Json::String("ASSISTANT".into()));
+            obj.insert(
+                "content".into(),
+                match content {
+                    Some(content) => encode_generic_content(content)?,
+                    None => Json::Null,
+                },
+            );
+            if let Some(tool_calls) = tool_calls {
+                obj.insert(
+                    "toolCalls".into(),
+                    Json::Array(tool_calls.iter().map(encode_oci_tool_call).collect()),
+                );
+            }
+        }
+        Message::Tool {
+            content,
+            tool_call_id,
+        } => {
+            obj.insert("role".into(), Json::String("TOOL".into()));
+            obj.insert("content".into(), encode_generic_content(content)?);
+            obj.insert("toolCallId".into(), Json::String(tool_call_id.clone()));
+        }
+        Message::ProviderNative {
+            provider, value, ..
+        } if provider == "oci_genai" => return Ok(value.clone()),
+        other => {
+            return Err(FlowError::InvalidArgument(format!(
+                "message {other:?} cannot be encoded for OCI GenAI"
+            )));
+        }
+    }
+    Ok(Json::Object(obj))
+}
+
+/// Rewrite only the GENERIC messages that intercepts actually changed.
+///
+/// Unchanged messages are carried over from the raw payload verbatim so
+/// per-message provider fields without a normalized equivalent survive.
+fn patch_generic_messages(
+    chat_request: &mut serde_json::Map<String, Json>,
+    edited: &[Message],
+    baseline: &[Message],
+) -> Result<()> {
+    let raw_messages: Vec<Json> = chat_request
+        .get("messages")
+        .and_then(Json::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let patched = edited
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            let unchanged = baseline.get(index) == Some(message);
+            match raw_messages.get(index) {
+                Some(raw) if unchanged => Ok(raw.clone()),
+                _ => encode_generic_message(message),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    insert_json(chat_request, "messages", Json::Array(patched));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// COHERE message decode/encode
+// ---------------------------------------------------------------------------
+
+fn decode_cohere_messages(chat_request: &serde_json::Map<String, Json>) -> Result<Vec<Message>> {
+    let mut messages = Vec::new();
+
+    if let Some(preamble) = chat_request.get("preambleOverride").and_then(Json::as_str)
+        && !preamble.is_empty()
+    {
+        messages.push(Message::System {
+            content: MessageContent::Text(preamble.to_string()),
+            name: None,
+        });
+    }
+
+    if let Some(history) = chat_request.get("chatHistory") {
+        let turns = history.as_array().ok_or_else(|| {
+            FlowError::InvalidArgument("OCI GenAI COHERE chatHistory must be an array".into())
+        })?;
+        for turn in turns {
+            messages.push(decode_cohere_turn(turn)?);
+        }
+    }
+
+    if let Some(current) = chat_request.get("message").and_then(Json::as_str) {
+        messages.push(Message::User {
+            content: MessageContent::Text(current.to_string()),
+            name: None,
+        });
+    }
+
+    Ok(messages)
+}
+
+fn decode_cohere_turn(turn: &Json) -> Result<Message> {
+    let obj = turn.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("OCI GenAI COHERE chatHistory turn must be an object".into())
+    })?;
+    let role = obj
+        .get("role")
+        .and_then(Json::as_str)
+        .unwrap_or("USER")
+        .to_uppercase();
+    let Some(text) = obj.get("message").and_then(Json::as_str) else {
+        return Ok(provider_native_message(&role, turn));
+    };
+    let content = MessageContent::Text(text.to_string());
+    match role.as_str() {
+        "USER" => Ok(Message::User {
+            content,
+            name: None,
+        }),
+        "CHATBOT" => Ok(Message::Assistant {
+            content: Some(content),
+            tool_calls: None,
+            name: None,
+        }),
+        "SYSTEM" => Ok(Message::System {
+            content,
+            name: None,
+        }),
+        _ => Ok(provider_native_message(&role, turn)),
+    }
+}
+
+/// Extract the plain-text body of a normalized message for COHERE encoding.
+fn cohere_text(content: &MessageContent) -> Result<String> {
+    match content {
+        MessageContent::Text(text) => Ok(text.clone()),
+        MessageContent::Parts(_) => Err(FlowError::InvalidArgument(
+            "multimodal content cannot be encoded for the OCI GenAI COHERE format".into(),
+        )),
+    }
+}
+
+/// Rebuild the COHERE `preambleOverride`/`chatHistory`/`message` fields from
+/// edited messages. COHERE turns are plain strings, so edits rebuild the
+/// modeled fields rather than patching individual turns.
+fn encode_cohere_messages(
+    chat_request: &mut serde_json::Map<String, Json>,
+    messages: &[Message],
+) -> Result<()> {
+    let mut remaining = messages;
+
+    if let Some(Message::System { content, .. }) = remaining.first() {
+        insert_json(
+            chat_request,
+            "preambleOverride",
+            Json::String(cohere_text(content)?),
+        );
+        remaining = &remaining[1..];
+    }
+
+    let mut current = String::new();
+    if let Some(Message::User { content, .. }) = remaining.last() {
+        current = cohere_text(content)?;
+        remaining = &remaining[..remaining.len() - 1];
+    }
+
+    let history = remaining
+        .iter()
+        .map(encode_cohere_turn)
+        .collect::<Result<Vec<_>>>()?;
+
+    chat_request.insert("message".into(), Json::String(current));
+    if !history.is_empty() || chat_request.contains_key("chatHistory") {
+        chat_request.insert("chatHistory".into(), Json::Array(history));
+    }
+    Ok(())
+}
+
+fn encode_cohere_turn(message: &Message) -> Result<Json> {
+    let (role, content) = match message {
+        Message::User { content, .. } => ("USER", content),
+        Message::Assistant {
+            content: Some(content),
+            ..
+        } => ("CHATBOT", content),
+        Message::System { content, .. } => ("SYSTEM", content),
+        Message::Tool { content, .. } => ("TOOL", content),
+        Message::ProviderNative {
+            provider, value, ..
+        } if provider == "oci_genai" => return Ok(value.clone()),
+        other => {
+            return Err(FlowError::InvalidArgument(format!(
+                "message {other:?} cannot be encoded as an OCI GenAI COHERE chatHistory turn"
+            )));
+        }
+    };
+    Ok(serde_json::json!({"role": role, "message": cohere_text(content)?}))
+}
+
+// ---------------------------------------------------------------------------
+// Params, tools, and envelope helpers
+// ---------------------------------------------------------------------------
+
+/// Decode the normalized generation params for one API format.
+fn decode_params(
+    chat_request: &serde_json::Map<String, Json>,
+    api_format: &str,
+) -> Result<Option<GenerationParams>> {
+    const SURFACE: &str = "OCI GenAI";
+    let temperature = super::optional_f64(chat_request, "temperature", SURFACE)?;
+    let max_tokens = super::optional_u64(chat_request, "maxTokens", SURFACE)?;
+    let top_p = super::optional_f64(chat_request, "topP", SURFACE)?;
+    let stop_key = if api_format == "COHERE" {
+        "stopSequences"
+    } else {
+        "stop"
+    };
+    let stop = optional_string_list(chat_request, stop_key, SURFACE)?;
+    if temperature.is_some() || max_tokens.is_some() || top_p.is_some() || stop.is_some() {
+        Ok(Some(GenerationParams {
+            temperature,
+            max_tokens,
+            top_p,
+            stop,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Patch only the generation params an intercept actually changed.
+///
+/// Setting a param to `None` does not remove the raw key: the raw value keeps
+/// serving as the source of truth for anything the annotation stops modeling.
+fn patch_params(
+    chat_request: &mut serde_json::Map<String, Json>,
+    edited: Option<&GenerationParams>,
+    baseline: Option<&GenerationParams>,
+    api_format: &str,
+) {
+    if edited == baseline {
+        return;
+    }
+    let temperature = edited.and_then(|params| params.temperature);
+    if temperature.is_some() && temperature != baseline.and_then(|params| params.temperature) {
+        insert_json(
+            chat_request,
+            "temperature",
+            temperature.map(json_f64).unwrap_or(Json::Null),
+        );
+    }
+    let top_p = edited.and_then(|params| params.top_p);
+    if top_p.is_some() && top_p != baseline.and_then(|params| params.top_p) {
+        insert_json(
+            chat_request,
+            "topP",
+            top_p.map(json_f64).unwrap_or(Json::Null),
+        );
+    }
+    let max_tokens = edited.and_then(|params| params.max_tokens);
+    if max_tokens.is_some() && max_tokens != baseline.and_then(|params| params.max_tokens) {
+        insert_json(
+            chat_request,
+            "maxTokens",
+            max_tokens.map(Json::from).unwrap_or(Json::Null),
+        );
+    }
+    let stop = edited.and_then(|params| params.stop.as_ref());
+    if stop.is_some() && stop != baseline.and_then(|params| params.stop.as_ref()) {
+        let stop_key = if api_format == "COHERE" {
+            "stopSequences"
+        } else {
+            "stop"
+        };
+        insert_json(
+            chat_request,
+            stop_key,
+            stop.map(|values| serde_json::json!(values))
+                .unwrap_or(Json::Null),
+        );
+    }
+}
+
+fn decode_tools(
+    chat_request: &serde_json::Map<String, Json>,
+) -> Result<Option<Vec<ToolDefinition>>> {
+    match chat_request.get("tools") {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::Array(tools)) => Ok(Some(
+            tools
+                .iter()
+                .map(|tool| {
+                    let native = native_component(tool);
+                    ToolDefinition::ProviderNative {
+                        provider: native.provider,
+                        kind: native.kind,
+                        value: native.value,
+                    }
+                })
+                .collect(),
+        )),
+        Some(_) => Err(FlowError::InvalidArgument(
+            "OCI GenAI tools must be an array".into(),
+        )),
+    }
+}
+
+fn encode_oci_tool(tool: &ToolDefinition) -> Result<Json> {
+    match tool {
+        ToolDefinition::ProviderNative {
+            provider, value, ..
+        } if provider == "oci_genai" => Ok(value.clone()),
+        ToolDefinition::Function { function, extra } => {
+            let mut obj = extra.clone();
+            obj.insert("type".into(), Json::String("FUNCTION".into()));
+            obj.insert("name".into(), Json::String(function.name.clone()));
+            if let Some(description) = &function.description {
+                obj.insert("description".into(), Json::String(description.clone()));
+            }
+            if let Some(parameters) = &function.parameters {
+                obj.insert("parameters".into(), parameters.clone());
+            }
+            obj.extend(function.extra.clone());
+            Ok(Json::Object(obj))
+        }
+        other => Err(FlowError::InvalidArgument(format!(
+            "tool {other:?} cannot be encoded for OCI GenAI"
+        ))),
+    }
+}
+
+fn encode_oci_tool_choice(tool_choice: &ToolChoice) -> Result<Json> {
+    match tool_choice {
+        ToolChoice::ProviderNative(native) if native.provider == "oci_genai" => {
+            Ok(native.value.clone())
+        }
+        other => Err(FlowError::InvalidArgument(format!(
+            "tool choice {other:?} cannot be encoded for OCI GenAI"
+        ))),
+    }
+}
+
+/// Extract the model identity from the `servingMode` envelope object.
+fn model_from_envelope(envelope: &serde_json::Map<String, Json>) -> Option<String> {
+    let serving_mode = envelope.get("servingMode")?.as_object()?;
+    serving_mode
+        .get("modelId")
+        .or_else(|| serving_mode.get("endpointId"))
+        .and_then(Json::as_str)
+        .map(str::to_string)
+}
+
+/// Split the request content into the optional ChatDetails envelope and the
+/// chat request object.
+fn split_envelope(
+    obj: &serde_json::Map<String, Json>,
+) -> (
+    Option<&serde_json::Map<String, Json>>,
+    &serde_json::Map<String, Json>,
+) {
+    match obj.get("chatRequest").and_then(Json::as_object) {
+        Some(chat_request) => (Some(obj), chat_request),
+        None => (None, obj),
+    }
+}
+
+/// Resolve the request API format (uppercased), defaulting to `GENERIC`.
+fn request_api_format(chat_request: &serde_json::Map<String, Json>) -> String {
+    chat_request
+        .get("apiFormat")
+        .and_then(Json::as_str)
+        .unwrap_or("GENERIC")
+        .to_uppercase()
+}
+
+fn validate_oci_supported_fields(
+    annotated: &AnnotatedLlmRequest,
+    baseline: &AnnotatedLlmRequest,
+) -> Result<()> {
+    let unsupported = [
+        annotated.model != baseline.model,
+        annotated.instructions != baseline.instructions,
+        annotated.store != baseline.store,
+        annotated.previous_response_id != baseline.previous_response_id,
+        annotated.truncation != baseline.truncation,
+        annotated.reasoning != baseline.reasoning,
+        annotated.include != baseline.include,
+        annotated.user != baseline.user,
+        annotated.metadata != baseline.metadata,
+        annotated.service_tier != baseline.service_tier,
+        annotated.parallel_tool_calls != baseline.parallel_tool_calls,
+        annotated.max_output_tokens != baseline.max_output_tokens,
+        annotated.max_tool_calls != baseline.max_tool_calls,
+        annotated.top_logprobs != baseline.top_logprobs,
+        annotated.stream != baseline.stream,
+    ]
+    .into_iter()
+    .any(|changed| changed);
+    if unsupported {
+        return Err(FlowError::InvalidArgument(
+            "request contains fields that cannot be encoded for OCI GenAI".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Patch envelope-level fields (`compartmentId`, `servingMode`) when the
+/// api-specific annotation changed them.
+fn patch_oci_api_specific(
+    envelope: Option<&mut serde_json::Map<String, Json>>,
+    edited: &Option<ApiSpecificRequest>,
+    baseline: &Option<ApiSpecificRequest>,
+) -> Result<()> {
+    let (compartment_id, serving_mode, old_compartment_id, old_serving_mode) =
+        match (edited, baseline) {
+            (
+                Some(ApiSpecificRequest::OCIGenAI {
+                    compartment_id,
+                    serving_mode,
+                    ..
+                }),
+                Some(ApiSpecificRequest::OCIGenAI {
+                    compartment_id: old_compartment_id,
+                    serving_mode: old_serving_mode,
+                    ..
+                }),
+            ) => (
+                compartment_id,
+                serving_mode,
+                old_compartment_id,
+                old_serving_mode,
+            ),
+            // A dropped api_specific annotation leaves the envelope untouched;
+            // the raw payload keeps serving as the source of truth.
+            (None, _) => return Ok(()),
+            (Some(_), _) => {
+                return Err(FlowError::InvalidArgument(
+                    "api_specific provider does not match OCI GenAI".into(),
+                ));
+            }
+        };
+    if compartment_id == old_compartment_id && serving_mode == old_serving_mode {
+        return Ok(());
+    }
+    let Some(envelope) = envelope else {
+        return Err(FlowError::InvalidArgument(
+            "compartmentId and servingMode edits require a ChatDetails envelope".into(),
+        ));
+    };
+    if compartment_id != old_compartment_id {
+        set_or_remove_json(
+            envelope,
+            "compartmentId",
+            compartment_id.clone().map(Json::String),
+        );
+    }
+    if serving_mode != old_serving_mode {
+        set_or_remove_json(envelope, "servingMode", serving_mode.clone());
+    }
+    Ok(())
+}
+
+/// The API format the encoder should target: an edited api-specific annotation
+/// wins over the raw payload, mirroring the decode default of `GENERIC`.
+fn encode_api_format(
+    annotated: &AnnotatedLlmRequest,
+    chat_request: &serde_json::Map<String, Json>,
+) -> String {
+    if let Some(ApiSpecificRequest::OCIGenAI {
+        api_format: Some(api_format),
+        ..
+    }) = &annotated.api_specific
+    {
+        return api_format.to_uppercase();
+    }
+    request_api_format(chat_request)
+}
+
+// ---------------------------------------------------------------------------
+// LlmCodec implementation
+// ---------------------------------------------------------------------------
+
+impl LlmCodec for OCIGenAIChatCodec {
+    fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
+        let obj = request
+            .content
+            .as_object()
+            .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
+        let (envelope, chat_request) = split_envelope(obj);
+        let api_format = request_api_format(chat_request);
+
+        let messages = if api_format == "COHERE" {
+            decode_cohere_messages(chat_request)?
+        } else {
+            match chat_request.get("messages") {
+                None | Some(Json::Null) => Vec::new(),
+                Some(Json::Array(messages)) => messages
+                    .iter()
+                    .map(decode_generic_message)
+                    .collect::<Result<Vec<_>>>()?,
+                Some(_) => {
+                    return Err(FlowError::InvalidArgument(
+                        "OCI GenAI GENERIC messages must be an array".into(),
+                    ));
+                }
+            }
+        };
+        let params = decode_params(chat_request, &api_format)?;
+        let tools = decode_tools(chat_request)?;
+        let tool_choice = chat_request
+            .get("toolChoice")
+            .filter(|value| !value.is_null())
+            .map(|value| ToolChoice::ProviderNative(native_component(value)));
+
+        let modeled = if api_format == "COHERE" {
+            MODELED_COHERE_REQUEST_KEYS
+        } else {
+            MODELED_GENERIC_REQUEST_KEYS
+        };
+        let extra: serde_json::Map<String, Json> = chat_request
+            .iter()
+            .filter(|(key, _)| !is_modeled_key(key, modeled))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+
+        Ok(AnnotatedLlmRequest {
+            messages,
+            instructions: None,
+            model: envelope.and_then(model_from_envelope),
+            params,
+            tools,
+            tool_choice,
+            store: None,
+            previous_response_id: None,
+            truncation: None,
+            reasoning: None,
+            include: None,
+            user: None,
+            metadata: None,
+            service_tier: None,
+            parallel_tool_calls: None,
+            max_output_tokens: None,
+            max_tool_calls: None,
+            top_logprobs: None,
+            stream: None,
+            api_specific: Some(ApiSpecificRequest::OCIGenAI {
+                compartment_id: envelope
+                    .and_then(|envelope| envelope.get("compartmentId"))
+                    .and_then(Json::as_str)
+                    .map(str::to_string),
+                serving_mode: envelope
+                    .and_then(|envelope| envelope.get("servingMode"))
+                    .cloned(),
+                api_format: Some(api_format),
+            }),
+            extra,
+        })
+    }
+
+    fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
+        let baseline = self.decode(original)?;
+        let mut content = original.content.clone();
+        let obj = content
+            .as_object_mut()
+            .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
+
+        // Split the mutable envelope from a working copy of the chat request.
+        let chat_request_key = obj
+            .get("chatRequest")
+            .is_some_and(Json::is_object)
+            .then(|| "chatRequest".to_string());
+        let mut chat_request = match &chat_request_key {
+            Some(key) => obj
+                .get(key)
+                .and_then(Json::as_object)
+                .cloned()
+                .unwrap_or_default(),
+            None => obj.clone(),
+        };
+        let api_format = encode_api_format(annotated, &chat_request);
+
+        validate_oci_supported_fields(annotated, &baseline)?;
+
+        if annotated.messages != baseline.messages {
+            if api_format == "COHERE" {
+                encode_cohere_messages(&mut chat_request, &annotated.messages)?;
+            } else {
+                patch_generic_messages(&mut chat_request, &annotated.messages, &baseline.messages)?;
+            }
+        }
+
+        patch_params(
+            &mut chat_request,
+            annotated.params.as_ref(),
+            baseline.params.as_ref(),
+            &api_format,
+        );
+
+        if annotated.tools != baseline.tools {
+            let tools = annotated
+                .tools
+                .as_deref()
+                .map(|tools| {
+                    tools
+                        .iter()
+                        .map(encode_oci_tool)
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .map(Json::Array);
+            set_or_remove_json(&mut chat_request, "tools", tools);
+        }
+        if annotated.tool_choice != baseline.tool_choice {
+            let tool_choice = annotated
+                .tool_choice
+                .as_ref()
+                .map(encode_oci_tool_choice)
+                .transpose()?;
+            set_or_remove_json(&mut chat_request, "toolChoice", tool_choice);
+        }
+
+        patch_extra_fields(&mut chat_request, &baseline.extra, &annotated.extra);
+
+        match chat_request_key {
+            Some(key) => {
+                obj.insert(key, Json::Object(chat_request));
+                patch_oci_api_specific(Some(obj), &annotated.api_specific, &baseline.api_specific)?;
+                Ok(LlmRequest {
+                    headers: original.headers.clone(),
+                    content,
+                })
+            }
+            None => {
+                patch_oci_api_specific(None, &annotated.api_specific, &baseline.api_specific)?;
+                Ok(LlmRequest {
+                    headers: original.headers.clone(),
+                    content: Json::Object(chat_request),
+                })
+            }
         }
     }
 }
