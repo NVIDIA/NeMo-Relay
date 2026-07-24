@@ -256,8 +256,10 @@ pub struct AtifSectionConfig {
     /// [`storage`]: Self::storage
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_directory: Option<PathBuf>,
-    /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID.
-    /// When [`storage`] is non-empty, the rendered filename is appended to each backend's key prefix.
+    /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID, and
+    /// `{metadata.<path>:-fallback}` placeholders use path-safe strings from the top-level scope
+    /// metadata or the optional literal fallback. When [`storage`] is non-empty, the rendered
+    /// filename is appended to each backend's key prefix.
     ///
     /// [`storage`]: Self::storage
     #[serde(default = "default_atif_filename_template")]
@@ -846,11 +848,8 @@ fn register_atif_dispatcher(
     section: AtifSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    if !section.filename_template.contains("{session_id}") {
-        return Err(PluginError::InvalidConfig(
-            "ATIF filename_template must contain '{session_id}'".to_string(),
-        ));
-    }
+    validate_atif_filename_template(&section.filename_template)
+        .map_err(PluginError::InvalidConfig)?;
 
     let mut storage_vec = Vec::with_capacity(section.storage.len());
     for (index, entry) in section.storage.iter().enumerate() {
@@ -1171,9 +1170,22 @@ impl AtifDispatcher {
         // subscriber is attached after that start event has already been
         // emitted.
         let session_id = event.uuid().to_string();
+        let (filename, local_path) = match self.prepare_destination(&session_id, event.metadata()) {
+            Ok(destination) => destination,
+            Err(error) => {
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "atif_destination_render_failed",
+                    plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                    exporter = "atif",
+                    session_id = session_id.as_str();
+                    "ATIF destination rendering failed: {error}"
+                );
+                return None;
+            }
+        };
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
-        let (filename, local_path) = self.prepare_destination(&session_id);
         let correlation = AtifCorrelation::from_event(event);
         self.scope_owners.insert(event.uuid(), event.uuid());
         self.agents.insert(
@@ -1360,13 +1372,14 @@ impl AtifDispatcher {
         }
     }
 
-    fn prepare_destination(&self, session_id: &str) -> (String, Option<PathBuf>) {
-        let filename = self
-            .config
-            .filename_template
-            .replace("{session_id}", session_id);
+    fn prepare_destination(
+        &self,
+        session_id: &str,
+        metadata: Option<&Json>,
+    ) -> Result<(String, Option<PathBuf>), String> {
+        let filename = render_atif_filename(&self.config.filename_template, session_id, metadata)?;
         if !self.config.storage.is_empty() {
-            return (filename, None);
+            return Ok((filename, None));
         }
         let directory = self
             .config
@@ -1374,7 +1387,7 @@ impl AtifDispatcher {
             .clone()
             .unwrap_or_else(default_output_directory);
         let path = directory.join(&filename);
-        (filename, Some(path))
+        Ok((filename, Some(path)))
     }
 
     fn sink_targets(&self) -> Vec<SinkLabel> {
@@ -1391,6 +1404,108 @@ impl AtifDispatcher {
                 .collect()
         }
     }
+}
+
+fn is_valid_atif_metadata_selector(selector: &str) -> bool {
+    !selector.is_empty()
+        && selector.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}
+
+fn parse_atif_metadata_expression(expression: &str) -> Result<(&str, Option<&str>), String> {
+    let (selector, fallback) = expression
+        .split_once(":-")
+        .map_or((expression, None), |(key, value)| (key, Some(value)));
+    if !is_valid_atif_metadata_selector(selector) {
+        return Err(format!(
+            "ATIF filename_template metadata placeholder '{{metadata.{selector}}}' must contain a dot-separated path of ASCII letters, digits, '-' or '_'"
+        ));
+    }
+    Ok((selector, fallback))
+}
+
+fn validate_atif_filename_template(template: &str) -> Result<(), String> {
+    const PREFIX: &str = "{metadata.";
+
+    if !template.contains("{session_id}") {
+        return Err("ATIF filename_template must contain '{session_id}'".to_string());
+    }
+
+    let mut cursor = 0;
+    while let Some(relative_start) = template[cursor..].find(PREFIX) {
+        let selector_start = cursor + relative_start + PREFIX.len();
+        let end = template[selector_start..]
+            .find('}')
+            .map(|relative_end| selector_start + relative_end)
+            .ok_or_else(|| {
+                "ATIF filename_template contains an unclosed metadata placeholder".to_string()
+            })?;
+        let (_, fallback) = parse_atif_metadata_expression(&template[selector_start..end])?;
+        if let Some(fallback) = fallback
+            && !is_safe_atif_metadata_path(fallback)
+        {
+            return Err(format!(
+                "ATIF filename_template fallback '{fallback}' must be a path-safe relative fragment"
+            ));
+        }
+        cursor = end + 1;
+    }
+    Ok(())
+}
+
+fn render_atif_filename(
+    template: &str,
+    session_id: &str,
+    metadata: Option<&Json>,
+) -> Result<String, String> {
+    const PREFIX: &str = "{metadata.";
+
+    let mut rendered = template.replace("{session_id}", session_id);
+    let mut cursor = 0;
+    while let Some(relative_start) = rendered[cursor..].find(PREFIX) {
+        let start = cursor + relative_start;
+        let selector_start = start + PREFIX.len();
+        let end = rendered[selector_start..]
+            .find('}')
+            .map(|relative_end| selector_start + relative_end)
+            .ok_or_else(|| {
+                "ATIF filename_template contains an unclosed metadata placeholder".to_string()
+            })?;
+        let expression = rendered[selector_start..end].to_string();
+        let (selector, fallback) = parse_atif_metadata_expression(&expression)?;
+        let value = selector
+            .split('.')
+            .fold(metadata, |value, segment| value?.get(segment))
+            .and_then(Json::as_str)
+            .or(fallback)
+            .ok_or_else(|| {
+                format!(
+                    "filename_template placeholder '{{metadata.{selector}}}' must resolve to a string"
+                )
+            })?;
+        if !is_safe_atif_metadata_path(value) {
+            return Err(format!(
+                "metadata path '{selector}' must be a path-safe relative fragment"
+            ));
+        }
+        rendered.replace_range(start..=end, value);
+        cursor = start + value.len();
+    }
+    Ok(rendered)
+}
+
+fn is_safe_atif_metadata_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('/').all(|segment| {
+            !matches!(segment, "" | "." | "..")
+                && segment.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                })
+        })
 }
 
 fn atif_dispatcher_subscriber(
@@ -2376,14 +2491,14 @@ fn validate_atif_values(
     policy: &ConfigPolicy,
     section: &AtifSectionConfig,
 ) {
-    if !section.filename_template.contains("{session_id}") {
+    if let Err(message) = validate_atif_filename_template(&section.filename_template) {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atif".to_string()),
             Some("filename_template".to_string()),
-            "ATIF filename_template must contain '{session_id}'".to_string(),
+            message,
         );
     }
     for (index, storage) in section.storage.iter().enumerate() {
