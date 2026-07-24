@@ -128,6 +128,14 @@ pub use events::*;
 pub use observability::*;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    register_runtime_types(m)?;
+    register_llm_types(m)?;
+    register_event_types(m)?;
+    register_observability_types(m)?;
+    register_codec_types(m)
+}
+
+fn register_runtime_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScopeStack>()?;
     m.add_class::<PyLlmStream>()?;
     m.add_class::<PyScopeAttributes>()?;
@@ -138,6 +146,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolHandle>()?;
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
+    Ok(())
+}
+
+fn register_llm_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLlmCodecIdentity>()?;
     m.add_class::<PyLlmSanitizeContext>()?;
     m.add_class::<PyPendingMarkSpec>()?;
@@ -145,8 +157,16 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolExecutionInterceptOutcome>()?;
     m.add_class::<PyAnnotatedLLMRequest>()?;
     m.add_class::<PyAnnotatedLLMResponse>()?;
+    Ok(())
+}
+
+fn register_event_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScopeEvent>()?;
     m.add_class::<PyMarkEvent>()?;
+    Ok(())
+}
+
+fn register_observability_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAtifExporter>()?;
     m.add_class::<PyAtofExporterMode>()?;
     m.add_class::<PyAtofEndpointConfig>()?;
@@ -156,6 +176,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOpenTelemetrySubscriber>()?;
     m.add_class::<PyOpenInferenceConfig>()?;
     m.add_class::<PyOpenInferenceSubscriber>()?;
+    Ok(())
+}
+
+fn register_codec_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOpenAIChatCodec>()?;
     m.add_class::<PyOpenAIResponsesCodec>()?;
     m.add_class::<PyAnthropicMessagesCodec>()?;
