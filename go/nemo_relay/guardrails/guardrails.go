@@ -159,12 +159,6 @@ func DeregisterLlmSanitizeRequest(name string) error {
 	return nemo_relay.DeregisterLlmSanitizeRequestGuardrail(name)
 }
 
-// RegisterContextualLlmSanitizeRequest registers a codec-aware LLM request
-// sanitizer invoked as “fn(request, context)“.
-func RegisterContextualLlmSanitizeRequest(name string, priority int32, fn nemo_relay.ContextualLLMRequestFunc) error {
-	return nemo_relay.RegisterContextualLlmSanitizeRequestGuardrail(name, priority, fn)
-}
-
 // --- LLM Sanitize Response ---
 
 // RegisterLlmSanitizeResponse registers a guardrail that sanitizes LLM response
@@ -179,12 +173,6 @@ func RegisterLlmSanitizeResponse(name string, priority int32, fn nemo_relay.LLMR
 // name. This is a shorthand for [nemo_relay.DeregisterLlmSanitizeResponseGuardrail].
 func DeregisterLlmSanitizeResponse(name string) error {
 	return nemo_relay.DeregisterLlmSanitizeResponseGuardrail(name)
-}
-
-// RegisterContextualLlmSanitizeResponse registers a codec-aware LLM response
-// sanitizer invoked as “fn(response, context)“.
-func RegisterContextualLlmSanitizeResponse(name string, priority int32, fn nemo_relay.ContextualLLMResponseFunc) error {
-	return nemo_relay.RegisterContextualLlmSanitizeResponseGuardrail(name, priority, fn)
 }
 
 // --- LLM Conditional Execution ---

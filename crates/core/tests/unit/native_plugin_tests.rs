@@ -512,6 +512,7 @@ unsafe extern "C" fn noop_tool_execution(
 unsafe extern "C" fn noop_llm_request(
     _user_data: *mut c_void,
     _request_json: *const NemoRelayNativeString,
+    _context_json: *const NemoRelayNativeString,
     _out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -520,6 +521,7 @@ unsafe extern "C" fn noop_llm_request(
 unsafe extern "C" fn noop_json(
     _user_data: *mut c_void,
     _payload_json: *const NemoRelayNativeString,
+    _context_json: *const NemoRelayNativeString,
     _out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -730,6 +732,7 @@ unsafe extern "C" fn tool_json_error(
 unsafe extern "C" fn llm_request_echo(
     _user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
+    _context_json: *const NemoRelayNativeString,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     let request = read_native_string(request_json).unwrap();
@@ -755,8 +758,17 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
         content: json!({"model": "test"}),
     };
     assert_eq!(
-        call_llm_request_callback(llm_request_echo, ptr::null_mut(), &request).unwrap(),
-        request
+        call_llm_sanitize_request_callback(
+            llm_request_echo,
+            ptr::null_mut(),
+            &request,
+            LlmSanitizeContext {
+                has_active_codec: false,
+                codec_name: None
+            },
+        )
+        .unwrap(),
+        Some(request)
     );
 }
 

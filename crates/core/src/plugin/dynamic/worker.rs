@@ -1194,7 +1194,7 @@ impl WorkerPluginInstance {
                     let instance = Arc::new(self.clone_for_callback());
                     let callback_name = name.clone();
                     if registration.contextual {
-                        ctx.register_contextual_llm_sanitize_request_guardrail(
+                        ctx.register_llm_sanitize_request_guardrail(
                             &name,
                             priority,
                             Arc::new(move |request, context| {
@@ -1217,7 +1217,7 @@ impl WorkerPluginInstance {
                         ctx.register_llm_sanitize_request_guardrail(
                             &name,
                             priority,
-                            Arc::new(move |request| {
+                            Arc::new(move |request, _context| {
                                 instance
                                     .invoke_llm_request_json(
                                         &callback_name,
@@ -1227,12 +1227,13 @@ impl WorkerPluginInstance {
                                         None,
                                         None,
                                     )
+                                    .map(Some)
                                     .unwrap_or_else(|_| {
                                         instance.log_callback_fallback(
                                             &callback_name,
                                             RegistrationSurface::LlmSanitizeRequestGuardrail,
                                         );
-                                        request
+                                        Some(request)
                                     })
                             }),
                         )?;
@@ -1242,7 +1243,7 @@ impl WorkerPluginInstance {
                     let instance = Arc::new(self.clone_for_callback());
                     let callback_name = name.clone();
                     if registration.contextual {
-                        ctx.register_contextual_llm_sanitize_response_guardrail(
+                        ctx.register_llm_sanitize_response_guardrail(
                             &name,
                             priority,
                             Arc::new(move |value, context| {
@@ -1265,7 +1266,7 @@ impl WorkerPluginInstance {
                         ctx.register_llm_sanitize_response_guardrail(
                             &name,
                             priority,
-                            Arc::new(move |value| {
+                            Arc::new(move |value, _context| {
                                 instance
                                     .invoke_llm_response_json(
                                         &callback_name,
@@ -1273,12 +1274,13 @@ impl WorkerPluginInstance {
                                         "",
                                         value.clone(),
                                     )
+                                    .map(Some)
                                     .unwrap_or_else(|_| {
                                         instance.log_callback_fallback(
                                             &callback_name,
                                             RegistrationSurface::LlmSanitizeResponseGuardrail,
                                         );
-                                        value
+                                        Some(value)
                                     })
                             }),
                         )?;

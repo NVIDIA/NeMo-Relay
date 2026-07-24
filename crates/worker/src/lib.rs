@@ -133,14 +133,11 @@ type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
 type ToolExecutionFn = Arc<
     dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
 >;
-type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
-type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
-type ContextualLlmSanitizeRequestFn =
+type LlmSanitizeRequestFn =
     Arc<dyn Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync>;
-type ContextualLlmSanitizeResponseFn =
-    Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
+type LlmSanitizeResponseFn = Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
 
-/// Active codec information supplied to a contextual LLM sanitizer.
+/// Active codec information supplied to an LLM sanitizer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmSanitizeContext {
     /// Whether the managed call has a codec for this payload direction.
@@ -172,8 +169,6 @@ struct WorkerHandlers {
     tool_executions: HashMap<String, ToolExecutionFn>,
     llm_sanitize_requests: HashMap<String, LlmSanitizeRequestFn>,
     llm_sanitize_responses: HashMap<String, LlmSanitizeResponseFn>,
-    contextual_llm_sanitize_requests: HashMap<String, ContextualLlmSanitizeRequestFn>,
-    contextual_llm_sanitize_responses: HashMap<String, ContextualLlmSanitizeResponseFn>,
     llm_conditionals: HashMap<String, LlmConditionalFn>,
     llm_requests: HashMap<String, LlmRequestFn>,
     llm_executions: HashMap<String, LlmExecutionFn>,
@@ -403,13 +398,14 @@ impl PluginContext {
         priority: i32,
         callback: F,
     ) where
-        F: Fn(LlmRequest) -> LlmRequest + Send + Sync + 'static,
+        F: Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync + 'static,
     {
-        self.push_registration(
+        self.push_registration_with_context(
             name,
             RegistrationSurface::LlmSanitizeRequestGuardrail,
             priority,
             false,
+            true,
         );
         self.handlers
             .llm_sanitize_requests
@@ -423,58 +419,17 @@ impl PluginContext {
         priority: i32,
         callback: F,
     ) where
-        F: Fn(Json) -> Json + Send + Sync + 'static,
+        F: Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync + 'static,
     {
-        self.push_registration(
+        self.push_registration_with_context(
             name,
             RegistrationSurface::LlmSanitizeResponseGuardrail,
             priority,
             false,
+            true,
         );
         self.handlers
             .llm_sanitize_responses
-            .insert(name.into(), Arc::new(callback));
-    }
-
-    /// Registers a contextual LLM sanitize-request guardrail.
-    ///
-    /// Returning `None` omits the payload and annotation from the emitted start event.
-    pub fn register_contextual_llm_sanitize_request_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) where
-        F: Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync + 'static,
-    {
-        self.push_contextual_registration(
-            name,
-            RegistrationSurface::LlmSanitizeRequestGuardrail,
-            priority,
-        );
-        self.handlers
-            .contextual_llm_sanitize_requests
-            .insert(name.into(), Arc::new(callback));
-    }
-
-    /// Registers a contextual LLM sanitize-response guardrail.
-    ///
-    /// Returning `None` omits the payload and annotation from the emitted end event.
-    pub fn register_contextual_llm_sanitize_response_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) where
-        F: Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync + 'static,
-    {
-        self.push_contextual_registration(
-            name,
-            RegistrationSurface::LlmSanitizeResponseGuardrail,
-            priority,
-        );
-        self.handlers
-            .contextual_llm_sanitize_responses
             .insert(name.into(), Arc::new(callback));
     }
 
@@ -574,15 +529,6 @@ impl PluginContext {
         break_chain: bool,
     ) {
         self.push_registration_with_context(name, surface, priority, break_chain, false);
-    }
-
-    fn push_contextual_registration(
-        &mut self,
-        name: &str,
-        surface: RegistrationSurface,
-        priority: i32,
-    ) {
-        self.push_registration_with_context(name, surface, priority, false, true);
     }
 
     fn push_registration_with_context(
@@ -1570,40 +1516,22 @@ impl WorkerService {
                 let payload = llm_payload(request.payload)?;
                 let context = payload.sanitize_context();
                 let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
-                if self.is_contextual_llm_request(&request.registration_name)? {
-                    let handler =
-                        self.contextual_llm_sanitize_request(&request.registration_name)?;
-                    match with_thread_scope(&scope, || handler(request_value, context)) {
-                        Some(request) => Ok(json_response(
-                            serde_json::to_value(request)
-                                .expect("LLM request is JSON serializable"),
-                        )),
-                        None => Ok(empty_response()),
-                    }
-                } else {
-                    let handler = self.llm_sanitize_request(&request.registration_name)?;
-                    let request = with_thread_scope(&scope, || handler(request_value));
-                    Ok(json_response(
+                let handler = self.llm_sanitize_request(&request.registration_name)?;
+                match with_thread_scope(&scope, || handler(request_value, context)) {
+                    Some(request) => Ok(json_response(
                         serde_json::to_value(request).expect("LLM request is JSON serializable"),
-                    ))
+                    )),
+                    None => Ok(empty_response()),
                 }
             }
             RegistrationSurface::LlmSanitizeResponseGuardrail => {
                 let payload = llm_payload(request.payload)?;
                 let context = payload.sanitize_context();
                 let response = required_json::<Json>(payload.response, "llm response")?;
-                if self.is_contextual_llm_response(&request.registration_name)? {
-                    let handler =
-                        self.contextual_llm_sanitize_response(&request.registration_name)?;
-                    match with_thread_scope(&scope, || handler(response, context)) {
-                        Some(response) => Ok(json_response(response)),
-                        None => Ok(empty_response()),
-                    }
-                } else {
-                    let handler = self.llm_sanitize_response(&request.registration_name)?;
-                    Ok(json_response(with_thread_scope(&scope, || {
-                        handler(response)
-                    })))
+                let handler = self.llm_sanitize_response(&request.registration_name)?;
+                match with_thread_scope(&scope, || handler(response, context)) {
+                    Some(response) => Ok(json_response(response)),
+                    None => Ok(empty_response()),
                 }
             }
             RegistrationSurface::LlmConditionalExecutionGuardrail => {
@@ -1769,58 +1697,6 @@ impl WorkerService {
             .ok_or_else(|| {
                 WorkerSdkError::InvalidInput(format!(
                     "llm response sanitizer '{name}' not registered"
-                ))
-            })
-    }
-
-    fn is_contextual_llm_request(&self, name: &str) -> Result<bool> {
-        Ok(self
-            .handlers
-            .lock()
-            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
-            .contextual_llm_sanitize_requests
-            .contains_key(name))
-    }
-
-    fn is_contextual_llm_response(&self, name: &str) -> Result<bool> {
-        Ok(self
-            .handlers
-            .lock()
-            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
-            .contextual_llm_sanitize_responses
-            .contains_key(name))
-    }
-
-    fn contextual_llm_sanitize_request(
-        &self,
-        name: &str,
-    ) -> Result<ContextualLlmSanitizeRequestFn> {
-        self.handlers
-            .lock()
-            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
-            .contextual_llm_sanitize_requests
-            .get(name)
-            .cloned()
-            .ok_or_else(|| {
-                WorkerSdkError::InvalidInput(format!(
-                    "contextual llm request sanitizer '{name}' not registered"
-                ))
-            })
-    }
-
-    fn contextual_llm_sanitize_response(
-        &self,
-        name: &str,
-    ) -> Result<ContextualLlmSanitizeResponseFn> {
-        self.handlers
-            .lock()
-            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
-            .contextual_llm_sanitize_responses
-            .get(name)
-            .cloned()
-            .ok_or_else(|| {
-                WorkerSdkError::InvalidInput(format!(
-                    "contextual llm response sanitizer '{name}' not registered"
                 ))
             })
     }

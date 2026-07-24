@@ -1091,7 +1091,7 @@ fn register_llm_sanitize_request_guardrail(
     core_registry_api::register_llm_sanitize_request_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1114,7 +1114,7 @@ fn register_llm_sanitize_response_guardrail(
     core_registry_api::register_llm_sanitize_response_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1123,42 +1123,6 @@ fn register_llm_sanitize_response_guardrail(
 #[pyfunction]
 fn deregister_llm_sanitize_response_guardrail(name: &str) -> PyResult<bool> {
     core_registry_api::deregister_llm_sanitize_response_guardrail(name).map_err(to_py_err)
-}
-
-/// Register a contextual LLM sanitize-request guardrail.
-///
-/// Callback: ``(request: LlmRequest, context: dict) -> Optional[LlmRequest]``.
-/// Returning ``None`` omits the event payload and annotation.
-#[pyfunction]
-fn register_contextual_llm_sanitize_request_guardrail(
-    name: &str,
-    priority: i32,
-    guardrail: Py<PyAny>,
-) -> PyResult<()> {
-    core_registry_api::register_contextual_llm_sanitize_request_guardrail(
-        name,
-        priority,
-        py_callable::wrap_py_contextual_llm_sanitize_request_fn(guardrail),
-    )
-    .map_err(to_py_err)
-}
-
-/// Register a contextual LLM sanitize-response guardrail.
-///
-/// Callback: ``(response: Json, context: dict) -> Optional[Json]``.
-/// Returning ``None`` omits the event payload and annotation.
-#[pyfunction]
-fn register_contextual_llm_sanitize_response_guardrail(
-    name: &str,
-    priority: i32,
-    guardrail: Py<PyAny>,
-) -> PyResult<()> {
-    core_registry_api::register_contextual_llm_sanitize_response_guardrail(
-        name,
-        priority,
-        py_callable::wrap_py_contextual_llm_sanitize_response_fn(guardrail),
-    )
-    .map_err(to_py_err)
 }
 
 /// Register an LLM conditional-execution guardrail.
@@ -1578,7 +1542,7 @@ fn scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1604,7 +1568,7 @@ fn scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1847,14 +1811,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         deregister_llm_sanitize_response_guardrail,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        register_contextual_llm_sanitize_request_guardrail,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        register_contextual_llm_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(

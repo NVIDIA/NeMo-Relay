@@ -28,8 +28,8 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
     ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
     PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
-    ensure_builtin_plugins_registered, initialize_plugins, list_plugin_kinds,
-    rollback_registrations, validate_plugin_config,
+    ensure_builtin_plugins_registered, initialize_plugins_exact as initialize_plugins,
+    list_plugin_kinds, rollback_registrations, validate_plugin_config,
 };
 use futures::StreamExt;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};

@@ -23,8 +23,6 @@ const {
   deregisterLlmSanitizeRequestGuardrail,
   registerLlmSanitizeResponseGuardrail,
   deregisterLlmSanitizeResponseGuardrail,
-  registerContextualLlmSanitizeRequestGuardrail,
-  registerContextualLlmSanitizeResponseGuardrail,
   registerLlmConditionalExecutionGuardrail,
   deregisterLlmConditionalExecutionGuardrail,
   registerLlmRequestIntercept,
@@ -363,7 +361,7 @@ describe('LLM guardrails', () => {
     let requestContext;
     let responseContext;
     registerSubscriber('node_contextual_llm_sanitize_events', (event) => events.push(event));
-    registerContextualLlmSanitizeRequestGuardrail(
+    registerLlmSanitizeRequestGuardrail(
       'node_contextual_llm_sanitize_request',
       10,
       (request, context) => {
@@ -374,7 +372,7 @@ describe('LLM guardrails', () => {
         };
       },
     );
-    registerContextualLlmSanitizeResponseGuardrail(
+    registerLlmSanitizeResponseGuardrail(
       'node_contextual_llm_sanitize_response',
       10,
       (response, context) => {

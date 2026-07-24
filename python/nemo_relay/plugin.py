@@ -15,8 +15,6 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
 
 from nemo_relay import (
-    ContextualLlmSanitizeRequestGuardrail,
-    ContextualLlmSanitizeResponseGuardrail,
     EventSanitizeGuardrail,
     Json,
     JsonObject,
@@ -137,18 +135,6 @@ class PluginContext(Protocol):
         self, name: str, priority: int, callback: LlmSanitizeResponseGuardrail
     ) -> None:
         """Register an LLM sanitize-response guardrail for this component."""
-        ...
-
-    def register_contextual_llm_sanitize_request_guardrail(
-        self, name: str, priority: int, callback: ContextualLlmSanitizeRequestGuardrail
-    ) -> None:
-        """Register a codec-aware LLM request sanitizer for this component."""
-        ...
-
-    def register_contextual_llm_sanitize_response_guardrail(
-        self, name: str, priority: int, callback: ContextualLlmSanitizeResponseGuardrail
-    ) -> None:
-        """Register a codec-aware LLM response sanitizer for this component."""
         ...
 
     def register_llm_conditional_execution_guardrail(

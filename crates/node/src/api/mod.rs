@@ -32,8 +32,8 @@ use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    ToolExecutionNextFn,
+    EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream, LlmSanitizeContext,
+    LlmStreamExecutionNextFn, LlmStreamInner, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
@@ -881,7 +881,7 @@ fn build_plugin_context(
             core_registry_api::register_llm_sanitize_request_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_sanitize_request_fn(middleware_json_callback_tsfn(
+                callable::wrap_js_llm_sanitize_request_fn(middleware_json_pair_callback_tsfn(
                     ctx.env, &callback,
                 )?),
             )
@@ -927,7 +927,7 @@ fn build_plugin_context(
             core_registry_api::register_llm_sanitize_response_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_response_fn(middleware_json_callback_tsfn(
+                callable::wrap_js_llm_sanitize_response_fn(middleware_json_pair_callback_tsfn(
                     ctx.env, &callback,
                 )?),
             )
@@ -956,98 +956,6 @@ fn build_plugin_context(
     context.set_named_property(
         "registerLlmSanitizeResponseGuardrail",
         register_llm_sanitize_response_guardrail,
-    )?;
-
-    let contextual_llm_sanitize_request_regs = registrations.clone();
-    let contextual_llm_sanitize_request_namespace = namespace_prefix.clone();
-    let register_contextual_llm_sanitize_request_guardrail = env.create_function_from_closure(
-        "__nemo_relay_plugin_register_contextual_llm_sanitize_request_guardrail",
-        move |ctx| {
-            let name = format!(
-                "{}{}",
-                contextual_llm_sanitize_request_namespace,
-                ctx.get::<String>(0)?
-            );
-            let priority = ctx.get::<i32>(1)?;
-            let callback = ctx.get::<JsFunction>(2)?;
-            core_registry_api::register_contextual_llm_sanitize_request_guardrail(
-                &name,
-                priority,
-                callable::wrap_js_contextual_llm_sanitize_request_fn(
-                    middleware_json_pair_callback_tsfn(ctx.env, &callback)?,
-                ),
-            )
-            .map_err(to_napi_err)?;
-
-            let name_clone = name.clone();
-            contextual_llm_sanitize_request_regs
-                .lock()
-                .unwrap()
-                .push(PluginRegistration::new(
-                    "plugin",
-                    name_clone.clone(),
-                    Box::new(move || {
-                        core_registry_api::deregister_llm_sanitize_request_guardrail(&name_clone)
-                            .map(|_| ())
-                            .map_err(|e| {
-                                PluginError::RegistrationFailed(format!(
-                                    "contextual llm sanitize request guardrail deregistration failed: {e}"
-                                ))
-                            })
-                    }),
-                ));
-            ctx.env.get_undefined()
-        },
-    )?;
-    context.set_named_property(
-        "registerContextualLlmSanitizeRequestGuardrail",
-        register_contextual_llm_sanitize_request_guardrail,
-    )?;
-
-    let contextual_llm_sanitize_response_regs = registrations.clone();
-    let contextual_llm_sanitize_response_namespace = namespace_prefix.clone();
-    let register_contextual_llm_sanitize_response_guardrail = env.create_function_from_closure(
-        "__nemo_relay_plugin_register_contextual_llm_sanitize_response_guardrail",
-        move |ctx| {
-            let name = format!(
-                "{}{}",
-                contextual_llm_sanitize_response_namespace,
-                ctx.get::<String>(0)?
-            );
-            let priority = ctx.get::<i32>(1)?;
-            let callback = ctx.get::<JsFunction>(2)?;
-            core_registry_api::register_contextual_llm_sanitize_response_guardrail(
-                &name,
-                priority,
-                callable::wrap_js_contextual_llm_sanitize_response_fn(
-                    middleware_json_pair_callback_tsfn(ctx.env, &callback)?,
-                ),
-            )
-            .map_err(to_napi_err)?;
-
-            let name_clone = name.clone();
-            contextual_llm_sanitize_response_regs
-                .lock()
-                .unwrap()
-                .push(PluginRegistration::new(
-                    "plugin",
-                    name_clone.clone(),
-                    Box::new(move || {
-                        core_registry_api::deregister_llm_sanitize_response_guardrail(&name_clone)
-                            .map(|_| ())
-                            .map_err(|e| {
-                                PluginError::RegistrationFailed(format!(
-                                    "contextual llm sanitize response guardrail deregistration failed: {e}"
-                                ))
-                            })
-                    }),
-                ));
-            ctx.env.get_undefined()
-        },
-    )?;
-    context.set_named_property(
-        "registerContextualLlmSanitizeResponseGuardrail",
-        register_contextual_llm_sanitize_response_guardrail,
     )?;
 
     let llm_conditional_regs = registrations.clone();
@@ -1671,7 +1579,7 @@ pub fn test_closed_tool_callback(
 /// Internal test helper: invoke a closed JS LLM sanitize-request wrapper and return the fallback request.
 #[napi(js_name = "__testClosedLlmSanitizeRequestCallback")]
 pub fn test_closed_llm_sanitize_request_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callback: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
     request: Json,
 ) -> Result<Json> {
     clear_recorded_callback_error();
@@ -1679,19 +1587,33 @@ pub fn test_closed_llm_sanitize_request_callback(
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let wrapped = callable::wrap_js_llm_sanitize_request_fn(callback);
-    Ok(serde_json::to_value(wrapped(llm_request)).unwrap_or(Json::Null))
+    Ok(serde_json::to_value(wrapped(
+        llm_request,
+        LlmSanitizeContext {
+            has_active_codec: false,
+            codec_name: None,
+        },
+    ))
+    .unwrap_or(Json::Null))
 }
 
 /// Internal test helper: invoke a closed JS LLM sanitize-response wrapper and return the fallback response.
 #[napi(js_name = "__testClosedLlmResponseCallback")]
 pub fn test_closed_llm_response_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callback: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
     response: Json,
 ) -> Json {
     clear_recorded_callback_error();
     let _ = callback.clone().abort();
-    let wrapped = callable::wrap_js_llm_response_fn(callback);
-    wrapped(response)
+    let wrapped = callable::wrap_js_llm_sanitize_response_fn(callback);
+    wrapped(
+        response,
+        LlmSanitizeContext {
+            has_active_codec: false,
+            codec_name: None,
+        },
+    )
+    .unwrap_or(Json::Null)
 }
 
 /// Internal test helper: invoke a closed JS collector wrapper and surface the queue failure.
@@ -2740,7 +2662,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     guardrail: JsFunction,
 ) -> Result<()> {
-    let callback = middleware_json_callback_tsfn(&env, &guardrail)?;
+    let callback = middleware_json_pair_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_llm_sanitize_request_guardrail(
         &name,
         priority,
@@ -2771,11 +2693,11 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     guardrail: JsFunction,
 ) -> Result<()> {
-    let callback = middleware_json_callback_tsfn(&env, &guardrail)?;
+    let callback = middleware_json_pair_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_llm_sanitize_response_guardrail(
         &name,
         priority,
-        callable::wrap_js_llm_response_fn(callback),
+        callable::wrap_js_llm_sanitize_response_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -2786,44 +2708,6 @@ pub fn register_llm_sanitize_response_guardrail(
 #[napi]
 pub fn deregister_llm_sanitize_response_guardrail(name: String) -> Result<bool> {
     core_registry_api::deregister_llm_sanitize_response_guardrail(&name).map_err(to_napi_err)
-}
-
-/// Register a codec-context-aware LLM request sanitizer. The callback receives
-/// `(request, context)` and may return `null` to omit the event payload.
-#[napi]
-pub fn register_contextual_llm_sanitize_request_guardrail(
-    env: Env,
-    name: String,
-    priority: i32,
-    guardrail: JsFunction,
-) -> Result<()> {
-    core_registry_api::register_contextual_llm_sanitize_request_guardrail(
-        &name,
-        priority,
-        callable::wrap_js_contextual_llm_sanitize_request_fn(middleware_json_pair_callback_tsfn(
-            &env, &guardrail,
-        )?),
-    )
-    .map_err(to_napi_err)
-}
-
-/// Register a codec-context-aware LLM response sanitizer. The callback receives
-/// `(response, context)` and may return `null` to omit the event payload.
-#[napi]
-pub fn register_contextual_llm_sanitize_response_guardrail(
-    env: Env,
-    name: String,
-    priority: i32,
-    guardrail: JsFunction,
-) -> Result<()> {
-    core_registry_api::register_contextual_llm_sanitize_response_guardrail(
-        &name,
-        priority,
-        callable::wrap_js_contextual_llm_sanitize_response_fn(middleware_json_pair_callback_tsfn(
-            &env, &guardrail,
-        )?),
-    )
-    .map_err(to_napi_err)
 }
 
 /// Register a guardrail that conditionally gates LLM execution.
@@ -3316,7 +3200,9 @@ pub fn scope_register_llm_sanitize_request_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_sanitize_request_fn(middleware_json_callback_tsfn(&env, &guardrail)?),
+        callable::wrap_js_llm_sanitize_request_fn(middleware_json_pair_callback_tsfn(
+            &env, &guardrail,
+        )?),
     )
     .map_err(to_napi_err)
 }
@@ -3356,7 +3242,9 @@ pub fn scope_register_llm_sanitize_response_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_response_fn(middleware_json_callback_tsfn(&env, &guardrail)?),
+        callable::wrap_js_llm_sanitize_response_fn(middleware_json_pair_callback_tsfn(
+            &env, &guardrail,
+        )?),
     )
     .map_err(to_napi_err)
 }

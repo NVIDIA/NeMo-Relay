@@ -198,12 +198,12 @@ fn register_fixture_llm_hooks(
     ctx.register_llm_sanitize_request_guardrail(
         "fixture_llm_sanitize_request",
         0,
-        |request| mark_llm_request(request, "worker_plugin_llm_sanitize_request"),
+        |request, _context| Some(mark_llm_request(request, "worker_plugin_llm_sanitize_request")),
     );
     ctx.register_llm_sanitize_response_guardrail(
         "fixture_llm_sanitize_response",
         0,
-        |response| mark_json(response, "worker_plugin_llm_sanitize_response"),
+        |response, _context| Some(mark_json(response, "worker_plugin_llm_sanitize_response")),
     );
     ctx.register_llm_conditional_execution_guardrail(
         "fixture_llm_conditional",

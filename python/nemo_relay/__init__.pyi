@@ -172,30 +172,36 @@ Arguments:
 Return:
     ``None`` to allow execution, or a rejection message to block it.
 """
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest]
+_LlmSanitizeRequestWithContext: TypeAlias = Callable[[LLMRequest, "LlmSanitizeContext"], Optional[LLMRequest]]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest] | _LlmSanitizeRequestWithContext
 """Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 
 Arguments:
-    The current LLM request.
+    The current LLM request and a context object with ``has_active_codec`` and
+    ``codec_name``. One-argument callbacks remain supported for compatibility.
 
 Return:
-    Request object recorded on the emitted lifecycle event.
+    Request object recorded on the emitted lifecycle event, or ``None`` to omit
+    the LLM observability payload and annotation.
 """
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject]
+_LlmSanitizeResponseWithContext: TypeAlias = Callable[[JsonObject, "LlmSanitizeContext"], Optional[JsonObject]]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject] | _LlmSanitizeResponseWithContext
 """Guardrail callback that sanitizes an emitted JSON LLM response payload.
 
 Arguments:
-    The response object to sanitize for observability.
+    The response object and a context object with ``has_active_codec`` and
+    ``codec_name``. One-argument callbacks remain supported for compatibility.
 
 Return:
-    Response object recorded on the emitted lifecycle event.
+    Response object recorded on the emitted lifecycle event, or ``None`` to
+    omit the LLM observability payload and annotation.
 """
 LlmSanitizeContext: TypeAlias = JsonObject
-"""Codec identity supplied while a managed LLM event is sanitized."""
-ContextualLlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, LlmSanitizeContext], Optional[LLMRequest]]
-"""Codec-aware sanitizer invoked as ``callback(request, context)``."""
-ContextualLlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject, LlmSanitizeContext], Optional[JsonObject]]
-"""Codec-aware sanitizer invoked as ``callback(response, context)``."""
+"""Codec identity supplied while a managed LLM event is sanitized.
+
+``has_active_codec`` distinguishes no codec from an unrecognized custom codec;
+``codec_name`` is populated only for a recognized built-in codec.
+"""
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
 """Guardrail callback that can block an LLM call.
 

@@ -700,14 +700,14 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
     assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
 
 
-def test_plugin_context_registers_contextual_llm_sanitizers():
+def test_plugin_context_registers_contextual_llm_sanitizers_under_standard_names():
     context = PluginContext()
 
-    context.register_contextual_llm_sanitize_request_guardrail(
+    context.register_llm_sanitize_request_guardrail(
         "request",
         lambda request, codec_context: request if codec_context["has_active_codec"] else None,
     )
-    context.register_contextual_llm_sanitize_response_guardrail(
+    context.register_llm_sanitize_response_guardrail(
         "response",
         lambda response, codec_context: response if codec_context["codec_name"] else None,
     )
@@ -738,8 +738,8 @@ async def test_contextual_llm_sanitizers_receive_codec_context_and_can_omit_payl
                 del response
                 seen.append(("response", codec_context))
 
-            ctx.register_contextual_llm_sanitize_request_guardrail("request", request_sanitizer)
-            ctx.register_contextual_llm_sanitize_response_guardrail("response", response_sanitizer)
+            ctx.register_llm_sanitize_request_guardrail("request", request_sanitizer)
+            ctx.register_llm_sanitize_response_guardrail("response", response_sanitizer)
 
     service = _service(ContextualSanitizerPlugin(), RecordingHostStub())
     await _register(service)

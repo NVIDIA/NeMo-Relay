@@ -16,11 +16,10 @@ use nemo_relay_plugin::{
     AnnotatedLlmRequest, CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory,
     EventSanitizeFields, Json, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome,
     LlmSanitizeContext, LlmStream, LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin,
-    NemoRelayNativeContextualLlmRequestCb, NemoRelayNativeContextualLlmResponseCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
-    NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb,
-    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeHostApiV1, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmStreamExecutionCb,
     NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
     NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
     NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
@@ -115,7 +114,7 @@ impl RegisteredToolExecution {
 struct RegisteredLlmRequest {
     name: String,
     priority: i32,
-    cb: NemoRelayNativeLlmRequestCb,
+    cb: NemoRelayNativeLlmSanitizeRequestCb,
     user_data: usize,
     free_fn: NemoRelayNativeFreeFn,
 }
@@ -131,41 +130,9 @@ impl RegisteredLlmRequest {
 struct RegisteredLlmJson {
     name: String,
     priority: i32,
-    cb: NemoRelayNativeJsonCb,
+    cb: NemoRelayNativeLlmSanitizeResponseCb,
     user_data: usize,
     free_fn: NemoRelayNativeFreeFn,
-}
-
-struct RegisteredContextualLlmRequest {
-    name: String,
-    priority: i32,
-    cb: NemoRelayNativeContextualLlmRequestCb,
-    user_data: usize,
-    free_fn: NemoRelayNativeFreeFn,
-}
-
-impl RegisteredContextualLlmRequest {
-    unsafe fn free(self) {
-        if let Some(free_fn) = self.free_fn {
-            unsafe { free_fn(self.user_data as *mut c_void) };
-        }
-    }
-}
-
-struct RegisteredContextualLlmResponse {
-    name: String,
-    priority: i32,
-    cb: NemoRelayNativeContextualLlmResponseCb,
-    user_data: usize,
-    free_fn: NemoRelayNativeFreeFn,
-}
-
-impl RegisteredContextualLlmResponse {
-    unsafe fn free(self) {
-        if let Some(free_fn) = self.free_fn {
-            unsafe { free_fn(self.user_data as *mut c_void) };
-        }
-    }
 }
 
 impl RegisteredLlmJson {
@@ -265,8 +232,6 @@ impl_captured_registration!(
     RegisteredToolExecution,
     RegisteredLlmRequest,
     RegisteredLlmJson,
-    RegisteredContextualLlmRequest,
-    RegisteredContextualLlmResponse,
     RegisteredLlmConditional,
     RegisteredLlmExecution,
     RegisteredLlmStreamExecution,
@@ -324,10 +289,6 @@ static TOOL_CONDITIONAL_REGISTRATION: Mutex<Option<RegisteredToolConditional>> =
 static TOOL_EXECUTION_REGISTRATION: Mutex<Option<RegisteredToolExecution>> = Mutex::new(None);
 static LLM_REQUEST_REGISTRATION: Mutex<Option<RegisteredLlmRequest>> = Mutex::new(None);
 static LLM_JSON_REGISTRATION: Mutex<Option<RegisteredLlmJson>> = Mutex::new(None);
-static CONTEXTUAL_LLM_REQUEST_REGISTRATION: Mutex<Option<RegisteredContextualLlmRequest>> =
-    Mutex::new(None);
-static CONTEXTUAL_LLM_RESPONSE_REGISTRATION: Mutex<Option<RegisteredContextualLlmResponse>> =
-    Mutex::new(None);
 static LLM_CONDITIONAL_REGISTRATION: Mutex<Option<RegisteredLlmConditional>> = Mutex::new(None);
 static LLM_EXECUTION_REGISTRATION: Mutex<Option<RegisteredLlmExecution>> = Mutex::new(None);
 static LLM_STREAM_EXECUTION_REGISTRATION: Mutex<Option<RegisteredLlmStreamExecution>> =
@@ -337,7 +298,7 @@ static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestInte
 
 #[test]
 fn native_abi_v1_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 1);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 2);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -355,13 +316,13 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 312);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 296);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
                 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272,
-                280, 288, 296, 304,
+                280, 288,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
@@ -393,7 +354,7 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_offsets() -> [usize; 39] {
+fn host_api_offsets() -> [usize; 37] {
     [
         offset_of!(NemoRelayNativeHostApiV1, abi_version),
         offset_of!(NemoRelayNativeHostApiV1, struct_size),
@@ -473,14 +434,6 @@ fn host_api_offsets() -> [usize; 39] {
         offset_of!(
             NemoRelayNativeHostApiV1,
             plugin_context_register_scope_sanitize_end_guardrail
-        ),
-        offset_of!(
-            NemoRelayNativeHostApiV1,
-            plugin_context_register_contextual_llm_sanitize_request_guardrail
-        ),
-        offset_of!(
-            NemoRelayNativeHostApiV1,
-            plugin_context_register_contextual_llm_sanitize_response_guardrail
         ),
     ]
 }
@@ -736,7 +689,7 @@ unsafe extern "C" fn capture_llm_request(
     _ctx: *mut NemoRelayNativePluginContext,
     name: *const NemoRelayNativeString,
     priority: i32,
-    cb: NemoRelayNativeLlmRequestCb,
+    cb: NemoRelayNativeLlmSanitizeRequestCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
@@ -765,7 +718,7 @@ unsafe extern "C" fn capture_llm_json(
     _ctx: *mut NemoRelayNativePluginContext,
     name: *const NemoRelayNativeString,
     priority: i32,
-    cb: NemoRelayNativeJsonCb,
+    cb: NemoRelayNativeLlmSanitizeResponseCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
@@ -1174,64 +1127,6 @@ unsafe extern "C" fn true_scope_stack_active() -> bool {
     true
 }
 
-unsafe extern "C" fn capture_contextual_llm_request(
-    _ctx: *mut NemoRelayNativePluginContext,
-    name: *const NemoRelayNativeString,
-    priority: i32,
-    cb: NemoRelayNativeContextualLlmRequestCb,
-    user_data: *mut c_void,
-    free_fn: NemoRelayNativeFreeFn,
-) -> NemoRelayStatus {
-    let status = *REGISTRATION_STATUS.lock().unwrap();
-    if status == NemoRelayStatus::Ok {
-        let host = test_host();
-        let name = match required_host_string(&host, name) {
-            Ok(name) => name,
-            Err(status) => return status,
-        };
-        replace_registration(
-            &CONTEXTUAL_LLM_REQUEST_REGISTRATION,
-            RegisteredContextualLlmRequest {
-                name,
-                priority,
-                cb,
-                user_data: user_data as usize,
-                free_fn,
-            },
-        );
-    }
-    status
-}
-
-unsafe extern "C" fn capture_contextual_llm_response(
-    _ctx: *mut NemoRelayNativePluginContext,
-    name: *const NemoRelayNativeString,
-    priority: i32,
-    cb: NemoRelayNativeContextualLlmResponseCb,
-    user_data: *mut c_void,
-    free_fn: NemoRelayNativeFreeFn,
-) -> NemoRelayStatus {
-    let status = *REGISTRATION_STATUS.lock().unwrap();
-    if status == NemoRelayStatus::Ok {
-        let host = test_host();
-        let name = match required_host_string(&host, name) {
-            Ok(name) => name,
-            Err(status) => return status,
-        };
-        replace_registration(
-            &CONTEXTUAL_LLM_RESPONSE_REGISTRATION,
-            RegisteredContextualLlmResponse {
-                name,
-                priority,
-                cb,
-                user_data: user_data as usize,
-                free_fn,
-            },
-        );
-    }
-    status
-}
-
 fn test_host() -> NemoRelayNativeHostApiV1 {
     NemoRelayNativeHostApiV1 {
         abi_version: NEMO_RELAY_NATIVE_ABI_VERSION,
@@ -1271,10 +1166,6 @@ fn test_host() -> NemoRelayNativeHostApiV1 {
         plugin_context_register_mark_sanitize_guardrail: capture_event_sanitize,
         plugin_context_register_scope_sanitize_start_guardrail: capture_event_sanitize,
         plugin_context_register_scope_sanitize_end_guardrail: capture_event_sanitize,
-        plugin_context_register_contextual_llm_sanitize_request_guardrail:
-            capture_contextual_llm_request,
-        plugin_context_register_contextual_llm_sanitize_response_guardrail:
-            capture_contextual_llm_response,
     }
 }
 
@@ -1294,8 +1185,6 @@ fn reset_state() {
     clear_registration(&TOOL_EXECUTION_REGISTRATION);
     clear_registration(&LLM_REQUEST_REGISTRATION);
     clear_registration(&LLM_JSON_REGISTRATION);
-    clear_registration(&CONTEXTUAL_LLM_REQUEST_REGISTRATION);
-    clear_registration(&CONTEXTUAL_LLM_RESPONSE_REGISTRATION);
     clear_registration(&LLM_CONDITIONAL_REGISTRATION);
     clear_registration(&LLM_EXECUTION_REGISTRATION);
     clear_registration(&LLM_STREAM_EXECUTION_REGISTRATION);
@@ -1520,22 +1409,6 @@ fn take_llm_json_registration() -> RegisteredLlmJson {
         .unwrap()
         .take()
         .expect("LLM JSON callback should be registered")
-}
-
-fn take_contextual_llm_request_registration() -> RegisteredContextualLlmRequest {
-    CONTEXTUAL_LLM_REQUEST_REGISTRATION
-        .lock()
-        .unwrap()
-        .take()
-        .expect("contextual LLM request callback should be registered")
-}
-
-fn take_contextual_llm_response_registration() -> RegisteredContextualLlmResponse {
-    CONTEXTUAL_LLM_RESPONSE_REGISTRATION
-        .lock()
-        .unwrap()
-        .take()
-        .expect("contextual LLM response callback should be registered")
 }
 
 fn take_llm_conditional_registration() -> RegisteredLlmConditional {
@@ -2930,12 +2803,14 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_sanitize_request_guardrail("llm-request", 0, |request| request)
-        .unwrap();
+    ctx.register_llm_sanitize_request_guardrail("llm-request", 0, |request, _context| {
+        Some(request)
+    })
+    .unwrap();
     let registration = take_llm_request_registration();
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
     assert_eq!(
-        unsafe { (registration.cb)(ptr::null_mut(), request, &mut out) },
+        unsafe { (registration.cb)(ptr::null_mut(), request, ptr::null(), &mut out) },
         NemoRelayStatus::NullPointer
     );
     assert_eq!(
@@ -2943,6 +2818,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
             (registration.cb)(
                 registration.user_data as *mut c_void,
                 request,
+                ptr::null(),
                 ptr::null_mut(),
             )
         },
@@ -2954,12 +2830,12 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_sanitize_response_guardrail("llm-response", 0, |value| value)
+    ctx.register_llm_sanitize_response_guardrail("llm-response", 0, |value, _context| Some(value))
         .unwrap();
     let registration = take_llm_json_registration();
     let response = json_host_string(&host, json!({}));
     assert_eq!(
-        unsafe { (registration.cb)(ptr::null_mut(), response, &mut out) },
+        unsafe { (registration.cb)(ptr::null_mut(), response, ptr::null(), &mut out) },
         NemoRelayStatus::NullPointer
     );
     assert_eq!(
@@ -2967,6 +2843,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
             (registration.cb)(
                 registration.user_data as *mut c_void,
                 response,
+                ptr::null(),
                 ptr::null_mut(),
             )
         },
@@ -3294,38 +3171,64 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_sanitize_request_guardrail("llm-request", 0, |request| request)
-        .unwrap();
+    ctx.register_llm_sanitize_request_guardrail("llm-request", 0, |request, _context| {
+        Some(request)
+    })
+    .unwrap();
     let registration = take_llm_request_registration();
     let request = host_string(&host, "{not json");
+    let context = json_host_string(
+        &host,
+        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
+    );
     let stale_out = host_string(&host, r#"{"stale":true}"#);
     let mut out = stale_out;
     assert_eq!(
-        unsafe { (registration.cb)(registration.user_data as *mut c_void, request, &mut out) },
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
+                request,
+                context,
+                &mut out,
+            )
+        },
         NemoRelayStatus::InvalidJson
     );
     assert!(out.is_null());
     unsafe {
         (host.string_free)(stale_out);
         (host.string_free)(request);
+        (host.string_free)(context);
         registration.free();
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_sanitize_response_guardrail("llm-response", 0, |value| value)
+    ctx.register_llm_sanitize_response_guardrail("llm-response", 0, |value, _context| Some(value))
         .unwrap();
     let registration = take_llm_json_registration();
     let response = host_string(&host, "{not json");
+    let context = json_host_string(
+        &host,
+        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
+    );
     let stale_out = host_string(&host, r#"{"stale":true}"#);
     let mut out = stale_out;
     assert_eq!(
-        unsafe { (registration.cb)(registration.user_data as *mut c_void, response, &mut out) },
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
+                response,
+                context,
+                &mut out,
+            )
+        },
         NemoRelayStatus::InvalidJson
     );
     assert!(out.is_null());
     unsafe {
         (host.string_free)(stale_out);
         (host.string_free)(response);
+        (host.string_free)(context);
         registration.free();
     }
 
@@ -4201,47 +4104,77 @@ fn typed_llm_sanitize_guardrails_transform_request_and_response() {
     let _guard = begin_test();
     let host = test_host();
     let mut ctx = test_context(&host);
-    ctx.register_llm_sanitize_request_guardrail("llm-sanitize-request", 12, |mut request| {
-        request.headers.insert("x-policy".into(), json!("sdk"));
-        request.content["sanitized"] = json!(true);
-        request
-    })
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-sanitize-request",
+        12,
+        |mut request, _context| {
+            request.headers.insert("x-policy".into(), json!("sdk"));
+            request.content["sanitized"] = json!(true);
+            Some(request)
+        },
+    )
     .unwrap();
 
     let registration = take_llm_request_registration();
     assert_eq!(registration.name, "llm-sanitize-request");
     assert_eq!(registration.priority, 12);
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
+    let context = json_host_string(
+        &host,
+        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
+    );
     let mut out = ptr::null_mut();
-    let status =
-        unsafe { (registration.cb)(registration.user_data as *mut c_void, request, &mut out) };
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            request,
+            context,
+            &mut out,
+        )
+    };
     assert_eq!(status, NemoRelayStatus::Ok);
     let output = read_json_and_free(&host, out);
     assert_eq!(output["headers"]["x-policy"], json!("sdk"));
     assert_eq!(output["content"]["sanitized"], json!(true));
     unsafe {
         (host.string_free)(request);
+        (host.string_free)(context);
         registration.free();
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_sanitize_response_guardrail("llm-sanitize-response", 13, |mut payload| {
-        payload["sanitized"] = json!(true);
-        payload
-    })
+    ctx.register_llm_sanitize_response_guardrail(
+        "llm-sanitize-response",
+        13,
+        |mut payload, _context| {
+            payload["sanitized"] = json!(true);
+            Some(payload)
+        },
+    )
     .unwrap();
 
     let registration = take_llm_json_registration();
     assert_eq!(registration.name, "llm-sanitize-response");
     assert_eq!(registration.priority, 13);
     let response = json_host_string(&host, json!({ "output": true }));
+    let context = json_host_string(
+        &host,
+        serde_json::to_value(LlmSanitizeContext::default()).unwrap(),
+    );
     let mut out = ptr::null_mut();
-    let status =
-        unsafe { (registration.cb)(registration.user_data as *mut c_void, response, &mut out) };
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            response,
+            context,
+            &mut out,
+        )
+    };
     assert_eq!(status, NemoRelayStatus::Ok);
     assert_eq!(read_json_and_free(&host, out)["sanitized"], json!(true));
     unsafe {
         (host.string_free)(response);
+        (host.string_free)(context);
         registration.free();
     }
 }
@@ -4256,7 +4189,7 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     };
 
     let mut ctx = test_context(&host);
-    ctx.register_contextual_llm_sanitize_request_guardrail(
+    ctx.register_llm_sanitize_request_guardrail(
         "contextual-request",
         14,
         |mut request, callback_context| {
@@ -4268,7 +4201,7 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     )
     .unwrap();
 
-    let registration = take_contextual_llm_request_registration();
+    let registration = take_llm_request_registration();
     assert_eq!(registration.name, "contextual-request");
     assert_eq!(registration.priority, 14);
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
@@ -4294,7 +4227,7 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_contextual_llm_sanitize_response_guardrail(
+    ctx.register_llm_sanitize_response_guardrail(
         "contextual-response",
         15,
         |mut payload, callback_context| {
@@ -4305,7 +4238,7 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     )
     .unwrap();
 
-    let registration = take_contextual_llm_response_registration();
+    let registration = take_llm_json_registration();
     assert_eq!(registration.name, "contextual-response");
     assert_eq!(registration.priority, 15);
     let response = json_host_string(&host, json!({ "output": true }));
@@ -4333,14 +4266,10 @@ fn typed_contextual_llm_sanitizer_uses_null_output_to_omit_payload() {
     let _guard = begin_test();
     let host = test_host();
     let mut ctx = test_context(&host);
-    ctx.register_contextual_llm_sanitize_response_guardrail(
-        "contextual-omit",
-        16,
-        |_payload, _context| None,
-    )
-    .unwrap();
+    ctx.register_llm_sanitize_response_guardrail("contextual-omit", 16, |_payload, _context| None)
+        .unwrap();
 
-    let registration = take_contextual_llm_response_registration();
+    let registration = take_llm_json_registration();
     let response = json_host_string(&host, json!({"secret": "value"}));
     let context = json_host_string(
         &host,

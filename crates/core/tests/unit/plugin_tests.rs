@@ -1511,13 +1511,13 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm_sanitize_request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Some(request)),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm_sanitize_response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     ctx.register_llm_conditional_execution_guardrail(
@@ -1651,14 +1651,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Some(request)),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_request_guardrail(
             "llm-sanitize-request",
             1,
-            Arc::new(|request| request),
+            Arc::new(|request, _context| Some(request)),
         ),
         "llm sanitize request guardrail:",
     );
@@ -1666,14 +1666,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_response_guardrail(
             "llm-sanitize-response",
             1,
-            Arc::new(|response| response),
+            Arc::new(|response, _context| Some(response)),
         ),
         "llm sanitize response guardrail:",
     );
@@ -1815,13 +1815,13 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Some(request)),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))

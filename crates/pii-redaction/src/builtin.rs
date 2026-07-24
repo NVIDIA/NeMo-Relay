@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
-    ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
-    LlmSanitizeContext, ToolSanitizeFn,
+    EventSanitizeFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    ToolSanitizeFn,
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -433,7 +433,7 @@ fn event_sanitize_callback_with_scope_categories(
 
 pub(super) fn llm_sanitize_request_callback(
     backend: CompiledBuiltinBackend,
-) -> ContextualLlmSanitizeRequestFn {
+) -> LlmSanitizeRequestFn {
     Arc::new(move |mut request: LlmRequest, context| {
         if let Some(trajectory) = backend.trajectory.as_ref() {
             request.content = trajectory.sanitize_provider_payload(request.content);
@@ -461,7 +461,7 @@ pub(super) fn llm_sanitize_request_callback(
 
 pub(super) fn llm_sanitize_response_callback(
     backend: CompiledBuiltinBackend,
-) -> ContextualLlmSanitizeResponseFn {
+) -> LlmSanitizeResponseFn {
     Arc::new(move |payload: Json, context| {
         if let Some(trajectory) = backend.trajectory.as_ref() {
             return Some(trajectory.sanitize_provider_payload(payload));

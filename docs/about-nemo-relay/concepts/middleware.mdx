@@ -193,10 +193,8 @@ guardrails important:
 
 ## Contextual LLM Sanitizers
 
-LLM sanitize guardrails have two compatible callback forms. Existing callbacks
-continue to receive only the payload and must return a sanitized payload. New
-**contextual** callbacks receive the payload first, then per-call codec
-information:
+Every LLM sanitize guardrail receives the payload first and a required
+per-call context second:
 
 ```text
 request:  (LlmRequest, context) -> Option<LlmRequest>
@@ -223,10 +221,62 @@ JavaScript) only when observing the payload would be unsafe: Relay omits the
 LLM event payload and its annotation, while leaving the client-visible request
 and response unchanged. Omission short-circuits later LLM sanitizers.
 
-Contextual and legacy callbacks use the same registry and therefore preserve
-the normal priority and name tie-break ordering. Use a contextual callback when
-the sanitization rule depends on the active provider codec; retain the legacy
-form for provider-independent sanitization.
+Rust, Go, raw C FFI, native plugins, and Rust worker plugins must implement
+this two-parameter contract. Python accepts an inspectable one-parameter
+callback as a compatibility form and supplies no context to it. Node.js always
+calls the callback with two arguments; JavaScript one-parameter callbacks
+naturally ignore the extra argument. In both languages, new callbacks should
+declare both parameters.
+
+### Rust
+
+```rust
+use std::sync::Arc;
+use nemo_relay::api::registry::register_llm_sanitize_request_guardrail;
+
+register_llm_sanitize_request_guardrail(
+    "redact-openai-chat",
+    10,
+    Arc::new(|mut request, context| {
+        if context.codec_name.as_deref() == Some("openai_chat") {
+            request.content["messages"] = serde_json::json!([]);
+        }
+        Some(request)
+    }),
+)?;
+```
+
+### Python
+
+```python
+from nemo_relay import LLMRequest
+from nemo_relay import guardrails
+
+def redact_request(request: LLMRequest, context: dict) -> LLMRequest | None:
+    if context["codec_name"] == "openai_chat":
+        return LLMRequest(request.headers, {"messages": []})
+    return request
+
+guardrails.register_llm_sanitize_request("redact-openai-chat", 10, redact_request)
+```
+
+### Node.js
+
+```js
+const relay = require("nemo-relay-node");
+
+relay.registerLlmSanitizeRequestGuardrail(
+  "redact-openai-chat",
+  10,
+  (request, context) =>
+    context.codec_name === "openai_chat"
+      ? { ...request, content: { ...request.content, messages: [] } }
+      : request,
+);
+```
+
+The same registration names support scope-local and plugin-context
+registrations. Priority and name tie-break ordering are unchanged.
 
 ## Detailed Execution Flow
 

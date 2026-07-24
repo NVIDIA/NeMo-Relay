@@ -2638,10 +2638,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     register_llm_sanitize_request_guardrail(
         "lock_global_llm_sanitize_request",
         1,
-        Arc::new(move |request| {
+        Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_global");
             assert_middleware_callback_locks_are_free();
-            request
+            Some(request)
         }),
     )
     .unwrap();
@@ -2650,10 +2650,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         &scope.uuid,
         "lock_scope_llm_sanitize_request",
         2,
-        Arc::new(move |request| {
+        Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_scope");
             assert_middleware_callback_locks_are_free();
-            request
+            Some(request)
         }),
     )
     .unwrap();
@@ -2707,10 +2707,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     register_llm_sanitize_response_guardrail(
         "lock_global_llm_sanitize_response",
         1,
-        Arc::new(move |response| {
+        Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_global");
             assert_middleware_callback_locks_are_free();
-            response
+            Some(response)
         }),
     )
     .unwrap();
@@ -2719,10 +2719,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         &scope.uuid,
         "lock_scope_llm_sanitize_response",
         2,
-        Arc::new(move |response| {
+        Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_scope");
             assert_middleware_callback_locks_are_free();
-            response
+            Some(response)
         }),
     )
     .unwrap();

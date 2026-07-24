@@ -19,10 +19,8 @@ typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const void* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const void* event, const char* fields_json);
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, const char* args_json);
-typedef void* (*NemoRelayLlmRequestCb)(void* user_data, const void* request);
-typedef void* (*NemoRelayContextualLlmRequestCb)(void* user_data, const void* request, NemoRelayLlmSanitizeContext context);
-typedef char* (*NemoRelayLlmResponseFn)(void* user_data, const char* response_json);
-typedef char* (*NemoRelayContextualLlmResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeContext context);
+typedef void* (*NemoRelayLlmSanitizeRequestCb)(void* user_data, const void* request, NemoRelayLlmSanitizeContext context);
+typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeContext context);
 typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const void* request);
 typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* name, const void* request, const char* annotated_json, char** out_outcome_json);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
@@ -49,10 +47,8 @@ extern int32_t nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(F
 extern int32_t nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolConditionalFn cb, void* user_data, NemoRelayFreeFn free_fn);
-extern int32_t nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
-extern int32_t nemo_relay_plugin_context_register_contextual_llm_sanitize_request_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayContextualLlmRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
-extern int32_t nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmResponseFn cb, void* user_data, NemoRelayFreeFn free_fn);
-extern int32_t nemo_relay_plugin_context_register_contextual_llm_sanitize_response_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayContextualLlmResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmSanitizeRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmSanitizeResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_llm_conditional_execution_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmConditionalCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_llm_request_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, _Bool break_chain, NemoRelayLlmRequestInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_request_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, _Bool break_chain, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -67,10 +63,8 @@ extern char* goEventSanitizeTrampoline(void*, const void*, const char*);
 extern void goFreeTrampoline(void*);
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
-extern void* goLlmRequestTrampoline(void*, const void*);
-extern void* goContextualLlmRequestTrampoline(void*, const void*, NemoRelayLlmSanitizeContext);
-extern char* goLlmResponseTrampoline(void*, const char*);
-extern char* goContextualLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeContext);
+extern void* goLlmRequestTrampoline(void*, const void*, NemoRelayLlmSanitizeContext);
+extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeContext);
 extern char* goLlmConditionalTrampoline(void*, const void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
 extern int32_t goLlmRequestInterceptTrampoline(void*, const char*, const void*, const char*, char**);
@@ -676,26 +670,9 @@ func (ctx *PluginContext) RegisterLlmSanitizeRequestGuardrail(name string, prior
 		ctx.ptr,
 		cName,
 		C.int32_t(priority),
-		(C.NemoRelayLlmRequestCb)(C.goLlmRequestTrampoline),
+		(C.NemoRelayLlmSanitizeRequestCb)(C.goLlmRequestTrampoline),
 		userData,
 		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
-}
-
-// RegisterContextualLlmSanitizeRequestGuardrail registers a codec-aware LLM
-// request sanitizer for this component. The callback receives request first,
-// context second, and may omit the emitted payload.
-func (ctx *PluginContext) RegisterContextualLlmSanitizeRequestGuardrail(name string, priority int32, fn ContextualLLMRequestFunc) error {
-	if ctx == nil || ctx.ptr == nil {
-		return errors.New(errPluginContextClosed)
-	}
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_contextual_llm_sanitize_request_guardrail(
-		ctx.ptr, cName, C.int32_t(priority),
-		(C.NemoRelayContextualLlmRequestCb)(C.goContextualLlmRequestTrampoline),
-		userData, (C.NemoRelayFreeFn)(C.goFreeTrampoline),
 	))
 }
 
@@ -711,26 +688,9 @@ func (ctx *PluginContext) RegisterLlmSanitizeResponseGuardrail(name string, prio
 		ctx.ptr,
 		cName,
 		C.int32_t(priority),
-		(C.NemoRelayLlmResponseFn)(C.goLlmResponseTrampoline),
+		(C.NemoRelayLlmSanitizeResponseCb)(C.goLlmResponseTrampoline),
 		userData,
 		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
-}
-
-// RegisterContextualLlmSanitizeResponseGuardrail registers a codec-aware LLM
-// response sanitizer for this component. The callback receives response first,
-// context second, and may omit the emitted payload.
-func (ctx *PluginContext) RegisterContextualLlmSanitizeResponseGuardrail(name string, priority int32, fn ContextualLLMResponseFunc) error {
-	if ctx == nil || ctx.ptr == nil {
-		return errors.New(errPluginContextClosed)
-	}
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_contextual_llm_sanitize_response_guardrail(
-		ctx.ptr, cName, C.int32_t(priority),
-		(C.NemoRelayContextualLlmResponseCb)(C.goContextualLlmResponseTrampoline),
-		userData, (C.NemoRelayFreeFn)(C.goFreeTrampoline),
 	))
 }
 
