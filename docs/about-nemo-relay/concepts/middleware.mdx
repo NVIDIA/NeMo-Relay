@@ -221,10 +221,12 @@ in-process sanitizer, use `resolve_codec()` to access the active codec
 implementation. A resolver returns no codec for manual calls without one.
 Worker-plugin contexts resolve to an invocation-scoped asynchronous proxy with
 the same directional operations: request codecs provide `decode(request)` and
-`encode(annotated, original)`, while response codecs provide
-`decode(response)`. An active runtime or opaque codec resolves just like a
-built-in codec; its identity does not limit the available operations. The
-worker proxy is valid only while its sanitizer callback is running.
+`encode(annotated, original)`, while response codecs provide `decode(response)`.
+Python in-process response codecs expose that operation as `decode_response`,
+and Node.js exposes it as `decodeResponse`. An active runtime or opaque codec
+resolves just like a built-in codec; its identity does not limit the available
+operations. The worker proxy is valid only while its sanitizer callback is
+running; do not retain it after the callback returns.
 
 <Tabs>
 <Tab title="Python" language="python">

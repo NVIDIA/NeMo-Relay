@@ -341,6 +341,7 @@ message LlmCodecDecodeRequest {
   string auth_token = 2;
   string codec_capability_id = 3;
   JsonEnvelope request = 4;
+  string invocation_id = 5;
 }
 
 message LlmCodecEncodeRequest {
@@ -349,6 +350,7 @@ message LlmCodecEncodeRequest {
   string codec_capability_id = 3;
   JsonEnvelope annotated_request = 4;
   JsonEnvelope original_request = 5;
+  string invocation_id = 6;
 }
 
 message LlmCodecDecodeResponse {
@@ -356,4 +358,5 @@ message LlmCodecDecodeResponse {
   string auth_token = 2;
   string codec_capability_id = 3;
   JsonEnvelope response = 4;
+  string invocation_id = 5;
 }

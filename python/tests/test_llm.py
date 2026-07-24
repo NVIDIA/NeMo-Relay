@@ -272,6 +272,27 @@ class TestLLMGuardrails:
         assert end.data is None
         assert end.annotated_response is None
 
+    def test_sanitize_response_guardrail_accepts_scalar_json_payloads(self):
+        events = []
+        subscribers.register("py_llm_sanitize_scalar_sub", lambda event: events.append(event))
+        guardrails.register_llm_sanitize_response(
+            "py_llm_sanitize_scalar",
+            1,
+            lambda response, context: f"sanitized:{response}",
+        )
+        try:
+            handle = llm.call("llm_sanitize_scalar", make_request())
+            llm.call_end(handle, "raw-response")
+        finally:
+            guardrails.deregister_llm_sanitize_response("py_llm_sanitize_scalar")
+            try:
+                subscribers.flush()
+            finally:
+                subscribers.deregister("py_llm_sanitize_scalar_sub")
+
+        end = _llm_event(events, "llm_sanitize_scalar", "end")
+        assert end.data == "sanitized:raw-response"
+
     def test_deregister_nonexistent(self):
         assert not guardrails.deregister_llm_sanitize_request("nope")
         assert not guardrails.deregister_llm_sanitize_response("nope")

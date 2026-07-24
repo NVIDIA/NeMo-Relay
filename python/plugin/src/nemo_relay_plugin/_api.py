@@ -118,12 +118,15 @@ class LlmSanitizeRequestContext:
     codec: LlmCodecIdentity
     _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
     _capability_id: str | None = field(default=None, repr=False, compare=False)
+    _invocation_id: str | None = field(default=None, repr=False, compare=False)
 
     def resolve_codec(self) -> "WorkerRequestCodec | None":
         """Return the active request-codec proxy for this invocation."""
         if self._runtime is None or self._capability_id is None:
             return None
-        return WorkerRequestCodec(self._runtime, self._capability_id)
+        if self._invocation_id is None:
+            return None
+        return WorkerRequestCodec(self._runtime, self._capability_id, self._invocation_id)
 
 
 @dataclass(frozen=True)
@@ -133,12 +136,15 @@ class LlmSanitizeResponseContext:
     codec: LlmCodecIdentity
     _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
     _capability_id: str | None = field(default=None, repr=False, compare=False)
+    _invocation_id: str | None = field(default=None, repr=False, compare=False)
 
     def resolve_codec(self) -> "WorkerResponseCodec | None":
         """Return the active response-codec proxy for this invocation."""
         if self._runtime is None or self._capability_id is None:
             return None
-        return WorkerResponseCodec(self._runtime, self._capability_id)
+        if self._invocation_id is None:
+            return None
+        return WorkerResponseCodec(self._runtime, self._capability_id, self._invocation_id)
 
 
 @dataclass(frozen=True)
@@ -147,14 +153,17 @@ class WorkerRequestCodec:
 
     _runtime: "PluginRuntime"
     _capability_id: str
+    _invocation_id: str
 
     async def decode(self, request: LlmRequest) -> AnnotatedLlmRequest:
         """Decode a wire request with the active host codec."""
-        return await self._runtime._decode_llm_codec_request(self._capability_id, request)
+        return await self._runtime._decode_llm_codec_request(self._capability_id, self._invocation_id, request)
 
     async def encode(self, annotated: AnnotatedLlmRequest, original: LlmRequest) -> LlmRequest:
         """Encode an annotated request with the active host codec."""
-        return await self._runtime._encode_llm_codec_request(self._capability_id, annotated, original)
+        return await self._runtime._encode_llm_codec_request(
+            self._capability_id, self._invocation_id, annotated, original
+        )
 
 
 @dataclass(frozen=True)
@@ -163,10 +172,11 @@ class WorkerResponseCodec:
 
     _runtime: "PluginRuntime"
     _capability_id: str
+    _invocation_id: str
 
     async def decode(self, response: Json) -> Json:
         """Decode a wire response with the active host codec."""
-        return await self._runtime._decode_llm_codec_response(self._capability_id, response)
+        return await self._runtime._decode_llm_codec_response(self._capability_id, self._invocation_id, response)
 
 
 def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
@@ -1289,37 +1299,42 @@ class PluginRuntime:
         self._auth_token = auth_token
         self._host_stub = host_stub
 
-    async def _decode_llm_codec_request(self, capability_id: str, request: LlmRequest) -> AnnotatedLlmRequest:
+    async def _decode_llm_codec_request(
+        self, capability_id: str, invocation_id: str, request: LlmRequest
+    ) -> AnnotatedLlmRequest:
         result = await self._host_stub.DecodeLlmCodecRequest(
             pb.LlmCodecDecodeRequest(
                 activation_id=self._activation_id,
                 auth_token=self._auth_token,
                 codec_capability_id=capability_id,
+                invocation_id=invocation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
             )
         )
         return _json_result_to_value(result, ANNOTATED_LLM_REQUEST_SCHEMA)
 
     async def _encode_llm_codec_request(
-        self, capability_id: str, annotated: AnnotatedLlmRequest, original: LlmRequest
+        self, capability_id: str, invocation_id: str, annotated: AnnotatedLlmRequest, original: LlmRequest
     ) -> LlmRequest:
         result = await self._host_stub.EncodeLlmCodecRequest(
             pb.LlmCodecEncodeRequest(
                 activation_id=self._activation_id,
                 auth_token=self._auth_token,
                 codec_capability_id=capability_id,
+                invocation_id=invocation_id,
                 annotated_request=_json_envelope(ANNOTATED_LLM_REQUEST_SCHEMA, annotated),
                 original_request=_json_envelope(LLM_REQUEST_SCHEMA, original),
             )
         )
         return _json_result_to_value(result, LLM_REQUEST_SCHEMA)
 
-    async def _decode_llm_codec_response(self, capability_id: str, response: Json) -> Json:
+    async def _decode_llm_codec_response(self, capability_id: str, invocation_id: str, response: Json) -> Json:
         result = await self._host_stub.DecodeLlmCodecResponse(
             pb.LlmCodecDecodeResponse(
                 activation_id=self._activation_id,
                 auth_token=self._auth_token,
                 codec_capability_id=capability_id,
+                invocation_id=invocation_id,
                 response=_json_envelope(JSON_SCHEMA, response),
             )
         )
@@ -2105,11 +2120,17 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
     async def _invoke_llm_sanitizer(self, callback: Any, payload: Any, request: Any) -> Any:
         context = (
             LlmSanitizeRequestContext(
-                _llm_codec_identity(request.llm), self._runtime, _llm_codec_capability(request.llm)
+                _llm_codec_identity(request.llm),
+                self._runtime,
+                _llm_codec_capability(request.llm),
+                request.invocation_id,
             )
             if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL
             else LlmSanitizeResponseContext(
-                _llm_codec_identity(request.llm), self._runtime, _llm_codec_capability(request.llm)
+                _llm_codec_identity(request.llm),
+                self._runtime,
+                _llm_codec_capability(request.llm),
+                request.invocation_id,
             )
         )
         result = await _maybe_await(callback(payload, context))

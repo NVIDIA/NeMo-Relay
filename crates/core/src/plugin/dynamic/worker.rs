@@ -1572,10 +1572,7 @@ impl WorkerPluginCallback {
         request: LlmRequest,
         context: LlmSanitizeRequestContext,
     ) -> FlowResult<Option<LlmRequest>> {
-        let capability_id = context
-            .resolve_codec()
-            .map(|codec| self.host_state.insert_request_codec(codec));
-        let invoke = self.base_request(
+        let mut invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmSanitizeRequestGuardrail,
             None,
@@ -1587,11 +1584,26 @@ impl WorkerPluginCallback {
                 llm_invocation::SanitizeContext::RequestSanitizeContext(
                     ProtoLlmSanitizeRequestContext {
                         codec: Some(codec_identity_to_proto(&context.codec)),
-                        codec_capability_id: capability_id.clone(),
+                        codec_capability_id: None,
                     },
                 ),
             )),
         );
+        let capability_id = context.resolve_codec().map(|codec| {
+            let capability_id = self
+                .host_state
+                .insert_request_codec(&invoke.invocation_id, codec);
+            let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
+                unreachable!("LLM sanitizer invocation must have an LLM payload");
+            };
+            let Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) =
+                llm.sanitize_context.as_mut()
+            else {
+                unreachable!("request sanitizer invocation must have a request context");
+            };
+            context.codec_capability_id = Some(capability_id.clone());
+            capability_id
+        });
         let response = self.invoke_blocking(invoke);
         if let Some(capability_id) = capability_id {
             self.host_state.remove_codec(&capability_id);
@@ -1610,10 +1622,7 @@ impl WorkerPluginCallback {
         response: Json,
         context: LlmSanitizeResponseContext,
     ) -> FlowResult<Option<Json>> {
-        let capability_id = context
-            .resolve_codec()
-            .map(|codec| self.host_state.insert_response_codec(codec));
-        let invoke = self.base_request(
+        let mut invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmSanitizeResponseGuardrail,
             None,
@@ -1625,11 +1634,26 @@ impl WorkerPluginCallback {
                 llm_invocation::SanitizeContext::ResponseSanitizeContext(
                     ProtoLlmSanitizeResponseContext {
                         codec: Some(codec_identity_to_proto(&context.codec)),
-                        codec_capability_id: capability_id.clone(),
+                        codec_capability_id: None,
                     },
                 ),
             )),
         );
+        let capability_id = context.resolve_codec().map(|codec| {
+            let capability_id = self
+                .host_state
+                .insert_response_codec(&invoke.invocation_id, codec);
+            let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
+                unreachable!("LLM sanitizer invocation must have an LLM payload");
+            };
+            let Some(llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) =
+                llm.sanitize_context.as_mut()
+            else {
+                unreachable!("response sanitizer invocation must have a response context");
+            };
+            context.codec_capability_id = Some(capability_id.clone());
+            capability_id
+        });
         let response = self.invoke_blocking(invoke);
         if let Some(capability_id) = capability_id {
             self.host_state.remove_codec(&capability_id);
@@ -2011,7 +2035,12 @@ struct WorkerHostRuntimeState {
     codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
 }
 
-enum WorkerCodecCapability {
+struct WorkerCodecCapability {
+    invocation_id: String,
+    direction: WorkerCodecDirection,
+}
+
+enum WorkerCodecDirection {
     Request(Arc<dyn LlmCodec>),
     Response(Arc<dyn LlmResponseCodec>),
 }
@@ -2069,18 +2098,28 @@ impl WorkerHostRuntimeState {
         }
     }
 
-    fn insert_request_codec(&self, codec: Arc<dyn LlmCodec>) -> String {
-        self.insert_codec(WorkerCodecCapability::Request(codec))
+    fn insert_request_codec(&self, invocation_id: &str, codec: Arc<dyn LlmCodec>) -> String {
+        self.insert_codec(invocation_id, WorkerCodecDirection::Request(codec))
     }
 
-    fn insert_response_codec(&self, codec: Arc<dyn LlmResponseCodec>) -> String {
-        self.insert_codec(WorkerCodecCapability::Response(codec))
+    fn insert_response_codec(
+        &self,
+        invocation_id: &str,
+        codec: Arc<dyn LlmResponseCodec>,
+    ) -> String {
+        self.insert_codec(invocation_id, WorkerCodecDirection::Response(codec))
     }
 
-    fn insert_codec(&self, codec: WorkerCodecCapability) -> String {
+    fn insert_codec(&self, invocation_id: &str, direction: WorkerCodecDirection) -> String {
         let id = format!("codec-{}", Uuid::now_v7());
         if let Ok(mut codecs) = self.codecs.lock() {
-            codecs.insert(id.clone(), codec);
+            codecs.insert(
+                id.clone(),
+                WorkerCodecCapability {
+                    invocation_id: invocation_id.to_owned(),
+                    direction,
+                },
+            );
         }
         id
     }
@@ -2091,31 +2130,49 @@ impl WorkerHostRuntimeState {
         }
     }
 
-    fn request_codec(&self, id: &str) -> Result<Arc<dyn LlmCodec>, Status> {
+    fn request_codec(&self, id: &str, invocation_id: &str) -> Result<Arc<dyn LlmCodec>, Status> {
         let codecs = self
             .codecs
             .lock()
             .map_err(|err| Status::internal(format!("codec lock poisoned: {err}")))?;
-        match codecs.get(id) {
-            Some(WorkerCodecCapability::Request(codec)) => Ok(codec.clone()),
-            Some(WorkerCodecCapability::Response(_)) => Err(Status::invalid_argument(
+        let capability = codecs
+            .get(id)
+            .ok_or_else(|| Status::not_found("codec capability is unavailable"))?;
+        if capability.invocation_id != invocation_id {
+            return Err(Status::permission_denied(
+                "codec capability does not belong to this invocation",
+            ));
+        }
+        match &capability.direction {
+            WorkerCodecDirection::Request(codec) => Ok(codec.clone()),
+            WorkerCodecDirection::Response(_) => Err(Status::invalid_argument(
                 "codec capability is response-only",
             )),
-            None => Err(Status::not_found("codec capability is unavailable")),
         }
     }
 
-    fn response_codec(&self, id: &str) -> Result<Arc<dyn LlmResponseCodec>, Status> {
+    fn response_codec(
+        &self,
+        id: &str,
+        invocation_id: &str,
+    ) -> Result<Arc<dyn LlmResponseCodec>, Status> {
         let codecs = self
             .codecs
             .lock()
             .map_err(|err| Status::internal(format!("codec lock poisoned: {err}")))?;
-        match codecs.get(id) {
-            Some(WorkerCodecCapability::Response(codec)) => Ok(codec.clone()),
-            Some(WorkerCodecCapability::Request(_)) => {
+        let capability = codecs
+            .get(id)
+            .ok_or_else(|| Status::not_found("codec capability is unavailable"))?;
+        if capability.invocation_id != invocation_id {
+            return Err(Status::permission_denied(
+                "codec capability does not belong to this invocation",
+            ));
+        }
+        match &capability.direction {
+            WorkerCodecDirection::Response(codec) => Ok(codec.clone()),
+            WorkerCodecDirection::Request(_) => {
                 Err(Status::invalid_argument("codec capability is request-only"))
             }
-            None => Err(Status::not_found("codec capability is unavailable")),
         }
     }
 
@@ -2525,7 +2582,9 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let codec = self.state.request_codec(&request.codec_capability_id)?;
+        let codec = self
+            .state
+            .request_codec(&request.codec_capability_id, &request.invocation_id)?;
         let request = required_envelope(request.request, "codec request")
             .and_then(|value| {
                 decode_json_envelope::<LlmRequest>(&value)
@@ -2545,7 +2604,9 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let codec = self.state.request_codec(&request.codec_capability_id)?;
+        let codec = self
+            .state
+            .request_codec(&request.codec_capability_id, &request.invocation_id)?;
         let annotated = required_envelope(request.annotated_request, "annotated codec request")
             .and_then(|value| {
                 decode_json_envelope::<AnnotatedLlmRequest>(&value)
@@ -2571,7 +2632,9 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let codec = self.state.response_codec(&request.codec_capability_id)?;
+        let codec = self
+            .state
+            .response_codec(&request.codec_capability_id, &request.invocation_id)?;
         let response = required_envelope(request.response, "codec response")
             .and_then(|value| {
                 decode_json_envelope::<Json>(&value)

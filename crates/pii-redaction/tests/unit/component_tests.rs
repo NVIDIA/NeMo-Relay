@@ -442,6 +442,39 @@ fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
 }
 
 #[test]
+fn normalized_llm_paths_use_configured_anthropic_codec_without_a_system_message() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_paths: vec!["/messages/0/content".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        Some("anthropic_messages".to_string()),
+    )
+    .unwrap();
+    let sanitize_request = crate::builtin::llm_sanitize_request_callback(backend);
+
+    let sanitized = sanitize_request(
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({
+                "model": "claude-sonnet-4-6",
+                "messages": [{"role": "user", "content": "sk-anthropic-secret"}],
+            }),
+        },
+        no_codec_request_context(),
+    )
+    .expect("the configured Anthropic codec must sanitize a valid message-only request");
+
+    assert_eq!(
+        sanitized.content["messages"][0]["content"],
+        json!("[REDACTED]")
+    );
+}
+
+#[test]
 fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
     let callback = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
         Some("openai_chat"),

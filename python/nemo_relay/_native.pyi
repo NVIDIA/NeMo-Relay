@@ -40,7 +40,7 @@ class _EventSanitizeFields(TypedDict):
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
 _LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest", "LlmSanitizeRequestContext"], Optional["LLMRequest"]]
-_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject, "LlmSanitizeResponseContext"], Optional[_JsonObject]]
+_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_Json, "LlmSanitizeResponseContext"], Optional[_Json]]
 _EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]

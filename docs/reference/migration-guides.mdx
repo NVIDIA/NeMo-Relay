@@ -135,11 +135,13 @@ following identities:
 Treat identity as descriptive and codec resolution as authoritative. Do not
 infer a provider from the request shape. A request codec supports
 `decode(request)` and `encode(annotated, original)`. A response codec supports
-`decode(response)`; response encoding is not available.
+`decode(response)` in Rust workers, `decode_response(response)` in Python, and
+`decodeResponse(response)` in Node.js; response encoding is not available.
 
-The resolved codec is scoped to the sanitizer callback. Do not store it for
-later work. Worker codec operations are asynchronous because they call the host
-over `grpc-v1`.
+Worker codec proxies are scoped to the sanitizer callback and must not be
+stored for later work. Worker codec operations are asynchronous because they
+call the host over `grpc-v1`. In-process resolvers return the active codec
+facade directly.
 
 For complete in-process examples, refer to
 [Codec-Aware LLM Sanitizers](/about-nemo-relay/concepts/middleware#codec-aware-llm-sanitizers).

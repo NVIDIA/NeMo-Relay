@@ -194,20 +194,20 @@ Arguments:
     The current LLM request and a context object containing a tagged ``codec``
     identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
     ``builtin`` and ``runtime`` identities include ``id``. Use
-    ``context.resolve_request_codec()`` to access the active in-process codec.
+    ``context.resolve_codec()`` to access the active in-process codec.
 
 Return:
     Request object recorded on the emitted lifecycle event, or ``None`` to omit
     the LLM observability payload and annotation.
 """
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject, "LlmSanitizeResponseContext"], Optional[JsonObject]]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[Json, "LlmSanitizeResponseContext"], Optional[Json]]
 """Guardrail callback that sanitizes an emitted JSON LLM response payload.
 
 Arguments:
     The response object and a context object containing a tagged ``codec``
     identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
     ``builtin`` and ``runtime`` identities include ``id``. Use
-    ``context.resolve_response_codec()`` to access the active in-process codec.
+    ``context.resolve_codec()`` to access the active in-process codec.
 
 Return:
     Response object recorded on the emitted lifecycle event, or ``None`` to

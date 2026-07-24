@@ -168,7 +168,7 @@ LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeReque
 #: Guardrail callback that sanitizes an emitted JSON LLM response payload.
 #: Callbacks receive ``(response, context)`` and can return ``None`` to omit
 #: observability payload and annotation without changing the caller response.
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject, "LlmSanitizeResponseContext"], Optional[JsonObject]]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[Json, "LlmSanitizeResponseContext"], Optional[Json]]
 #: Guardrail callback that can block an LLM call by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]

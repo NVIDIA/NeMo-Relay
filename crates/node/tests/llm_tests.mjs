@@ -1173,6 +1173,23 @@ describe('LLM intercepts', () => {
     assert.equal(declarations.split(openKind).length - 1, 3);
   });
 
+  it('generated LLM sanitizer declarations expose directional codec contexts', () => {
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+
+    assert.match(
+      declarations,
+      /registerLlmSanitizeRequestGuardrail\([^\n]*resolveCodec\(\): import\('\.\/typed'\)\.LlmCodec \| null/,
+    );
+    assert.match(
+      declarations,
+      /registerLlmSanitizeResponseGuardrail\([^\n]*resolveCodec\(\): import\('\.\/typed'\)\.LlmResponseCodec \| null/,
+    );
+    assert.doesNotMatch(
+      declarations,
+      /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/,
+    );
+  });
+
   it('standalone conditional execution helper throws on rejection', async () => {
     registerLlmConditionalExecutionGuardrail('node_llm_cond_helper', 10, () => 'llm blocked by helper');
     try {

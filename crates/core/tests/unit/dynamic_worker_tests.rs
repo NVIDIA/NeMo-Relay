@@ -1488,8 +1488,9 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
     let codec = Arc::new(OpenAIChatCodec);
     let request_codec: Arc<dyn LlmCodec> = codec.clone();
     let response_codec: Arc<dyn LlmResponseCodec> = codec.clone();
-    let request_capability = state.insert_request_codec(request_codec);
-    let response_capability = state.insert_response_codec(response_codec);
+    let invocation_id = "sanitize-invocation";
+    let request_capability = state.insert_request_codec(invocation_id, request_codec);
+    let response_capability = state.insert_response_codec(invocation_id, response_codec);
     let request = LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({
@@ -1504,6 +1505,7 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
             activation_id: ACTIVATION_ID.into(),
             auth_token: "wrong".into(),
             codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
         }))
         .await
@@ -1515,6 +1517,7 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
             codec_capability_id: "codec-forged".into(),
+            invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
         }))
         .await
@@ -1526,17 +1529,31 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
             codec_capability_id: response_capability.clone(),
+            invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
         }))
         .await
         .expect_err("response capability cannot decode requests");
     assert_eq!(wrong_direction.code(), tonic::Code::InvalidArgument);
 
+    let wrong_invocation = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: "another-invocation".into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("a capability cannot be reused by another invocation");
+    assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
     let decoded = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
             codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
         }))
         .await
@@ -1553,6 +1570,7 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
             codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
             annotated_request: Some(
                 json_envelope("nemo.relay.AnnotatedLlmRequest@2", &annotated).unwrap(),
             ),
@@ -1581,6 +1599,7 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
             codec_capability_id: response_capability.clone(),
+            invocation_id: invocation_id.into(),
             response: Some(json_envelope(JSON_SCHEMA, &response).unwrap()),
         }))
         .await
@@ -1595,6 +1614,7 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
             codec_capability_id: request_capability,
+            invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
         }))
         .await

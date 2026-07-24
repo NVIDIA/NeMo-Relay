@@ -17,8 +17,8 @@ use nemo_relay::api::runtime::{
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
-    ProviderSurface, detect_request_surface, detect_response_surface,
-    request_codec as build_request_codec, response_codec as build_response_codec,
+    ProviderSurface, detect_response_surface, request_codec as build_request_codec,
+    response_codec as build_response_codec,
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
@@ -301,11 +301,6 @@ impl CompiledBuiltinBackend {
         }
     }
 
-    fn uses_compatible_legacy_request_codec(&self, request: &LlmRequest) -> bool {
-        self.legacy_surface
-            .is_some_and(|surface| detect_request_surface(&request.content) == Some(surface))
-    }
-
     fn uses_compatible_legacy_response_codec(&self, payload: &Json) -> bool {
         self.legacy_surface
             .is_some_and(|surface| detect_response_surface(payload) == Some(surface))
@@ -447,12 +442,6 @@ pub(super) fn llm_sanitize_request_callback(
         if backend.target_paths.is_empty() {
             request.content = backend.sanitize_json_preorder_dfs(request.content);
             return Some(request);
-        }
-        if matches!(&context.codec, LlmCodecIdentity::None)
-            && !backend.uses_compatible_legacy_request_codec(&request)
-        {
-            log_llm_payload_omitted("request", &context.codec, "no compatible legacy codec");
-            return None;
         }
         let resolved = context.resolve_codec();
         let fallback = if resolved.is_none() {

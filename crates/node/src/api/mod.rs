@@ -2821,6 +2821,9 @@ pub fn register_llm_sanitize_request_guardrail(
     env: Env,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(request: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmCodec | null }) => Json | null"
+    )]
     guardrail: JsFunction,
 ) -> Result<()> {
     let callback = middleware_llm_sanitize_request_callback_tsfn(&env, &guardrail)?;
@@ -2851,6 +2854,9 @@ pub fn register_llm_sanitize_response_guardrail(
     env: Env,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(response: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmResponseCodec | null }) => Json | null"
+    )]
     guardrail: JsFunction,
 ) -> Result<()> {
     let callback = middleware_llm_sanitize_response_callback_tsfn(&env, &guardrail)?;
@@ -3351,6 +3357,9 @@ pub fn scope_register_llm_sanitize_request_guardrail(
     scope_uuid: String,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(request: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmCodec | null }) => Json | null"
+    )]
     guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -3392,6 +3401,9 @@ pub fn scope_register_llm_sanitize_response_guardrail(
     scope_uuid: String,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(response: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmResponseCodec | null }) => Json | null"
+    )]
     guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)

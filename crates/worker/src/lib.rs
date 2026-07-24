@@ -173,6 +173,7 @@ pub struct LlmSanitizeRequestContext {
     pub codec: LlmCodecIdentity,
     runtime: Option<PluginRuntime>,
     codec_capability_id: Option<String>,
+    invocation_id: Option<String>,
 }
 
 /// Active codec context supplied to an LLM response sanitizer.
@@ -182,6 +183,7 @@ pub struct LlmSanitizeResponseContext {
     pub codec: LlmCodecIdentity,
     runtime: Option<PluginRuntime>,
     codec_capability_id: Option<String>,
+    invocation_id: Option<String>,
 }
 
 impl LlmSanitizeRequestContext {
@@ -191,6 +193,7 @@ impl LlmSanitizeRequestContext {
         Some(WorkerRequestCodec {
             runtime: self.runtime.clone()?,
             capability_id: self.codec_capability_id.clone()?,
+            invocation_id: self.invocation_id.clone()?,
         })
     }
 }
@@ -202,6 +205,7 @@ impl LlmSanitizeResponseContext {
         Some(WorkerResponseCodec {
             runtime: self.runtime.clone()?,
             capability_id: self.codec_capability_id.clone()?,
+            invocation_id: self.invocation_id.clone()?,
         })
     }
 }
@@ -211,13 +215,14 @@ impl LlmSanitizeResponseContext {
 pub struct WorkerRequestCodec {
     runtime: PluginRuntime,
     capability_id: String,
+    invocation_id: String,
 }
 
 impl WorkerRequestCodec {
     /// Decodes an opaque request into its normalized representation.
     pub async fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         self.runtime
-            .decode_llm_codec_request(&self.capability_id, request)
+            .decode_llm_codec_request(&self.capability_id, &self.invocation_id, request)
             .await
     }
     /// Encodes normalized request changes onto the original opaque request.
@@ -227,7 +232,12 @@ impl WorkerRequestCodec {
         original: &LlmRequest,
     ) -> Result<LlmRequest> {
         self.runtime
-            .encode_llm_codec_request(&self.capability_id, annotated, original)
+            .encode_llm_codec_request(
+                &self.capability_id,
+                &self.invocation_id,
+                annotated,
+                original,
+            )
             .await
     }
 }
@@ -237,13 +247,14 @@ impl WorkerRequestCodec {
 pub struct WorkerResponseCodec {
     runtime: PluginRuntime,
     capability_id: String,
+    invocation_id: String,
 }
 
 impl WorkerResponseCodec {
     /// Decodes an opaque response into its normalized representation.
     pub async fn decode(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         self.runtime
-            .decode_llm_codec_response(&self.capability_id, response)
+            .decode_llm_codec_response(&self.capability_id, &self.invocation_id, response)
             .await
     }
 }
@@ -675,6 +686,7 @@ impl PluginRuntime {
     async fn decode_llm_codec_request(
         &self,
         capability_id: &str,
+        invocation_id: &str,
         request: &LlmRequest,
     ) -> Result<AnnotatedLlmRequest> {
         let mut client = self.host_client().await?;
@@ -683,6 +695,7 @@ impl PluginRuntime {
                 activation_id: self.activation_id.clone(),
                 auth_token: self.auth_token.clone(),
                 codec_capability_id: capability_id.into(),
+                invocation_id: invocation_id.into(),
                 request: Some(json_envelope("nemo.relay.LlmRequest@1", request)?),
             }))
             .await
@@ -694,6 +707,7 @@ impl PluginRuntime {
     async fn encode_llm_codec_request(
         &self,
         capability_id: &str,
+        invocation_id: &str,
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> Result<LlmRequest> {
@@ -703,6 +717,7 @@ impl PluginRuntime {
                 activation_id: self.activation_id.clone(),
                 auth_token: self.auth_token.clone(),
                 codec_capability_id: capability_id.into(),
+                invocation_id: invocation_id.into(),
                 annotated_request: Some(json_envelope(
                     "nemo.relay.AnnotatedLlmRequest@2",
                     annotated,
@@ -718,6 +733,7 @@ impl PluginRuntime {
     async fn decode_llm_codec_response(
         &self,
         capability_id: &str,
+        invocation_id: &str,
         response: &Json,
     ) -> Result<AnnotatedLlmResponse> {
         let mut client = self.host_client().await?;
@@ -726,6 +742,7 @@ impl PluginRuntime {
                 activation_id: self.activation_id.clone(),
                 auth_token: self.auth_token.clone(),
                 codec_capability_id: capability_id.into(),
+                invocation_id: invocation_id.into(),
                 response: Some(json_envelope("nemo.relay.Json@1", response)?),
             }))
             .await
@@ -1805,7 +1822,7 @@ impl WorkerService {
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
-        let mut context = payload.sanitize_request_context();
+        let mut context = payload.sanitize_request_context(&request.invocation_id);
         context.runtime = Some(self.runtime.clone());
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let handler = self.llm_sanitize_request(&request.registration_name)?;
@@ -1823,7 +1840,7 @@ impl WorkerService {
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
-        let mut context = payload.sanitize_response_context();
+        let mut context = payload.sanitize_response_context(&request.invocation_id);
         context.runtime = Some(self.runtime.clone());
         let response = required_json::<Json>(payload.response, "llm response")?;
         let handler = self.llm_sanitize_response(&request.registration_name)?;
@@ -2057,7 +2074,7 @@ struct LlmPayload {
 }
 
 impl LlmPayload {
-    fn sanitize_request_context(&self) -> LlmSanitizeRequestContext {
+    fn sanitize_request_context(&self, invocation_id: &str) -> LlmSanitizeRequestContext {
         let codec = match self.sanitize_context.as_ref() {
             Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
             _ => None,
@@ -2069,10 +2086,11 @@ impl LlmPayload {
                 Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec_capability_id.clone(),
                 _ => None,
             },
+            invocation_id: Some(invocation_id.to_owned()),
         }
     }
 
-    fn sanitize_response_context(&self) -> LlmSanitizeResponseContext {
+    fn sanitize_response_context(&self, invocation_id: &str) -> LlmSanitizeResponseContext {
         let codec = match self.sanitize_context.as_ref() {
             Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
             _ => None,
@@ -2084,6 +2102,7 @@ impl LlmPayload {
                 Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec_capability_id.clone(),
                 _ => None,
             },
+            invocation_id: Some(invocation_id.to_owned()),
         }
     }
 }
