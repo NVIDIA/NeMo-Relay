@@ -33,7 +33,7 @@ pub const MAX_FILE_SINK_QUEUE_ENTRIES: usize = 8_192;
 /// Size-based rotation renames existing backup files on each rotation, so an unbounded value can
 /// make one log write perform excessive filesystem work. This limit counts backup files and does
 /// not include the active log file.
-pub const MAX_FILE_SINK_RETAINED_FILES: usize = 100;
+pub const MAX_FILE_SINK_RETAINED_FILES: usize = 9;
 
 /// Operational logging configuration for [`LoggingRuntime::configure`](super::LoggingRuntime::configure).
 ///

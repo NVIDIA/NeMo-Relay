@@ -109,7 +109,7 @@ sinks use asynchronous queues, and `queue_capacity` cannot exceed 8,192 entries
 per sink. Size-based rotation is optional; when enabled,
 `max_file_size_bytes` and `retained_files` must be configured together.
 `retained_files` counts backup files in addition to the active file and cannot
-exceed 100. A record larger than `max_file_size_bytes` remains intact rather
+exceed 9. A record larger than `max_file_size_bytes` remains intact rather
 than being split. File sinks remain append-only when rotation settings are
 omitted.
 
