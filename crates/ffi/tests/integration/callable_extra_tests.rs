@@ -69,6 +69,7 @@ unsafe extern "C" fn llm_request_intercept_invalid_annotated_cb(
 unsafe extern "C" fn llm_request_passthrough_cb(
     _user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeContext,
 ) -> *mut FfiLLMRequest {
     Box::into_raw(Box::new(FfiLLMRequest(unsafe { (&*request).0.clone() })))
 }
@@ -227,7 +228,11 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
     );
 
     let sanitize = wrap_llm_sanitize_request_fn(llm_request_passthrough_cb, ptr::null_mut(), None);
-    let sanitized = sanitize(request.clone());
+    let sanitized = sanitize(
+        request.clone(),
+        nemo_relay::api::runtime::LlmSanitizeContext::default(),
+    )
+    .expect("non-null sanitizer result");
     assert_eq!(sanitized.content, request.content);
 
     let conditional = wrap_llm_conditional_fn(llm_conditional_error_cb, ptr::null_mut(), None);

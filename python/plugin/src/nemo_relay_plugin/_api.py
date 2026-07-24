@@ -76,7 +76,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, Protocol, TypeAlias, TypedDict
+from typing import Any, ClassVar, Protocol, TypeAlias, TypedDict, cast
 from urllib.parse import urlsplit
 
 grpc: Any = importlib.import_module("grpc")
@@ -104,7 +104,7 @@ AnnotatedLlmRequest: TypeAlias = dict[str, Any]
 
 
 class LlmSanitizeContext(TypedDict):
-    """Codec identity provided to a contextual LLM sanitizer."""
+    """Codec identity provided to an LLM sanitizer."""
 
     has_active_codec: bool
     codec_name: str | None
@@ -117,6 +117,30 @@ def _llm_sanitize_context(invocation: pb.LlmInvocation) -> LlmSanitizeContext:
         "has_active_codec": invocation.has_active_codec,
         "codec_name": codec_name or None,
     }
+
+
+def _llm_sanitizer_accepts_context(callback: object) -> bool:
+    """Return whether a sanitizer accepts payload and context.
+
+    Signature binding happens at registration time so invocation does not mask
+    callback ``TypeError`` exceptions as an arity fallback.
+    """
+    try:
+        signature = inspect.signature(cast(Callable[..., object], callback))
+    except (TypeError, ValueError) as exc:
+        raise WorkerSdkError(
+            "LLM sanitizer callback signature cannot be inspected; use a callable "
+            "that accepts `(payload)` or `(payload, context)`"
+        ) from exc
+    try:
+        signature.bind(None, None)
+    except TypeError:
+        try:
+            signature.bind(None)
+        except TypeError as exc:
+            raise WorkerSdkError("LLM sanitizer callback must accept `(payload)` or `(payload, context)`") from exc
+        return False
+    return True
 
 
 WORKER_PROTOCOL = "grpc-v1"
@@ -747,14 +771,14 @@ ToolExecutionCallback: TypeAlias = Callable[
     [str, Json, "ToolNext"],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
-LlmSanitizeRequestCallback: TypeAlias = Callable[[LlmRequest], LlmRequest | Awaitable[LlmRequest]]
-LlmSanitizeResponseCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
-ContextualLlmSanitizeRequestCallback: TypeAlias = Callable[
-    [LlmRequest, LlmSanitizeContext], LlmRequest | None | Awaitable[LlmRequest | None]
-]
-ContextualLlmSanitizeResponseCallback: TypeAlias = Callable[
-    [Json, LlmSanitizeContext], Json | None | Awaitable[Json | None]
-]
+LlmSanitizeRequestCallback: TypeAlias = (
+    Callable[[LlmRequest], LlmRequest | Awaitable[LlmRequest]]
+    | Callable[[LlmRequest, LlmSanitizeContext], LlmRequest | None | Awaitable[LlmRequest | None]]
+)
+LlmSanitizeResponseCallback: TypeAlias = (
+    Callable[[Json], Json | Awaitable[Json]]
+    | Callable[[Json, LlmSanitizeContext], Json | None | Awaitable[Json | None]]
+)
 LlmConditionalCallback: TypeAlias = Callable[[LlmRequest], str | None | Awaitable[str | None]]
 LlmRequestCallback: TypeAlias = Callable[
     [str, LlmRequest, AnnotatedLlmRequest | None],
@@ -781,8 +805,6 @@ class _Handlers:
     tool_executions: dict[str, ToolExecutionCallback]
     llm_sanitize_requests: dict[str, LlmSanitizeRequestCallback]
     llm_sanitize_responses: dict[str, LlmSanitizeResponseCallback]
-    contextual_llm_sanitize_requests: dict[str, ContextualLlmSanitizeRequestCallback]
-    contextual_llm_sanitize_responses: dict[str, ContextualLlmSanitizeResponseCallback]
     llm_conditionals: dict[str, LlmConditionalCallback]
     llm_requests: dict[str, LlmRequestCallback]
     llm_executions: dict[str, LlmExecutionCallback]
@@ -803,8 +825,6 @@ class _Handlers:
             tool_executions={},
             llm_sanitize_requests={},
             llm_sanitize_responses={},
-            contextual_llm_sanitize_requests={},
-            contextual_llm_sanitize_responses={},
             llm_conditionals={},
             llm_requests={},
             llm_executions={},
@@ -1057,13 +1077,19 @@ class PluginContext:
 
         Args:
             name: Component-local registration name.
-            callback: Function receiving an :data:`LlmRequest` and returning
+            callback: Function receiving ``(request, context)`` and returning
                 the request recorded on the LLM start event, directly or
-                through an awaitable. It does not change the request sent to
-                the model.
+                through an awaitable. Return ``None`` to omit observability.
+                Existing one-parameter callbacks remain supported.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.LLM_SANITIZE_REQUEST_GUARDRAIL, priority, False)
+        self._push_registration(
+            name,
+            pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
+            priority,
+            False,
+            contextual=_llm_sanitizer_accepts_context(callback),
+        )
         self._handlers.llm_sanitize_requests[name] = callback
 
     def register_llm_sanitize_response_guardrail(
@@ -1077,45 +1103,20 @@ class PluginContext:
 
         Args:
             name: Component-local registration name.
-            callback: Function receiving response JSON and returning the value
-                recorded on the LLM end event, directly or through an
-                awaitable. It does not change the real model response.
+            callback: Function receiving ``(response, context)`` and returning
+                the value recorded on the LLM end event, directly or through an
+                awaitable. Return ``None`` to omit observability. Existing
+                one-parameter callbacks remain supported.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, priority, False)
+        self._push_registration(
+            name,
+            pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
+            priority,
+            False,
+            contextual=_llm_sanitizer_accepts_context(callback),
+        )
         self._handlers.llm_sanitize_responses[name] = callback
-
-    def register_contextual_llm_sanitize_request_guardrail(
-        self,
-        name: str,
-        callback: ContextualLlmSanitizeRequestCallback,
-        *,
-        priority: int = 0,
-    ) -> None:
-        """Register a codec-aware LLM request sanitizer.
-
-        ``callback`` is invoked as ``callback(request, context)``. Returning
-        ``None`` omits the recorded LLM payload and annotation without
-        changing the provider request.
-        """
-        self._push_registration(name, pb.LLM_SANITIZE_REQUEST_GUARDRAIL, priority, False, contextual=True)
-        self._handlers.contextual_llm_sanitize_requests[name] = callback
-
-    def register_contextual_llm_sanitize_response_guardrail(
-        self,
-        name: str,
-        callback: ContextualLlmSanitizeResponseCallback,
-        *,
-        priority: int = 0,
-    ) -> None:
-        """Register a codec-aware LLM response sanitizer.
-
-        ``callback`` is invoked as ``callback(response, context)``. Returning
-        ``None`` omits the recorded LLM payload and annotation without
-        changing the provider response.
-        """
-        self._push_registration(name, pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, priority, False, contextual=True)
-        self._handlers.contextual_llm_sanitize_responses[name] = callback
 
     def register_llm_conditional_execution_guardrail(
         self,
@@ -1969,37 +1970,19 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     )
                 )
             if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
+                callback = self._handler(self._handlers.llm_sanitize_requests, request.registration_name)
+                payload = _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
                 if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
-                    result = await _maybe_await(
-                        self._handler(self._handlers.contextual_llm_sanitize_requests, request.registration_name)(
-                            _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA),
-                            _llm_sanitize_context(request.llm),
-                        )
-                    )
+                    result = await _maybe_await(callback(payload, _llm_sanitize_context(request.llm)))
                     return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
-                return _json_response(
-                    await _maybe_await(
-                        self._handler(self._handlers.llm_sanitize_requests, request.registration_name)(
-                            _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
-                        )
-                    )
-                )
+                return _json_response(await _maybe_await(callback(payload)))
             if request.surface == pb.LLM_SANITIZE_RESPONSE_GUARDRAIL:
+                callback = self._handler(self._handlers.llm_sanitize_responses, request.registration_name)
+                payload = _decode_required_envelope(request.llm.response, "llm response")
                 if self._is_contextual_llm_sanitizer(request.registration_name, request.surface):
-                    result = await _maybe_await(
-                        self._handler(self._handlers.contextual_llm_sanitize_responses, request.registration_name)(
-                            _decode_required_envelope(request.llm.response, "llm response"),
-                            _llm_sanitize_context(request.llm),
-                        )
-                    )
+                    result = await _maybe_await(callback(payload, _llm_sanitize_context(request.llm)))
                     return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
-                return _json_response(
-                    await _maybe_await(
-                        self._handler(self._handlers.llm_sanitize_responses, request.registration_name)(
-                            _decode_required_envelope(request.llm.response, "llm response")
-                        )
-                    )
-                )
+                return _json_response(await _maybe_await(callback(payload)))
             if request.surface == pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL:
                 result = await _maybe_await(
                     self._handler(self._handlers.llm_conditionals, request.registration_name)(

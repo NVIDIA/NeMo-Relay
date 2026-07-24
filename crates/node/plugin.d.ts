@@ -211,18 +211,14 @@ export interface PluginContext {
     priority: number,
     callback: (name: string, args: Json) => string | null,
   ): void;
-  /** Register an LLM sanitize-request guardrail for this component. */
-  registerLlmSanitizeRequestGuardrail(name: string, priority: number, callback: (request: Json) => Json): void;
-  /** Register an LLM sanitize-response guardrail for this component. */
-  registerLlmSanitizeResponseGuardrail(name: string, priority: number, callback: (response: Json) => Json): void;
-  /** Register a codec-aware LLM request sanitizer. The callback receives `(request, context)`. */
-  registerContextualLlmSanitizeRequestGuardrail(
+  /** Register an LLM sanitize-request guardrail. The callback receives `(request, context)`. */
+  registerLlmSanitizeRequestGuardrail(
     name: string,
     priority: number,
     callback: (request: Json, context: LlmSanitizeContext) => Json | null,
   ): void;
-  /** Register a codec-aware LLM response sanitizer. The callback receives `(response, context)`. */
-  registerContextualLlmSanitizeResponseGuardrail(
+  /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
+  registerLlmSanitizeResponseGuardrail(
     name: string,
     priority: number,
     callback: (response: Json, context: LlmSanitizeContext) => Json | null,

@@ -22,11 +22,11 @@ use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmRequestInterceptFn, LlmSanitizeContext, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs,
+    ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
-use crate::api::runtime::callbacks::{LlmSanitizeRequestGuardrail, LlmSanitizeResponseGuardrail};
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::shared::sanitize_event;
@@ -68,11 +68,9 @@ pub struct NemoRelayContextState {
     /// Global tool execution intercepts that wrap or replace callback execution.
     pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
     /// Global LLM request sanitizers applied to emitted LLM-start payloads.
-    pub(crate) llm_sanitize_request_guardrails:
-        SortedRegistry<Guardrail<LlmSanitizeRequestGuardrail>>,
+    pub(crate) llm_sanitize_request_guardrails: SortedRegistry<Guardrail<LlmSanitizeRequestFn>>,
     /// Global LLM response sanitizers applied to emitted LLM-end payloads.
-    pub(crate) llm_sanitize_response_guardrails:
-        SortedRegistry<Guardrail<LlmSanitizeResponseGuardrail>>,
+    pub(crate) llm_sanitize_response_guardrails: SortedRegistry<Guardrail<LlmSanitizeResponseFn>>,
     /// Global LLM guardrails that can reject execution before the provider callback runs.
     pub(crate) llm_conditional_execution_guardrails: SortedRegistry<Guardrail<LlmConditionalFn>>,
     /// Global LLM request intercepts that can rewrite or annotate requests.
@@ -950,8 +948,8 @@ impl NemoRelayContextState {
     /// are released.
     pub(crate) fn llm_sanitize_request_entries(
         &self,
-        scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeRequestGuardrail>>],
-    ) -> Vec<Guardrail<LlmSanitizeRequestGuardrail>> {
+        scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeRequestFn>>],
+    ) -> Vec<Guardrail<LlmSanitizeRequestFn>> {
         merge_guardrail_entries(&self.llm_sanitize_request_guardrails, scope_locals)
             .into_iter()
             .cloned()
@@ -969,14 +967,11 @@ impl NemoRelayContextState {
     pub(crate) fn llm_sanitize_request_snapshot_chain(
         request: LlmRequest,
         context: LlmSanitizeContext,
-        entries: &[Guardrail<LlmSanitizeRequestGuardrail>],
+        entries: &[Guardrail<LlmSanitizeRequestFn>],
     ) -> Option<LlmRequest> {
         let mut value = Some(request);
         for entry in entries {
-            value = value.and_then(|value| match &entry.payload {
-                LlmSanitizeRequestGuardrail::Legacy(callback) => Some(callback(value)),
-                LlmSanitizeRequestGuardrail::Contextual(callback) => callback(value, context),
-            });
+            value = value.and_then(|value| (entry.payload)(value, context));
         }
         value
     }
@@ -992,8 +987,8 @@ impl NemoRelayContextState {
     /// are released.
     pub(crate) fn llm_sanitize_response_entries(
         &self,
-        scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeResponseGuardrail>>],
-    ) -> Vec<Guardrail<LlmSanitizeResponseGuardrail>> {
+        scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeResponseFn>>],
+    ) -> Vec<Guardrail<LlmSanitizeResponseFn>> {
         merge_guardrail_entries(&self.llm_sanitize_response_guardrails, scope_locals)
             .into_iter()
             .cloned()
@@ -1011,14 +1006,11 @@ impl NemoRelayContextState {
     pub(crate) fn llm_sanitize_response_snapshot_chain(
         response: Json,
         context: LlmSanitizeContext,
-        entries: &[Guardrail<LlmSanitizeResponseGuardrail>],
+        entries: &[Guardrail<LlmSanitizeResponseFn>],
     ) -> Option<Json> {
         let mut value = Some(response);
         for entry in entries {
-            value = value.and_then(|value| match &entry.payload {
-                LlmSanitizeResponseGuardrail::Legacy(callback) => Some(callback(value)),
-                LlmSanitizeResponseGuardrail::Contextual(callback) => callback(value, context),
-            });
+            value = value.and_then(|value| (entry.payload)(value, context));
         }
         value
     }

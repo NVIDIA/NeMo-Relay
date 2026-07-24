@@ -365,8 +365,8 @@ func requireLlmScopeEvents(t *testing.T, events []Event) (*ScopeEvent, *ScopeEve
 
 func TestLlmSanitizeRequestGuardrail(t *testing.T) {
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_san_req", 1,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
-			return headers, content
+		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+			return request, false
 		},
 	)
 	if err != nil {
@@ -377,7 +377,9 @@ func TestLlmSanitizeRequestGuardrail(t *testing.T) {
 
 func TestLlmSanitizeResponseGuardrail(t *testing.T) {
 	err := RegisterLlmSanitizeResponseGuardrail("go_llm_san_resp", 1,
-		func(responseJSON json.RawMessage) json.RawMessage { return responseJSON },
+		func(responseJSON json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) {
+			return responseJSON, false
+		},
 	)
 	if err != nil {
 		t.Fatalf(llmRegisterFailed, err)
@@ -385,7 +387,7 @@ func TestLlmSanitizeResponseGuardrail(t *testing.T) {
 	DeregisterLlmSanitizeResponseGuardrail("go_llm_san_resp")
 }
 
-func TestContextualLlmSanitizeGuardrails(t *testing.T) {
+func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	var capturedInput, capturedOutput json.RawMessage
 	var mu sync.Mutex
 	if err := RegisterSubscriber("go_contextual_llm_sanitize_events", func(event Event) {
@@ -402,7 +404,7 @@ func TestContextualLlmSanitizeGuardrails(t *testing.T) {
 	}
 	defer DeregisterSubscriber("go_contextual_llm_sanitize_events")
 
-	if err := RegisterContextualLlmSanitizeRequestGuardrail("go_contextual_llm_request", 1,
+	if err := RegisterLlmSanitizeRequestGuardrail("go_contextual_llm_request", 1,
 		func(request LLMRequestDTO, context LLMSanitizeContext) (LLMRequestDTO, bool) {
 			if context.HasActiveCodec {
 				t.Fatal("manual registration should not receive an active codec")
@@ -414,7 +416,7 @@ func TestContextualLlmSanitizeGuardrails(t *testing.T) {
 	}
 	defer DeregisterLlmSanitizeRequestGuardrail("go_contextual_llm_request")
 
-	if err := RegisterContextualLlmSanitizeResponseGuardrail("go_contextual_llm_response", 1,
+	if err := RegisterLlmSanitizeResponseGuardrail("go_contextual_llm_response", 1,
 		func(response json.RawMessage, context LLMSanitizeContext) (json.RawMessage, bool) {
 			if context.CodecName != nil {
 				t.Fatal("manual registration should not receive a codec name")
@@ -461,13 +463,13 @@ func TestLlmConditionalExecutionGuardrail(t *testing.T) {
 
 func TestLlmDuplicateGuardrailFails(t *testing.T) {
 	RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
-			return headers, content
+		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+			return request, false
 		},
 	)
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
-			return headers, content
+		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+			return request, false
 		},
 	)
 	if err == nil {
@@ -722,12 +724,13 @@ func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	defer DeregisterSubscriber("go_llm_san_evt_sub")
 
 	RegisterLlmSanitizeRequestGuardrail("go_llm_content_mod", 1,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
 			var m map[string]interface{}
-			json.Unmarshal(content, &m)
+			json.Unmarshal(request.Content, &m)
 			m["system_prompt_injected"] = true
 			out, _ := json.Marshal(m)
-			return headers, out
+			request.Content = out
+			return request, false
 		},
 	)
 	defer DeregisterLlmSanitizeRequestGuardrail("go_llm_content_mod")

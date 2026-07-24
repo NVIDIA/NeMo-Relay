@@ -1172,7 +1172,7 @@ fn register_builtin_backend(
         )?;
     }
     if config.input {
-        ctx.register_contextual_llm_sanitize_request_guardrail(
+        ctx.register_llm_sanitize_request_guardrail(
             &registration_name(profile_name, "input"),
             config.priority,
             llm_sanitize_request_callback(compiled.clone()),
@@ -1197,7 +1197,7 @@ fn register_builtin_backend(
         )?;
     }
     if config.output {
-        ctx.register_contextual_llm_sanitize_response_guardrail(
+        ctx.register_llm_sanitize_response_guardrail(
             &registration_name(profile_name, "output"),
             config.priority,
             llm_sanitize_response_callback(compiled.clone()),

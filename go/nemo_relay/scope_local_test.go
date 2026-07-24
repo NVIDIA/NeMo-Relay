@@ -923,12 +923,13 @@ func TestScopeLocalLlmSanitizeRequestGuardrailAffectsEvent(t *testing.T) {
 		handle, _ := PushScope("llm_scope_guard", ScopeTypeAgent)
 		defer PopScope(handle)
 		err := ScopeRegisterLlmSanitizeRequestGuardrail(handle.UUID(), "scope_llm_san_req", 1,
-			func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+			func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
 				var m map[string]interface{}
-				json.Unmarshal(content, &m)
+				json.Unmarshal(request.Content, &m)
 				m["scope_llm_sanitized"] = true
 				out, _ := json.Marshal(m)
-				return headers, out
+				request.Content = out
+				return request, false
 			})
 		if err != nil {
 			t.Fatalf("ScopeRegisterLlmSanitizeRequestGuardrail failed: %v", err)
@@ -1080,9 +1081,9 @@ func assertScopeLocalLLMWrappersDeregister(t *testing.T, scopeUUID string, reque
 		&sanitizeRequestCalls,
 		func() error {
 			return ScopeRegisterLlmSanitizeRequestGuardrail(scopeUUID, "llm_scope_san_req", 1,
-				func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+				func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
 					sanitizeRequestCalls++
-					return headers, content
+					return request, false
 				},
 			)
 		},
@@ -1098,9 +1099,9 @@ func assertScopeLocalLLMWrappersDeregister(t *testing.T, scopeUUID string, reque
 		&sanitizeResponseCalls,
 		func() error {
 			return ScopeRegisterLlmSanitizeResponseGuardrail(scopeUUID, "llm_scope_san_resp", 1,
-				func(responseJSON json.RawMessage) json.RawMessage {
+				func(responseJSON json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) {
 					sanitizeResponseCalls++
-					return responseJSON
+					return responseJSON, false
 				},
 			)
 		},

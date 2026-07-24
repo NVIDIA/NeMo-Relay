@@ -152,6 +152,7 @@ unsafe extern "C" fn llm_request_intercept_cb(
 unsafe extern "C" fn llm_request_null_cb(
     _user_data: *mut libc::c_void,
     _request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeContext,
 ) -> *mut FfiLLMRequest {
     std::ptr::null_mut()
 }
@@ -167,7 +168,11 @@ unsafe extern "C" fn llm_conditional_cb(
     }
 }
 
-unsafe extern "C" fn json_cb(_user_data: *mut libc::c_void, json: *const c_char) -> *mut c_char {
+unsafe extern "C" fn json_cb(
+    _user_data: *mut libc::c_void,
+    json: *const c_char,
+    _context: NemoRelayLlmSanitizeContext,
+) -> *mut c_char {
     let mut value: Json =
         serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().unwrap()).unwrap();
     value["wrapped"] = json!(true);
@@ -379,9 +384,13 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
 
     let sanitize_request =
         wrap_llm_sanitize_request_fn(llm_request_null_cb, std::ptr::null_mut(), None);
-    let sanitized = sanitize_request(make_request());
-    assert_eq!(sanitized.headers.len(), 0);
-    assert_eq!(sanitized.content, Json::Null);
+    assert_eq!(
+        sanitize_request(
+            make_request(),
+            nemo_relay::api::runtime::LlmSanitizeContext::default(),
+        ),
+        None
+    );
 
     let conditional = wrap_llm_conditional_fn(llm_conditional_cb, std::ptr::null_mut(), None);
     assert_eq!(
@@ -394,12 +403,13 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     );
     assert_eq!(conditional(&make_request()).unwrap(), None);
 
-    let wrapped_json = wrap_json_fn(json_cb, std::ptr::null_mut(), None);
-    assert_eq!(wrapped_json(json!({"value": 1}))["wrapped"], json!(true));
-
-    let wrapped_response = wrap_llm_response_fn(json_cb, std::ptr::null_mut(), None);
+    let wrapped_response = wrap_llm_sanitize_response_fn(json_cb, std::ptr::null_mut(), None);
     assert_eq!(
-        wrapped_response(json!({"value": 2}))["wrapped"],
+        wrapped_response(
+            json!({"value": 2}),
+            nemo_relay::api::runtime::LlmSanitizeContext::default(),
+        )
+        .unwrap()["wrapped"],
         json!(true)
     );
 }

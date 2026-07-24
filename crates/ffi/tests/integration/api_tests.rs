@@ -14,7 +14,9 @@ use nemo_relay::plugin::PluginRegistrationContext;
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
-use nemo_relay_ffi::callable::{NemoRelayLlmExecNextFn, NemoRelayToolExecNextFn};
+use nemo_relay_ffi::callable::{
+    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeContext, NemoRelayToolExecNextFn,
+};
 use nemo_relay_ffi::convert::nemo_relay_string_free;
 use nemo_relay_ffi::error::{NemoRelayStatus, nemo_relay_last_error, set_last_error};
 use nemo_relay_ffi::types::{
@@ -343,6 +345,7 @@ unsafe extern "C" fn tool_exec_intercept_cb(
 unsafe extern "C" fn llm_request_cb(
     _user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeContext,
 ) -> *mut FfiLLMRequest {
     let request = unsafe { &*request };
     let mut content = request.0.content.clone();
@@ -356,6 +359,7 @@ unsafe extern "C" fn llm_request_cb(
 unsafe extern "C" fn llm_response_cb(
     _user_data: *mut libc::c_void,
     response_json: *const c_char,
+    _context: NemoRelayLlmSanitizeContext,
 ) -> *mut c_char {
     let mut response: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(response_json) }
@@ -388,7 +392,16 @@ unsafe extern "C" fn llm_request_intercept_cb(
     _annotated_json: *const c_char,
     out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
-    let transformed = unsafe { Box::from_raw(llm_request_cb(ptr::null_mut(), request)) };
+    let transformed = unsafe {
+        Box::from_raw(llm_request_cb(
+            ptr::null_mut(),
+            request,
+            NemoRelayLlmSanitizeContext {
+                has_active_codec: false,
+                codec_name: ptr::null(),
+            },
+        ))
+    };
     let outcome = json!({
         "request": transformed.0,
         "annotated_request": null,

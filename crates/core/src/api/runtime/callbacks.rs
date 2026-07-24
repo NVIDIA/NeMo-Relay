@@ -141,10 +141,6 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
 /// # Parameters
 /// - First argument: LLM request payload to sanitize for observability.
 ///
-/// # Returns
-/// Sanitized [`LlmRequest`] for the emitted event.
-pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
-
 /// Per-call codec context for first-party LLM sanitize guardrails.
 ///
 /// The context distinguishes no active codec from an active custom codec that
@@ -157,11 +153,13 @@ pub struct LlmSanitizeContext {
     pub codec_name: Option<&'static str>,
 }
 
-/// Result of a contextual LLM request sanitizer.
+/// # Returns
+/// `Some` contains the sanitized request for the emitted event. `None` omits
+/// both the raw request payload and its annotation from that event.
 ///
-/// `None` omits both the raw request payload and its annotation from the
-/// emitted start event.
-pub type ContextualLlmSanitizeRequestFn =
+/// The context is always supplied for managed LLM calls. Its fields distinguish
+/// no active codec from a recognized built-in codec and an active custom codec.
+pub type LlmSanitizeRequestFn =
     Arc<dyn Fn(LlmRequest, LlmSanitizeContext) -> Option<LlmRequest> + Send + Sync>;
 /// Sanitize an LLM response before the runtime records it.
 ///
@@ -172,41 +170,13 @@ pub type ContextualLlmSanitizeRequestFn =
 /// - First argument: JSON response payload to sanitize for observability.
 ///
 /// # Returns
-/// Sanitized JSON response payload for the emitted event.
-pub type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
-
-/// Result of a contextual LLM response sanitizer.
+/// `Some` contains the sanitized response for the emitted event. `None` omits
+/// both the raw response payload and its annotation from that event.
 ///
-/// `None` omits both the raw response payload and its annotation from the
-/// emitted end event.
-pub type ContextualLlmSanitizeResponseFn =
+/// The context is always supplied for managed LLM calls. Its fields distinguish
+/// no active codec from a recognized built-in codec and an active custom codec.
+pub type LlmSanitizeResponseFn =
     Arc<dyn Fn(Json, LlmSanitizeContext) -> Option<Json> + Send + Sync>;
-
-/// One LLM request sanitizer stored in the shared priority-ordered registry.
-#[derive(Clone)]
-pub(crate) enum LlmSanitizeRequestGuardrail {
-    Legacy(LlmSanitizeRequestFn),
-    Contextual(ContextualLlmSanitizeRequestFn),
-}
-
-impl From<LlmSanitizeRequestFn> for LlmSanitizeRequestGuardrail {
-    fn from(callback: LlmSanitizeRequestFn) -> Self {
-        Self::Legacy(callback)
-    }
-}
-
-/// One LLM response sanitizer stored in the shared priority-ordered registry.
-#[derive(Clone)]
-pub(crate) enum LlmSanitizeResponseGuardrail {
-    Legacy(LlmSanitizeResponseFn),
-    Contextual(ContextualLlmSanitizeResponseFn),
-}
-
-impl From<LlmSanitizeResponseFn> for LlmSanitizeResponseGuardrail {
-    fn from(callback: LlmSanitizeResponseFn) -> Self {
-        Self::Legacy(callback)
-    }
-}
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,

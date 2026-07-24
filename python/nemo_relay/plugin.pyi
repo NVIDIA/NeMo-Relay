@@ -6,8 +6,6 @@ from types import TracebackType
 from typing import AsyncContextManager, Literal, Protocol, Self, TypedDict
 
 from nemo_relay import (
-    ContextualLlmSanitizeRequestGuardrail,
-    ContextualLlmSanitizeResponseGuardrail,
     Event,
     EventSanitizeGuardrail,
     JsonObject,
@@ -61,12 +59,6 @@ class PluginContext(Protocol):
     ) -> None: ...
     def register_llm_sanitize_response_guardrail(
         self, name: str, priority: int, callback: LlmSanitizeResponseGuardrail
-    ) -> None: ...
-    def register_contextual_llm_sanitize_request_guardrail(
-        self, name: str, priority: int, callback: ContextualLlmSanitizeRequestGuardrail
-    ) -> None: ...
-    def register_contextual_llm_sanitize_response_guardrail(
-        self, name: str, priority: int, callback: ContextualLlmSanitizeResponseGuardrail
     ) -> None: ...
     def register_llm_conditional_execution_guardrail(
         self, name: str, priority: int, callback: LlmConditionalExecutionGuardrail

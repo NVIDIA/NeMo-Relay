@@ -21,8 +21,6 @@ Example::
 """
 
 from nemo_relay import (
-    ContextualLlmSanitizeRequestGuardrail,
-    ContextualLlmSanitizeResponseGuardrail,
     EventSanitizeGuardrail,
     LlmConditionalExecutionGuardrail,
     LlmSanitizeRequestGuardrail,
@@ -54,12 +52,6 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     deregister_tool_sanitize_response_guardrail as _native_deregister_tool_sanitize_response,
-)
-from nemo_relay._native import (
-    register_contextual_llm_sanitize_request_guardrail as _native_register_contextual_llm_sanitize_request,
-)
-from nemo_relay._native import (
-    register_contextual_llm_sanitize_response_guardrail as _native_register_contextual_llm_sanitize_response,
 )
 from nemo_relay._native import (
     register_llm_conditional_execution_guardrail as _native_register_llm_conditional_execution,
@@ -256,8 +248,11 @@ def register_llm_sanitize_request(name: str, priority: int, guardrail: LlmSaniti
     Args:
         name: Unique guardrail name used for later replacement or removal.
         priority: Execution order for the guardrail. Lower values run first.
-        guardrail: Callable invoked as ``guardrail(request)`` that must return
-            the sanitized request recorded on the emitted start event.
+        guardrail: Callable invoked as ``guardrail(request, context)`` that
+            returns the sanitized request, or ``None`` to omit the LLM
+            observability payload and its annotation. ``context`` contains
+            ``has_active_codec`` and ``codec_name``. Inspectable one-argument
+            callbacks remain supported for compatibility.
 
     Returns:
         None: This function returns after the guardrail is registered.
@@ -271,7 +266,7 @@ def register_llm_sanitize_request(name: str, priority: int, guardrail: LlmSaniti
 
         import nemo_relay
 
-        def strip_auth(request):
+        def strip_auth(request, context):
             headers = {k: v for k, v in request.headers.items() if k.lower() != "authorization"}
             return nemo_relay.LLMRequest(headers, request.content)
 
@@ -303,8 +298,11 @@ def register_llm_sanitize_response(name: str, priority: int, guardrail: LlmSanit
     Args:
         name: Unique guardrail name used for later replacement or removal.
         priority: Execution order for the guardrail. Lower values run first.
-        guardrail: Callable invoked as ``guardrail(response)`` that must return
-            the sanitized payload recorded on the emitted end event.
+        guardrail: Callable invoked as ``guardrail(response, context)`` that
+            returns the sanitized payload, or ``None`` to omit the LLM
+            observability payload and its annotation. ``context`` contains
+            ``has_active_codec`` and ``codec_name``. Inspectable one-argument
+            callbacks remain supported for compatibility.
 
     Returns:
         None: This function returns after the guardrail is registered.
@@ -331,79 +329,6 @@ def deregister_llm_sanitize_response(name: str) -> bool:
         the guardrail chain they already resolved.
     """
     return _native_deregister_llm_sanitize_response(name)
-
-
-def register_contextual_llm_sanitize_request(
-    name: str, priority: int, guardrail: ContextualLlmSanitizeRequestGuardrail
-) -> None:
-    """Register a codec-aware LLM request sanitizer.
-
-    Args:
-        name: Unique guardrail name used for later replacement or removal.
-        priority: Execution order for the guardrail. Lower values run first.
-        guardrail: Callable invoked as ``guardrail(request, context)``. The
-            context mapping contains ``has_active_codec`` and ``codec_name``.
-            Return a sanitized request for the emitted start event, or ``None``
-            to omit the event payload and annotation for that call.
-
-    Returns:
-        None: This function returns after the guardrail is registered.
-
-    Notes:
-        This guardrail is observability-only and does not mutate the request
-        sent to the provider callback. ``codec_name`` is ``None`` when no
-        recognized built-in codec is active, including active custom codecs.
-
-    Example::
-
-        import nemo_relay
-
-        def sanitize_request(request, context):
-            if context["codec_name"] == "openai_chat":
-                return nemo_relay.LLMRequest(request.headers, {"messages": []})
-            return None
-
-        nemo_relay.guardrails.register_contextual_llm_sanitize_request(
-            "codec-aware-request", 10, sanitize_request
-        )
-    """
-    return _native_register_contextual_llm_sanitize_request(name, priority, guardrail)
-
-
-def register_contextual_llm_sanitize_response(
-    name: str, priority: int, guardrail: ContextualLlmSanitizeResponseGuardrail
-) -> None:
-    """Register a codec-aware LLM response sanitizer.
-
-    Args:
-        name: Unique guardrail name used for later replacement or removal.
-        priority: Execution order for the guardrail. Lower values run first.
-        guardrail: Callable invoked as ``guardrail(response, context)``. The
-            context mapping contains ``has_active_codec`` and ``codec_name``.
-            Return a sanitized response for the emitted end event, or ``None``
-            to omit the event payload and annotation for that call.
-
-    Returns:
-        None: This function returns after the guardrail is registered.
-
-    Notes:
-        This guardrail changes only observability data. The provider response
-        returned to the caller is left unchanged. ``codec_name`` is ``None``
-        when no recognized built-in codec is active, including active custom
-        codecs.
-
-    Example::
-
-        import nemo_relay
-
-        def sanitize_response(response, context):
-            return response if context["has_active_codec"] else None
-
-        nemo_relay.guardrails.register_contextual_llm_sanitize_response(
-            "codec-aware-response", 10, sanitize_response
-        )
-    """
-    return _native_register_contextual_llm_sanitize_response(name, priority, guardrail)
 
 
 def register_llm_conditional_execution(name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail) -> None:
@@ -459,8 +384,6 @@ __all__ = [
     "deregister_llm_sanitize_request",
     "register_llm_sanitize_response",
     "deregister_llm_sanitize_response",
-    "register_contextual_llm_sanitize_request",
-    "register_contextual_llm_sanitize_response",
     "register_llm_conditional_execution",
     "deregister_llm_conditional_execution",
 ]

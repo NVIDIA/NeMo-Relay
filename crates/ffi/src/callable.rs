@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    ContextualLlmSanitizeRequestFn, ContextualLlmSanitizeResponseFn, EventSanitizeFn,
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
-    ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
+    LlmRequestInterceptFn, LlmSanitizeContext, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -98,19 +98,7 @@ pub type NemoRelayToolExecInterceptCb = unsafe extern "C" fn(
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
-/// Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
-/// The returned string must be allocated with `malloc` or equivalent.
-pub type NemoRelayJsonCb =
-    unsafe extern "C" fn(user_data: *mut libc::c_void, json: *const c_char) -> *mut c_char;
-
-/// Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
-/// a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
-pub type NemoRelayLlmRequestCb = unsafe extern "C" fn(
-    user_data: *mut libc::c_void,
-    request: *const FfiLLMRequest,
-) -> *mut FfiLLMRequest;
-
-/// Codec identity supplied to a contextual LLM sanitizer. `codec_name` is null
+/// Codec identity supplied to an LLM sanitizer. `codec_name` is null
 /// when no recognized built-in codec is active and is valid only for the
 /// duration of the callback.
 #[repr(C)]
@@ -121,17 +109,17 @@ pub struct NemoRelayLlmSanitizeContext {
     pub codec_name: *const c_char,
 }
 
-/// Contextual LLM request sanitizer. It receives the request first and its
+/// LLM request sanitizer. It receives the request first and its
 /// codec context second. Return null to omit the observability payload.
-pub type NemoRelayContextualLlmRequestCb = unsafe extern "C" fn(
+pub type NemoRelayLlmSanitizeRequestCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
     context: NemoRelayLlmSanitizeContext,
 ) -> *mut FfiLLMRequest;
 
-/// Contextual LLM response sanitizer. It receives response JSON first and its
+/// LLM response sanitizer. It receives response JSON first and its
 /// codec context second. Return null to omit the observability payload.
-pub type NemoRelayContextualLlmResponseCb = unsafe extern "C" fn(
+pub type NemoRelayLlmSanitizeResponseCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     response_json: *const c_char,
     context: NemoRelayLlmSanitizeContext,
@@ -588,23 +576,6 @@ pub fn wrap_llm_stream_exec_intercept_fn(
     )
 }
 
-/// Wrap a generic C JSON callback into a Rust closure.
-pub fn wrap_json_fn(
-    cb: NemoRelayJsonCb,
-    user_data: *mut libc::c_void,
-    free_fn: NemoRelayFreeFn,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
-    let ud = make_user_data(user_data, free_fn);
-    Box::new(move |value: Json| {
-        let c_json = json_to_c_string(&value);
-        let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nemo_relay_string_free_internal(c_json) };
-        let result = ptr_to_json(result_ptr);
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
-    })
-}
-
 /// Wrap a C LLM request intercept callback (annotated-aware) into a Rust
 /// `LlmRequestInterceptFn` closure. The callback receives the intercept name,
 /// the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes one
@@ -678,56 +649,12 @@ pub fn wrap_llm_request_intercept_fn(
     )
 }
 
-/// Wrap a C JSON callback into a `Fn(Json) -> Json` closure for LLM response
-/// sanitization. The callback receives the response as a JSON string and
-/// returns the (possibly modified) JSON string.
-pub fn wrap_llm_response_fn(
-    cb: NemoRelayJsonCb,
-    user_data: *mut libc::c_void,
-    free_fn: NemoRelayFreeFn,
-) -> LlmSanitizeResponseFn {
-    let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |response: Json| {
-        let c_json = json_to_c_string(&response);
-        let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nemo_relay_string_free_internal(c_json) };
-        let result_json = ptr_to_json(result_ptr);
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result_json
-    })
-}
-
-/// Wrap a C LLM request sanitize callback into a Rust closure.
+/// Wrap a C LLM request sanitizer into a Rust closure.
 pub fn wrap_llm_sanitize_request_fn(
-    cb: NemoRelayLlmRequestCb,
+    cb: NemoRelayLlmSanitizeRequestCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> LlmSanitizeRequestFn {
-    let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |request: LlmRequest| {
-        let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
-        let result_ptr = unsafe { cb(ud.ptr, ffi_req) };
-        // Free the input request
-        unsafe { drop(Box::from_raw(ffi_req)) };
-        if result_ptr.is_null() {
-            // If callback returns null, return a default
-            LlmRequest {
-                headers: serde_json::Map::new(),
-                content: Json::Null,
-            }
-        } else {
-            let result = unsafe { Box::from_raw(result_ptr) };
-            result.0
-        }
-    })
-}
-
-/// Wrap a contextual C LLM request sanitizer into a Rust closure.
-pub fn wrap_contextual_llm_sanitize_request_fn(
-    cb: NemoRelayContextualLlmRequestCb,
-    user_data: *mut libc::c_void,
-    free_fn: NemoRelayFreeFn,
-) -> ContextualLlmSanitizeRequestFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |request: LlmRequest, context: LlmSanitizeContext| {
         let codec_name = context.codec_name.and_then(|name| CString::new(name).ok());
@@ -744,12 +671,12 @@ pub fn wrap_contextual_llm_sanitize_request_fn(
     })
 }
 
-/// Wrap a contextual C LLM response sanitizer into a Rust closure.
-pub fn wrap_contextual_llm_sanitize_response_fn(
-    cb: NemoRelayContextualLlmResponseCb,
+/// Wrap a C LLM response sanitizer into a Rust closure.
+pub fn wrap_llm_sanitize_response_fn(
+    cb: NemoRelayLlmSanitizeResponseCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> ContextualLlmSanitizeResponseFn {
+) -> LlmSanitizeResponseFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |response: Json, context: LlmSanitizeContext| {
         let codec_name = context.codec_name.and_then(|name| CString::new(name).ok());

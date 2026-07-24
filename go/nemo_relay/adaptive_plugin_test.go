@@ -90,8 +90,8 @@ func registerLifecycleGuardrails(ctx *PluginContext) error {
 	if err := ctx.RegisterLlmSanitizeRequestGuardrail(
 		"llm_sanitize_request",
 		7,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
-			return headers, content
+		func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+			return request, false
 		},
 	); err != nil {
 		return err
@@ -99,7 +99,9 @@ func registerLifecycleGuardrails(ctx *PluginContext) error {
 	if err := ctx.RegisterLlmSanitizeResponseGuardrail(
 		"llm_sanitize_response",
 		7,
-		func(responseJSON json.RawMessage) json.RawMessage { return responseJSON },
+		func(responseJSON json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) {
+			return responseJSON, false
+		},
 	); err != nil {
 		return err
 	}
@@ -532,10 +534,10 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			return closed.RegisterToolConditionalExecutionGuardrail("tool_conditional", 1, func(name string, args json.RawMessage) *string { return nil })
 		}},
 		{"llm sanitize request", func() error {
-			return closed.RegisterLlmSanitizeRequestGuardrail("llm_sanitize_request", 1, func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) { return headers, content })
+			return closed.RegisterLlmSanitizeRequestGuardrail("llm_sanitize_request", 1, func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) { return request, false })
 		}},
 		{"llm sanitize response", func() error {
-			return closed.RegisterLlmSanitizeResponseGuardrail("llm_sanitize_response", 1, func(response json.RawMessage) json.RawMessage { return response })
+			return closed.RegisterLlmSanitizeResponseGuardrail("llm_sanitize_response", 1, func(response json.RawMessage, _ LLMSanitizeContext) (json.RawMessage, bool) { return response, false })
 		}},
 		{"llm conditional", func() error {
 			return closed.RegisterLlmConditionalExecutionGuardrail("llm_conditional", 1, func(headers, content json.RawMessage) *string { return nil })

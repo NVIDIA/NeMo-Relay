@@ -39,10 +39,10 @@ class _EventSanitizeFields(TypedDict):
 
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
-_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest"], "LLMRequest"]
-_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject], _JsonObject]
-_ContextualLlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest", _JsonObject], Optional["LLMRequest"]]
-_ContextualLlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject, _JsonObject], Optional[_JsonObject]]
+_LlmSanitizeRequestWithContext: TypeAlias = Callable[["LLMRequest", _JsonObject], Optional["LLMRequest"]]
+_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest"], "LLMRequest"] | _LlmSanitizeRequestWithContext
+_LlmSanitizeResponseWithContext: TypeAlias = Callable[[_JsonObject, _JsonObject], Optional[_JsonObject]]
+_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject], _JsonObject] | _LlmSanitizeResponseWithContext
 _EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
@@ -1803,18 +1803,6 @@ def register_llm_sanitize_response_guardrail(
     Returns:
         ``None``.
     """
-    ...
-
-def register_contextual_llm_sanitize_request_guardrail(
-    name: str, priority: int, guardrail: _ContextualLlmSanitizeRequestGuardrail
-) -> None:
-    """Register a contextual LLM request sanitizer invoked as ``guardrail(request, context)``."""
-    ...
-
-def register_contextual_llm_sanitize_response_guardrail(
-    name: str, priority: int, guardrail: _ContextualLlmSanitizeResponseGuardrail
-) -> None:
-    """Register a contextual LLM response sanitizer invoked as ``guardrail(response, context)``."""
     ...
 
 def deregister_llm_sanitize_response_guardrail(name: str) -> bool:

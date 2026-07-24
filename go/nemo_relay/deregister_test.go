@@ -159,8 +159,8 @@ func TestRegisterDeregisterReregisterToolExecutionIntercept(t *testing.T) {
 
 func TestRegisterDeregisterReregisterLlmSanitizeRequestGuardrail(t *testing.T) {
 	name := "go_reregister_llm_san_req"
-	fn := func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
-		return headers, content
+	fn := func(request LLMRequestDTO, _ LLMSanitizeContext) (LLMRequestDTO, bool) {
+		return request, false
 	}
 
 	err := RegisterLlmSanitizeRequestGuardrail(name, 1, fn)
