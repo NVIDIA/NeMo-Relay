@@ -274,7 +274,7 @@ nemo_relay::editor_config! {
         codec => {
             label: "codec",
             kind: Enum,
-            values: ["openai_chat", "openai_responses", "anthropic_messages"],
+            values: ["openai_chat", "openai_responses", "anthropic_messages", "oci_genai"],
             optional: true,
         },
         profiles => { label: "profiles", kind: List, list: &PII_REDACTION_PROFILE_LIST_ITEM },
@@ -500,7 +500,12 @@ fn custom_mark_payload_policy_schema(
 fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
     string_enum_schema(
         generator,
-        &["openai_chat", "openai_responses", "anthropic_messages"],
+        &[
+            "openai_chat",
+            "openai_responses",
+            "anthropic_messages",
+            "oci_genai",
+        ],
         None,
     )
 }
@@ -1137,7 +1142,8 @@ fn validate_codec_requirements(
             "pii_redaction.unsupported_value",
             Some(PII_REDACTION_PLUGIN_KIND.to_string()),
             Some("codec".to_string()),
-            "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'".to_string(),
+            "codec must be 'openai_chat', 'openai_responses', 'anthropic_messages', or 'oci_genai'"
+                .to_string(),
         );
     }
 }

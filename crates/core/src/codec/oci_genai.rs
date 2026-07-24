@@ -50,6 +50,7 @@ use super::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, GenerationParams, Message,
     MessageContent, ProviderNativeComponent, ToolCall, ToolChoice, ToolDefinition,
 };
+use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, ResponseToolCall, Usage,
 };
@@ -61,6 +62,33 @@ use super::traits::{LlmCodec, LlmResponseCodec};
 
 /// Built-in codec for the OCI Generative AI chat API.
 pub struct OCIGenAIChatCodec;
+
+pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDescriptor {
+    surface: ProviderSurface::OCIGenAI,
+    detect_request: |obj, hint| {
+        // The ChatDetails envelope (chatRequest + servingMode/compartmentId) and
+        // the apiFormat discriminator are unique to OCI Generative AI; a bare
+        // chatRequest without apiFormat needs the provider hint to classify.
+        let has_chat_request = obj.get("chatRequest").is_some_and(Json::is_object);
+        let has_envelope_marker =
+            obj.get("servingMode").is_some() || obj.get("compartmentId").is_some();
+        let hinted_oci =
+            hint.is_some_and(|hint_value| hint_value == "oci" || hint_value == "oci.genai");
+        (has_chat_request && has_envelope_marker)
+            || obj.get("apiFormat").is_some()
+            || (hinted_oci && has_chat_request)
+    },
+    detect_response: |obj| match obj.get("chatResponse") {
+        Some(Json::Object(chat_response)) => chat_response.get("apiFormat").is_some(),
+        _ => obj.get("apiFormat").is_some(),
+    },
+    decode_request: |request| OCIGenAIChatCodec.decode(request),
+    decode_response: |raw| OCIGenAIChatCodec.decode_response(raw),
+    codec_name: "oci_genai",
+    request_codec: || std::sync::Arc::new(OCIGenAIChatCodec),
+    response_codec: || std::sync::Arc::new(OCIGenAIChatCodec),
+    streaming_codec: || Box::new(OCIGenAIStreamingCodec::new()),
+};
 
 // ---------------------------------------------------------------------------
 // Optional-field helpers
@@ -1352,6 +1380,299 @@ fn decode_oci_usage(usage: &serde_json::Map<String, Json>) -> Usage {
         cache_read_tokens,
         cache_write_tokens: None,
         cost: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming codec
+// ---------------------------------------------------------------------------
+
+/// Streaming counterpart to [`OCIGenAIChatCodec`].
+///
+/// Replays the OCI Generative AI SSE event sequence into the same JSON shape a
+/// non-streaming `ChatResult` carries (`{modelId, chatResponse: {apiFormat,
+/// ...}}`). Once finalized, the assembled JSON can be fed back through
+/// [`OCIGenAIChatCodec::decode_response`] to produce an
+/// [`AnnotatedLlmResponse`] — meaning streaming and non-streaming OCI requests
+/// converge on the same observability output.
+///
+/// # Strategy
+///
+/// OCI streams untagged chat-response deltas. `GENERIC` events carry
+/// `{index, message: {role, content: [{type: "TEXT", text}], toolCalls}, finishReason}`
+/// fragments whose text and tool-call `arguments` accumulate per choice index;
+/// `COHERE` events carry incremental `{apiFormat: "COHERE", text}` fragments
+/// with `finishReason` on the terminal event. Events wrapped in a
+/// `chatResponse` envelope are unwrapped first, and `modelId`/`usage` are
+/// captured whenever a chunk supplies them.
+///
+/// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced
+/// collector and finalizer closures share access. Each instance is single-use
+/// because [`LlmFinalizerFn`] consumes the finalize step.
+///
+/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+pub struct OCIGenAIStreamingCodec {
+    state: std::sync::Arc<std::sync::Mutex<OCIGenAIStreamingState>>,
+}
+
+impl OCIGenAIStreamingCodec {
+    /// Creates a fresh streaming codec with empty accumulator state.
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(OCIGenAIStreamingState::default())),
+        }
+    }
+}
+
+impl Default for OCIGenAIStreamingCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl super::streaming::StreamingCodec for OCIGenAIStreamingCodec {
+    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move |event: Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(&event);
+            Ok(())
+        })
+    }
+
+    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move || -> Json {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Move state out so finalize can consume it; the codec is single-use, so leaving a
+            // default behind is intentional and never observed by another caller.
+            std::mem::take(&mut *guard).finalize()
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct OCIGenAIStreamingState {
+    model_id: Option<String>,
+    /// Resolved from the first event's `apiFormat`, or inferred from the event
+    /// shape (`message`/`index` => GENERIC, bare `text` => COHERE).
+    api_format: Option<String>,
+    /// Latest non-null usage snapshot; the terminal event's counters win.
+    usage: Option<Json>,
+    /// Per-choice accumulators keyed by `index`. BTreeMap so finalize emits
+    /// choices in stable order.
+    choices: std::collections::BTreeMap<u64, OCIChoiceState>,
+    cohere_text: String,
+    cohere_finish_reason: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct OCIChoiceState {
+    role: Option<String>,
+    text: String,
+    /// Tool calls keyed by their array position; `arguments` fragments
+    /// accumulate, identity fields last-write-win.
+    tool_calls: std::collections::BTreeMap<usize, OCIToolCallState>,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct OCIToolCallState {
+    id: Option<String>,
+    type_: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+impl OCIGenAIStreamingState {
+    fn observe(&mut self, event: &Json) {
+        let Some(obj) = event.as_object() else {
+            return;
+        };
+        // Some transports wrap each delta in the ChatResult envelope; unwrap it.
+        let inner = obj.get("chatResponse").and_then(Json::as_object);
+        if let Some(model_id) = obj.get("modelId").and_then(Json::as_str) {
+            self.model_id = Some(model_id.to_string());
+        }
+        let obj = inner.unwrap_or(obj);
+
+        if self.api_format.is_none() {
+            self.api_format = obj
+                .get("apiFormat")
+                .and_then(Json::as_str)
+                .map(str::to_uppercase)
+                .or_else(|| self.infer_api_format(obj));
+        }
+        if let Some(usage) = obj.get("usage")
+            && !usage.is_null()
+        {
+            self.usage = Some(usage.clone());
+        }
+
+        if self.api_format.as_deref() == Some("COHERE") {
+            if let Some(text) = obj.get("text").and_then(Json::as_str) {
+                self.cohere_text.push_str(text);
+            }
+            if let Some(reason) = obj.get("finishReason").and_then(Json::as_str) {
+                self.cohere_finish_reason = Some(reason.to_string());
+            }
+            return;
+        }
+
+        // GENERIC: the event is either a bare choice delta or carries a
+        // `choices` array of deltas.
+        match obj.get("choices").and_then(Json::as_array) {
+            Some(choices) => {
+                for choice in choices {
+                    if let Some(choice) = choice.as_object() {
+                        self.observe_generic_choice(choice);
+                    }
+                }
+            }
+            None => self.observe_generic_choice(obj),
+        }
+    }
+
+    fn infer_api_format(&self, obj: &serde_json::Map<String, Json>) -> Option<String> {
+        if obj.get("message").is_some()
+            || obj.get("choices").is_some()
+            || obj.get("index").is_some()
+        {
+            Some("GENERIC".to_string())
+        } else if obj.get("text").is_some() {
+            Some("COHERE".to_string())
+        } else {
+            None
+        }
+    }
+
+    fn observe_generic_choice(&mut self, choice: &serde_json::Map<String, Json>) {
+        let index = choice.get("index").and_then(Json::as_u64).unwrap_or(0);
+        let entry = self.choices.entry(index).or_default();
+        if let Some(reason) = choice.get("finishReason").and_then(Json::as_str) {
+            entry.finish_reason = Some(reason.to_string());
+        }
+        let Some(message) = choice.get("message").and_then(Json::as_object) else {
+            return;
+        };
+        if let Some(role) = message.get("role").and_then(Json::as_str) {
+            entry.role = Some(role.to_string());
+        }
+        if let Some(parts) = message.get("content").and_then(Json::as_array) {
+            for part in parts {
+                let Some(part) = part.as_object() else {
+                    continue;
+                };
+                if part.get("type").and_then(Json::as_str) == Some("TEXT")
+                    && let Some(text) = part.get("text").and_then(Json::as_str)
+                {
+                    entry.text.push_str(text);
+                }
+            }
+        }
+        if let Some(tool_calls) = message.get("toolCalls").and_then(Json::as_array) {
+            for (position, tool_call) in tool_calls.iter().enumerate() {
+                if let Some(tool_call) = tool_call.as_object() {
+                    entry.observe_tool_call(position, tool_call);
+                }
+            }
+        }
+    }
+
+    fn finalize(self) -> Json {
+        let api_format = self.api_format.unwrap_or_else(|| "GENERIC".to_string());
+        let mut chat_response = serde_json::Map::new();
+        chat_response.insert("apiFormat".to_string(), Json::String(api_format.clone()));
+        if api_format == "COHERE" {
+            chat_response.insert("text".to_string(), Json::String(self.cohere_text));
+            if let Some(reason) = self.cohere_finish_reason {
+                chat_response.insert("finishReason".to_string(), Json::String(reason));
+            }
+        } else {
+            let choices: Vec<Json> = self
+                .choices
+                .into_iter()
+                .map(|(index, choice)| choice.finalize(index))
+                .collect();
+            chat_response.insert("choices".to_string(), Json::Array(choices));
+        }
+        if let Some(usage) = self.usage {
+            chat_response.insert("usage".to_string(), usage);
+        }
+        let mut output = serde_json::Map::new();
+        if let Some(model_id) = self.model_id {
+            output.insert("modelId".to_string(), Json::String(model_id));
+        }
+        output.insert("chatResponse".to_string(), Json::Object(chat_response));
+        Json::Object(output)
+    }
+}
+
+impl OCIChoiceState {
+    fn observe_tool_call(&mut self, position: usize, tool_call: &serde_json::Map<String, Json>) {
+        let state = self.tool_calls.entry(position).or_default();
+        if let Some(id) = tool_call.get("id").and_then(Json::as_str) {
+            state.id = Some(id.to_string());
+        }
+        if let Some(type_) = tool_call.get("type").and_then(Json::as_str) {
+            state.type_ = Some(type_.to_string());
+        }
+        if let Some(name) = tool_call.get("name").and_then(Json::as_str) {
+            state.name = Some(name.to_string());
+        }
+        if let Some(arguments) = tool_call.get("arguments").and_then(Json::as_str) {
+            state.arguments.push_str(arguments);
+        }
+    }
+
+    fn finalize(self, index: u64) -> Json {
+        let mut message = serde_json::Map::new();
+        message.insert(
+            "role".to_string(),
+            Json::String(self.role.unwrap_or_else(|| "ASSISTANT".to_string())),
+        );
+        message.insert(
+            "content".to_string(),
+            serde_json::json!([{"type": "TEXT", "text": self.text}]),
+        );
+        if !self.tool_calls.is_empty() {
+            let tool_calls: Vec<Json> = self
+                .tool_calls
+                .into_values()
+                .map(OCIToolCallState::finalize)
+                .collect();
+            message.insert("toolCalls".to_string(), Json::Array(tool_calls));
+        }
+        let mut choice = serde_json::Map::new();
+        choice.insert("index".to_string(), Json::Number(index.into()));
+        choice.insert("message".to_string(), Json::Object(message));
+        if let Some(reason) = self.finish_reason {
+            choice.insert("finishReason".to_string(), Json::String(reason));
+        }
+        Json::Object(choice)
+    }
+}
+
+impl OCIToolCallState {
+    fn finalize(self) -> Json {
+        let mut call = serde_json::Map::new();
+        if let Some(id) = self.id {
+            call.insert("id".to_string(), Json::String(id));
+        }
+        call.insert(
+            "type".to_string(),
+            Json::String(self.type_.unwrap_or_else(|| "FUNCTION".to_string())),
+        );
+        call.insert(
+            "name".to_string(),
+            Json::String(self.name.unwrap_or_default()),
+        );
+        call.insert("arguments".to_string(), Json::String(self.arguments));
+        Json::Object(call)
     }
 }
 

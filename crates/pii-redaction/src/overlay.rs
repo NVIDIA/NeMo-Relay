@@ -12,6 +12,7 @@ pub(crate) enum BuiltinCodecName {
     OpenAIChat,
     OpenAIResponses,
     AnthropicMessages,
+    OCIGenAI,
 }
 
 impl BuiltinCodecName {
@@ -20,6 +21,7 @@ impl BuiltinCodecName {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+            ProviderSurface::OCIGenAI => Self::OCIGenAI,
         }
     }
 
@@ -32,6 +34,7 @@ impl BuiltinCodecName {
             Self::OpenAIChat => overlay_openai_chat_response(payload, annotated),
             Self::OpenAIResponses => overlay_openai_responses_response(payload, annotated),
             Self::AnthropicMessages => overlay_anthropic_response(payload, annotated),
+            Self::OCIGenAI => overlay_oci_genai_response(payload, annotated),
         }
     }
 }
@@ -116,6 +119,139 @@ fn overlay_anthropic_response(mut payload: Json, annotated: &AnnotatedLlmRespons
         overlay_anthropic_tool_calls(blocks, annotated.tool_calls.as_deref());
     }
     payload
+}
+
+fn overlay_oci_genai_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+    let Some(root) = payload.as_object_mut() else {
+        return payload;
+    };
+    if root.contains_key("modelId") {
+        set_optional_string_field(root, "modelId", annotated.model.as_deref());
+    }
+    if root.get("chatResponse").is_some_and(Json::is_object) {
+        if let Some(chat_response) = root.get_mut("chatResponse").and_then(Json::as_object_mut) {
+            overlay_oci_chat_response(chat_response, annotated);
+        }
+    } else {
+        overlay_oci_chat_response(root, annotated);
+    }
+    payload
+}
+
+fn overlay_oci_chat_response(
+    chat_response: &mut Map<String, Json>,
+    annotated: &AnnotatedLlmResponse,
+) {
+    let api_format = chat_response
+        .get("apiFormat")
+        .and_then(Json::as_str)
+        .unwrap_or("GENERIC")
+        .to_uppercase();
+
+    if api_format == "COHERE" {
+        set_optional_string_field(
+            chat_response,
+            "text",
+            annotated_message_text(annotated.message.as_ref()).as_deref(),
+        );
+        set_optional_string_field(
+            chat_response,
+            "finishReason",
+            annotated
+                .finish_reason
+                .as_ref()
+                .map(oci_cohere_finish_reason),
+        );
+        return;
+    }
+
+    let Some(choice) = chat_response
+        .get_mut("choices")
+        .and_then(Json::as_array_mut)
+        .and_then(|choices| choices.first_mut())
+        .and_then(Json::as_object_mut)
+    else {
+        return;
+    };
+    set_optional_string_field(
+        choice,
+        "finishReason",
+        annotated
+            .finish_reason
+            .as_ref()
+            .map(oci_generic_finish_reason),
+    );
+    let Some(message) = choice.get_mut("message").and_then(Json::as_object_mut) else {
+        return;
+    };
+    if let Some(blocks) = message.get_mut("content").and_then(Json::as_array_mut) {
+        overlay_oci_text_parts(blocks, annotated_message_text(annotated.message.as_ref()));
+    }
+    overlay_oci_tool_calls(message, annotated.tool_calls.as_deref());
+}
+
+fn overlay_oci_text_parts(blocks: &mut [Json], message_text: Option<String>) {
+    let text_part_count = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Json::as_str) == Some("TEXT"))
+        .count();
+    let parts = message_text
+        .as_deref()
+        .map(|text| text.split('\n').collect::<Vec<_>>());
+    let mut text_part_index = 0usize;
+
+    for block in blocks {
+        if block.get("type").and_then(Json::as_str) != Some("TEXT") {
+            continue;
+        }
+        let Some(block) = block.as_object_mut() else {
+            continue;
+        };
+        if text_part_count <= 1 {
+            set_optional_string_field(block, "text", message_text.as_deref());
+            text_part_index += 1;
+            continue;
+        }
+        let part = parts
+            .as_ref()
+            .and_then(|parts| parts.get(text_part_index).copied())
+            .or_else(|| {
+                (text_part_index == 0)
+                    .then_some(message_text.as_deref())
+                    .flatten()
+            });
+        set_optional_string_field(block, "text", part);
+        text_part_index += 1;
+    }
+}
+
+fn overlay_oci_tool_calls(
+    message: &mut Map<String, Json>,
+    tool_calls: Option<&[ResponseToolCall]>,
+) {
+    let Some(raw_calls) = message.get_mut("toolCalls").and_then(Json::as_array_mut) else {
+        return;
+    };
+    let Some(tool_calls) = tool_calls else {
+        message.remove("toolCalls");
+        return;
+    };
+
+    raw_calls.truncate(tool_calls.len());
+
+    for (raw_call, sanitized_call) in raw_calls.iter_mut().zip(tool_calls.iter()) {
+        let Some(raw_call) = raw_call.as_object_mut() else {
+            message.remove("toolCalls");
+            return;
+        };
+        set_optional_string_field(raw_call, "id", Some(sanitized_call.id.as_str()));
+        set_optional_string_field(raw_call, "name", Some(sanitized_call.name.as_str()));
+        set_optional_string_field(
+            raw_call,
+            "arguments",
+            Some(json_string(&sanitized_call.arguments).as_str()),
+        );
+    }
 }
 
 fn overlay_openai_chat_tool_calls(
@@ -362,6 +498,25 @@ fn anthropic_stop_reason(reason: &FinishReason) -> &str {
         FinishReason::Length => "max_tokens",
         FinishReason::ToolUse => "tool_use",
         FinishReason::ContentFilter => "refusal",
+        FinishReason::Unknown(other) => other.as_str(),
+    }
+}
+
+fn oci_generic_finish_reason(reason: &FinishReason) -> &str {
+    match reason {
+        FinishReason::Complete => "stop",
+        FinishReason::Length => "length",
+        FinishReason::ToolUse => "tool_calls",
+        FinishReason::ContentFilter => "content_filter",
+        FinishReason::Unknown(other) => other.as_str(),
+    }
+}
+
+fn oci_cohere_finish_reason(reason: &FinishReason) -> &str {
+    match reason {
+        FinishReason::Complete => "COMPLETE",
+        FinishReason::Length => "MAX_TOKENS",
+        FinishReason::ToolUse | FinishReason::ContentFilter => "COMPLETE",
         FinishReason::Unknown(other) => other.as_str(),
     }
 }

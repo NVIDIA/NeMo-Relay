@@ -399,7 +399,12 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
     assert!(schema_property_has_enum(
         &schema,
         "codec",
-        &["openai_chat", "openai_responses", "anthropic_messages"]
+        &[
+            "openai_chat",
+            "openai_responses",
+            "anthropic_messages",
+            "oci_genai"
+        ]
     ));
     assert!(schema_property_has_default(
         &schema,
@@ -628,8 +633,9 @@ fn invalid_shapes_and_values_are_reported() {
     })));
     assert!(bad_codec.has_errors());
     assert!(bad_codec.diagnostics.iter().any(|diag| {
-        diag.message
-            .contains("codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'")
+        diag.message.contains(
+            "codec must be 'openai_chat', 'openai_responses', 'anthropic_messages', or 'oci_genai'",
+        )
     }));
 
     let unsupported_remote_codec = validate_plugin_config(&plugin_config(json!({

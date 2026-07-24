@@ -7,7 +7,11 @@ use super::*;
 use serde_json::json;
 
 use super::super::request::{ContentPart, Message, MessageContent, ToolChoice};
+use super::super::resolve::{
+    detect_request_surface, detect_request_surface_with_hint, detect_response_surface,
+};
 use super::super::response::{ApiSpecificResponse, FinishReason};
+use super::super::streaming::StreamingCodec;
 
 // -------------------------------------------------------------------
 // Helpers and fixtures
@@ -989,4 +993,211 @@ fn test_finish_reason_mapping() {
         let annotated = OCIGenAIChatCodec.decode_response(&response).unwrap();
         assert_eq!(annotated.finish_reason, Some(expected), "for {raw}");
     }
+}
+
+// ===================================================================
+// Surface detection tests
+// ===================================================================
+
+#[test]
+fn test_detect_request_envelope_and_api_format() {
+    assert_eq!(
+        detect_request_surface(&generic_chat_details()),
+        Some(ProviderSurface::OCIGenAI)
+    );
+    assert_eq!(
+        detect_request_surface(&cohere_chat_details()),
+        Some(ProviderSurface::OCIGenAI)
+    );
+    // A bare chatRequest carries the apiFormat discriminator.
+    assert_eq!(
+        detect_request_surface(&generic_chat_details()["chatRequest"]),
+        Some(ProviderSurface::OCIGenAI)
+    );
+}
+
+#[test]
+fn test_detect_request_hint_resolves_bare_chat_request() {
+    let bare = json!({"chatRequest": {"messages": []}});
+    assert_eq!(detect_request_surface(&bare), None);
+    assert_eq!(
+        detect_request_surface_with_hint(&bare, Some("oci")),
+        Some(ProviderSurface::OCIGenAI)
+    );
+    assert_eq!(
+        detect_request_surface_with_hint(&bare, Some("oci.genai")),
+        Some(ProviderSurface::OCIGenAI)
+    );
+    assert_eq!(detect_request_surface_with_hint(&bare, Some("other")), None);
+}
+
+#[test]
+fn test_detect_request_does_not_shadow_other_surfaces() {
+    assert_eq!(
+        detect_request_surface(&json!({"messages": []})),
+        Some(ProviderSurface::OpenAIChat)
+    );
+    assert_eq!(
+        detect_request_surface(&json!({"system": "x", "messages": []})),
+        Some(ProviderSurface::AnthropicMessages)
+    );
+    assert_eq!(
+        detect_request_surface(&json!({"input": []})),
+        Some(ProviderSurface::OpenAIResponses)
+    );
+}
+
+#[test]
+fn test_detect_response_chat_result() {
+    assert_eq!(
+        detect_response_surface(&generic_chat_result()),
+        Some(ProviderSurface::OCIGenAI)
+    );
+    assert_eq!(
+        detect_response_surface(&cohere_chat_result()),
+        Some(ProviderSurface::OCIGenAI)
+    );
+    // A bare COHERE chat response has no `choices`, so it stays unambiguous.
+    assert_eq!(
+        detect_response_surface(&cohere_chat_result()["chatResponse"]),
+        Some(ProviderSurface::OCIGenAI)
+    );
+}
+
+#[test]
+fn test_detect_response_bare_generic_is_ambiguous_with_openai_chat() {
+    // A bare GENERIC chat response carries both `apiFormat` and `choices`;
+    // strict response detection refuses ambiguous shapes.
+    assert_eq!(
+        detect_response_surface(&generic_chat_result()["chatResponse"]),
+        None
+    );
+}
+
+#[test]
+fn test_detect_response_does_not_shadow_other_surfaces() {
+    assert_eq!(
+        detect_response_surface(&json!({"choices": []})),
+        Some(ProviderSurface::OpenAIChat)
+    );
+    assert_eq!(
+        detect_response_surface(&json!({"type": "message", "content": []})),
+        Some(ProviderSurface::AnthropicMessages)
+    );
+    assert_eq!(
+        detect_response_surface(&json!({"output": []})),
+        Some(ProviderSurface::OpenAIResponses)
+    );
+}
+
+// ===================================================================
+// Streaming codec tests
+// ===================================================================
+
+#[test]
+fn oci_streaming_codec_assembles_generic_text_response() {
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "modelId": DEDICATED_ENDPOINT,
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "Hello, "}]}
+            }]
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": [{"type": "TEXT", "text": "world."}]}
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": []},
+        "finishReason": "stop",
+        "usage": {"promptTokens": 12, "completionTokens": 3, "totalTokens": 15}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    // Wire-compatible with a ChatResult — feed it back through the decoder.
+    let annotated = OCIGenAIChatCodec.decode_response(&assembled).unwrap();
+    assert_eq!(annotated.model.as_deref(), Some(DEDICATED_ENDPOINT));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Hello, world.".into()))
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+    let usage = annotated.usage.as_ref().unwrap();
+    assert_eq!(usage.prompt_tokens, Some(12));
+    assert_eq!(usage.completion_tokens, Some(3));
+    assert_eq!(usage.total_tokens, Some(15));
+}
+
+#[test]
+fn oci_streaming_codec_accumulates_generic_tool_call_arguments() {
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "apiFormat": "GENERIC",
+        "index": 0,
+        "message": {
+            "role": "ASSISTANT",
+            "content": [],
+            "toolCalls": [{"id": "call-1", "type": "FUNCTION", "name": "get_weather", "arguments": "{\"city\":"}]
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": [], "toolCalls": [{"arguments": " \"NYC\"}"}]},
+        "finishReason": "tool_calls"
+    }))
+    .unwrap();
+
+    let annotated = OCIGenAIChatCodec.decode_response(&finalizer()).unwrap();
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    let tool_calls = annotated.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls[0].id, "call-1");
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "NYC"}));
+}
+
+#[test]
+fn oci_streaming_codec_assembles_cohere_text_response() {
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({"apiFormat": "COHERE", "text": "Sunny"})).unwrap();
+    collector(json!({"apiFormat": "COHERE", "text": " and 72."})).unwrap();
+    collector(json!({
+        "apiFormat": "COHERE",
+        "text": "",
+        "finishReason": "COMPLETE",
+        "usage": {"promptTokens": 8, "completionTokens": 4, "totalTokens": 12}
+    }))
+    .unwrap();
+
+    let annotated = OCIGenAIChatCodec.decode_response(&finalizer()).unwrap();
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Sunny and 72.".into()))
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+    assert_eq!(annotated.usage.as_ref().unwrap().total_tokens, Some(12));
+    assert_eq!(
+        annotated.api_specific,
+        Some(ApiSpecificResponse::OCIGenAI {
+            api_format: Some("COHERE".into()),
+            model_version: None,
+        })
+    );
 }
