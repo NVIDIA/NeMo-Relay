@@ -635,7 +635,7 @@ def tool_fail(name, args):
 def tool_cond_bad(name, args):
     return 123
 
-def llm_sanitize_bad(request):
+def llm_sanitize_bad(request, context):
     return {"bad": True}
 
 def llm_cond_bad(request):
@@ -647,7 +647,7 @@ def llm_cond_none(request):
 def llm_req_bad(name, request):
     return {"bad": True}
 
-def llm_resp_fail(response):
+def llm_resp_fail(response, context):
     raise RuntimeError("resp boom")
 
 def collector_fail(chunk):
@@ -687,10 +687,8 @@ def event_fail(event):
             llm_sanitize(
                 request.clone(),
                 nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
-            )
-            .unwrap()
-            .content,
-            request.content
+            ),
+            None
         );
 
         let llm_cond = wrap_py_llm_conditional_fn(module.getattr("llm_cond_bad").unwrap().unbind());
@@ -730,7 +728,7 @@ def event_fail(event):
                 json!({"ok": true}),
                 nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
             ),
-            Some(json!({"ok": true}))
+            None
         );
 
         let mut collector =

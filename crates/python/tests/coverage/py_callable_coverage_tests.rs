@@ -73,7 +73,7 @@ def collector_ok(chunk):
 def finalizer_bad_json():
     return object()
 
-def llm_resp_bad_json(response):
+def llm_resp_bad_json(response, context):
     return object()
 
 class BadCodec:
@@ -194,7 +194,7 @@ class RaisingResponseCodec:
                 json!({"ok": true}),
                 nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
             ),
-            Some(json!({"ok": true}))
+            None
         );
 
         let bad_codec = PyLlmCodecWrapper {
