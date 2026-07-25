@@ -488,7 +488,7 @@ fn exporter_destinations_describe_observability_outputs() {
                 "kind": OBSERVABILITY_PLUGIN_KIND,
                 "enabled": true,
                 "config": {
-                    "version": 2,
+                    "version": 3,
                     "atof": {
                         "enabled": true,
                         "sinks": [
@@ -510,10 +510,16 @@ fn exporter_destinations_describe_observability_outputs() {
                     },
                     "opentelemetry": {
                         "enabled": true,
-                        "endpoint": "http://127.0.0.1:4318/v1/traces"
-                    },
-                    "openinference": {
-                        "enabled": true
+                        "endpoints": [
+                            {
+                                "type": "full",
+                                "endpoint": "http://127.0.0.1:4318/v1/traces"
+                            },
+                            {
+                                "type": "openinference",
+                                "endpoint": "http://127.0.0.1:4318/v1/traces"
+                            }
+                        ]
                     }
                 }
             }]
@@ -543,12 +549,12 @@ fn exporter_destinations_describe_observability_outputs() {
     assert!(
         destinations
             .iter()
-            .any(|line| line == "OpenTelemetry http://127.0.0.1:4318/v1/traces")
+            .any(|line| line == "OpenTelemetry full http://127.0.0.1:4318/v1/traces")
     );
     assert!(
         destinations
             .iter()
-            .any(|line| line == "OpenInference OTLP endpoint from environment/default")
+            .any(|line| line == "OpenTelemetry openinference http://127.0.0.1:4318/v1/traces")
     );
 }
 

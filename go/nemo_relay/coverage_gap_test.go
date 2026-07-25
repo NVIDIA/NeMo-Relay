@@ -153,17 +153,9 @@ func assertClosedExporterFails(t *testing.T) {
 
 func assertZeroSubscriberConfigs(t *testing.T) {
 	t.Helper()
-	otel, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{})
-	if err != nil {
-		t.Fatalf("NewOpenTelemetrySubscriber with zero config failed: %v", err)
+	if _, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{}); err == nil {
+		t.Fatal("expected a required endpoint error")
 	}
-	otel.Close()
-
-	openInference, err := NewOpenInferenceSubscriber(OpenInferenceConfig{})
-	if err != nil {
-		t.Fatalf("NewOpenInferenceSubscriber with zero config failed: %v", err)
-	}
-	openInference.Close()
 }
 
 func TestWrapperAndCodecFinalizersRun(t *testing.T) {

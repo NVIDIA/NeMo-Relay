@@ -105,6 +105,7 @@ fn reset_runtime() {
 
 fn build_observability_config(bucket: &str, key_prefix: &str) -> PluginConfig {
     let Json::Object(component_config) = json!({
+        "version": 3,
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
@@ -142,6 +143,7 @@ fn build_http_observability_config(endpoints: &[String]) -> PluginConfig {
         })
         .collect::<Vec<_>>();
     let Json::Object(component_config) = json!({
+        "version": 3,
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",

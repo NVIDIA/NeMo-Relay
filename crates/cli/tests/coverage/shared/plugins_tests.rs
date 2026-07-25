@@ -177,7 +177,7 @@ fn typed_editor_model_contains_observability_sections() {
     let schema = ObservabilityConfig::editor_schema();
     let atof = schema.field("atof").unwrap().schema().unwrap();
     let atif = schema.field("atif").unwrap().schema().unwrap();
-    let openinference = schema.field("openinference").unwrap().schema().unwrap();
+    let opentelemetry = schema.field("opentelemetry").unwrap().schema().unwrap();
     let sinks = atof.field("sinks").expect("ATOF sinks field");
     assert_eq!(sinks.kind, EditorFieldKind::List);
     assert_eq!(
@@ -192,19 +192,29 @@ fn typed_editor_model_contains_observability_sections() {
             .iter()
             .any(|field| field.name == "filename_template")
     );
+    let otel_endpoints = opentelemetry.field("endpoints").unwrap();
+    assert_eq!(otel_endpoints.kind, EditorFieldKind::List);
+    let endpoint = otel_endpoints.list_item.unwrap();
+    assert_eq!(endpoint.kind, EditorFieldKind::Section);
+    let endpoint_schema = endpoint.schema.unwrap()();
     assert!(
-        openinference
+        endpoint_schema
+            .fields
+            .iter()
+            .any(|field| field.name == "type")
+    );
+    assert!(
+        endpoint_schema
             .fields
             .iter()
             .any(|field| field.name == "endpoint")
     );
-    let attribute_mappings = openinference.field("attribute_mappings").unwrap();
-    assert_eq!(attribute_mappings.kind, EditorFieldKind::List);
-    let mapping = attribute_mappings.list_item.unwrap();
-    assert_eq!(mapping.kind, EditorFieldKind::Section);
-    let mapping_schema = mapping.schema.unwrap()();
-    assert_eq!(mapping_schema.fields[0].name, "key");
-    assert_eq!(mapping_schema.fields[1].name, "alias");
+    assert!(
+        endpoint_schema
+            .fields
+            .iter()
+            .any(|field| field.name == "header_env")
+    );
 }
 
 #[test]
@@ -834,7 +844,7 @@ fn editor_save_preserves_unknown_observability_fields() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 2,
+                "version": 3,
                 "future_top_level": "preserve",
                 "atof": {
                     "enabled": true,
@@ -2037,7 +2047,7 @@ fn validate_config_reports_plugin_diagnostics() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 2,
+                "version": 3,
                 "atof": {
                     "enabled": true,
                     "sinks": [{

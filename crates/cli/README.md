@@ -34,7 +34,7 @@ The CLI is designed for these tasks:
 - **Configure transparent runs interactively**: Use the setup wizard to write
   project or user configuration for supported agents.
 - **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
-  streams, or OpenInference spans from one shared config model.
+  streams, or typed OpenTelemetry spans from one shared config model.
 - **Diagnose setup readiness**: Check config layers, `plugins.toml` discovery,
   agent binaries, persistent coding-agent integrations, hook status,
   observability outputs, and shell completions with `nemo-relay doctor`.

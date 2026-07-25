@@ -26,7 +26,7 @@ Top-level exports also include:
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
-  ``OpenTelemetrySubscriber``, and ``OpenInferenceSubscriber``
+  and ``OpenTelemetrySubscriber``
 - JSON and callback type aliases used by middleware, typed wrappers, and
   plugin-facing configuration helpers
 
@@ -106,8 +106,6 @@ from nemo_relay._native import (
     LlmSanitizeResponseCodec,
     LlmSanitizeResponseContext,
     MarkEvent,
-    OpenInferenceConfig,
-    OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
     PendingMarkSpec,
@@ -536,8 +534,6 @@ __all__ = [
     "AtofExporterMode",
     "AtofExporterConfig",
     "AtofExporter",
-    "OpenInferenceConfig",
-    "OpenInferenceSubscriber",
     "OpenTelemetryConfig",
     "OpenTelemetrySubscriber",
     "JsonPrimitive",

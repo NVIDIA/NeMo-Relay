@@ -3107,11 +3107,13 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
         );
 
         let invalid_map_shape = cstring(r#"["not-an-object"]"#);
+        let endpoint = cstring("http://localhost:4318/v1/traces");
         let mut otel = ptr::null_mut();
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 invalid_map_shape.as_ptr(),
                 ptr::null(),
                 ptr::null(),
@@ -3125,9 +3127,10 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
         );
         let mut openinference = ptr::null_mut();
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 invalid_map_shape.as_ptr(),
                 ptr::null(),
                 ptr::null(),

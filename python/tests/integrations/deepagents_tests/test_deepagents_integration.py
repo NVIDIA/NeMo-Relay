@@ -628,10 +628,9 @@ def test_e2e_agent_exports_openinference_output_contract(
     agent = create_deep_agent(**kwargs)
 
     with _OtelCollector() as collector:
-        config = nemo_relay.OpenInferenceConfig()
-        config.endpoint = collector.endpoint
+        config = nemo_relay.OpenTelemetryConfig("openinference", collector.endpoint)
         config.service_name = "deepagents-test"
-        subscriber = nemo_relay.OpenInferenceSubscriber(config)
+        subscriber = nemo_relay.OpenTelemetrySubscriber(config)
         subscriber_name = f"deepagents_openinference_{uuid4().hex}"
         event_recorder_name = f"deepagents_events_{uuid4().hex}"
         subscriber.register(subscriber_name)

@@ -91,12 +91,6 @@ from nemo_relay._native import (
     MarkEvent as MarkEvent,
 )
 from nemo_relay._native import (
-    OpenInferenceConfig as OpenInferenceConfig,
-)
-from nemo_relay._native import (
-    OpenInferenceSubscriber as OpenInferenceSubscriber,
-)
-from nemo_relay._native import (
     OpenTelemetryConfig as OpenTelemetryConfig,
 )
 from nemo_relay._native import (

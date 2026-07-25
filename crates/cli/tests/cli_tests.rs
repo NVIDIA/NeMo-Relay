@@ -896,6 +896,7 @@ fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
 }
 
 fn write_test_tls_identity(bootstrap_dir: &Path) -> Arc<rustls::ServerConfig> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     std::fs::create_dir_all(bootstrap_dir).unwrap();
     std::fs::write(
@@ -1916,10 +1917,18 @@ fn cli_plugins_validate_rejects_malformed_python_entrypoints_by_path_and_id() {
 #[test]
 fn cli_plugins_list_json_emits_empty_versioned_success_output() {
     let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
     let output = Command::new(gateway_bin())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "list", "--json"])
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "plugins",
+            "list",
+            "--json",
+        ])
         .output()
         .unwrap();
 
@@ -3242,7 +3251,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 3
 
 [components.config.atof]
 enabled = true

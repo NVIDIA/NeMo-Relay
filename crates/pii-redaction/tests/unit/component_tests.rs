@@ -34,9 +34,9 @@ use crate::plugin::{
     list_plugin_kinds, rollback_registrations, validate_plugin_config,
 };
 use futures::StreamExt;
+use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
@@ -2183,8 +2183,11 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
         .build();
-    let openinference =
-        OpenInferenceSubscriber::from_tracer_provider(openinference_provider, "pii-regression");
+    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        openinference_provider,
+        "pii-regression",
+        OpenTelemetryType::OpenInference,
+    );
     openinference
         .register("pii-regression-openinference")
         .unwrap();

@@ -63,10 +63,6 @@ pub struct FfiAtifExporter(pub nemo_relay::observability::atif::AtifExporter);
 pub struct FfiAtofExporter(pub nemo_relay::observability::atof::AtofExporter);
 /// Opaque OpenTelemetry subscriber handle.
 pub struct FfiOpenTelemetrySubscriber(pub nemo_relay::observability::otel::OpenTelemetrySubscriber);
-/// Opaque OpenInference subscriber handle.
-pub struct FfiOpenInferenceSubscriber(
-    pub nemo_relay::observability::openinference::OpenInferenceSubscriber,
-);
 /// Opaque owned adaptive runtime handle.
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
 /// Opaque owned dynamic plugin host activation.
@@ -265,21 +261,6 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_free(ptr: *mut FfiAtofExporter
 /// `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
-    if !ptr.is_null() {
-        drop(unsafe { Box::from_raw(ptr) });
-    }
-}
-
-/// Free an OpenInference subscriber handle previously returned by
-/// `nemo_relay_openinference_subscriber_create`.
-///
-/// # Safety
-/// `ptr` must be a valid pointer returned by
-/// `nemo_relay_openinference_subscriber_create`, or null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_openinference_subscriber_free(
-    ptr: *mut FfiOpenInferenceSubscriber,
-) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

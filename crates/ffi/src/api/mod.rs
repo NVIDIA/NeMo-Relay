@@ -34,13 +34,13 @@ use crate::error::{
     NemoRelayStatus, clear_last_error, last_error_message, set_last_error, status_from_error,
     status_from_plugin_error,
 };
+pub use crate::types::nemo_relay_otel_subscriber_free;
 use crate::types::{
     FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest,
-    FfiLlmSanitizeRequestCodec, FfiLlmSanitizeResponseCodec, FfiOpenInferenceSubscriber,
-    FfiOpenTelemetrySubscriber, FfiPluginActivation, FfiPluginContext, FfiScopeHandle,
-    FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
+    FfiLlmSanitizeRequestCodec, FfiLlmSanitizeResponseCodec, FfiOpenTelemetrySubscriber,
+    FfiPluginActivation, FfiPluginContext, FfiScopeHandle, FfiScopeStack,
+    FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
 };
-pub use crate::types::{nemo_relay_openinference_subscriber_free, nemo_relay_otel_subscriber_free};
 use libc::c_char;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};

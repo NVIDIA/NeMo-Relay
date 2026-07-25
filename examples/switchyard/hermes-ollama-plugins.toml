@@ -54,6 +54,9 @@ base_url = "http://127.0.0.1:11434"
 kind = "observability"
 enabled = true
 
+[components.config]
+version = 3
+
 [components.config.atof]
 enabled = true
 
@@ -84,6 +87,9 @@ filename_template = "trajectory-{session_id}.atif.json"
 
 [components.config.opentelemetry]
 enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "full"
 transport = "http_binary"
 endpoint = "http://127.0.0.1:4318/v1/traces"
 service_name = "nemo-relay-switchyard-e2e"
@@ -91,6 +97,6 @@ service_namespace = "switchyard-integration"
 instrumentation_scope = "nemo-relay-switchyard"
 timeout_millis = 5000
 
-[components.config.opentelemetry.resource_attributes]
+[components.config.opentelemetry.endpoints.resource_attributes]
 "deployment.environment.name" = "local-e2e"
 "switchyard.profile.id" = "hermes-ollama-stage-router"

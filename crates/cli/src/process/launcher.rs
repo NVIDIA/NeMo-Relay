@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::plugin_component::{
     AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
@@ -693,30 +694,17 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
         .as_ref()
         .filter(|section| section.enabled)
     {
-        destinations.push(format!(
-            "OpenTelemetry {}",
-            section
-                .endpoint
-                .as_deref()
-                .map(sanitized_url)
-                .as_deref()
-                .unwrap_or("OTLP endpoint from environment/default")
-        ));
-    }
-    if let Some(section) = config
-        .openinference
-        .as_ref()
-        .filter(|section| section.enabled)
-    {
-        destinations.push(format!(
-            "OpenInference {}",
-            section
-                .endpoint
-                .as_deref()
-                .map(sanitized_url)
-                .as_deref()
-                .unwrap_or("OTLP endpoint from environment/default")
-        ));
+        for endpoint in &section.endpoints {
+            let endpoint_type = match endpoint.otel_type {
+                OpenTelemetryType::Full => "full",
+                OpenTelemetryType::GenAi => "gen_ai",
+                OpenTelemetryType::OpenInference => "openinference",
+            };
+            destinations.push(format!(
+                "OpenTelemetry {endpoint_type} {}",
+                sanitized_url(&endpoint.endpoint)
+            ));
+        }
     }
     destinations
 }

@@ -277,8 +277,8 @@ Exporters handle the mark as follows:
 - ATOF preserves the canonical mark event.
 - ATIF omits marks because it models trajectory steps rather than independent
   point-in-time events.
-- OpenTelemetry and OpenInference apply their configured `mark_projection` to
-  parented marks.
+- The `full` and `openinference` OpenTelemetry projections use their fixed
+  native mark handling. The `gen_ai` projection omits marks.
 
 ## How Events Are Produced
 
@@ -289,5 +289,5 @@ the runtime record important state transitions even when there is no full nested
 callback to wrap. Subscriber delivery is downstream from event construction and
 does not block the emitting call on native bindings.
 
-ATOF export writes this raw canonical event stream. ATIF, OpenTelemetry, and
-OpenInference are downstream projections over the same events.
+ATOF export writes this raw canonical event stream. ATIF and the typed
+OpenTelemetry formats are downstream projections over the same events.

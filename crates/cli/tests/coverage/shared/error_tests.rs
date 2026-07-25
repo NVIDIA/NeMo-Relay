@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
-use nemo_relay::observability::openinference::OpenInferenceError;
 
 use super::*;
 
@@ -69,10 +68,6 @@ fn log_kinds_cover_every_operational_error_class() {
         (
             CliError::Flow(FlowError::Internal("runtime".into())),
             "runtime",
-        ),
-        (
-            CliError::OpenInference(OpenInferenceError::Provider("export".into())),
-            "openinference",
         ),
     ];
 

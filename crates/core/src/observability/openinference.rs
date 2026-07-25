@@ -3,855 +3,31 @@
 
 //! OpenInference subscriber support for NeMo Relay.
 //!
-//! This crate adapts NeMo Relay lifecycle events into OpenInference trace spans:
-//!
-//! - scope/tool/LLM `Start` events open spans
-//! - matching `End` events close spans
-//! - `Mark` events become span events by default, with an optional OpenInference tool projection
-//! - orphan marks fall back to zero-duration spans so they still reach OTLP
-//!
-//! The public API is intentionally small:
-//!
-//! - [`OpenInferenceConfig`] configures the OTLP exporter and OpenInference metadata
-//! - [`OpenInferenceSubscriber`] exposes a NeMo Relay [`EventSubscriberFn`] and
-//!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
-
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+//! Projection functions used by the unified OpenTelemetry subscriber.
 
 use super::{
-    MarkProjection, OtlpAttributeMapping, apply_attribute_mappings, attribute_mapping_aliases,
-    attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
     merge_usage, model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_session_identity_attributes, push_top_level_json_attributes, relay_span_id,
-    relay_trace_id, validate_attribute_mappings,
+    push_top_level_json_attributes,
 };
-use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
-use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
+use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::scope::ScopeType;
-use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
 use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
-use crate::error::FlowError;
 use crate::json::Json;
+#[cfg(test)]
 use chrono::{DateTime, Utc};
-use openinference_semantic_conventions::SpanKind as OpenInferenceSpanKind;
-use openinference_semantic_conventions::attributes as oi;
-use opentelemetry::trace::{
-    Span as _, SpanContext, SpanKind, TraceContextExt, TraceFlags, TraceState, Tracer,
-    TracerProvider as _,
-};
-use opentelemetry::{Context, KeyValue};
-use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider, Span};
+use opentelemetry::KeyValue;
+#[cfg(test)]
+use opentelemetry::trace::SpanContext;
+use opentelemetry::trace::SpanKind;
 use serde::Serialize;
-use uuid::Uuid;
+#[cfg(test)]
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
-
-use opentelemetry_otlp::WithTonicConfig;
-use tokio::runtime::Handle;
-use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
-
-/// Result type for the OpenInference subscriber crate.
-pub type Result<T> = std::result::Result<T, OpenInferenceError>;
-
-/// Errors produced while configuring or operating the OpenInference subscriber.
-#[derive(Debug, thiserror::Error)]
-pub enum OpenInferenceError {
-    /// The tonic gRPC exporter requires an active Tokio runtime.
-    #[error("the OTLP gRPC exporter requires an active Tokio runtime")]
-    MissingTokioRuntime,
-    /// Failed to parse a configured gRPC metadata header.
-    #[error("invalid OTLP gRPC header {key:?}: {message}")]
-    InvalidGrpcHeader {
-        /// Header name that failed to parse.
-        key: String,
-        /// Parser failure message.
-        message: String,
-    },
-    /// Failed to build the OTLP exporter.
-    #[error("failed to build the OTLP exporter: {0}")]
-    ExporterBuild(String),
-    /// The underlying tracer provider returned an error.
-    #[error("OpenInference tracer provider error: {0}")]
-    Provider(String),
-    /// Attribute mapping configuration was invalid.
-    #[error("invalid attribute mappings: {0}")]
-    InvalidAttributeMappings(String),
-    /// Registration errors from the core runtime.
-    #[error(transparent)]
-    Core(#[from] FlowError),
-}
-
-/// Supported OTLP trace transports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OtlpTransport {
-    /// OTLP/HTTP protobuf, typically `http://host:4318/v1/traces`.
-    #[default]
-    HttpBinary,
-    /// OTLP/gRPC, typically `http://host:4317`.
-    Grpc,
-}
-
-/// Configuration for the OpenInference subscriber.
-#[derive(Debug, Clone)]
-pub struct OpenInferenceConfig {
-    endpoint: Option<String>,
-    headers: HashMap<String, String>,
-    resource_attributes: HashMap<String, String>,
-    service_name: String,
-    service_namespace: Option<String>,
-    service_version: Option<String>,
-    instrumentation_scope: String,
-    mark_projection: MarkProjection,
-    mark_exclude_names: Vec<String>,
-    attribute_mappings: Vec<OtlpAttributeMapping>,
-    timeout: Duration,
-    transport: OtlpTransport,
-}
-
-impl Default for OpenInferenceConfig {
-    fn default() -> Self {
-        Self {
-            endpoint: None,
-            headers: HashMap::new(),
-            resource_attributes: HashMap::new(),
-            service_name: "nemo-relay".to_string(),
-            service_namespace: None,
-            service_version: None,
-            instrumentation_scope: "nemo-relay-openinference".to_string(),
-            mark_projection: MarkProjection::default(),
-            mark_exclude_names: default_mark_exclude_names(),
-            attribute_mappings: Vec::new(),
-            timeout: Duration::from_secs(3),
-            transport: OtlpTransport::HttpBinary,
-        }
-    }
-}
-
-impl OpenInferenceConfig {
-    /// Creates a config with sensible defaults.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Selects the OTLP transport.
-    pub fn with_transport(mut self, transport: OtlpTransport) -> Self {
-        self.transport = transport;
-        self
-    }
-
-    /// Sets the `service.name` resource attribute.
-    pub fn with_service_name(mut self, service_name: impl Into<String>) -> Self {
-        self.service_name = service_name.into();
-        self
-    }
-
-    /// Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
-    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
-        self.endpoint = Some(endpoint.into());
-        self
-    }
-
-    /// Adds a header/metadata entry for the exporter.
-    pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.insert(key.into(), value.into());
-        self
-    }
-
-    /// Adds a resource attribute as a string key/value pair.
-    pub fn with_resource_attribute(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
-        self.resource_attributes.insert(key.into(), value.into());
-        self
-    }
-
-    /// Sets the OTLP request timeout.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// Sets the service namespace resource attribute.
-    pub fn with_service_namespace(mut self, namespace: impl Into<String>) -> Self {
-        self.service_namespace = Some(namespace.into());
-        self
-    }
-
-    /// Sets the service version resource attribute.
-    pub fn with_service_version(mut self, version: impl Into<String>) -> Self {
-        self.service_version = Some(version.into());
-        self
-    }
-
-    /// Sets the instrumentation scope name used for emitted spans.
-    pub fn with_instrumentation_scope(mut self, scope: impl Into<String>) -> Self {
-        self.instrumentation_scope = scope.into();
-        self
-    }
-
-    /// Selects how point-in-time marks are represented in exported traces.
-    pub fn with_mark_projection(mut self, mark_projection: MarkProjection) -> Self {
-        self.mark_projection = mark_projection;
-        self
-    }
-
-    /// Excludes named marks from tool projection while preserving their native
-    /// event representation. The default excludes high-volume `llm.chunk`
-    /// marks.
-    pub fn with_mark_exclude_names<I, S>(mut self, names: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.mark_exclude_names = names.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Adds a typed attribute copy after event payload projection.
-    pub fn with_attribute_mapping(
-        mut self,
-        key: impl Into<String>,
-        alias: impl Into<String>,
-    ) -> Self {
-        self.attribute_mappings
-            .push(OtlpAttributeMapping::new(key, alias));
-        self
-    }
-
-    /// Replaces the configured typed attribute copies.
-    pub fn with_attribute_mappings<I>(mut self, mappings: I) -> Self
-    where
-        I: IntoIterator<Item = OtlpAttributeMapping>,
-    {
-        self.attribute_mappings = mappings.into_iter().collect();
-        self
-    }
-}
-
-/// OpenInference-backed NeMo Relay subscriber.
-#[derive(Clone)]
-pub struct OpenInferenceSubscriber {
-    inner: Arc<Inner>,
-}
-
-/// Options for constructing an OpenInference subscriber from an existing tracer provider.
-#[derive(Debug, Clone)]
-pub struct OpenInferenceSubscriberOptions {
-    /// How mark events are projected into the trace.
-    pub mark_projection: MarkProjection,
-    /// Mark names excluded from tool projection.
-    pub mark_exclude_names: Vec<String>,
-    /// Typed OTLP attributes copied to alias keys.
-    pub attribute_mappings: Vec<OtlpAttributeMapping>,
-}
-
-impl Default for OpenInferenceSubscriberOptions {
-    fn default() -> Self {
-        Self {
-            mark_projection: MarkProjection::default(),
-            mark_exclude_names: default_mark_exclude_names(),
-            attribute_mappings: Vec::new(),
-        }
-    }
-}
-
-struct Inner {
-    processor: Arc<Mutex<OpenInferenceEventProcessor>>,
-    subscriber: EventSubscriberFn,
-}
-
-impl OpenInferenceSubscriber {
-    /// Builds a subscriber backed by a new OTLP tracer provider.
-    pub fn new(config: OpenInferenceConfig) -> Result<Self> {
-        if config.transport == OtlpTransport::Grpc && tokio::runtime::Handle::try_current().is_err()
-        {
-            return Err(OpenInferenceError::MissingTokioRuntime);
-        }
-        validate_attribute_mappings(&config.attribute_mappings)
-            .map_err(OpenInferenceError::InvalidAttributeMappings)?;
-
-        let provider = build_tracer_provider(&config)?;
-        Ok(Self::from_tracer_provider_with_scope(
-            provider,
-            config.instrumentation_scope,
-            config.mark_projection,
-            config.mark_exclude_names,
-            config.attribute_mappings,
-        ))
-    }
-
-    /// Builds a subscriber from an already-configured tracer provider.
-    pub fn from_tracer_provider(
-        provider: SdkTracerProvider,
-        instrumentation_scope: impl Into<String>,
-    ) -> Self {
-        Self::from_tracer_provider_with_scope(
-            provider,
-            instrumentation_scope.into(),
-            MarkProjection::default(),
-            default_mark_exclude_names(),
-            Vec::new(),
-        )
-    }
-
-    /// Builds a subscriber from a tracer provider with an explicit mark projection.
-    pub fn from_tracer_provider_with_mark_projection(
-        provider: SdkTracerProvider,
-        instrumentation_scope: impl Into<String>,
-        mark_projection: MarkProjection,
-    ) -> Self {
-        Self::from_tracer_provider_with_scope(
-            provider,
-            instrumentation_scope.into(),
-            mark_projection,
-            default_mark_exclude_names(),
-            Vec::new(),
-        )
-    }
-
-    /// Builds a subscriber with explicit mark projection and exclusion names.
-    pub fn from_tracer_provider_with_mark_projection_and_exclusions<I, S>(
-        provider: SdkTracerProvider,
-        instrumentation_scope: impl Into<String>,
-        mark_projection: MarkProjection,
-        mark_exclude_names: I,
-    ) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Self::from_tracer_provider_with_scope(
-            provider,
-            instrumentation_scope.into(),
-            mark_projection,
-            mark_exclude_names.into_iter().map(Into::into).collect(),
-            Vec::new(),
-        )
-    }
-
-    /// Builds a subscriber from a tracer provider with typed attribute copies.
-    pub fn from_tracer_provider_with_attribute_mappings<I>(
-        provider: SdkTracerProvider,
-        instrumentation_scope: impl Into<String>,
-        attribute_mappings: I,
-    ) -> Result<Self>
-    where
-        I: IntoIterator<Item = OtlpAttributeMapping>,
-    {
-        let attribute_mappings = attribute_mappings.into_iter().collect::<Vec<_>>();
-        Self::from_tracer_provider_with_options(
-            provider,
-            instrumentation_scope,
-            OpenInferenceSubscriberOptions {
-                attribute_mappings,
-                ..Default::default()
-            },
-        )
-    }
-
-    /// Builds a subscriber from a tracer provider with composable projection options.
-    pub fn from_tracer_provider_with_options(
-        provider: SdkTracerProvider,
-        instrumentation_scope: impl Into<String>,
-        options: OpenInferenceSubscriberOptions,
-    ) -> Result<Self> {
-        validate_attribute_mappings(&options.attribute_mappings)
-            .map_err(OpenInferenceError::InvalidAttributeMappings)?;
-        Ok(Self::from_tracer_provider_with_scope(
-            provider,
-            instrumentation_scope.into(),
-            options.mark_projection,
-            options.mark_exclude_names,
-            options.attribute_mappings,
-        ))
-    }
-
-    fn from_tracer_provider_with_scope(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-        attribute_mappings: Vec<OtlpAttributeMapping>,
-    ) -> Self {
-        let processor = Arc::new(Mutex::new(
-            OpenInferenceEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
-                provider,
-                instrumentation_scope,
-                mark_projection,
-                mark_exclude_names,
-                attribute_mappings,
-            ),
-        ));
-        let processor_for_callback = Arc::clone(&processor);
-        let subscriber: EventSubscriberFn = Arc::new(move |event: &Event| {
-            let Ok(mut guard) = processor_for_callback.lock() else {
-                // Observability should not take down the host process if the
-                // subscriber state was previously poisoned.
-                return;
-            };
-            guard.process(event);
-        });
-
-        Self {
-            inner: Arc::new(Inner {
-                processor,
-                subscriber,
-            }),
-        }
-    }
-
-    /// Returns the raw NeMo Relay subscriber callback for custom registration flows.
-    pub fn subscriber(&self) -> EventSubscriberFn {
-        Arc::clone(&self.inner.subscriber)
-    }
-
-    /// Registers this subscriber globally with the NeMo Relay runtime.
-    pub fn register(&self, name: &str) -> Result<()> {
-        register_subscriber(name, self.subscriber())?;
-        log::info!(
-            target: "nemo_relay.observability",
-            event = "exporter_registered",
-            exporter = "openinference",
-            subscriber = name;
-            "OpenInference exporter registered"
-        );
-        Ok(())
-    }
-
-    /// Deregisters a previously-registered global subscriber by name.
-    pub fn deregister(&self, name: &str) -> Result<bool> {
-        let removed = deregister_subscriber(name)?;
-        if removed {
-            log::info!(
-                target: "nemo_relay.observability",
-                event = "subscriber_deregistered",
-                subscriber = name;
-                "Observability subscriber deregistered"
-            );
-        }
-        Ok(removed)
-    }
-
-    /// Flushes finished spans through the underlying tracer provider.
-    pub fn force_flush(&self) -> Result<()> {
-        flush_subscribers()?;
-        let guard = self.inner.processor.lock().map_err(|_| {
-            OpenInferenceError::Provider("the subscriber state lock was poisoned".to_string())
-        })?;
-        guard.force_flush()
-    }
-
-    /// Shuts down the underlying tracer provider.
-    ///
-    /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
-    pub fn shutdown(&self) -> Result<()> {
-        flush_subscribers()?;
-        let guard = self.inner.processor.lock().map_err(|_| {
-            OpenInferenceError::Provider("the subscriber state lock was poisoned".to_string())
-        })?;
-        let result = guard.shutdown();
-        if result.is_ok() {
-            log::info!(
-                target: "nemo_relay.observability",
-                event = "exporter_shutdown",
-                exporter = "openinference";
-                "OpenInference exporter shut down"
-            );
-        }
-        result
-    }
-}
-
-fn build_tracer_provider(config: &OpenInferenceConfig) -> Result<SdkTracerProvider> {
-    let exporter = match config.transport {
-        OtlpTransport::HttpBinary => {
-            let mut builder = SpanExporter::builder()
-                .with_http()
-                .with_protocol(Protocol::HttpBinary)
-                .with_timeout(config.timeout);
-            if let Some(endpoint) = &config.endpoint {
-                builder = builder.with_endpoint(endpoint.clone());
-            }
-            if !config.headers.is_empty() {
-                builder = builder.with_headers(config.headers.clone());
-            }
-            builder
-                .build()
-                .map_err(|e| OpenInferenceError::ExporterBuild(e.to_string()))?
-        }
-        OtlpTransport::Grpc => {
-            let mut builder = SpanExporter::builder()
-                .with_tonic()
-                .with_protocol(Protocol::Grpc)
-                .with_timeout(config.timeout);
-            if let Some(endpoint) = &config.endpoint {
-                builder = builder.with_endpoint(endpoint.clone());
-            }
-            if !config.headers.is_empty() {
-                builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
-            }
-            builder
-                .build()
-                .map_err(|e| OpenInferenceError::ExporterBuild(e.to_string()))?
-        }
-    };
-
-    let mut resource_attributes = vec![KeyValue::new("service.name", config.service_name.clone())];
-    if let Some(service_namespace) = &config.service_namespace {
-        resource_attributes.push(KeyValue::new(
-            "service.namespace",
-            service_namespace.clone(),
-        ));
-    }
-    if let Some(service_version) = &config.service_version {
-        resource_attributes.push(KeyValue::new("service.version", service_version.clone()));
-    }
-    for (key, value) in &config.resource_attributes {
-        resource_attributes.push(KeyValue::new(key.clone(), value.clone()));
-    }
-
-    // Disable per-span attribute caps. OpenInference emits many flat
-    // `llm.input_messages.*` attributes on long conversations; the OTel SDK
-    // default (128) silently drops attributes added last in the span's
-    // lifecycle, notably `llm.token_count.*` emitted at span end.
-    let builder = SdkTracerProvider::builder()
-        .with_resource(
-            Resource::builder_empty()
-                .with_attributes(resource_attributes)
-                .build(),
-        )
-        .with_max_attributes_per_span(u32::MAX)
-        .with_max_attributes_per_event(u32::MAX);
-
-    if Handle::try_current().is_ok() {
-        Ok(builder.with_batch_exporter(exporter).build())
-    } else {
-        Ok(builder.with_simple_exporter(exporter).build())
-    }
-}
-
-fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
-    for (key, value) in headers {
-        let metadata_key = MetadataKey::from_bytes(key.as_bytes()).map_err(|e| {
-            OpenInferenceError::InvalidGrpcHeader {
-                key: key.clone(),
-                message: e.to_string(),
-            }
-        })?;
-        let metadata_value = MetadataValue::try_from(value.as_str()).map_err(|e| {
-            OpenInferenceError::InvalidGrpcHeader {
-                key: key.clone(),
-                message: e.to_string(),
-            }
-        })?;
-        metadata.insert(metadata_key, metadata_value);
-    }
-    Ok(metadata)
-}
-
-struct ActiveSpan {
-    span: Span,
-    span_context: SpanContext,
-    start_model_name: Option<String>,
-    projected_attributes: Vec<KeyValue>,
-}
-
-struct OpenInferenceEventProcessor {
-    active_spans: HashMap<Uuid, ActiveSpan>,
-    completed_span_contexts: HashMap<Uuid, SpanContext>,
-    completed_span_order: VecDeque<Uuid>,
-    provider: SdkTracerProvider,
-    tracer: SdkTracer,
-    mark_projection: MarkProjection,
-    mark_exclude_names: Vec<String>,
-    attribute_mappings: Vec<OtlpAttributeMapping>,
-}
-
-impl OpenInferenceEventProcessor {
-    #[cfg(test)]
-    fn new(provider: SdkTracerProvider, instrumentation_scope: String) -> Self {
-        Self::new_with_mark_projection(provider, instrumentation_scope, MarkProjection::default())
-    }
-
-    #[cfg(test)]
-    fn new_with_mark_projection(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions(
-            provider,
-            instrumentation_scope,
-            mark_projection,
-            default_mark_exclude_names(),
-        )
-    }
-
-    #[cfg(test)]
-    fn new_with_mark_projection_and_exclusions(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions_and_mappings(
-            provider,
-            instrumentation_scope,
-            mark_projection,
-            mark_exclude_names,
-            Vec::new(),
-        )
-    }
-
-    fn new_with_mark_projection_and_exclusions_and_mappings(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-        attribute_mappings: Vec<OtlpAttributeMapping>,
-    ) -> Self {
-        let tracer = provider.tracer(instrumentation_scope);
-        Self {
-            active_spans: HashMap::new(),
-            completed_span_contexts: HashMap::new(),
-            completed_span_order: VecDeque::new(),
-            provider,
-            tracer,
-            mark_projection,
-            mark_exclude_names,
-            attribute_mappings,
-        }
-    }
-
-    fn process(&mut self, event: &Event) {
-        match event.scope_category() {
-            Some(ScopeCategory::Start) => self.process_start(event),
-            Some(ScopeCategory::End) => self.process_end(event),
-            None => self.process_mark(event),
-        }
-    }
-
-    fn force_flush(&self) -> Result<()> {
-        self.provider
-            .force_flush()
-            .map_err(|e| OpenInferenceError::Provider(e.to_string()))
-    }
-
-    fn shutdown(&self) -> Result<()> {
-        self.provider
-            .shutdown()
-            .map_err(|e| OpenInferenceError::Provider(e.to_string()))
-    }
-
-    fn process_start(&mut self, event: &Event) {
-        self.remove_completed_span_context(event.uuid());
-        let parent_context = self.parent_context(event);
-        let is_trace_root = !parent_context.span().span_context().is_valid();
-        let start_model_name = model_name_for_llm_event(event);
-        let mut span = self
-            .tracer
-            .span_builder(span_name(event))
-            .with_kind(span_kind(event))
-            .with_start_time(to_system_time(*event.timestamp()))
-            .with_trace_id(relay_trace_id(event.uuid()))
-            .with_span_id(relay_span_id(event.uuid()))
-            .start_with_context(&self.tracer, &parent_context);
-        let mut attributes = start_attributes(event);
-        if start_model_name.is_some() {
-            attributes.retain(|attribute| attribute.key.as_str() != oi::llm::MODEL_NAME.as_str());
-        }
-        if is_trace_root {
-            push_session_identity_attributes(&mut attributes, event);
-        }
-        let projected_attributes = attribute_mapping_inputs(&attributes, &self.attribute_mappings);
-        span.set_attributes(attributes);
-        let span_context = local_parent_span_context(span.span_context());
-        self.active_spans.insert(
-            event.uuid(),
-            ActiveSpan {
-                span,
-                span_context,
-                start_model_name,
-                projected_attributes,
-            },
-        );
-    }
-
-    fn process_end(&mut self, event: &Event) {
-        let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
-            return;
-        };
-        self.record_completed_span_context(event.uuid(), active_span.span_context.clone());
-        super::set_span_status_from_event_metadata(&mut active_span.span, event);
-        let mut attributes = end_attributes(event);
-        if let Some(model_name) = model_name_for_llm_event(event).or(active_span.start_model_name) {
-            attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name));
-        }
-        if !self.attribute_mappings.is_empty() {
-            let mut projected_attributes = active_span.projected_attributes;
-            projected_attributes.extend(attributes.iter().cloned());
-            attributes.extend(attribute_mapping_aliases(
-                &projected_attributes,
-                &self.attribute_mappings,
-            ));
-        }
-        active_span.span.set_attributes(attributes);
-        active_span
-            .span
-            .end_with_timestamp(to_system_time(*event.timestamp()));
-    }
-
-    fn process_mark(&mut self, event: &Event) {
-        if effective_mark_projection(event, self.mark_projection, &self.mark_exclude_names)
-            == MarkProjection::Tool
-        {
-            self.process_mark_as_tool(event);
-            return;
-        }
-        let mark_name = event.name().to_string();
-        let timestamp = to_system_time(*event.timestamp());
-        let mut attributes = mark_attributes(event);
-        if event.name() == "session.start" {
-            push_session_identity_attributes(&mut attributes, event);
-        }
-
-        if self.find_parent_span(event).is_some() {
-            apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
-            let parent_span = self
-                .find_parent_span_mut(event)
-                .expect("parent span was present during mark projection");
-            parent_span
-                .span
-                .add_event_with_timestamp(mark_name, timestamp, attributes);
-            return;
-        }
-
-        let mut span = self
-            .tracer
-            .span_builder(format!("mark:{mark_name}"))
-            .with_kind(SpanKind::Internal)
-            .with_start_time(timestamp)
-            .with_trace_id(relay_trace_id(event.uuid()))
-            .with_span_id(relay_span_id(event.uuid()))
-            .start_with_context(&self.tracer, &self.parent_context(event));
-        attributes.push(KeyValue::new(
-            oi::OPENINFERENCE_SPAN_KIND,
-            OpenInferenceSpanKind::Chain,
-        ));
-        attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
-        apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
-        span.set_attributes(attributes);
-        span.end_with_timestamp(timestamp);
-    }
-
-    fn process_mark_as_tool(&mut self, event: &Event) {
-        let timestamp = to_system_time(*event.timestamp());
-        let orphan = self.find_parent_span(event).is_none();
-        let mut attributes = mark_attributes(event);
-        if event.name() == "session.start" {
-            push_session_identity_attributes(&mut attributes, event);
-        }
-        attributes.push(KeyValue::new("nemo_relay.mark.projection", "tool"));
-        attributes.push(KeyValue::new(
-            oi::OPENINFERENCE_SPAN_KIND,
-            OpenInferenceSpanKind::Tool,
-        ));
-        push_projected_mark_attributes(&mut attributes, event);
-        if orphan {
-            attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
-        }
-        apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
-
-        let mut span = self
-            .tracer
-            .span_builder(format!("mark:{}", event.name()))
-            .with_kind(SpanKind::Internal)
-            .with_start_time(timestamp)
-            .with_trace_id(relay_trace_id(event.uuid()))
-            .with_span_id(relay_span_id(event.uuid()))
-            .start_with_context(&self.tracer, &self.parent_context(event));
-        span.set_attributes(attributes);
-        span.end_with_timestamp(timestamp);
-    }
-
-    fn parent_context(&self, event: &Event) -> Context {
-        if let Some(active_span) = self.find_parent_span(event) {
-            return Context::new().with_remote_span_context(active_span.span_context.clone());
-        }
-        if let Some(span_context) = event
-            .parent_uuid()
-            .and_then(|uuid| self.completed_span_contexts.get(&uuid))
-        {
-            return Context::new().with_remote_span_context(span_context.clone());
-        }
-        let Some(parent_uuid) = event.parent_uuid() else {
-            return Context::new();
-        };
-        let stack = current_scope_stack();
-        let stack = stack.read().expect("scope stack lock poisoned");
-        if !stack.is_propagated_parent(parent_uuid) {
-            return Context::new();
-        }
-        let root_uuid = stack.root_uuid();
-        Context::new().with_remote_span_context(SpanContext::new(
-            relay_trace_id(root_uuid),
-            relay_span_id(parent_uuid),
-            TraceFlags::SAMPLED,
-            true,
-            TraceState::default(),
-        ))
-    }
-
-    fn parent_span_uuid(&self, event: &Event) -> Option<Uuid> {
-        event
-            .parent_uuid()
-            .filter(|uuid| self.active_spans.contains_key(uuid))
-    }
-
-    fn find_parent_span(&self, event: &Event) -> Option<&ActiveSpan> {
-        self.parent_span_uuid(event)
-            .and_then(|uuid| self.active_spans.get(&uuid))
-    }
-
-    fn find_parent_span_mut(&mut self, event: &Event) -> Option<&mut ActiveSpan> {
-        self.parent_span_uuid(event)
-            .and_then(|uuid| self.active_spans.get_mut(&uuid))
-    }
-
-    fn remove_completed_span_context(&mut self, uuid: Uuid) {
-        self.completed_span_contexts.remove(&uuid);
-        self.completed_span_order
-            .retain(|completed_uuid| *completed_uuid != uuid);
-    }
-
-    fn record_completed_span_context(&mut self, uuid: Uuid, span_context: SpanContext) {
-        if self
-            .completed_span_contexts
-            .insert(uuid, span_context)
-            .is_none()
-        {
-            self.completed_span_order.push_back(uuid);
-        }
-        while self.completed_span_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
-            if let Some(expired) = self.completed_span_order.pop_front() {
-                self.completed_span_contexts.remove(&expired);
-            }
-        }
-    }
-}
-
-fn span_kind(event: &Event) -> SpanKind {
+pub(super) fn span_kind(event: &Event) -> SpanKind {
     match semantic_scope_type(event) {
         Some(ScopeType::Llm) => SpanKind::Client,
         Some(
@@ -861,7 +37,7 @@ fn span_kind(event: &Event) -> SpanKind {
     }
 }
 
-fn span_name(event: &Event) -> String {
+pub(super) fn span_name(event: &Event) -> String {
     event.name().to_string()
 }
 
@@ -885,7 +61,7 @@ fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
     }
 }
 
-fn start_attributes(event: &Event) -> Vec<KeyValue> {
+pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = common_attributes(event);
     let is_llm = event
         .category()
@@ -895,7 +71,7 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
         // Final span metadata should reflect the completed event, especially for mixed-fidelity
         // Hermes flows where the request can be exact but the terminal error is lossy.
         attributes.retain(|attribute| {
-            attribute.key.as_str() != oi::METADATA.as_str()
+            attribute.key.as_str() != "metadata"
                 && !attribute.key.as_str().starts_with("openinference.metadata")
         });
     }
@@ -912,23 +88,23 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
         .category()
         .is_some_and(|category| category.as_str() == "tool")
     {
-        attributes.push(KeyValue::new(oi::tool::NAME, event.name().to_string()));
+        attributes.push(KeyValue::new("tool.name", event.name().to_string()));
         attributes.push(KeyValue::new(
-            oi::tool_call::function::NAME,
+            "tool_call.function.name",
             event.name().to_string(),
         ));
     }
 
     if let Some((input, mime_type)) = openinference_input_value(event) {
-        attributes.push(KeyValue::new(oi::input::VALUE, input.clone()));
-        attributes.push(KeyValue::new(oi::input::MIME_TYPE, mime_type));
+        attributes.push(KeyValue::new("input.value", input.clone()));
+        attributes.push(KeyValue::new("input.mime_type", mime_type));
 
         if event
             .category()
             .is_some_and(|category| category.as_str() == "tool")
         {
-            attributes.push(KeyValue::new(oi::tool::PARAMETERS, input.clone()));
-            attributes.push(KeyValue::new(oi::tool_call::function::ARGUMENTS, input));
+            attributes.push(KeyValue::new("tool.parameters", input.clone()));
+            attributes.push(KeyValue::new("tool_call.function.arguments", input));
         }
     }
     if is_llm {
@@ -937,7 +113,7 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
     attributes
 }
 
-fn end_attributes(event: &Event) -> Vec<KeyValue> {
+pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
     let is_llm = event
         .category()
@@ -946,13 +122,13 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
 
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.data", event.data());
     if let Some(metadata) = event.metadata().and_then(to_json_string) {
-        attributes.push(KeyValue::new(oi::METADATA, metadata));
+        attributes.push(KeyValue::new("metadata", metadata));
     }
     push_top_level_json_attributes(&mut attributes, "openinference.metadata", event.metadata());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
     if let Some((output, mime_type)) = openinference_output_value(event) {
-        attributes.push(KeyValue::new(oi::output::VALUE, output));
-        attributes.push(KeyValue::new(oi::output::MIME_TYPE, mime_type));
+        attributes.push(KeyValue::new("output.value", output));
+        attributes.push(KeyValue::new("output.mime_type", mime_type));
     }
     let fallback_usage = if is_llm {
         manual::usage_from_manual_llm_output(event.output())
@@ -980,7 +156,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         && let Some(cost_total) =
             cost_total_from_llm_event(event, normalized.as_deref(), fallback_usage.as_ref())
     {
-        attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
+        attributes.push(KeyValue::new("llm.cost.total", cost_total));
     }
     if is_llm {
         push_llm_response_attributes(&mut attributes, event, normalized.as_deref());
@@ -993,23 +169,23 @@ fn push_llm_usage_attributes(attributes: &mut Vec<KeyValue>, usage: Option<&Usag
         return;
     };
     if let Some(v) = usage.prompt_tokens {
-        attributes.push(KeyValue::new(oi::llm::token_count::PROMPT, v as i64));
+        attributes.push(KeyValue::new("llm.token_count.prompt", v as i64));
     }
     if let Some(v) = usage.completion_tokens {
-        attributes.push(KeyValue::new(oi::llm::token_count::COMPLETION, v as i64));
+        attributes.push(KeyValue::new("llm.token_count.completion", v as i64));
     }
     if let Some(v) = usage.total_tokens {
-        attributes.push(KeyValue::new(oi::llm::token_count::TOTAL, v as i64));
+        attributes.push(KeyValue::new("llm.token_count.total", v as i64));
     }
     if let Some(v) = usage.cache_read_tokens {
         attributes.push(KeyValue::new(
-            oi::llm::token_count::prompt_details::CACHE_READ,
+            "llm.token_count.prompt_details.cache_read",
             v as i64,
         ));
     }
     if let Some(v) = usage.cache_write_tokens {
         attributes.push(KeyValue::new(
-            oi::llm::token_count::prompt_details::CACHE_WRITE,
+            "llm.token_count.prompt_details.cache_write",
             v as i64,
         ));
     }
@@ -1025,7 +201,7 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     // provider-shaped (carry `messages`) and would otherwise be misrouted.
     if let Some(input) = event.input().and_then(replay_llm_payload) {
         if let Some(provider) = input.get("provider").and_then(Json::as_str) {
-            attributes.push(KeyValue::new(oi::llm::PROVIDER, provider.to_string()));
+            attributes.push(KeyValue::new("llm.provider", provider.to_string()));
         }
         push_replay_input_messages(attributes, input);
         return;
@@ -1063,7 +239,7 @@ fn push_annotated_request_attributes(
     request: &AnnotatedLlmRequest,
 ) {
     if let Some(params) = request.params.as_ref().and_then(to_json_string) {
-        attributes.push(KeyValue::new(oi::llm::INVOCATION_PARAMETERS, params));
+        attributes.push(KeyValue::new("llm.invocation_parameters", params));
     }
     let mut next_index = 0usize;
     if let Some(instructions) = request.instructions.as_ref().and_then(message_content_text) {
@@ -1466,7 +642,7 @@ fn cost_total_from_llm_event(
     .and_then(|cost| cost.total_for_currency("USD"))
 }
 
-fn mark_attributes(event: &Event) -> Vec<KeyValue> {
+pub(super) fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new("nemo_relay.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
@@ -1504,22 +680,40 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
 
 fn push_projected_mark_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     let mark_name = event.name().to_string();
-    attributes.push(KeyValue::new(oi::tool::NAME, mark_name.clone()));
-    attributes.push(KeyValue::new(oi::tool_call::function::NAME, mark_name));
+    attributes.push(KeyValue::new("tool.name", mark_name.clone()));
+    attributes.push(KeyValue::new("tool_call.function.name", mark_name));
 
     if let Some(data) = event.data().and_then(to_json_string) {
-        attributes.push(KeyValue::new(oi::output::VALUE, data));
-        attributes.push(KeyValue::new(oi::output::MIME_TYPE, "application/json"));
+        attributes.push(KeyValue::new("output.value", data));
+        attributes.push(KeyValue::new("output.mime_type", "application/json"));
     }
     if let Some(metadata) = event.metadata().and_then(to_json_string) {
-        attributes.push(KeyValue::new(oi::METADATA, metadata));
+        attributes.push(KeyValue::new("metadata", metadata));
     }
+}
+
+pub(super) fn remove_start_model_name(attributes: &mut Vec<KeyValue>) {
+    attributes.retain(|attribute| attribute.key.as_str() != "llm.model_name");
+}
+
+pub(super) fn push_model_name(attributes: &mut Vec<KeyValue>, model_name: String) {
+    attributes.push(KeyValue::new("llm.model_name", model_name));
+}
+
+pub(super) fn push_orphan_mark_attributes(attributes: &mut Vec<KeyValue>) {
+    attributes.push(KeyValue::new("openinference.span.kind", "CHAIN"));
+    attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
+}
+
+pub(super) fn push_tool_mark_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    attributes.push(KeyValue::new("openinference.span.kind", "TOOL"));
+    push_projected_mark_attributes(attributes, event);
 }
 
 fn common_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new(
-            oi::OPENINFERENCE_SPAN_KIND,
+            "openinference.span.kind",
             openinference_span_kind(semantic_scope_type(event)),
         ),
         KeyValue::new("nemo_relay.uuid", event.uuid().to_string()),
@@ -1537,32 +731,30 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
     ];
 
     if let Some(model_name) = model_name_for_llm_event(event) {
-        attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name));
+        attributes.push(KeyValue::new("llm.model_name", model_name));
     }
     if let Some(tool_call_id) = event.tool_call_id() {
-        attributes.push(KeyValue::new(oi::tool_call::ID, tool_call_id.to_string()));
+        attributes.push(KeyValue::new("tool_call.id", tool_call_id.to_string()));
     }
     if let Some(metadata) = event.metadata().and_then(to_json_string) {
-        attributes.push(KeyValue::new(oi::METADATA, metadata));
+        attributes.push(KeyValue::new("metadata", metadata));
     }
     push_top_level_json_attributes(&mut attributes, "openinference.metadata", event.metadata());
 
     attributes
 }
 
-fn openinference_span_kind(scope_type: Option<ScopeType>) -> OpenInferenceSpanKind {
+fn openinference_span_kind(scope_type: Option<ScopeType>) -> &'static str {
     match scope_type {
-        Some(ScopeType::Agent) => OpenInferenceSpanKind::Agent,
-        Some(ScopeType::Tool) => OpenInferenceSpanKind::Tool,
-        Some(ScopeType::Llm) => OpenInferenceSpanKind::Llm,
-        Some(ScopeType::Retriever) => OpenInferenceSpanKind::Retriever,
-        Some(ScopeType::Embedder) => OpenInferenceSpanKind::Embedding,
-        Some(ScopeType::Reranker) => OpenInferenceSpanKind::Reranker,
-        Some(ScopeType::Guardrail) => OpenInferenceSpanKind::Guardrail,
-        Some(ScopeType::Evaluator) => OpenInferenceSpanKind::Evaluator,
-        Some(ScopeType::Function | ScopeType::Custom | ScopeType::Unknown) | None => {
-            OpenInferenceSpanKind::Chain
-        }
+        Some(ScopeType::Agent) => "AGENT",
+        Some(ScopeType::Tool) => "TOOL",
+        Some(ScopeType::Llm) => "LLM",
+        Some(ScopeType::Retriever) => "RETRIEVER",
+        Some(ScopeType::Embedder) => "EMBEDDING",
+        Some(ScopeType::Reranker) => "RERANKER",
+        Some(ScopeType::Guardrail) => "GUARDRAIL",
+        Some(ScopeType::Evaluator) => "EVALUATOR",
+        Some(ScopeType::Function | ScopeType::Custom | ScopeType::Unknown) | None => "CHAIN",
     }
 }
 
@@ -1815,6 +1007,7 @@ fn to_json_string<T: Serialize>(value: &T) -> Option<String> {
     serde_json::to_string(value).ok()
 }
 
+#[cfg(test)]
 fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
     SpanContext::new(
         span_context.trace_id(),
@@ -1825,6 +1018,7 @@ fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
     )
 }
 
+#[cfg(test)]
 fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
     let seconds = timestamp.timestamp();
     let nanos = timestamp.timestamp_subsec_nanos();

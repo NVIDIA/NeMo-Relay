@@ -134,22 +134,6 @@ fn parse_string_map(
     Ok(out)
 }
 
-fn parse_attribute_mappings(
-    value: Option<Vec<OtlpAttributeMapping>>,
-) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
-    let mappings = value
-        .unwrap_or_default()
-        .into_iter()
-        .map(|mapping| nemo_relay::observability::OtlpAttributeMapping {
-            key: mapping.key,
-            alias: mapping.alias,
-        })
-        .collect::<Vec<_>>();
-    nemo_relay::observability::validate_attribute_mappings(&mappings)
-        .map_err(napi::Error::from_reason)?;
-    Ok(mappings)
-}
-
 fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Json {
     let mut metadata = serde_json::Map::new();
     metadata.insert(
@@ -165,38 +149,49 @@ fn otel_status_metadata(status_code: &'static str, status_message: Option<String
     Json::Object(metadata)
 }
 
+fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenTelemetryType> {
+    match value {
+        "full" => Ok(nemo_relay::observability::OpenTelemetryType::Full),
+        "gen_ai" => Ok(nemo_relay::observability::OpenTelemetryType::GenAi),
+        "openinference" => Ok(nemo_relay::observability::OpenTelemetryType::OpenInference),
+        other => Err(napi::Error::from_reason(format!(
+            "type must be 'full', 'gen_ai', or 'openinference', got {other:?}",
+        ))),
+    }
+}
+
+fn parse_otel_transport(
+    value: Option<String>,
+) -> napi::Result<nemo_relay::observability::otel::OtlpTransport> {
+    match value.as_deref().unwrap_or("http_binary") {
+        "http_binary" => Ok(nemo_relay::observability::otel::OtlpTransport::HttpBinary),
+        "grpc" => Ok(nemo_relay::observability::otel::OtlpTransport::Grpc),
+        other => Err(napi::Error::from_reason(format!(
+            "transport must be 'http_binary' or 'grpc', got {other:?}",
+        ))),
+    }
+}
+
 fn build_otel_config(
-    options: Option<OpenTelemetryConfig>,
+    options: OpenTelemetryConfig,
 ) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
-    let options = options.unwrap_or_default();
-    let transport = options
-        .transport
-        .unwrap_or_else(|| "http_binary".to_string());
+    let otel_type = parse_otel_type(&options.r#type)?;
+    let endpoint = options.endpoint;
+    let transport = parse_otel_transport(options.transport)?;
     let service_name = options
         .service_name
-        .unwrap_or_else(|| "nemo-relay".to_string());
+        .unwrap_or_else(|| "unknown_service".to_string());
     let instrumentation_scope = options
         .instrumentation_scope
-        .unwrap_or_else(|| "nemo-relay-otel".to_string());
+        .unwrap_or_else(|| "opentelemetry".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
 
-    let mut config = match transport.as_str() {
-        "http_binary" => {
-            nemo_relay::observability::otel::OpenTelemetryConfig::http_binary(service_name)
-        }
-        "grpc" => nemo_relay::observability::otel::OpenTelemetryConfig::grpc(service_name),
-        other => {
-            return Err(napi::Error::from_reason(format!(
-                "transport must be 'http_binary' or 'grpc', got {other:?}",
-            )));
-        }
-    }
-    .with_instrumentation_scope(instrumentation_scope)
-    .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+    let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
+        .with_transport(transport)
+        .with_service_name(service_name)
+        .with_instrumentation_scope(instrumentation_scope)
+        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
 
-    if let Some(endpoint) = options.endpoint {
-        config = config.with_endpoint(endpoint);
-    }
     if let Some(namespace) = options.service_namespace {
         config = config.with_service_namespace(namespace);
     }
@@ -209,8 +204,6 @@ fn build_otel_config(
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
-    config = config.with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
-
     Ok(config)
 }
 
@@ -279,57 +272,6 @@ fn build_atof_config(
             "ATOF sink type must be 'file' or 'stream'",
         )),
     }
-}
-
-fn build_openinference_config(
-    options: Option<OpenInferenceConfig>,
-) -> napi::Result<nemo_relay::observability::openinference::OpenInferenceConfig> {
-    let options = options.unwrap_or_default();
-    let transport = options
-        .transport
-        .unwrap_or_else(|| "http_binary".to_string());
-    let service_name = options
-        .service_name
-        .unwrap_or_else(|| "nemo-relay".to_string());
-    let instrumentation_scope = options
-        .instrumentation_scope
-        .unwrap_or_else(|| "nemo-relay-openinference".to_string());
-    let timeout_millis = options.timeout_millis.unwrap_or(3_000);
-
-    let transport = match transport.as_str() {
-        "http_binary" => nemo_relay::observability::openinference::OtlpTransport::HttpBinary,
-        "grpc" => nemo_relay::observability::openinference::OtlpTransport::Grpc,
-        other => {
-            return Err(napi::Error::from_reason(format!(
-                "transport must be 'http_binary' or 'grpc', got {other:?}",
-            )));
-        }
-    };
-
-    let mut config = nemo_relay::observability::openinference::OpenInferenceConfig::new()
-        .with_transport(transport)
-        .with_service_name(service_name)
-        .with_instrumentation_scope(instrumentation_scope)
-        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
-
-    if let Some(endpoint) = options.endpoint {
-        config = config.with_endpoint(endpoint);
-    }
-    if let Some(namespace) = options.service_namespace {
-        config = config.with_service_namespace(namespace);
-    }
-    if let Some(version) = options.service_version {
-        config = config.with_service_version(version);
-    }
-    for (key, value) in parse_string_map(options.headers, "headers")? {
-        config = config.with_header(key, value);
-    }
-    for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
-        config = config.with_resource_attribute(key, value);
-    }
-    config = config.with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
-
-    Ok(config)
 }
 
 // ---------------------------------------------------------------------------
@@ -4130,61 +4072,27 @@ impl AtofExporter {
 #[napi(object)]
 #[derive(Default)]
 pub struct OpenTelemetryConfig {
+    /// `"full"`, `"gen_ai"`, or `"openinference"`.
+    #[napi(ts_type = "\"full\" | \"gen_ai\" | \"openinference\"")]
+    pub r#type: String,
     /// `"http_binary"` (default) or `"grpc"`.
     pub transport: Option<String>,
     /// OTLP endpoint, such as `http://localhost:4318/v1/traces`.
-    pub endpoint: Option<String>,
+    pub endpoint: String,
     /// Extra exporter headers/metadata as string key/value pairs.
     pub headers: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
-    /// `service.name` resource attribute. Defaults to `"nemo-relay"`.
+    /// `service.name` resource attribute. Defaults to `"unknown_service"`.
     pub service_name: Option<String>,
     /// Optional `service.namespace` resource attribute.
     pub service_namespace: Option<String>,
     /// Optional `service.version` resource attribute.
     pub service_version: Option<String>,
-    /// Instrumentation scope name. Defaults to `"nemo-relay-otel"`.
+    /// Instrumentation scope name. Defaults to `"opentelemetry"`.
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
-    /// Typed projected attributes copied to aliases.
-    pub attribute_mappings: Option<Vec<OtlpAttributeMapping>>,
-}
-
-/// Typed projected attribute copy configuration.
-#[napi(object)]
-pub struct OtlpAttributeMapping {
-    /// Fully-qualified projected attribute to copy.
-    pub key: String,
-    /// Additional attribute name receiving the copied value.
-    pub alias: String,
-}
-
-/// Mutable configuration object for `OpenInferenceSubscriber`.
-#[napi(object)]
-#[derive(Default)]
-pub struct OpenInferenceConfig {
-    /// `"http_binary"` (default) or `"grpc"`.
-    pub transport: Option<String>,
-    /// OTLP endpoint, such as `http://localhost:4318/v1/traces`.
-    pub endpoint: Option<String>,
-    /// Extra exporter headers/metadata as string key/value pairs.
-    pub headers: Option<Json>,
-    /// Extra OpenInference resource attributes as string key/value pairs.
-    pub resource_attributes: Option<Json>,
-    /// `service.name` resource attribute. Defaults to `"nemo-relay"`.
-    pub service_name: Option<String>,
-    /// Optional `service.namespace` resource attribute.
-    pub service_namespace: Option<String>,
-    /// Optional `service.version` resource attribute.
-    pub service_version: Option<String>,
-    /// Instrumentation scope name. Defaults to `"nemo-relay-openinference"`.
-    pub instrumentation_scope: Option<String>,
-    /// Export timeout in milliseconds. Defaults to `3000`.
-    pub timeout_millis: Option<u32>,
-    /// Typed projected attributes copied to aliases.
-    pub attribute_mappings: Option<Vec<OtlpAttributeMapping>>,
 }
 
 /// OpenTelemetry-backed event subscriber.
@@ -4197,60 +4105,9 @@ pub struct OpenTelemetrySubscriber {
 impl OpenTelemetrySubscriber {
     /// Create a new OpenTelemetry subscriber from a config object.
     #[napi(constructor)]
-    pub fn new(config: Option<OpenTelemetryConfig>) -> napi::Result<Self> {
+    pub fn new(config: OpenTelemetryConfig) -> napi::Result<Self> {
         let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
             build_otel_config(config)?,
-        )
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(Self { inner })
-    }
-
-    /// Register this subscriber globally with the given name.
-    #[napi]
-    pub fn register(&self, name: String) -> napi::Result<()> {
-        self.inner
-            .register(&name)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Deregister a subscriber by name.
-    #[napi]
-    pub fn deregister(&self, name: String) -> napi::Result<bool> {
-        self.inner
-            .deregister(&name)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Force a flush of finished spans through the exporter.
-    #[napi]
-    pub fn force_flush(&self) -> napi::Result<()> {
-        self.inner
-            .force_flush()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Shut down the underlying tracer provider.
-    #[napi]
-    pub fn shutdown(&self) -> napi::Result<()> {
-        self.inner
-            .shutdown()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-}
-
-/// OpenInference-backed event subscriber.
-#[napi]
-pub struct OpenInferenceSubscriber {
-    inner: nemo_relay::observability::openinference::OpenInferenceSubscriber,
-}
-
-#[napi]
-impl OpenInferenceSubscriber {
-    /// Create a new OpenInference subscriber from a config object.
-    #[napi(constructor)]
-    pub fn new(config: Option<OpenInferenceConfig>) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::openinference::OpenInferenceSubscriber::new(
-            build_openinference_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })

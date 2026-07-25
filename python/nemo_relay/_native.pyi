@@ -1013,15 +1013,20 @@ class OpenTelemetryConfig:
     """
 
     transport: str
-    endpoint: Optional[str]
+    otel_type: Literal["full", "gen_ai", "openinference"]
+    endpoint: str
     service_name: str
     service_namespace: Optional[str]
     service_version: Optional[str]
     instrumentation_scope: str
     timeout_millis: int
 
-    def __init__(self) -> None:
-        """Create an OpenTelemetry config with native defaults."""
+    def __init__(
+        self,
+        otel_type: Literal["full", "gen_ai", "openinference"],
+        endpoint: str,
+    ) -> None:
+        """Create a typed OpenTelemetry config for the required endpoint."""
         ...
     @property
     def headers(self) -> dict[str, str]:
@@ -1038,14 +1043,6 @@ class OpenTelemetryConfig:
     @resource_attributes.setter
     def resource_attributes(self, value: dict[str, str]) -> None:
         """Replace additional OpenTelemetry resource attributes."""
-        ...
-    @property
-    def attribute_mappings(self) -> list[dict[str, str]]:
-        """Return typed projected-attribute aliases."""
-        ...
-    @attribute_mappings.setter
-    def attribute_mappings(self, value: list[dict[str, str]]) -> None:
-        """Replace typed projected-attribute aliases."""
         ...
     def set_header(self, key: str, value: str) -> None:
         """Set one exporter header key/value pair."""
@@ -1079,86 +1076,6 @@ class OpenTelemetrySubscriber:
         ...
     def shutdown(self) -> None:
         """Shut down native OpenTelemetry resources."""
-        ...
-
-class OpenInferenceConfig:
-    """Mutable configuration for ``OpenInferenceSubscriber``.
-
-    Summary:
-        Native OpenInference exporter configuration object.
-
-    Description:
-        Configure transport, endpoint, service identity, exporter timeout,
-        headers, and resource attributes before constructing a subscriber.
-    """
-
-    transport: str
-    endpoint: Optional[str]
-    service_name: str
-    service_namespace: Optional[str]
-    service_version: Optional[str]
-    instrumentation_scope: str
-    timeout_millis: int
-
-    def __init__(self) -> None:
-        """Create an OpenInference config with native defaults."""
-        ...
-    @property
-    def headers(self) -> dict[str, str]:
-        """Return additional exporter headers."""
-        ...
-    @headers.setter
-    def headers(self, value: dict[str, str]) -> None:
-        """Replace additional exporter headers."""
-        ...
-    @property
-    def resource_attributes(self) -> dict[str, str]:
-        """Return additional OpenInference resource attributes."""
-        ...
-    @resource_attributes.setter
-    def resource_attributes(self, value: dict[str, str]) -> None:
-        """Replace additional OpenInference resource attributes."""
-        ...
-    @property
-    def attribute_mappings(self) -> list[dict[str, str]]:
-        """Return typed projected-attribute aliases."""
-        ...
-    @attribute_mappings.setter
-    def attribute_mappings(self, value: list[dict[str, str]]) -> None:
-        """Replace typed projected-attribute aliases."""
-        ...
-    def set_header(self, key: str, value: str) -> None:
-        """Set one exporter header key/value pair."""
-        ...
-    def set_resource_attribute(self, key: str, value: str) -> None:
-        """Set one OpenInference resource attribute key/value pair."""
-        ...
-
-class OpenInferenceSubscriber:
-    """OpenInference-backed NeMo Relay event subscriber.
-
-    Summary:
-        Native subscriber that exports lifecycle events as OpenInference spans.
-
-    Description:
-        Register the subscriber under a name to receive runtime events. Flush or
-        shut it down before process exit when deterministic export is required.
-    """
-
-    def __init__(self, config: OpenInferenceConfig) -> None:
-        """Create a subscriber from an OpenInference config."""
-        ...
-    def register(self, name: str) -> None:
-        """Register the subscriber under ``name``."""
-        ...
-    def deregister(self, name: str) -> bool:
-        """Deregister ``name`` and return whether it existed."""
-        ...
-    def force_flush(self) -> None:
-        """Flush pending telemetry through the configured exporter."""
-        ...
-    def shutdown(self) -> None:
-        """Shut down native OpenInference resources."""
         ...
 
 class OpenAIChatCodec:

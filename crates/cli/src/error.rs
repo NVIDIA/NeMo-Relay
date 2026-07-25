@@ -65,8 +65,6 @@ pub(crate) enum CliError {
     },
     #[error("NeMo Relay runtime error: {0}")]
     Flow(#[from] nemo_relay::error::FlowError),
-    #[error("openinference error: {0}")]
-    OpenInference(#[from] nemo_relay::observability::openinference::OpenInferenceError),
 }
 
 impl CliError {
@@ -87,7 +85,6 @@ impl CliError {
             Self::PluginLifecycle { .. } => "plugin_lifecycle",
             Self::Flow(FlowError::GuardrailRejected(_)) => "guardrail_rejected",
             Self::Flow(_) => "runtime",
-            Self::OpenInference(_) => "openinference",
         }
     }
 
@@ -141,8 +138,7 @@ impl IntoResponse for CliError {
                 | Self::Install(_)
                 | Self::Config(_)
                 | Self::Launch(_)
-                | Self::Flow(_)
-                | Self::OpenInference(_),
+                | Self::Flow(_),
             ) => StatusCode::INTERNAL_SERVER_ERROR,
             (false, _) => StatusCode::INTERNAL_SERVER_ERROR,
         };

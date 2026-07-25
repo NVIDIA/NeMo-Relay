@@ -26,7 +26,7 @@ atof-streaming = ["nemo-relay/atof-streaming"]
 switchyard = ["dep:nemo-relay-switchyard"]
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "otel", "openinference", "worker-grpc"] }
+nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
 nemo-relay-switchyard = { workspace = true, optional = true, features = ["schema"] }

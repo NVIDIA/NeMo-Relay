@@ -179,8 +179,6 @@ fn register_observability_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAtofExporter>()?;
     m.add_class::<PyOpenTelemetryConfig>()?;
     m.add_class::<PyOpenTelemetrySubscriber>()?;
-    m.add_class::<PyOpenInferenceConfig>()?;
-    m.add_class::<PyOpenInferenceSubscriber>()?;
     Ok(())
 }
 
