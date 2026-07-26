@@ -81,6 +81,9 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 /// Boxed JSON stream returned by streaming worker callbacks.
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
 
+const JSON_SCHEMA: &str = "nemo.relay.Json@1";
+const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
+
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
 }
@@ -696,12 +699,12 @@ impl PluginRuntime {
                 auth_token: self.auth_token.clone(),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                request: Some(json_envelope("nemo.relay.LlmRequest@1", request)?),
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, request)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, "nemo.relay.AnnotatedLlmRequest@2")
+        decode_typed_json_result(response, ANNOTATED_LLM_REQUEST_SCHEMA)
     }
 
     async fn encode_llm_codec_request(
@@ -718,16 +721,13 @@ impl PluginRuntime {
                 auth_token: self.auth_token.clone(),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                annotated_request: Some(json_envelope(
-                    "nemo.relay.AnnotatedLlmRequest@2",
-                    annotated,
-                )?),
-                original_request: Some(json_envelope("nemo.relay.LlmRequest@1", original)?),
+                annotated_request: Some(json_envelope(ANNOTATED_LLM_REQUEST_SCHEMA, annotated)?),
+                original_request: Some(json_envelope(LLM_REQUEST_SCHEMA, original)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, "nemo.relay.LlmRequest@1")
+        decode_typed_json_result(response, LLM_REQUEST_SCHEMA)
     }
 
     async fn decode_llm_codec_response(
@@ -743,12 +743,12 @@ impl PluginRuntime {
                 auth_token: self.auth_token.clone(),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                response: Some(json_envelope("nemo.relay.Json@1", response)?),
+                response: Some(json_envelope(JSON_SCHEMA, response)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, "nemo.relay.Json@1")
+        decode_typed_json_result(response, JSON_SCHEMA)
     }
     /// Emits a mark event through the host runtime.
     pub async fn emit_mark(
@@ -922,7 +922,7 @@ impl ToolNext {
                 activation_id: self.runtime.activation_id.clone(),
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
-                value: Some(json_envelope("nemo.relay.Json@1", &value)?),
+                value: Some(json_envelope(JSON_SCHEMA, &value)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -947,7 +947,7 @@ impl LlmNext {
                 activation_id: self.runtime.activation_id.clone(),
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
-                request: Some(json_envelope("nemo.relay.LlmRequest@1", &request)?),
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -973,7 +973,7 @@ impl LlmStreamNext {
                 activation_id: self.runtime.activation_id.clone(),
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
-                request: Some(json_envelope("nemo.relay.LlmRequest@1", &request)?),
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
@@ -1431,7 +1431,7 @@ impl PluginWorker for WorkerService {
                 let chunk = match item {
                     Ok(value) => StreamChunk {
                         item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                            match json_envelope("nemo.relay.Json@1", &value) {
+                            match json_envelope(JSON_SCHEMA, &value) {
                                 Ok(value) => value,
                                 Err(err) => {
                                     let _ =
@@ -1647,10 +1647,8 @@ impl WorkerService {
                 self.invoke_event_sanitize_response(request, &scope, surface)
                     .await
             }
-            RegistrationSurface::ToolSanitizeRequestGuardrail => {
-                self.invoke_tool_response(request, &scope, surface).await
-            }
-            RegistrationSurface::ToolSanitizeResponseGuardrail
+            RegistrationSurface::ToolSanitizeRequestGuardrail
+            | RegistrationSurface::ToolSanitizeResponseGuardrail
             | RegistrationSurface::ToolConditionalExecutionGuardrail
             | RegistrationSurface::ToolRequestIntercept
             | RegistrationSurface::ToolExecutionIntercept => {
@@ -2112,10 +2110,10 @@ fn codec_identity_from_proto(
 ) -> LlmCodecIdentity {
     let codec_kind = codec
         .map(|codec| codec.kind)
-        .unwrap_or(LlmCodecKind::None as i32);
+        .unwrap_or(LlmCodecKind::Unspecified as i32);
     let codec_id = codec.and_then(|codec| codec.id.clone());
     match LlmCodecKind::try_from(codec_kind).ok() {
-        Some(LlmCodecKind::None) => LlmCodecIdentity::None,
+        Some(LlmCodecKind::Unspecified) => LlmCodecIdentity::None,
         Some(LlmCodecKind::Builtin) => match codec_id.as_deref() {
             Some("openai_chat") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
             Some("openai_responses") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
@@ -2208,7 +2206,7 @@ fn json_response(value: Json) -> InvokeResponse {
     InvokeResponse {
         result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Json(
             JsonResult {
-                value: Some(infallible_json_envelope("nemo.relay.Json@1", &value)),
+                value: Some(infallible_json_envelope(JSON_SCHEMA, &value)),
                 error: None,
             },
         )),
@@ -2290,7 +2288,7 @@ fn decode_typed_json_result<T: serde::de::DeserializeOwned>(
 fn optional_json_envelope(value: Option<Json>) -> Result<Option<JsonEnvelope>> {
     value
         .as_ref()
-        .map(|value| json_envelope("nemo.relay.Json@1", value).map_err(WorkerSdkError::from))
+        .map(|value| json_envelope(JSON_SCHEMA, value).map_err(WorkerSdkError::from))
         .transpose()
 }
 

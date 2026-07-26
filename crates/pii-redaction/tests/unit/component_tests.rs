@@ -4085,13 +4085,13 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
     clear_plugin_configuration().unwrap();
 }
 
-#[test]
-fn builtin_backend_removes_targeted_message_names_and_ignores_missing_normalized_paths() {
+#[tokio::test]
+async fn builtin_backend_removes_targeted_message_names_and_ignores_missing_normalized_paths() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    initialize_plugins(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": true,
@@ -4106,7 +4106,8 @@ fn builtin_backend_removes_targeted_message_names_and_ignores_missing_normalized
                 "/messages/1/name"
             ]
         }
-    }))))
+    })))
+    .await
     .unwrap();
 
     let events = capture_events("pii-redaction-remove-message-names");
@@ -4154,13 +4155,13 @@ fn builtin_backend_removes_targeted_message_names_and_ignores_missing_normalized
     clear_plugin_configuration().unwrap();
 }
 
-#[test]
-fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_array_removal() {
+#[tokio::test]
+async fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_array_removal() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    initialize_plugins(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_responses",
         "input": true,
@@ -4171,7 +4172,8 @@ fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_array_remo
             "action": "remove",
             "target_paths": ["/messages/0/content/0"]
         }
-    }))))
+    })))
+    .await
     .unwrap();
 
     let events = capture_events("pii-redaction-unsafe-normalized-array-removal");
@@ -4210,13 +4212,13 @@ fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_array_remo
     clear_plugin_configuration().unwrap();
 }
 
-#[test]
-fn builtin_backend_sanitizes_observable_llm_request_headers() {
+#[tokio::test]
+async fn builtin_backend_sanitizes_observable_llm_request_headers() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    initialize_plugins(plugin_config(json!({
         "mode": "builtin",
         "input": true,
         "output": false,
@@ -4226,7 +4228,8 @@ fn builtin_backend_sanitizes_observable_llm_request_headers() {
             "action": "redact",
             "detector": "email"
         }
-    }))))
+    })))
+    .await
     .unwrap();
 
     let events = capture_events("pii-redaction-llm-request-headers");
@@ -4264,13 +4267,13 @@ fn builtin_backend_sanitizes_observable_llm_request_headers() {
     clear_plugin_configuration().unwrap();
 }
 
-#[test]
-fn trajectory_preset_redacts_opaque_llm_request_header_values() {
+#[tokio::test]
+async fn trajectory_preset_redacts_opaque_llm_request_header_values() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    initialize_plugins(plugin_config(json!({
         "mode": "builtin",
         "input": true,
         "output": false,
@@ -4279,7 +4282,8 @@ fn trajectory_preset_redacts_opaque_llm_request_header_values() {
         "builtin": {
             "preset": "trajectory_context"
         }
-    }))))
+    })))
+    .await
     .unwrap();
 
     let events = capture_events("pii-trajectory-llm-request-headers");

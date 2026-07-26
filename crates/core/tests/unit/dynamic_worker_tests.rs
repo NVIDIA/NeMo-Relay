@@ -558,7 +558,9 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
             };
             seen.lock().unwrap().push((
                 request.registration_name,
-                codec.map(|codec| codec.kind).unwrap_or(LlmCodecKind::None as i32),
+                codec
+                    .map(|codec| codec.kind)
+                    .unwrap_or(LlmCodecKind::Unspecified as i32),
                 codec.and_then(|codec| codec.id.clone()),
                 invocation.request.is_some(),
                 invocation.response.is_some(),
@@ -605,14 +607,14 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
         [
             (
                 "request".into(),
-                LlmCodecKind::None as i32,
+                LlmCodecKind::Unspecified as i32,
                 None,
                 true,
                 false,
             ),
             (
                 "response".into(),
-                LlmCodecKind::None as i32,
+                LlmCodecKind::Unspecified as i32,
                 None,
                 false,
                 true,

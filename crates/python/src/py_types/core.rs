@@ -59,7 +59,7 @@ impl PyLlmSanitizeRequestContext {
     #[getter]
     fn codec(&self) -> PyLlmCodecIdentity {
         PyLlmCodecIdentity {
-            inner: self.inner.codec.clone(),
+            inner: self.inner.codec().clone(),
         }
     }
 
@@ -83,7 +83,7 @@ impl PyLlmSanitizeResponseContext {
     #[getter]
     fn codec(&self) -> PyLlmCodecIdentity {
         PyLlmCodecIdentity {
-            inner: self.inner.codec.clone(),
+            inner: self.inner.codec().clone(),
         }
     }
 

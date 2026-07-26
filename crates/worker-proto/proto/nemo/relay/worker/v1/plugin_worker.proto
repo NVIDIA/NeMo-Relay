@@ -55,7 +55,7 @@ enum RegistrationSurface {
 }
 
 enum LlmCodecKind {
-  LLM_CODEC_KIND_NONE = 0;
+  LLM_CODEC_KIND_UNSPECIFIED = 0;
   LLM_CODEC_KIND_BUILTIN = 1;
   LLM_CODEC_KIND_RUNTIME = 2;
   LLM_CODEC_KIND_OPAQUE = 3;

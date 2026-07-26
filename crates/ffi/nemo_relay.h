@@ -794,6 +794,9 @@ char *nemo_relay_llm_sanitize_request_codec_decode(const struct FfiLlmSanitizeRe
 /**
  * Encode normalized request changes through a callback-scoped codec capability.
  *
+ * The returned request is owned by the caller and must be freed with
+ * `nemo_relay_llm_request_free`. Returns null on failure.
+ *
  * # Safety
  * All pointers must be non-null and valid only during the sanitizer callback.
  */

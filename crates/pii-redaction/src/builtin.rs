@@ -537,18 +537,20 @@ pub(super) fn llm_sanitize_request_callback(
         let resolved = context.resolve_codec();
         let fallback = if resolved.is_none() {
             backend
-                .selected_surface(&context.codec)
+                .selected_surface(context.codec())
                 .map(build_request_codec)
         } else {
             None
         };
-        let codec = resolved.as_deref().or(fallback.as_deref());
-        let sanitized =
-            codec.and_then(|codec| backend.sanitize_request_with_codec(codec, &request));
+        let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+            log_llm_payload_omitted("request", context.codec(), "no usable request codec");
+            return None;
+        };
+        let sanitized = backend.sanitize_request_with_codec(codec, &request);
         if sanitized.is_none() {
             log_llm_payload_omitted(
                 "request",
-                &context.codec,
+                context.codec(),
                 "codec decode, sanitize, or encode failure",
             );
         }
@@ -566,27 +568,39 @@ pub(super) fn llm_sanitize_response_callback(
         if backend.target_paths.is_empty() {
             return Some(backend.sanitize_json_preorder_dfs(payload));
         }
-        if matches!(&context.codec, LlmCodecIdentity::None)
+        if matches!(context.codec(), LlmCodecIdentity::None)
             && !backend.uses_compatible_legacy_response_codec(&payload)
         {
-            log_llm_payload_omitted("response", &context.codec, "no compatible legacy codec");
+            log_llm_payload_omitted(
+                "response",
+                context.codec(),
+                "no active response codec or compatible legacy codec",
+            );
             return None;
         }
-        let surface = backend.selected_surface(&context.codec);
+        let Some(surface) = backend.selected_surface(context.codec()) else {
+            log_llm_payload_omitted(
+                "response",
+                context.codec(),
+                "no recognized response codec surface",
+            );
+            return None;
+        };
         let resolved = context.resolve_codec();
         let fallback = if resolved.is_none() {
-            surface.map(build_response_codec)
+            Some(build_response_codec(surface))
         } else {
             None
         };
-        let codec = resolved.as_deref().or(fallback.as_deref());
-        let sanitized = surface.zip(codec).and_then(|(surface, codec)| {
-            backend.sanitize_response_with_codec(codec, surface, payload)
-        });
+        let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+            log_llm_payload_omitted("response", context.codec(), "no usable response codec");
+            return None;
+        };
+        let sanitized = backend.sanitize_response_with_codec(codec, surface, payload);
         if sanitized.is_none() {
             log_llm_payload_omitted(
                 "response",
-                &context.codec,
+                context.codec(),
                 "codec decode, sanitize, or encode failure",
             );
         }

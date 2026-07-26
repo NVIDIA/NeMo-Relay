@@ -689,7 +689,7 @@ pub fn wrap_llm_sanitize_request_fn(
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
             clear_last_error();
-            let (codec_kind, codec_id) = match ffi_codec_identity(&context.codec) {
+            let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
                 Ok(identity) => identity,
                 Err(error) => {
                     set_last_error(&error.to_string());
@@ -730,7 +730,7 @@ pub fn wrap_llm_sanitize_response_fn(
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         clear_last_error();
-        let (codec_kind, codec_id) = match ffi_codec_identity(&context.codec) {
+        let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
             Ok(identity) => identity,
             Err(error) => {
                 set_last_error(&error.to_string());

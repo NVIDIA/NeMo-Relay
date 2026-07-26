@@ -339,7 +339,9 @@ the recommended contract for new configuration. If normalized paths are
 configured and Relay cannot resolve a request codec or cannot project a
 response through a recognized built-in or compatible fallback codec, the LLM
 event payload and its annotation are omitted rather than emitting unsanitized
-content.
+content. In particular, a manual LLM call with normalized `target_paths`, no
+active codec, and no configured `codec` fallback omits both the payload and its
+annotation.
 
 ## Decision Rule
 

@@ -775,7 +775,7 @@ async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
     service = _service(ContextualSanitizerPlugin(), RecordingHostStub())
     await _register(service)
     for codec_kind, codec_id in [
-        (pb.LLM_CODEC_KIND_NONE, None),
+        (pb.LLM_CODEC_KIND_UNSPECIFIED, None),
         (pb.LLM_CODEC_KIND_BUILTIN, "openai_chat"),
         (pb.LLM_CODEC_KIND_BUILTIN, "openai_responses"),
         (pb.LLM_CODEC_KIND_BUILTIN, "anthropic_messages"),
@@ -943,13 +943,19 @@ async def test_llm_sanitizer_codec_rpc_failures_return_invocation_errors(
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def request_sanitizer(request, context):
+            async def request_sanitizer(
+                request: Json,
+                context: LlmSanitizeRequestContext,
+            ) -> Json:
                 codec = context.resolve_codec()
                 assert codec is not None
                 annotated = await codec.decode(request)
                 return await codec.encode(annotated, request)
 
-            async def response_sanitizer(response, context):
+            async def response_sanitizer(
+                response: Json,
+                context: LlmSanitizeResponseContext,
+            ) -> Json:
                 codec = context.resolve_codec()
                 assert codec is not None
                 await codec.decode(response)

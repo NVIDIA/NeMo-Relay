@@ -1585,7 +1585,7 @@ impl WorkerPluginCallback {
                 None,
                 llm_invocation::SanitizeContext::RequestSanitizeContext(
                     ProtoLlmSanitizeRequestContext {
-                        codec: Some(codec_identity_to_proto(&context.codec)),
+                        codec: Some(codec_identity_to_proto(context.codec())),
                         codec_capability_id: None,
                     },
                 ),
@@ -1635,7 +1635,7 @@ impl WorkerPluginCallback {
                 Some(response),
                 llm_invocation::SanitizeContext::ResponseSanitizeContext(
                     ProtoLlmSanitizeResponseContext {
-                        codec: Some(codec_identity_to_proto(&context.codec)),
+                        codec: Some(codec_identity_to_proto(context.codec())),
                         codec_capability_id: None,
                     },
                 ),
@@ -2743,7 +2743,7 @@ fn invoke_request_payload_llm_context(
 
 fn codec_identity_to_proto(identity: &LlmCodecIdentity) -> ProtoLlmCodecIdentity {
     let (kind, id) = match identity {
-        LlmCodecIdentity::None => (LlmCodecKind::None as i32, None),
+        LlmCodecIdentity::None => (LlmCodecKind::Unspecified as i32, None),
         LlmCodecIdentity::BuiltIn(codec) => {
             (LlmCodecKind::Builtin as i32, Some(codec.id().to_owned()))
         }

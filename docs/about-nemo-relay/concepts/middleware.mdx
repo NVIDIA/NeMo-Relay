@@ -291,7 +291,7 @@ register_llm_sanitize_request_guardrail(
     "redact-openai-chat",
     10,
     Arc::new(|mut request, context| {
-        if context.codec == LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+        if context.codec() == &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
             && let Some(codec) = context.resolve_codec()
             && let Ok(mut annotated) = codec.decode(&request)
         {

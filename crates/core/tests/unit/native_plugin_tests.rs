@@ -1229,6 +1229,46 @@ fn native_llm_sanitize_context_preserves_all_codec_identity_states() {
     }
 }
 
+#[test]
+fn native_llm_sanitizer_input_allocation_failures_release_codec_ids() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({"model": "test"}),
+    };
+    let identity = LlmCodecIdentity::Runtime("com.example.chat.v1".into());
+    let live_before = native_string_live_allocations();
+
+    fail_native_string_allocation_after(1);
+    let request_error = call_llm_sanitize_request_callback(
+        llm_request_alias,
+        ptr::null_mut(),
+        &request,
+        LlmSanitizeRequestContext::with_identity(identity.clone()),
+    )
+    .unwrap_err();
+    assert!(
+        request_error
+            .to_string()
+            .contains("failed to allocate native LLM request")
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
+
+    fail_native_string_allocation_after(1);
+    let response_error = call_llm_sanitize_response_callback(
+        llm_response_alias,
+        ptr::null_mut(),
+        &json!({"model": "test"}),
+        LlmSanitizeResponseContext::with_identity(identity),
+    )
+    .unwrap_err();
+    assert!(
+        response_error
+            .to_string()
+            .contains("failed to allocate native LLM response")
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
+}
+
 fn tool_next(output: FlowResult<Json>) -> ToolExecutionNextFn {
     let output = Arc::new(Mutex::new(Some(output)));
     Arc::new(move |_args| {

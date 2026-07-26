@@ -38,7 +38,10 @@ use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::FlowError;
 use crate::json::Json;
-use crate::{codec::optimization::LlmOptimizationContribution, codec::response::PricingResolver};
+use crate::{
+    codec::optimization::LlmOptimizationContribution,
+    codec::response::{AnnotatedLlmResponse, PricingResolver},
+};
 
 fn reset_global() {
     let _ = spdlog::init_log_crate_proxy();
@@ -104,59 +107,92 @@ impl LlmCodec for RuntimeIdentityCodec {
     }
 }
 
+impl LlmResponseCodec for RuntimeIdentityCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Runtime("com.example.chat.v1".into())
+    }
+
+    fn decode_response(&self, response: &Json) -> crate::error::Result<AnnotatedLlmResponse> {
+        OpenAIChatCodec.decode_response(response)
+    }
+}
+
 #[test]
 fn sanitizer_context_preserves_all_codec_identity_states() {
-    assert_eq!(
-        sanitize_context_for_request_codec(None).codec,
-        LlmCodecIdentity::None
+    let identity_only_request = crate::api::runtime::LlmSanitizeRequestContext::with_identity(
+        LlmCodecIdentity::Runtime("identity-only.request.v1".into()),
     );
     assert_eq!(
-        sanitize_context_for_request_codec(Some(&OpenAIChatCodec)).codec,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+        identity_only_request.codec(),
+        &LlmCodecIdentity::Runtime("identity-only.request.v1".into())
+    );
+    assert!(identity_only_request.resolve_codec().is_none());
+
+    let identity_only_response = crate::api::runtime::LlmSanitizeResponseContext::with_identity(
+        LlmCodecIdentity::Runtime("identity-only.response.v1".into()),
     );
     assert_eq!(
-        sanitize_context_for_request_codec(Some(&OpenAIResponsesCodec)).codec,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+        identity_only_response.codec(),
+        &LlmCodecIdentity::Runtime("identity-only.response.v1".into())
+    );
+    assert!(identity_only_response.resolve_codec().is_none());
+
+    assert_eq!(
+        sanitize_context_for_request_codec(None).codec(),
+        &LlmCodecIdentity::None
     );
     assert_eq!(
-        sanitize_context_for_request_codec(Some(&AnthropicMessagesCodec)).codec,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+        sanitize_context_for_request_codec(Some(&OpenAIChatCodec)).codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     );
     assert_eq!(
-        sanitize_context_for_request_codec(Some(&RuntimeIdentityCodec)).codec,
-        LlmCodecIdentity::Runtime("com.example.chat.v1".into())
+        sanitize_context_for_request_codec(Some(&OpenAIResponsesCodec)).codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+    );
+    assert_eq!(
+        sanitize_context_for_request_codec(Some(&AnthropicMessagesCodec)).codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+    );
+    assert_eq!(
+        sanitize_context_for_request_codec(Some(&RuntimeIdentityCodec)).codec(),
+        &LlmCodecIdentity::Runtime("com.example.chat.v1".into())
     );
     assert_eq!(
         sanitize_context_for_request_codec(Some(&ProjectionFailingCodec {
             projection_attempts: Arc::new(AtomicUsize::new(0)),
         }))
-        .codec,
-        LlmCodecIdentity::Opaque
+        .codec(),
+        &LlmCodecIdentity::Opaque
     );
     assert_eq!(
-        sanitize_context_for_response_codec(Some(&OpenAIChatCodec as &dyn LlmResponseCodec)).codec,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+        sanitize_context_for_response_codec(Some(&OpenAIChatCodec as &dyn LlmResponseCodec))
+            .codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     );
     assert_eq!(
         sanitize_context_for_response_codec(Some(&OpenAIResponsesCodec as &dyn LlmResponseCodec))
-            .codec,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+            .codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     );
     assert_eq!(
         sanitize_context_for_response_codec(Some(&AnthropicMessagesCodec as &dyn LlmResponseCodec))
-            .codec,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+            .codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
     );
     assert_eq!(
-        sanitize_context_for_response_codec(None).codec,
-        LlmCodecIdentity::None
+        sanitize_context_for_response_codec(Some(&RuntimeIdentityCodec)).codec(),
+        &LlmCodecIdentity::Runtime("com.example.chat.v1".into())
+    );
+    assert_eq!(
+        sanitize_context_for_response_codec(None).codec(),
+        &LlmCodecIdentity::None
     );
     assert_eq!(
         sanitize_context_for_response_codec(Some(&ProjectionFailingCodec {
             projection_attempts: Arc::new(AtomicUsize::new(0)),
         }))
-        .codec,
-        LlmCodecIdentity::Opaque
+        .codec(),
+        &LlmCodecIdentity::Opaque
     );
 }
 
@@ -1346,7 +1382,7 @@ fn failed_managed_calls_sanitize_fallback_end_data() {
             sanitizer_inputs
                 .lock()
                 .unwrap()
-                .push((response, context.codec));
+                .push((response, context.codec().clone()));
             Some(redacted_response())
         }),
     )

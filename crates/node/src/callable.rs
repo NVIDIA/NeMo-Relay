@@ -503,7 +503,7 @@ fn js_llm_sanitize_request_context(
     context: &LlmSanitizeRequestContext,
 ) -> JsLlmSanitizeRequestContext {
     JsLlmSanitizeRequestContext {
-        codec: js_codec_identity(&context.codec),
+        codec: js_codec_identity(context.codec()),
         resolved: context.resolve_codec(),
     }
 }
@@ -533,7 +533,7 @@ fn js_llm_sanitize_response_context(
     context: &LlmSanitizeResponseContext,
 ) -> JsLlmSanitizeResponseContext {
     JsLlmSanitizeResponseContext {
-        codec: js_codec_identity(&context.codec),
+        codec: js_codec_identity(context.codec()),
         resolved: context.resolve_codec(),
     }
 }

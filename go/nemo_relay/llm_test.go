@@ -290,16 +290,19 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 	defer DeregisterLlmSanitizeRequestGuardrail(requestGuard)
 	defer DeregisterLlmSanitizeResponseGuardrail(responseGuard)
 
-	var requestResolved, responseResolved bool
-	var retainedRequestCodec *LLMRequestSanitizeCodec
-	var retainedResponseCodec *LLMResponseSanitizeCodec
-	var retainedRequest LLMRequestDTO
-	var callbackErrorsMu sync.Mutex
-	var callbackErrors []string
+	var callbackState struct {
+		sync.Mutex
+		requestResolved       bool
+		responseResolved      bool
+		retainedRequestCodec  *LLMRequestSanitizeCodec
+		retainedResponseCodec *LLMResponseSanitizeCodec
+		retainedRequest       LLMRequestDTO
+		errors                []string
+	}
 	recordCallbackError := func(format string, args ...any) {
-		callbackErrorsMu.Lock()
-		defer callbackErrorsMu.Unlock()
-		callbackErrors = append(callbackErrors, fmt.Sprintf(format, args...))
+		callbackState.Lock()
+		defer callbackState.Unlock()
+		callbackState.errors = append(callbackState.errors, fmt.Sprintf(format, args...))
 	}
 	if err := RegisterLlmSanitizeRequestGuardrail(
 		requestGuard,
@@ -314,8 +317,10 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 				recordCallbackError("active request codec did not resolve")
 				return request, false
 			}
-			retainedRequestCodec = codec
-			retainedRequest = request
+			callbackState.Lock()
+			callbackState.retainedRequestCodec = codec
+			callbackState.retainedRequest = request
+			callbackState.Unlock()
 			annotated, err := codec.Decode(request)
 			if err != nil {
 				recordCallbackError("request codec decode failed: %v", err)
@@ -326,7 +331,9 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 				recordCallbackError("request codec encode failed: %v", err)
 				return request, false
 			}
-			requestResolved = true
+			callbackState.Lock()
+			callbackState.requestResolved = true
+			callbackState.Unlock()
 			return encoded, false
 		},
 	); err != nil {
@@ -336,17 +343,26 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 		responseGuard,
 		0,
 		func(response json.RawMessage, context LLMSanitizeResponseContext) (json.RawMessage, bool) {
+			if context.Codec.CodecKind != LLMCodecBuiltin ||
+				context.Codec.CodecID == nil ||
+				*context.Codec.CodecID != "openai_chat" {
+				recordCallbackError("unexpected response codec identity: %#v", context.Codec)
+			}
 			codec := context.ResolveCodec()
 			if codec == nil {
 				recordCallbackError("active response codec did not resolve")
 				return response, false
 			}
-			retainedResponseCodec = codec
+			callbackState.Lock()
+			callbackState.retainedResponseCodec = codec
+			callbackState.Unlock()
 			if _, err := codec.Decode(response); err != nil {
 				recordCallbackError("response codec decode failed: %v", err)
 				return response, false
 			}
-			responseResolved = true
+			callbackState.Lock()
+			callbackState.responseResolved = true
+			callbackState.Unlock()
 			return response, false
 		},
 	); err != nil {
@@ -372,9 +388,14 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
 	}
-	callbackErrorsMu.Lock()
-	sanitizerErrors := append([]string(nil), callbackErrors...)
-	callbackErrorsMu.Unlock()
+	callbackState.Lock()
+	sanitizerErrors := append([]string(nil), callbackState.errors...)
+	requestResolved := callbackState.requestResolved
+	responseResolved := callbackState.responseResolved
+	retainedRequestCodec := callbackState.retainedRequestCodec
+	retainedResponseCodec := callbackState.retainedResponseCodec
+	retainedRequest := callbackState.retainedRequest
+	callbackState.Unlock()
 	if len(sanitizerErrors) != 0 {
 		t.Fatalf("sanitizer callbacks failed: %v", sanitizerErrors)
 	}

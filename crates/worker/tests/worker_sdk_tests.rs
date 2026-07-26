@@ -684,53 +684,23 @@ async fn worker_service_invokes_every_registration_surface() {
         .expect("response omission invoke")
         .into_inner();
     assert_empty_response(omitted_response);
-    let mut codec_request = llm_invoke(
-        "llm-sanitize-request",
-        RegistrationSurface::LlmSanitizeRequestGuardrail,
-        llm_request(),
-        None,
-        None,
+    let codec_request_result = invoke_json(&mut client, llm_request_codec_invoke()).await;
+    assert_eq!(
+        codec_request_result,
+        json!({
+            "headers": {},
+            "content": {"phase": "llm_sanitize_request"},
+        })
     );
-    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
-        codec_request.payload.as_mut()
-    {
-        invocation.sanitize_context = Some(
-            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
-                nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
-                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
-                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Builtin as i32,
-                        id: Some("openai_chat".into()),
-                    }),
-                    codec_capability_id: Some("request-capability".into()),
-                },
-            ),
-        );
-    }
-    invoke_json(&mut client, codec_request).await;
 
-    let mut codec_response = llm_invoke(
-        "llm-sanitize-response",
-        RegistrationSurface::LlmSanitizeResponseGuardrail,
-        llm_request(),
-        None,
-        Some(json!({"value": "secret"})),
+    let codec_response_result = invoke_json(&mut client, llm_response_codec_invoke()).await;
+    assert_eq!(
+        codec_response_result,
+        json!({
+            "value": "secret",
+            "phase": "llm_sanitize_response",
+        })
     );
-    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
-        codec_response.payload.as_mut()
-    {
-        invocation.sanitize_context = Some(
-            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
-                nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
-                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
-                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Opaque as i32,
-                        id: None,
-                    }),
-                    codec_capability_id: Some("response-capability".into()),
-                },
-            ),
-        );
-    }
-    invoke_json(&mut client, codec_response).await;
     assert_eq!(
         invoke_guardrail(
             &mut client,
@@ -1541,6 +1511,43 @@ async fn worker_service_propagates_host_runtime_errors() {
         "llm next failed",
     );
 
+    for (failures, request, expected) in [
+        (
+            MockHostFailures {
+                codec_request_decode: true,
+                ..Default::default()
+            },
+            llm_request_codec_invoke(),
+            "codec request decode failed",
+        ),
+        (
+            MockHostFailures {
+                codec_request_encode: true,
+                ..Default::default()
+            },
+            llm_request_codec_invoke(),
+            "codec request encode failed",
+        ),
+        (
+            MockHostFailures {
+                codec_response_decode: true,
+                ..Default::default()
+            },
+            llm_response_codec_invoke(),
+            "codec response decode failed",
+        ),
+    ] {
+        host.set_failures(failures);
+        assert_worker_error(
+            client
+                .invoke(Request::new(request))
+                .await
+                .expect("codec failure returns structured error")
+                .into_inner(),
+            expected,
+        );
+    }
+
     for (mode, expected) in [
         (MockStreamMode::WorkerError, "stream worker failed"),
         (MockStreamMode::EmptyChunk, "empty stream chunk"),
@@ -1996,6 +2003,9 @@ struct MockHostFailures {
     tool_next: bool,
     llm_next: bool,
     llm_stream_mode: MockStreamMode,
+    codec_request_decode: bool,
+    codec_request_encode: bool,
+    codec_response_decode: bool,
 }
 
 #[derive(Clone, Default)]
@@ -2215,6 +2225,12 @@ impl RelayHostRuntime for MockHost {
             "codec_request_decode:{}",
             request.codec_capability_id
         ));
+        if self.failures().codec_request_decode {
+            return Ok(Response::new(JsonResult {
+                value: None,
+                error: Some(worker_error("codec request decode failed")),
+            }));
+        }
         Ok(Response::new(JsonResult {
             value: Some(
                 json_envelope("nemo.relay.AnnotatedLlmRequest@2", &json!({}))
@@ -2234,6 +2250,12 @@ impl RelayHostRuntime for MockHost {
             "codec_request_encode:{}",
             request.codec_capability_id
         ));
+        if self.failures().codec_request_encode {
+            return Ok(Response::new(JsonResult {
+                value: None,
+                error: Some(worker_error("codec request encode failed")),
+            }));
+        }
         Ok(Response::new(JsonResult {
             value: Some(
                 json_envelope(
@@ -2256,6 +2278,12 @@ impl RelayHostRuntime for MockHost {
             "codec_response_decode:{}",
             request.codec_capability_id
         ));
+        if self.failures().codec_response_decode {
+            return Ok(Response::new(JsonResult {
+                value: None,
+                error: Some(worker_error("codec response decode failed")),
+            }));
+        }
         Ok(Response::new(JsonResult {
             value: Some(json_env(json!({}))),
             error: None,
@@ -2603,6 +2631,58 @@ fn llm_request_with_block() -> LlmRequest {
         headers: Default::default(),
         content: json!({"block": true}),
     }
+}
+
+fn llm_request_codec_invoke() -> InvokeRequest {
+    let mut request = llm_invoke(
+        "llm-sanitize-request",
+        RegistrationSurface::LlmSanitizeRequestGuardrail,
+        llm_request(),
+        None,
+        None,
+    );
+    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+        request.payload.as_mut()
+    {
+        invocation.sanitize_context = Some(
+            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
+                nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Builtin as i32,
+                        id: Some("openai_chat".into()),
+                    }),
+                    codec_capability_id: Some("request-capability".into()),
+                },
+            ),
+        );
+    }
+    request
+}
+
+fn llm_response_codec_invoke() -> InvokeRequest {
+    let mut request = llm_invoke(
+        "llm-sanitize-response",
+        RegistrationSurface::LlmSanitizeResponseGuardrail,
+        llm_request(),
+        None,
+        Some(json!({"value": "secret"})),
+    );
+    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+        request.payload.as_mut()
+    {
+        invocation.sanitize_context = Some(
+            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
+                nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Opaque as i32,
+                        id: None,
+                    }),
+                    codec_capability_id: Some("response-capability".into()),
+                },
+            ),
+        );
+    }
+    request
 }
 
 fn set_json_field(mut value: Json, key: &str, field_value: &str) -> Json {
