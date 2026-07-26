@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Manifest entrypoint for the Rampart PII local-model provider."""
+"""Manifest entrypoint for the Rampart PII inference provider."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import Any
 from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginContext, WorkerPlugin, serve_plugin
 
 from .detector import RampartDetector, RampartSettings, resolve_verified_model_root
+
+PII_DETECTION_PROVIDER_CONTRACT = "nemo.relay.pii_detection.v1"
 
 
 class _Admission:
@@ -87,7 +89,11 @@ class RampartWorker(WorkerPlugin):
                 if not release_on_completion:
                     admission.release()
 
-        ctx.register_local_model_provider("detector", detect)
+        ctx.register_inference_provider(
+            "detector",
+            PII_DETECTION_PROVIDER_CONTRACT,
+            detect,
+        )
 
 
 async def main() -> None:

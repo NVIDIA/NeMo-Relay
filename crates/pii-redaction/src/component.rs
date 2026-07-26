@@ -28,6 +28,8 @@ use super::local::{register_local_backend, validate_local_backend_config};
 
 /// The plugin kind reserved for the built-in privacy component.
 pub const PII_REDACTION_PLUGIN_KIND: &str = "pii_redaction";
+/// Versioned inference contract implemented by PII detection providers.
+pub const PII_DETECTION_PROVIDER_CONTRACT: &str = "nemo.relay.pii_detection.v1";
 pub(super) const DEFAULT_LOCAL_MODEL_LATENCY_MS: u64 = 250;
 pub(super) const DEFAULT_LOCAL_MODEL_MIN_SCORE: f64 = 0.4;
 pub(super) const MAX_LOCAL_MODEL_LATENCY_MS: u64 = 60_000;

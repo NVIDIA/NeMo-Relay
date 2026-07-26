@@ -43,9 +43,9 @@ tooling.
   clients, servers, services, and messages.
 - **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
   serializing Relay DTOs into protocol payloads.
-- **Language-neutral provider surface**: `LOCAL_MODEL_PROVIDER` carries
-  component-owned request and response JSON without coupling the host to the
-  worker implementation language.
+- **Language-neutral provider surface**: `INFERENCE_PROVIDER` carries a
+  versioned contract identifier plus component-owned request and response JSON
+  without coupling the host to the worker implementation language.
 
 ## Installation
 

@@ -48,13 +48,11 @@ pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
 pub mod dynamic;
 pub use dynamic::*;
-mod local_model;
-#[cfg(feature = "worker-grpc")]
-pub(crate) use local_model::deregister_local_model_provider_checked;
+mod inference;
 #[doc(hidden)]
-pub use local_model::{
-    LocalModelProviderFn, deregister_local_model_provider, local_model_provider,
-    register_local_model_provider_tracked,
+pub use inference::{
+    InferenceProvider, InferenceProviderDescriptor, InferenceProviderFn,
+    InferenceProviderRegistration, InferenceProviderRegistry,
 };
 
 type PluginMap = HashMap<String, RegisteredPlugin>;
@@ -350,6 +348,7 @@ impl PluginRegistration {
 pub struct PluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
     namespace: Option<String>,
+    inference_providers: InferenceProviderRegistry,
 }
 
 impl PluginRegistrationContext {
@@ -363,7 +362,31 @@ impl PluginRegistrationContext {
         Self {
             registrations: vec![],
             namespace: Some(namespace.into()),
+            inference_providers: InferenceProviderRegistry::default(),
         }
+    }
+
+    /// Creates a registration context backed by host-owned inference providers.
+    #[doc(hidden)]
+    pub fn with_inference_providers(
+        namespace: Option<String>,
+        inference_providers: InferenceProviderRegistry,
+    ) -> Self {
+        Self {
+            registrations: Vec::new(),
+            namespace,
+            inference_providers,
+        }
+    }
+
+    /// Resolves an inference provider implementing the required contract.
+    #[doc(hidden)]
+    pub fn inference_provider(
+        &self,
+        name: &str,
+        expected_contract: &str,
+    ) -> Result<InferenceProvider> {
+        self.inference_providers.resolve(name, expected_contract)
     }
 
     /// Returns the runtime-qualified name for a plugin-local registration.
@@ -1317,12 +1340,23 @@ pub fn plugin_config_schema() -> Json {
 /// is removed before the new configuration is activated.
 #[doc(hidden)]
 pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
+    initialize_plugins_exact_with_inference_providers(config, InferenceProviderRegistry::default())
+        .await
+}
+
+/// Configures plugin components with host-owned inference providers.
+#[doc(hidden)]
+pub async fn initialize_plugins_exact_with_inference_providers(
+    config: PluginConfig,
+    inference_providers: InferenceProviderRegistry,
+) -> Result<ConfigReport> {
     run_owned_plugin_mutation("plugin initialization", move || async move {
         let lease = LegacyPluginMutationLease::acquire()?;
         let rollback_failures = Arc::new(Mutex::new(Vec::new()));
         let initialization = tokio::spawn(initialize_plugins_exact_inner(
             config,
             Some(Arc::clone(&rollback_failures)),
+            inference_providers,
         ))
         .await
         .map_err(|error| {
@@ -1439,14 +1473,16 @@ pub(crate) async fn initialize_plugins_exact_for_host(
     config: PluginConfig,
     owner_id: u64,
     rollback_failures: Arc<Mutex<Vec<String>>>,
+    inference_providers: InferenceProviderRegistry,
 ) -> Result<ConfigReport> {
     verify_plugin_host_owner(owner_id)?;
-    initialize_plugins_exact_inner(config, Some(rollback_failures)).await
+    initialize_plugins_exact_inner(config, Some(rollback_failures), inference_providers).await
 }
 
 async fn initialize_plugins_exact_inner(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    inference_providers: InferenceProviderRegistry,
 ) -> Result<ConfigReport> {
     let enabled_component_count = config
         .components
@@ -1483,11 +1519,17 @@ async fn initialize_plugins_exact_inner(
         match initialize_plugin_components_catching_panics(
             config.clone(),
             rollback_failures.clone(),
+            inference_providers.clone(),
         )
         .await
         {
             Ok(registrations) => {
-                store_active_plugin_configuration(config, report.clone(), registrations)?;
+                store_active_plugin_configuration(
+                    config,
+                    report.clone(),
+                    registrations,
+                    inference_providers,
+                )?;
                 log::info!(
                     target: "nemo_relay.plugin",
                     event = "plugin_configuration_replaced",
@@ -1499,6 +1541,7 @@ async fn initialize_plugins_exact_inner(
             Err(err) => match initialize_plugin_components_catching_panics(
                 previous_state.config.clone(),
                 rollback_failures.clone(),
+                previous_state.inference_providers.clone(),
             )
             .await
             {
@@ -1508,6 +1551,7 @@ async fn initialize_plugins_exact_inner(
                         previous_state.config,
                         previous_report,
                         registrations,
+                        previous_state.inference_providers,
                     )?;
                     log::warn!(
                         target: "nemo_relay.plugin",
@@ -1531,9 +1575,18 @@ async fn initialize_plugins_exact_inner(
             },
         }
     } else {
-        let registrations =
-            initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
-        store_active_plugin_configuration(config, report.clone(), registrations)?;
+        let registrations = initialize_plugin_components_catching_panics(
+            config.clone(),
+            rollback_failures,
+            inference_providers.clone(),
+        )
+        .await?;
+        store_active_plugin_configuration(
+            config,
+            report.clone(),
+            registrations,
+            inference_providers,
+        )?;
         log::info!(
             target: "nemo_relay.plugin",
             event = "plugin_configuration_activated",
@@ -1547,14 +1600,17 @@ async fn initialize_plugins_exact_inner(
 async fn initialize_plugin_components_catching_panics(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    inference_providers: InferenceProviderRegistry,
 ) -> Result<Vec<PluginRegistration>> {
-    tokio::spawn(async move { initialize_plugin_components(&config, rollback_failures).await })
-        .await
-        .map_err(|error| {
-            PluginError::Internal(format!(
-                "plugin component initialization task failed: {error}"
-            ))
-        })?
+    tokio::spawn(async move {
+        initialize_plugin_components(&config, rollback_failures, inference_providers).await
+    })
+    .await
+    .map_err(|error| {
+        PluginError::Internal(format!(
+            "plugin component initialization task failed: {error}"
+        ))
+    })?
 }
 
 /// Validates and activates `config` layered on top of the discovered
@@ -1565,6 +1621,16 @@ async fn initialize_plugin_components_catching_panics(
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
     let config = resolve_plugin_config(config)?;
     initialize_plugins_exact(config).await
+}
+
+/// Resolves discovered configuration and activates it with host inference providers.
+#[doc(hidden)]
+pub async fn initialize_plugins_with_inference_providers(
+    config: PluginConfig,
+    inference_providers: InferenceProviderRegistry,
+) -> Result<ConfigReport> {
+    let config = resolve_plugin_config(config)?;
+    initialize_plugins_exact_with_inference_providers(config, inference_providers).await
 }
 
 /// Layers `config` over the default discovered `plugins.toml` files.
@@ -1963,11 +2029,13 @@ struct ActivePluginConfiguration {
     config: PluginConfig,
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
+    inference_providers: InferenceProviderRegistry,
 }
 
 async fn initialize_plugin_components(
     config: &PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    inference_providers: InferenceProviderRegistry,
 ) -> Result<Vec<PluginRegistration>> {
     ensure_builtin_plugins_registered()?;
     let totals = plugin_component_totals(config);
@@ -1996,8 +2064,11 @@ async fn initialize_plugin_components(
             totals.get(component.kind.as_str()).copied().unwrap_or(1),
         );
 
-        let mut pending =
-            PendingPluginRegistrationContext::new(namespace, rollback_failures.clone());
+        let mut pending = PendingPluginRegistrationContext::new(
+            namespace,
+            rollback_failures.clone(),
+            inference_providers.clone(),
+        );
         plugin
             .register(&component.config, &mut pending.context)
             .await?;
@@ -2042,9 +2113,16 @@ struct PendingPluginRegistrationContext {
 }
 
 impl PendingPluginRegistrationContext {
-    fn new(namespace: String, rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
+    fn new(
+        namespace: String,
+        rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+        inference_providers: InferenceProviderRegistry,
+    ) -> Self {
         Self {
-            context: PluginRegistrationContext::with_namespace(namespace),
+            context: PluginRegistrationContext::with_inference_providers(
+                Some(namespace),
+                inference_providers,
+            ),
             rollback_failures,
         }
     }
@@ -2079,6 +2157,7 @@ fn store_active_plugin_configuration(
     config: PluginConfig,
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
+    inference_providers: InferenceProviderRegistry,
 ) -> Result<()> {
     let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
         PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
@@ -2087,6 +2166,7 @@ fn store_active_plugin_configuration(
         config,
         report,
         registrations,
+        inference_providers,
     });
     Ok(())
 }

@@ -845,7 +845,7 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
     [str, LlmRequest, "LlmStreamNext"],
     Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
 ]
-LocalModelProviderCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
+InferenceProviderCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
 
 
 @dataclass(slots=True)
@@ -866,7 +866,7 @@ class _Handlers:
     llm_requests: dict[str, LlmRequestCallback]
     llm_executions: dict[str, LlmExecutionCallback]
     llm_stream_executions: dict[str, LlmStreamExecutionCallback]
-    local_model_providers: dict[str, LocalModelProviderCallback]
+    inference_providers: dict[str, InferenceProviderCallback]
 
     @classmethod
     def empty(cls) -> _Handlers:
@@ -887,7 +887,7 @@ class _Handlers:
             llm_requests={},
             llm_executions={},
             llm_stream_executions={},
-            local_model_providers={},
+            inference_providers={},
         )
 
 
@@ -956,15 +956,17 @@ class PluginContext:
         self._push_registration(name, pb.SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
 
-    def register_local_model_provider(
+    def register_inference_provider(
         self,
         name: str,
-        callback: LocalModelProviderCallback,
+        contract: str,
+        callback: InferenceProviderCallback,
     ) -> None:
-        """Register a named local-model request-response provider.
+        """Register a named inference provider for a versioned host contract.
 
         Args:
             name: Stable provider name selected by a consuming host component.
+            contract: Versioned request-response contract implemented by the provider.
             callback: Function receiving and returning component-owned JSON.
                 The callback can return a value directly or through an
                 awaitable.
@@ -973,8 +975,8 @@ class PluginContext:
             Providers perform model inference only. The consuming host
             component owns field selection, policy, and output application.
         """
-        self._push_registration(name, pb.LOCAL_MODEL_PROVIDER, 0, False)
-        self._handlers.local_model_providers[name] = callback
+        self._push_registration(name, pb.INFERENCE_PROVIDER, 0, False, contract=contract)
+        self._handlers.inference_providers[name] = callback
 
     def _register_event_sanitizer(
         self,
@@ -1283,7 +1285,15 @@ class PluginContext:
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
+    def _push_registration(
+        self,
+        name: str,
+        surface: int,
+        priority: int,
+        break_chain: bool,
+        *,
+        contract: str = "",
+    ) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
@@ -1295,6 +1305,7 @@ class PluginContext:
                 surface=surface,
                 priority=priority,
                 break_chain=break_chain,
+                contract=contract,
             )
         )
 
@@ -2083,15 +2094,15 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         ),
                     )
                 )
-            if request.surface == pb.LOCAL_MODEL_PROVIDER:
+            if request.surface == pb.INFERENCE_PROVIDER:
                 result = await _maybe_await(
                     self._handler(
-                        self._handlers.local_model_providers,
+                        self._handlers.inference_providers,
                         request.registration_name,
                     )(
                         _decode_required_envelope(
                             request.provider,
-                            "local-model provider request",
+                            "inference provider request",
                         )
                     )
                 )
@@ -2231,7 +2242,7 @@ def _all_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        pb.LOCAL_MODEL_PROVIDER,
+        pb.INFERENCE_PROVIDER,
     ]
 
 

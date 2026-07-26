@@ -167,8 +167,8 @@ requests shutdown.
 
 ### Provide local inference
 
-Use `register_local_model_provider` when a first-party Relay component owns the
-policy and needs an isolated detector or inference implementation:
+Use `register_inference_provider` when a first-party Relay component owns a
+versioned contract and needs an isolated detector or inference implementation:
 
 ```python
 async def detect(request: Json) -> Json:
@@ -178,12 +178,17 @@ async def detect(request: Json) -> Json:
     }
 
 
-ctx.register_local_model_provider("detector", detect)
+ctx.register_inference_provider(
+    "detector",
+    "acme.pii_detection.v1",
+    detect,
+)
 ```
 
 Relay publishes this registration as `<plugin_id>/detector`. The consuming
-component owns the JSON contract, field selection, deadline, response
-validation, and application. The worker should perform inference only.
+component selects the exact contract and owns its JSON schema, field selection,
+deadline, response validation, and application. The worker should perform
+inference only.
 
 ## Create the Manifest
 

@@ -15,8 +15,7 @@ use nemo_relay::codec::resolve::{
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{
-    LocalModelProviderFn, PluginError, PluginRegistrationContext, Result as PluginResult,
-    local_model_provider,
+    InferenceProvider, PluginError, PluginRegistrationContext, Result as PluginResult,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -26,8 +25,9 @@ use super::component::{
     DEFAULT_LOCAL_MODEL_LATENCY_MS, DEFAULT_LOCAL_MODEL_MIN_SCORE, LocalBackendConfig,
     MAX_LOCAL_MODEL_EXCLUDED_LABELS, MAX_LOCAL_MODEL_LABEL_BYTES, MAX_LOCAL_MODEL_LATENCY_MS,
     MAX_LOCAL_MODEL_PROVIDER_VALUE_BYTES, MAX_LOCAL_MODEL_REPLACEMENT_BYTES,
-    MAX_LOCAL_MODEL_TARGET_PATH_BYTES, MAX_LOCAL_MODEL_TARGET_PATHS, PiiRedactionConfig,
-    is_valid_json_pointer, is_valid_json_pointer_pattern, profile_registration_prefix,
+    MAX_LOCAL_MODEL_TARGET_PATH_BYTES, MAX_LOCAL_MODEL_TARGET_PATHS,
+    PII_DETECTION_PROVIDER_CONTRACT, PiiRedactionConfig, is_valid_json_pointer,
+    is_valid_json_pointer_pattern, profile_registration_prefix,
 };
 use super::overlay::BuiltinCodecName;
 
@@ -42,7 +42,7 @@ const MAX_DETECTIONS_PER_TEXT: usize = 128;
 #[derive(Clone)]
 struct CompiledLocalBackend {
     provider_name: Arc<String>,
-    provider: LocalModelProviderFn,
+    provider: InferenceProvider,
     model_id: Option<String>,
     detector_profile: Option<String>,
     target_paths: Arc<HashSet<String>>,
@@ -118,7 +118,11 @@ struct SelectedText {
 }
 
 impl CompiledLocalBackend {
-    fn new(config: LocalBackendConfig, codec_name: Option<String>) -> PluginResult<Self> {
+    fn new(
+        config: LocalBackendConfig,
+        codec_name: Option<String>,
+        ctx: &PluginRegistrationContext,
+    ) -> PluginResult<Self> {
         if let Some(violation) = validate_local_backend_config(&config).into_iter().next() {
             return Err(PluginError::InvalidConfig(violation.message));
         }
@@ -141,11 +145,13 @@ impl CompiledLocalBackend {
             })?),
             None => None,
         };
-        let provider = local_model_provider(&provider_name).map_err(|_| {
-            PluginError::RegistrationFailed(format!(
-                "PII redaction local-model provider '{provider_name}' is unavailable"
-            ))
-        })?;
+        let provider = ctx
+            .inference_provider(&provider_name, PII_DETECTION_PROVIDER_CONTRACT)
+            .map_err(|error| {
+                PluginError::RegistrationFailed(format!(
+                    "PII redaction inference provider '{provider_name}' is unavailable: {error}"
+                ))
+            })?;
         Ok(Self {
             provider_name: Arc::new(provider_name),
             provider,
@@ -364,7 +370,7 @@ impl CompiledLocalBackend {
                 .collect(),
         };
         let request = serde_json::to_value(request)?;
-        let response = (self.provider)(request, timeout)?;
+        let response = self.provider.invoke(request, timeout)?;
         let response: LocalModelResponse = serde_json::from_value(response).map_err(|error| {
             PluginError::RegistrationFailed(format!(
                 "local-model provider returned an invalid detection response: {error}"
@@ -496,7 +502,7 @@ pub(super) fn register_local_backend(
             "local settings are required when mode = 'local_model'".to_string(),
         )
     })?;
-    let backend = CompiledLocalBackend::new(local, config.codec.clone())?;
+    let backend = CompiledLocalBackend::new(local, config.codec.clone(), ctx)?;
 
     if config.mark {
         ctx.register_mark_sanitize_guardrail(

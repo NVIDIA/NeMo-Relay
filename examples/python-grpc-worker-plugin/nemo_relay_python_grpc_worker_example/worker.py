@@ -71,7 +71,11 @@ class ExamplePythonWorker(WorkerPlugin):
             }
 
         ctx.register_tool_request_intercept("tag_tool_request", tag_tool_request)
-        ctx.register_local_model_provider("echo", echo_local_model)
+        ctx.register_inference_provider(
+            "echo",
+            "examples.python_grpc_worker.echo.v1",
+            echo_local_model,
+        )
 
 
 def _tag_json(value: Json, tag: str) -> Json:

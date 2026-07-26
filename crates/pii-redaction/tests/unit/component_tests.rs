@@ -28,11 +28,11 @@ use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
-    ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
+    ConfigPolicy, DiagnosticLevel, InferenceProviderDescriptor, InferenceProviderRegistration,
+    InferenceProviderRegistry, PluginComponentSpec, PluginConfig, PluginError,
     PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
-    deregister_local_model_provider,
     ensure_builtin_plugins_registered, initialize_plugins_exact as initialize_plugins,
-    list_plugin_kinds, register_local_model_provider_tracked, rollback_registrations,
+    initialize_plugins_with_inference_providers, list_plugin_kinds, rollback_registrations,
     validate_plugin_config,
 };
 use futures::StreamExt;
@@ -148,25 +148,23 @@ fn reset_runtime() {
     register_pii_redaction_component().unwrap();
 }
 
-struct LocalModelProviderGuard {
-    name: String,
-    registration_id: u64,
+struct InferenceProviderGuard {
+    _registration: InferenceProviderRegistration,
 }
 
-impl Drop for LocalModelProviderGuard {
-    fn drop(&mut self) {
-        let _ = deregister_local_model_provider(&self.name, self.registration_id);
-    }
-}
-
-fn register_test_local_model_provider(
+fn register_test_inference_provider(
+    registry: &InferenceProviderRegistry,
     name: &str,
     callback: impl Fn(Json, std::time::Duration) -> Result<Json, PluginError> + Send + Sync + 'static,
-) -> LocalModelProviderGuard {
-    let registration_id = register_local_model_provider_tracked(name, Arc::new(callback)).unwrap();
-    LocalModelProviderGuard {
-        name: name.to_string(),
-        registration_id,
+) -> InferenceProviderGuard {
+    let registration = registry
+        .register(
+            InferenceProviderDescriptor::new(name, PII_DETECTION_PROVIDER_CONTRACT).unwrap(),
+            Arc::new(callback),
+        )
+        .unwrap();
+    InferenceProviderGuard {
+        _registration: registration,
     }
 }
 
@@ -1286,24 +1284,27 @@ fn deterministic_and_local_model_profiles_compose_in_priority_order() {
     reset_runtime();
     setup_isolated_thread();
 
-    let _provider = register_test_local_model_provider("contextual", |request, _| {
-        assert_eq!(
-            request["texts"][0]["text"], "Alice emailed [REDACTED]",
-            "the local provider must receive the deterministic profile's output"
-        );
-        Ok(json!({
-            "version": 1,
-            "detections": [{
-                "text_id": 0,
-                "start_utf8": 0,
-                "end_utf8": 5,
-                "label": "GIVEN_NAME",
-                "score": 0.99
-            }]
-        }))
-    });
+    let inference_providers = InferenceProviderRegistry::default();
+    let _provider =
+        register_test_inference_provider(&inference_providers, "contextual", |request, _| {
+            assert_eq!(
+                request["texts"][0]["text"], "Alice emailed [REDACTED]",
+                "the local provider must receive the deterministic profile's output"
+            );
+            Ok(json!({
+                "version": 1,
+                "detections": [{
+                    "text_id": 0,
+                    "start_utf8": 0,
+                    "end_utf8": 5,
+                    "label": "GIVEN_NAME",
+                    "score": 0.99
+                }]
+            }))
+        });
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(initialize_plugins_with_inference_providers(
+        plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [
             {
@@ -1323,7 +1324,9 @@ fn deterministic_and_local_model_profiles_compose_in_priority_order() {
                 }
             }
         ]
-    }))))
+        })),
+        inference_providers,
+    ))
     .unwrap();
 
     let events = capture_events("pii-profile-composition");
@@ -1457,10 +1460,11 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let _one = register_test_local_model_provider("one", |_, _| {
+    let inference_providers = InferenceProviderRegistry::default();
+    let _one = register_test_inference_provider(&inference_providers, "one", |_, _| {
         Ok(json!({"version": 1, "detections": []}))
     });
-    let _two = register_test_local_model_provider("two", |_, _| {
+    let _two = register_test_inference_provider(&inference_providers, "two", |_, _| {
         Ok(json!({"version": 1, "detections": []}))
     });
 
@@ -1475,7 +1479,10 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_namespace("profiles::");
+    let mut ctx = PluginRegistrationContext::with_inference_providers(
+        Some("profiles::".into()),
+        inference_providers,
+    );
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
     let registrations_debug = format!("{registrations:?}");
@@ -2027,13 +2034,19 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
 
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
-    let _provider = register_test_local_model_provider("test-provider", move |request, _| {
-        called_inner.store(true, Ordering::SeqCst);
-        assert_eq!(request["version"], 1);
-        Ok(json!({"version": 1, "detections": []}))
-    });
+    let inference_providers = InferenceProviderRegistry::default();
+    let _provider = register_test_inference_provider(
+        &inference_providers,
+        "test-provider",
+        move |request, _| {
+            called_inner.store(true, Ordering::SeqCst);
+            assert_eq!(request["version"], 1);
+            Ok(json!({"version": 1, "detections": []}))
+        },
+    );
     setup_isolated_thread();
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(initialize_plugins_with_inference_providers(
+        plugin_config(json!({
         "mode": "local_model",
         "input": false,
         "output": false,
@@ -2041,7 +2054,9 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
         "tool_input": true,
         "tool_output": false,
         "local": {"backend": "test-provider"}
-    }))))
+        })),
+        inference_providers,
+    ))
     .unwrap();
     tool_call(
         ToolCallParams::builder()
@@ -2077,7 +2092,8 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
         .expect_err("missing local provider should fail registration");
     assert!(missing.to_string().contains("unavailable"));
 
-    let _failed = register_test_local_model_provider("failed", |_, _| {
+    let inference_providers = InferenceProviderRegistry::default();
+    let _failed = register_test_inference_provider(&inference_providers, "failed", |_, _| {
         Err(PluginError::RegistrationFailed("provider failed".into()))
     });
     let config = json!({
@@ -2092,11 +2108,50 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_namespace("failed::");
+    let mut ctx = PluginRegistrationContext::with_inference_providers(
+        Some("failed::".into()),
+        inference_providers,
+    );
     futures::executor::block_on(plugin.register(&config, &mut ctx))
         .expect("provider availability should be checked at registration");
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
+}
+
+#[test]
+fn local_backend_rejects_provider_with_incompatible_contract() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let inference_providers = InferenceProviderRegistry::default();
+    let _registration = inference_providers
+        .register(
+            InferenceProviderDescriptor::new("embedding", "acme.embedding.v1").unwrap(),
+            Arc::new(|request, _| Ok(request)),
+        )
+        .unwrap();
+    let plugin = PiiRedactionPlugin;
+    let Json::Object(config) = json!({
+        "mode": "local_model",
+        "input": false,
+        "output": false,
+        "mark": false,
+        "tool_input": true,
+        "tool_output": false,
+        "local": {"backend": "embedding"}
+    }) else {
+        panic!("component config must be object");
+    };
+    let mut ctx = PluginRegistrationContext::with_inference_providers(
+        Some("mismatch::".into()),
+        inference_providers,
+    );
+
+    let error = futures::executor::block_on(plugin.register(&config, &mut ctx))
+        .expect_err("PII must reject providers implementing another contract");
+
+    assert!(error.to_string().contains("acme.embedding.v1"));
+    assert!(error.to_string().contains(PII_DETECTION_PROVIDER_CONTRACT));
 }
 
 #[test]

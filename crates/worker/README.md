@@ -25,7 +25,7 @@ communicates with Relay through the versioned `grpc-v1` worker protocol.
 - **Isolate plugin code**: Run custom runtime behavior outside the Relay host
   process.
 - **Use typed registration APIs**: Implement `WorkerPlugin` and register
-  subscribers, guardrails, intercepts, or local-model providers with
+  subscribers, guardrails, intercepts, or inference providers with
   `PluginContext`.
 - **Call the host runtime**: Emit marks, manage scopes, and invoke middleware
   continuations through `PluginRuntime`.
@@ -86,24 +86,28 @@ Relay supplies the socket, activation ID, and authentication token through the
 worker environment. Use `serve_plugin` for Relay-spawned workers; explicit
 server configuration is intended for tests and custom launchers.
 
-## Local-Model Providers
+## Inference Providers
 
 A worker can expose detector or inference functionality to a first-party host
 component without owning middleware policy:
 
 ```rust
-ctx.register_local_model_provider("detector", |request| async move {
-    Ok(serde_json::json!({
-        "version": 1,
-        "detections": detect(request)?
-    }))
-});
+ctx.register_inference_provider(
+    "detector",
+    "acme.pii_detection.v1",
+    |request| async move {
+        Ok(serde_json::json!({
+            "version": 1,
+            "detections": detect(request)?
+        }))
+    },
+);
 ```
 
 The host publishes the provider as `<plugin_id>/detector`. The consuming
-component owns the request and response schema, deadline, field selection,
-validation, and application of the result. The worker callback should perform
-inference only.
+component selects the exact contract and owns the request and response schema,
+deadline, field selection, validation, and application of the result. The
+worker callback should perform inference only.
 
 ## Concurrency and Cancellation
 

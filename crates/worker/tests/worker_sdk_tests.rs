@@ -117,7 +117,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert!(
         handshake
             .supported_surfaces
-            .contains(&(RegistrationSurface::LocalModelProvider as i32))
+            .contains(&(RegistrationSurface::InferenceProvider as i32))
     );
 
     let bad_health = client
@@ -278,7 +278,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn worker_service_invokes_local_model_provider() {
+async fn worker_service_invokes_inference_provider() {
     let (handle, mut client) = spawn_worker(
         Arc::new(SurfacePlugin::default()),
         "http://127.0.0.1:9".into(),
@@ -287,7 +287,8 @@ async fn worker_service_invokes_local_model_provider() {
     let registrations = register_plugin(&mut client).await;
     assert!(registrations.iter().any(|registration| {
         registration.local_name == "local-model"
-            && registration.surface == RegistrationSurface::LocalModelProvider as i32
+            && registration.surface == RegistrationSurface::InferenceProvider as i32
+            && registration.contract == "test.echo.v1"
     }));
 
     let response = invoke_json(
@@ -1258,8 +1259,8 @@ async fn worker_service_reports_missing_handlers_and_malformed_payloads() {
             "llm execution",
         ),
         (
-            provider_invoke("missing-local-model", json!({})),
-            "local-model provider",
+            provider_invoke("missing-inference-provider", json!({})),
+            "inference provider",
         ),
     ] {
         assert_worker_error(
@@ -1964,7 +1965,7 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_llm_stream_execution_intercept("llm-stream-open-error", 1, |_, _, _| async {
             Err(WorkerSdkError::Callback("stream open boom".into()))
         });
-        ctx.register_local_model_provider("local-model", |request| async move {
+        ctx.register_inference_provider("local-model", "test.echo.v1", |request| async move {
             Ok(set_json_field(request, "provider", "local-model"))
         });
         Ok(())
@@ -2564,7 +2565,7 @@ fn provider_invoke(registration_name: &str, value: Json) -> InvokeRequest {
         activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
         registration_name: registration_name.into(),
-        surface: RegistrationSurface::LocalModelProvider as i32,
+        surface: RegistrationSurface::InferenceProvider as i32,
         continuation_id: String::new(),
         scope: Some(scope_context()),
         auth_token: AUTH_TOKEN.into(),

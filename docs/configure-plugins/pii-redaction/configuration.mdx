@@ -323,8 +323,10 @@ fields, batches text, enforces deadlines, validates detections, applies
 confidence and label policy, replaces accepted spans, and fails closed.
 
 The provider name is `<plugin_id>/<registration_name>`. For example, a worker
-with plugin ID `acme.pii_worker` that registers `detector` is selected as
-`acme.pii_worker/detector`.
+with plugin ID `acme.pii_worker` that registers `detector` for
+`nemo.relay.pii_detection.v1` is selected as `acme.pii_worker/detector`. Relay
+rejects providers that declare another contract before installing the
+sanitizer.
 
 ```toml
 [[components]]

@@ -36,7 +36,7 @@ Public data types:
     LlmOptimizationTokens: Explicit token evidence by category.
     LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
-    LocalModelProviderCallback: Local-model request-response provider callback.
+    InferenceProviderCallback: Versioned inference-provider callback.
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
@@ -76,6 +76,7 @@ from ._api import (
     Event,
     EventSanitizeCallback,
     EventSanitizeFields,
+    InferenceProviderCallback,
     Json,
     LlmCodecIdentity,
     LlmConditionalCallback,
@@ -97,7 +98,6 @@ from ._api import (
     LlmSanitizeResponseContext,
     LlmStreamExecutionCallback,
     LlmStreamNext,
-    LocalModelProviderCallback,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
@@ -144,7 +144,7 @@ __all__ = [
     "LlmSanitizeResponseCallback",
     "LlmStreamNext",
     "LlmStreamExecutionCallback",
-    "LocalModelProviderCallback",
+    "InferenceProviderCallback",
     "PluginContext",
     "PluginRuntime",
     "PendingMarkSpec",

@@ -4,7 +4,8 @@
 //! Tests for stable worker protocol helpers and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, RegistrationSurface, ScopeType,
+    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, Registration,
+    RegistrationSurface, ScopeType,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use prost::Message;
@@ -41,7 +42,13 @@ fn registration_surface_values_are_stable() {
     assert_eq!(RegistrationSurface::MarkSanitizeGuardrail as i32, 30);
     assert_eq!(RegistrationSurface::ScopeSanitizeStartGuardrail as i32, 31);
     assert_eq!(RegistrationSurface::ScopeSanitizeEndGuardrail as i32, 32);
-    assert_eq!(RegistrationSurface::LocalModelProvider as i32, 40);
+    assert_eq!(RegistrationSurface::InferenceProvider as i32, 40);
+    let encoded = Registration {
+        contract: "x".into(),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    assert_eq!(encoded, vec![42, 1, b'x']);
 }
 
 #[test]

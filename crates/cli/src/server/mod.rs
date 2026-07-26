@@ -25,6 +25,7 @@ use nemo_relay::plugin::dynamic::{
 };
 use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    initialize_plugins_exact_with_inference_providers,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -1116,7 +1117,11 @@ impl PluginActivation {
                     CliError::Config(format!("worker plugin load failed: {error}"))
                 })?)
             };
-        initialize_plugins_exact(plugin_config)
+        let inference_providers = worker
+            .as_ref()
+            .map(WorkerPluginActivation::inference_providers)
+            .unwrap_or_default();
+        initialize_plugins_exact_with_inference_providers(plugin_config, inference_providers)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
         Ok(Self {

@@ -72,10 +72,9 @@ use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginDeregistrationOutcome, PluginError,
-    PluginRegistrationContext, deregister_local_model_provider_checked,
-    deregister_plugin_registration_checked, register_local_model_provider_tracked,
-    register_plugin_tracked,
+    ConfigDiagnostic, DiagnosticLevel, InferenceProviderDescriptor, InferenceProviderRegistration,
+    InferenceProviderRegistry, Plugin, PluginDeregistrationOutcome, PluginError,
+    PluginRegistrationContext, deregister_plugin_registration_checked, register_plugin_tracked,
 };
 
 use super::{
@@ -131,7 +130,8 @@ pub struct WorkerPluginLoadSpec {
 pub struct WorkerPluginActivation {
     plugins: Vec<Arc<WorkerPluginInstance>>,
     plugin_registrations: Vec<(String, u64)>,
-    local_model_registrations: Vec<(String, u64)>,
+    inference_providers: InferenceProviderRegistry,
+    inference_provider_registrations: Vec<InferenceProviderRegistration>,
 }
 
 impl WorkerPluginActivation {
@@ -143,14 +143,20 @@ impl WorkerPluginActivation {
     /// Consumes the activation; deregistration runs from `Drop`.
     pub fn clear(self) {}
 
+    /// Returns the host-owned inference providers installed by this activation.
+    #[doc(hidden)]
+    pub fn inference_providers(&self) -> InferenceProviderRegistry {
+        self.inference_providers.clone()
+    }
+
     pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
         deregister_tracked_registrations_checked(&mut self.plugin_registrations, "worker")
     }
 
-    pub(crate) fn deregister_local_model_providers_checked(
+    pub(crate) fn deregister_inference_providers_checked(
         &mut self,
     ) -> DynamicPluginTeardownOutcome {
-        deregister_local_model_providers_checked(&mut self.local_model_registrations)
+        deregister_inference_providers_checked(&mut self.inference_provider_registrations)
     }
 
     pub(crate) fn shutdown_plugins_checked(&self) -> DynamicPluginTeardownOutcome {
@@ -164,7 +170,7 @@ impl WorkerPluginActivation {
 
 impl Drop for WorkerPluginActivation {
     fn drop(&mut self) {
-        let _ = deregister_local_model_providers_checked(&mut self.local_model_registrations);
+        let _ = deregister_inference_providers_checked(&mut self.inference_provider_registrations);
         for (plugin_kind, registration_id) in self.plugin_registrations.iter().rev() {
             let _ = deregister_plugin_registration_checked(plugin_kind, *registration_id);
         }
@@ -179,21 +185,35 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
+    load_worker_plugins_with_inference_providers(specs, InferenceProviderRegistry::default())
+}
+
+/// Loads worker plugins into an existing host inference-provider registry.
+#[doc(hidden)]
+pub fn load_worker_plugins_with_inference_providers<I>(
+    specs: I,
+    inference_providers: InferenceProviderRegistry,
+) -> crate::plugin::Result<WorkerPluginActivation>
+where
+    I: IntoIterator<Item = WorkerPluginLoadSpec>,
+{
     let mut activation = WorkerPluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
-        local_model_registrations: Vec::new(),
+        inference_providers: inference_providers.clone(),
+        inference_provider_registrations: Vec::new(),
     };
     for spec in specs {
         let instance = load_one_worker_plugin(&spec)?;
-        let local_model_registrations = instance.install_local_model_providers()?;
+        let inference_provider_registrations =
+            instance.install_inference_providers(&inference_providers)?;
         let plugin_kind = instance.plugin_kind.clone();
         // Transfer ownership before the next fallible registration so Drop can
         // unwind providers and the worker process on partial activation.
         activation.plugins.push(instance.clone());
         activation
-            .local_model_registrations
-            .extend(local_model_registrations);
+            .inference_provider_registrations
+            .extend(inference_provider_registrations);
         let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
@@ -1060,7 +1080,10 @@ fn clear_host_python_environment(command: &mut Command) {
 }
 
 impl WorkerPluginInstance {
-    fn install_local_model_providers(&self) -> crate::plugin::Result<Vec<(String, u64)>> {
+    fn install_inference_providers(
+        &self,
+        registry: &InferenceProviderRegistry,
+    ) -> crate::plugin::Result<Vec<InferenceProviderRegistration>> {
         let mut registrations = Vec::new();
         for registration in &self.registrations {
             let surface = RegistrationSurface::try_from(registration.surface).map_err(|_| {
@@ -1069,21 +1092,23 @@ impl WorkerPluginInstance {
                     self.plugin_kind, registration.surface
                 ))
             })?;
-            if surface != RegistrationSurface::LocalModelProvider {
+            if surface != RegistrationSurface::InferenceProvider {
                 continue;
             }
             let callback_name = registration.local_name.clone();
             let provider_name = format!("{}/{}", self.plugin_kind, callback_name);
             let callback = self.clone_for_callback();
-            match register_local_model_provider_tracked(
-                &provider_name,
+            let descriptor =
+                InferenceProviderDescriptor::new(provider_name, registration.contract.clone())?;
+            match registry.register(
+                descriptor,
                 Arc::new(move |request, timeout| {
-                    callback.invoke_local_model_provider(&callback_name, request, timeout)
+                    callback.invoke_inference_provider(&callback_name, request, timeout)
                 }),
             ) {
-                Ok(registration_id) => registrations.push((provider_name, registration_id)),
+                Ok(registration) => registrations.push(registration),
                 Err(error) => {
-                    let _ = deregister_local_model_providers_checked(&mut registrations);
+                    let _ = deregister_inference_providers_checked(&mut registrations);
                     return Err(error);
                 }
             }
@@ -1130,9 +1155,9 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::LlmStreamExecutionIntercept => {
                     self.install_llm_registration(ctx, registration, surface)?
                 }
-                RegistrationSurface::LocalModelProvider => {
-                    // Providers are installed before static component
-                    // initialization so components can resolve them.
+                RegistrationSurface::InferenceProvider => {
+                    // Providers are installed during host bootstrap so components
+                    // can resolve their contracts before runtime callbacks register.
                 }
                 RegistrationSurface::Unspecified => {
                     return Err(PluginError::RegistrationFailed(format!(
@@ -1421,7 +1446,7 @@ struct WorkerPluginCallback {
 }
 
 impl WorkerPluginCallback {
-    fn invoke_local_model_provider(
+    fn invoke_inference_provider(
         &self,
         registration_name: &str,
         value: Json,
@@ -1429,7 +1454,7 @@ impl WorkerPluginCallback {
     ) -> crate::plugin::Result<Json> {
         let request = self.base_request(
             registration_name,
-            RegistrationSurface::LocalModelProvider,
+            RegistrationSurface::InferenceProvider,
             None,
             Some(invoke_request_payload::Payload::Provider(
                 json_envelope_infallible(JSON_SCHEMA, &value),
@@ -1441,12 +1466,12 @@ impl WorkerPluginCallback {
         )
         .map_err(|error| {
             PluginError::RegistrationFailed(format!(
-                "local-model provider '{registration_name}' invocation failed: {error}"
+                "inference provider '{registration_name}' invocation failed: {error}"
             ))
         })?;
         json_from_invoke_response(response).map_err(|error| {
             PluginError::RegistrationFailed(format!(
-                "local-model provider '{registration_name}' returned an invalid response: {error}"
+                "inference provider '{registration_name}' returned an invalid response: {error}"
             ))
         })
     }
@@ -1463,25 +1488,26 @@ impl WorkerPluginCallback {
     }
 }
 
-fn deregister_local_model_providers_checked(
-    registrations: &mut Vec<(String, u64)>,
+fn deregister_inference_providers_checked(
+    registrations: &mut Vec<InferenceProviderRegistration>,
 ) -> DynamicPluginTeardownOutcome {
     let mut outcome = DynamicPluginTeardownOutcome::success();
-    for (name, registration_id) in std::mem::take(registrations).into_iter().rev() {
-        match deregister_local_model_provider_checked(&name, registration_id) {
+    for mut registration in std::mem::take(registrations).into_iter().rev() {
+        let name = registration.name().to_string();
+        match registration.deregister_checked() {
             Ok(PluginDeregistrationOutcome::Removed) => {}
             Ok(PluginDeregistrationOutcome::Missing) => outcome.record_error(
-                format!("local-model provider '{name}' was not registered during teardown"),
+                format!("inference provider '{name}' was not registered during teardown"),
                 true,
             ),
             Ok(PluginDeregistrationOutcome::Replaced) => outcome.record_error(
                 format!(
-                    "local-model provider '{name}' was replaced during teardown and was left registered"
+                    "inference provider '{name}' was replaced during teardown and was left registered"
                 ),
                 true,
             ),
             Err(error) => outcome.record_error(
-                format!("failed to deregister local-model provider '{name}': {error}"),
+                format!("failed to deregister inference provider '{name}': {error}"),
                 false,
             ),
         }
@@ -3054,6 +3080,19 @@ fn validate_registration_plan(
         if surface == RegistrationSurface::Unspecified {
             return Err(PluginError::RegistrationFailed(format!(
                 "worker plugin '{plugin_id}' returned unspecified registration surface"
+            )));
+        }
+        let contract = registration.contract.trim();
+        if surface == RegistrationSurface::InferenceProvider && contract.is_empty() {
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{plugin_id}' returned inference provider '{}' without a contract",
+                registration.local_name
+            )));
+        }
+        if surface != RegistrationSurface::InferenceProvider && !contract.is_empty() {
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{plugin_id}' returned a contract for non-provider registration '{}'",
+                registration.local_name
             )));
         }
     }

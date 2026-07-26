@@ -26,7 +26,7 @@ protocol.
 - **Isolate plugin dependencies**: Run custom policy, middleware, or exporter
   code outside the Relay host process.
 - **Use the shared runtime contract**: Register subscribers, guardrails, and
-  intercepts or local-model providers through `WorkerPlugin` and
+  intercepts or inference providers through `WorkerPlugin` and
   `PluginContext`.
 - **Call back into Relay safely**: Emit marks, create scopes, and continue
   managed execution through the host runtime handle.
@@ -105,10 +105,10 @@ worker process.
 For a complete manifest and runnable plugin, see the
 [Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md).
 
-## Local-Model Providers
+## Inference Providers
 
-Use `register_local_model_provider` when a first-party Relay component owns the
-policy and needs isolated model inference:
+Use `register_inference_provider` when a first-party Relay component owns a
+versioned request-response contract and needs isolated model inference:
 
 ```python
 async def detect(request: Json) -> Json:
@@ -118,13 +118,17 @@ async def detect(request: Json) -> Json:
     }
 
 
-ctx.register_local_model_provider("detector", detect)
+ctx.register_inference_provider(
+    "detector",
+    "acme.pii_detection.v1",
+    detect,
+)
 ```
 
 Relay publishes this provider as `<plugin_id>/detector`. The callback may be
 synchronous or asynchronous and should perform inference only. The consuming
-host component owns the payload schema, deadline, field traversal, output
-validation, and result application.
+host component selects the exact contract and owns the payload schema,
+deadline, field traversal, output validation, and result application.
 
 ## Request Intercepts
 

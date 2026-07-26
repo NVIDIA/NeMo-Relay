@@ -270,7 +270,7 @@ type LlmRequestFn = Arc<
 type LlmExecutionFn = Arc<dyn Fn(&str, LlmRequest, LlmNext) -> BoxFutureResult<Json> + Send + Sync>;
 type LlmStreamExecutionFn =
     Arc<dyn Fn(&str, LlmRequest, LlmStreamNext) -> BoxFutureResult<JsonStream> + Send + Sync>;
-type LocalModelProviderFn = Arc<dyn Fn(Json) -> BoxFutureResult<Json> + Send + Sync>;
+type InferenceProviderFn = Arc<dyn Fn(Json) -> BoxFutureResult<Json> + Send + Sync>;
 
 #[derive(Default)]
 struct WorkerHandlers {
@@ -290,7 +290,7 @@ struct WorkerHandlers {
     llm_requests: HashMap<String, LlmRequestFn>,
     llm_executions: HashMap<String, LlmExecutionFn>,
     llm_stream_executions: HashMap<String, LlmStreamExecutionFn>,
-    local_model_providers: HashMap<String, LocalModelProviderFn>,
+    inference_providers: HashMap<String, InferenceProviderFn>,
 }
 
 /// Registration context passed to [`WorkerPlugin::register`].
@@ -332,18 +332,18 @@ impl PluginContext {
             .insert(name.into(), Arc::new(callback));
     }
 
-    /// Registers a named local-model request-response provider.
+    /// Registers a named inference provider for a versioned host contract.
     ///
     /// The provider receives and returns versioned JSON data owned by the
     /// consuming host component. It does not register middleware or decide
     /// which runtime fields are sanitized.
-    pub fn register_local_model_provider<F, Fut>(&mut self, name: &str, callback: F)
+    pub fn register_inference_provider<F, Fut>(&mut self, name: &str, contract: &str, callback: F)
     where
         F: Fn(Json) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Json>> + Send + 'static,
     {
-        self.push_registration(name, RegistrationSurface::LocalModelProvider, 0, false);
-        self.handlers.local_model_providers.insert(
+        self.push_contract_registration(name, RegistrationSurface::InferenceProvider, contract);
+        self.handlers.inference_providers.insert(
             name.into(),
             Arc::new(move |request| Box::pin(callback(request))),
         );
@@ -685,6 +685,22 @@ impl PluginContext {
             surface: surface as i32,
             priority,
             break_chain,
+            contract: String::new(),
+        });
+    }
+
+    fn push_contract_registration(
+        &mut self,
+        name: &str,
+        surface: RegistrationSurface,
+        contract: &str,
+    ) {
+        self.handlers.registrations.push(Registration {
+            local_name: name.into(),
+            surface: surface as i32,
+            priority: 0,
+            break_chain: false,
+            contract: contract.into(),
         });
     }
 }
@@ -1680,9 +1696,9 @@ impl WorkerService {
             | RegistrationSurface::LlmExecutionIntercept => {
                 self.invoke_llm_response(request, &scope, surface).await
             }
-            RegistrationSurface::LocalModelProvider => {
+            RegistrationSurface::InferenceProvider => {
                 let payload = provider_payload(request.payload)?;
-                let handler = self.local_model_provider(&request.registration_name)?;
+                let handler = self.inference_provider(&request.registration_name)?;
                 let future = with_thread_scope(&scope, || handler(payload));
                 Ok(json_response(future.await?))
             }
@@ -2082,17 +2098,15 @@ impl WorkerService {
             })
     }
 
-    fn local_model_provider(&self, name: &str) -> Result<LocalModelProviderFn> {
+    fn inference_provider(&self, name: &str) -> Result<InferenceProviderFn> {
         self.handlers
             .lock()
             .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
-            .local_model_providers
+            .inference_providers
             .get(name)
             .cloned()
             .ok_or_else(|| {
-                WorkerSdkError::InvalidInput(format!(
-                    "local-model provider '{name}' not registered"
-                ))
+                WorkerSdkError::InvalidInput(format!("inference provider '{name}' not registered"))
             })
     }
 }
@@ -2219,7 +2233,7 @@ fn provider_payload(
             decode_json_envelope::<Json>(&value).map_err(Into::into)
         }
         _ => Err(WorkerSdkError::InvalidInput(
-            "expected local-model provider payload".into(),
+            "expected inference provider payload".into(),
         )),
     }
 }
@@ -2547,7 +2561,7 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
         RegistrationSurface::MarkSanitizeGuardrail,
         RegistrationSurface::ScopeSanitizeStartGuardrail,
         RegistrationSurface::ScopeSanitizeEndGuardrail,
-        RegistrationSurface::LocalModelProvider,
+        RegistrationSurface::InferenceProvider,
     ]
 }
 

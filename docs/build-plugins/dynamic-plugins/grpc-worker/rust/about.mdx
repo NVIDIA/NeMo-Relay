@@ -70,21 +70,26 @@ directly for normal operation.
 
 ### Provide local inference
 
-Use `register_local_model_provider` when a first-party Relay component owns the
-policy and needs isolated inference:
+Use `register_inference_provider` when a first-party Relay component owns a
+versioned contract and needs isolated inference:
 
 ```rust
-context.register_local_model_provider("detector", |request| async move {
-    Ok(serde_json::json!({
-        "version": 1,
-        "detections": detect(request)?
-    }))
-});
+context.register_inference_provider(
+    "detector",
+    "acme.pii_detection.v1",
+    |request| async move {
+        Ok(serde_json::json!({
+            "version": 1,
+            "detections": detect(request)?
+        }))
+    },
+);
 ```
 
 Relay publishes this registration as `<plugin_id>/detector`. The consuming
-component owns the JSON contract, field selection, deadline, response
-validation, and application. The worker should perform inference only.
+component selects the exact contract and owns its JSON schema, field selection,
+deadline, response validation, and application. The worker should perform
+inference only.
 
 ## Package the Worker
 

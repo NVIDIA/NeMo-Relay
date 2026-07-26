@@ -12,6 +12,8 @@ use serde_json::json;
 
 struct FixtureWorkerPlugin;
 
+const DEFAULT_INFERENCE_CONTRACT: &str = "nemo.relay.pii_detection.v1";
+
 impl WorkerPlugin for FixtureWorkerPlugin {
     fn plugin_id(&self) -> &str {
         if std::env::var("FIXTURE_WORKER_PLUGIN_ID").as_deref() == Ok("other_worker") {
@@ -57,8 +59,8 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             ctx.register_subscriber("", |_| {});
             return Ok(());
         }
-        let local_model_provider_names = config
-            .get("local_model_provider_names")
+        let inference_provider_names = config
+            .get("inference_provider_names")
             .and_then(Json::as_array)
             .map(|names| {
                 names
@@ -70,16 +72,20 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             .unwrap_or_else(|| {
                 vec![
                     config
-                        .get("local_model_provider_name")
+                        .get("inference_provider_name")
                         .and_then(Json::as_str)
                         .unwrap_or("fixture_local_model")
                         .to_string(),
                 ]
             });
-        for provider_name in local_model_provider_names {
+        for provider_name in inference_provider_names {
             let callback_provider_name = provider_name.clone();
             let exit_in_local_model = fixture_flag(config, "exit_in_local_model");
-            ctx.register_local_model_provider(&provider_name, move |request| {
+            let contract = config
+                .get("inference_provider_contract")
+                .and_then(Json::as_str)
+                .unwrap_or(DEFAULT_INFERENCE_CONTRACT);
+            ctx.register_inference_provider(&provider_name, contract, move |request| {
                 let provider_name = callback_provider_name.clone();
                 async move {
                     if exit_in_local_model {

@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nemo-relay-pii-rampart"
 version = "0.1.0"
-description = "Optional Rampart local-model provider for NeMo Relay PII redaction"
+description = "Optional Rampart inference provider for NeMo Relay PII redaction"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

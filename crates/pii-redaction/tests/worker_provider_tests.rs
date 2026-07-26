@@ -17,11 +17,9 @@ use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation,
 };
-use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, local_model_provider,
-};
+use nemo_relay::plugin::{PluginComponentSpec, PluginConfig, clear_plugin_configuration};
 use nemo_relay_pii_redaction::component::{
-    PII_REDACTION_PLUGIN_KIND, register_pii_redaction_component,
+    PII_DETECTION_PROVIDER_CONTRACT, PII_REDACTION_PLUGIN_KIND, register_pii_redaction_component,
 };
 use serde_json::{Map, json};
 use tempfile::TempDir;
@@ -77,7 +75,15 @@ async fn worker_provider_sanitizes_events_and_is_removed_after_host_clear() {
     .await
     .expect("worker and PII component should activate together");
     assert!(!report.has_errors());
-    assert!(local_model_provider("fixture_worker/fixture_local_model").is_ok());
+    let inference_providers = activation.inference_providers();
+    assert!(
+        inference_providers
+            .resolve(
+                "fixture_worker/fixture_local_model",
+                PII_DETECTION_PROVIDER_CONTRACT,
+            )
+            .is_ok()
+    );
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = Arc::clone(&events);
@@ -198,7 +204,12 @@ async fn worker_provider_sanitizes_events_and_is_removed_after_host_clear() {
     deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
     activation.clear().expect("plugin host should clear");
     assert!(
-        local_model_provider("fixture_worker/fixture_local_model").is_err(),
+        inference_providers
+            .resolve(
+                "fixture_worker/fixture_local_model",
+                PII_DETECTION_PROVIDER_CONTRACT,
+            )
+            .is_err(),
         "worker provider should not outlive its host activation"
     );
 }
@@ -249,6 +260,7 @@ async fn worker_exit_during_sanitization_fails_closed_and_removes_provider() {
     .await
     .expect("worker and PII component should activate together");
     assert!(!report.has_errors());
+    let inference_providers = activation.inference_providers();
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = Arc::clone(&events);
@@ -285,7 +297,12 @@ async fn worker_exit_during_sanitization_fails_closed_and_removes_provider() {
         .to_string();
     assert!(error.contains("shutdown"), "{error}");
     assert!(
-        local_model_provider("fixture_worker/fixture_local_model").is_err(),
+        inference_providers
+            .resolve(
+                "fixture_worker/fixture_local_model",
+                PII_DETECTION_PROVIDER_CONTRACT,
+            )
+            .is_err(),
         "failed worker provider should not survive host teardown"
     );
 }

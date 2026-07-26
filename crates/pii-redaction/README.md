@@ -223,9 +223,10 @@ max_latency_ms = 250
 
 The backend name is `<plugin_id>/<registration_name>`. For example, a worker
 with plugin ID `acme.pii_worker` that calls
-`register_local_model_provider("detector", ...)` is selected as
-`acme.pii_worker/detector`. Relay installs worker providers before static
-components initialize and removes PII sanitizers before stopping their worker.
+`register_inference_provider("detector", "nemo.relay.pii_detection.v1", ...)`
+is selected as `acme.pii_worker/detector`. Relay verifies the PII contract,
+installs worker providers before static components initialize, and removes PII
+sanitizers before stopping their worker.
 
 Use profiles to compose deterministic and contextual detection. The lower
 priority runs first:
@@ -331,8 +332,9 @@ The source tree includes an optional
 [Rampart worker](./providers/rampart/README.md) that implements this provider
 contract with a pinned ONNX token-classification model. It runs in a
 Relay-managed Python worker process, keeps ONNX dependencies out of the host,
-and complements the built-in deterministic recognizers. The model is acquired
-at activation time and is not distributed in the Relay package.
+and complements the built-in deterministic recognizers. The model is prefetched
+separately, then resolved and integrity-verified from the local cache at
+activation. It is not distributed in the Relay package.
 
 ## Documentation
 

@@ -18,8 +18,9 @@ class FakeContext:
     def __init__(self) -> None:
         self.callback: Any = None
 
-    def register_local_model_provider(self, name: str, callback: Any) -> None:
+    def register_inference_provider(self, name: str, contract: str, callback: Any) -> None:
         assert name == "detector"
+        assert contract == "nemo.relay.pii_detection.v1"
         self.callback = callback
 
 
