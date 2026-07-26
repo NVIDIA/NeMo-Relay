@@ -115,6 +115,13 @@ impl CompiledBuiltinBackend {
                     .to_string(),
             ));
         }
+        for (index, target_path) in config.target_paths.iter().enumerate() {
+            if !is_valid_json_pointer(target_path) {
+                return Err(PluginError::InvalidConfig(format!(
+                    "builtin.target_paths[{index}] must be a valid RFC 6901 JSON pointer"
+                )));
+            }
+        }
         let detector = config
             .detector
             .as_deref()
@@ -396,6 +403,23 @@ pub(super) fn llm_sanitize_response_callback(
             .sanitize_response_with_codec(payload.clone())
             .unwrap_or(payload);
         backend.sanitize_json_preorder_dfs(payload)
+    })
+}
+
+pub(super) fn is_valid_json_pointer(pointer: &str) -> bool {
+    if pointer.is_empty() {
+        return true;
+    }
+    pointer.strip_prefix('/').is_some_and(|path| {
+        path.split('/').all(|segment| {
+            let mut characters = segment.chars();
+            while let Some(character) = characters.next() {
+                if character == '~' && !matches!(characters.next(), Some('0' | '1')) {
+                    return false;
+                }
+            }
+            true
+        })
     })
 }
 
