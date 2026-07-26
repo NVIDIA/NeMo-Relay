@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 `nemo-relay-pii-redaction` is the first-party NeMo Relay plugin crate for
 deterministic privacy redaction on tool and LLM observability payloads. It
 ships the `pii_redaction` plugin contract, a production-ready `builtin`
-backend, and the future `local_model` seam for model-backed detection and
+backend, and a worker-backed `local_model` seam for model-backed detection and
 redaction.
 
 The plugin is designed for the common case where teams want a supported,
@@ -36,8 +36,8 @@ NeMo Relay PII Redaction allows you to:
   `openai_responses`, and `anthropic_messages`.
 - Remove conversational trajectory content while preserving event structure,
   tool-call identity, model attribution, routing, usage, and cost analytics.
-- Use the `local_model` config contract and provider registration surface for
-  future model-backed implementations.
+- Use an isolated `grpc-v1` worker as the detector behind the `local_model`
+  config contract without loading model dependencies into the Relay host.
 
 ## Plugin Versus Raw Middleware
 
@@ -188,13 +188,151 @@ high-risk secrets, prefer `redact` over partial `mask` behavior.
 
 ## Local Model Seam
 
-`local_model` is included in the plugin contract now, but no runtime
-implementation ships in this crate yet.
+`local_model` delegates bounded detector inference to a manifest-backed
+`grpc-v1` worker. The PII component remains responsible for choosing
+observability fields, decoding provider payloads, batching text, enforcing the
+deadline and failure policy, validating detections, and replacing accepted
+spans.
 
-The seam exists so a future local detector/redactor backend can be added
-without redesigning the public plugin surface. If `mode = "local_model"` is
-configured today, the runtime expects a registered local backend provider and
-fails fast if one is not installed.
+Configure the provider by its host-qualified name:
+
+```toml
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[components.config]
+mode = "local_model"
+codec = "openai_chat"
+
+[components.config.local]
+backend = "acme.pii_worker/detector"
+model_id = "acme-pii-v1"
+detector_profile = "default"
+min_score = 0.4
+target_path_patterns = [
+  "/messages/*/content",
+  "/messages/*/content/*/text",
+  "/message",
+  "/message/*/text",
+]
+replacement = "[REDACTED]"
+allow_network = false
+max_latency_ms = 250
+```
+
+The backend name is `<plugin_id>/<registration_name>`. For example, a worker
+with plugin ID `acme.pii_worker` that calls
+`register_local_model_provider("detector", ...)` is selected as
+`acme.pii_worker/detector`. Relay installs worker providers before static
+components initialize and removes PII sanitizers before stopping their worker.
+
+Use profiles to compose deterministic and contextual detection. The lower
+priority runs first:
+
+```toml
+[components.config]
+codec = "openai_chat"
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+
+[[components.config.profiles]]
+mode = "local_model"
+priority = 90
+
+[components.config.profiles.local]
+backend = "nemo_relay.pii_rampart/detector"
+min_score = 0.4
+max_latency_ms = 1500
+target_path_patterns = [
+  "/messages/*/content",
+  "/messages/*/content/*/text",
+  "/message",
+  "/message/*/text",
+]
+```
+
+`target_paths` contains exact JSON pointers. `target_path_patterns` also accepts
+`*` as one complete path segment, which is useful for message arrays. When a
+codec is configured, paths address the normalized request or response shape;
+the content-only patterns above cover the `openai_chat` request and response
+shape. Without a codec, they address the original JSON payload. When both lists
+are empty, Relay inspects every string leaf and reports a configuration warning.
+
+Use content-only paths for contextual classifiers. Do not send model names,
+tool identifiers, trace IDs, routing fields, or arbitrary provider metadata to
+a classifier unless that is an explicit policy choice.
+
+Relay accepts detections whose confidence is at least `min_score`, which
+defaults to `0.4`. `excluded_labels` is an exact, case-sensitive denylist for
+provider labels that should remain visible. The host applies both settings
+after validating the complete provider response; workers do not own the final
+redaction policy.
+
+Provider failures, timeouts, malformed responses, invalid UTF-8 boundaries,
+overlapping spans, and input-limit violations fail closed for the affected
+batch. If a configured codec cannot decode or safely re-encode an LLM payload,
+Relay replaces the entire emitted request or response body; it does not retry
+normalized selectors against the raw provider shape. `allow_network = true` is
+rejected; this lane is for same-machine inference. This setting is a
+configuration invariant, not a network sandbox: Relay's worker launcher does
+not currently prevent a worker process from opening sockets. Only install
+providers whose packaging and runtime behavior satisfy that policy. The
+default deadline is 250 ms for the complete selected payload, including every
+provider batch. Configuration above 60 seconds is rejected.
+
+### Provider Contract
+
+The worker receives a versioned JSON request:
+
+```json
+{
+  "version": 1,
+  "model_id": "acme-pii-v1",
+  "detector_profile": "default",
+  "texts": [
+    {"id": 0, "text": "Contact Alice Rivera"}
+  ]
+}
+```
+
+It returns detections using UTF-8 byte offsets:
+
+```json
+{
+  "version": 1,
+  "detections": [
+    {
+      "text_id": 0,
+      "start_utf8": 8,
+      "end_utf8": 20,
+      "label": "person",
+      "score": 0.99
+    }
+  ]
+}
+```
+
+The provider performs inference only. It must not choose Relay surfaces,
+traverse arbitrary event fields, or apply replacements itself. Rust and Python
+workers have SDK helpers for this registration. Other languages can implement
+the same `grpc-v1` protobuf contract directly; Rust, Python, and Node hosts all
+consume it through the shared core runtime.
+
+### Optional Rampart Provider
+
+The source tree includes an optional
+[Rampart worker](./providers/rampart/README.md) that implements this provider
+contract with a pinned ONNX token-classification model. It runs in a
+Relay-managed Python worker process, keeps ONNX dependencies out of the host,
+and complements the built-in deterministic recognizers. The model is acquired
+at activation time and is not distributed in the Relay package.
 
 ## Documentation
 

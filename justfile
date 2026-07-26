@@ -971,6 +971,8 @@ check-python-worker-proto:
     }
     assert pb.SUBSCRIBER == 1
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    assert pb.LOCAL_MODEL_PROVIDER == 40
+    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["provider"].number == 13
     PY
 
 generate-worker-plugin-lockfile:

@@ -27,13 +27,23 @@ func TestPiiRedactionShorthandHelpers(t *testing.T) {
 func TestPiiRedactionComponentSpecAndLocalModelHelpers(t *testing.T) {
 	config := NewConfig()
 	local := NewLocalModelConfig()
-	local.Backend = "local"
+	minScore := 0.75
+	local.Backend = "nemo_relay.pii_rampart/detector"
 	local.ModelID = "pii-model"
-	config.Mode = "local"
+	local.TargetPathPatterns = []string{"/messages/*/content"}
+	local.MinScore = &minScore
+	local.ExcludedLabels = []string{"CITY"}
+	config.Mode = "local_model"
 	config.Local = &local
 
 	spec := NewComponentSpec(config)
-	if !spec.Enabled || spec.Config.Local == nil || spec.Config.Local.ModelID != "pii-model" {
+	if !spec.Enabled ||
+		spec.Config.Local == nil ||
+		spec.Config.Local.ModelID != "pii-model" ||
+		len(spec.Config.Local.TargetPathPatterns) != 1 ||
+		spec.Config.Local.MinScore == nil ||
+		*spec.Config.Local.MinScore != minScore ||
+		len(spec.Config.Local.ExcludedLabels) != 1 {
 		t.Fatalf("unexpected PII redaction component spec: %#v", spec)
 	}
 }

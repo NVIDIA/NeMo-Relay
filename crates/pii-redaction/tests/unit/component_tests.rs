@@ -30,8 +30,10 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
     ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
     PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
+    deregister_local_model_provider,
     ensure_builtin_plugins_registered, initialize_plugins_exact as initialize_plugins,
-    list_plugin_kinds, rollback_registrations, validate_plugin_config,
+    list_plugin_kinds, register_local_model_provider_tracked, rollback_registrations,
+    validate_plugin_config,
 };
 use futures::StreamExt;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
@@ -140,11 +142,32 @@ fn top_level_policy_controls_component_diagnostics() {
 fn reset_runtime() {
     enable_operational_logs();
     let _ = clear_plugin_configuration();
-    crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
     register_pii_redaction_component().unwrap();
+}
+
+struct LocalModelProviderGuard {
+    name: String,
+    registration_id: u64,
+}
+
+impl Drop for LocalModelProviderGuard {
+    fn drop(&mut self) {
+        let _ = deregister_local_model_provider(&self.name, self.registration_id);
+    }
+}
+
+fn register_test_local_model_provider(
+    name: &str,
+    callback: impl Fn(Json, std::time::Duration) -> Result<Json, PluginError> + Send + Sync + 'static,
+) -> LocalModelProviderGuard {
+    let registration_id = register_local_model_provider_tracked(name, Arc::new(callback)).unwrap();
+    LocalModelProviderGuard {
+        name: name.to_string(),
+        registration_id,
+    }
 }
 
 fn setup_isolated_thread() {
@@ -1258,6 +1281,76 @@ fn profile_array_executes_every_profile_in_stable_array_order() {
 }
 
 #[test]
+fn deterministic_and_local_model_profiles_compose_in_priority_order() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    let _provider = register_test_local_model_provider("contextual", |request, _| {
+        assert_eq!(
+            request["texts"][0]["text"], "Alice emailed [REDACTED]",
+            "the local provider must receive the deterministic profile's output"
+        );
+        Ok(json!({
+            "version": 1,
+            "detections": [{
+                "text_id": 0,
+                "start_utf8": 0,
+                "end_utf8": 5,
+                "label": "GIVEN_NAME",
+                "score": 0.99
+            }]
+        }))
+    });
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [
+            {
+                "mode": "builtin",
+                "priority": 80,
+                "builtin": {
+                    "action": "redact",
+                    "detector": "email"
+                }
+            },
+            {
+                "mode": "local_model",
+                "priority": 90,
+                "local": {
+                    "backend": "contextual",
+                    "target_paths": ["/message"]
+                }
+            }
+        ]
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-profile-composition");
+    event(
+        EmitMarkEventParams::builder()
+            .name("composed-profile-mark")
+            .data(json!({
+                "message": "Alice emailed alice@example.com",
+                "region": "us-west-2"
+            }))
+            .build(),
+    )
+    .unwrap();
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(
+        captured[0].data().unwrap(),
+        &json!({
+            "message": "[REDACTED] emailed [REDACTED]",
+            "region": "us-west-2"
+        })
+    );
+
+    deregister_subscriber("pii-profile-composition").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn profile_array_rejects_legacy_fields_and_reports_profile_paths() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1364,10 +1457,12 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    register_local_backend_provider(Arc::new(|_, ctx| {
-        ctx.register_mark_sanitize_guardrail("shared", 100, Arc::new(|_, fields| fields))
-    }))
-    .unwrap();
+    let _one = register_test_local_model_provider("one", |_, _| {
+        Ok(json!({"version": 1, "detections": []}))
+    });
+    let _two = register_test_local_model_provider("two", |_, _| {
+        Ok(json!({"version": 1, "detections": []}))
+    });
 
     let plugin = PiiRedactionPlugin;
     let config = json!({
@@ -1384,8 +1479,8 @@ fn local_profile_registrations_receive_generated_namespaces() {
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
     let registrations_debug = format!("{registrations:?}");
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/shared"));
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/shared"));
+    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/mark"));
+    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/mark"));
     rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
@@ -1396,12 +1491,6 @@ fn failed_later_profile_rolls_back_earlier_profile_registrations() {
     reset_runtime();
     setup_isolated_thread();
 
-    register_local_backend_provider(Arc::new(|_, _| {
-        Err(PluginError::RegistrationFailed(
-            "intentional profile failure".into(),
-        ))
-    }))
-    .unwrap();
     let activation = futures::executor::block_on(initialize_plugins(plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [
@@ -1697,6 +1786,112 @@ fn validate_rejects_local_section_outside_local_mode() {
 }
 
 #[test]
+fn validate_rejects_invalid_local_model_provider_settings() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let cases = [
+        (
+            json!({"mode": "local_model"}),
+            "local",
+            "required when mode = 'local_model'",
+        ),
+        (
+            json!({"mode": "local_model", "local": {"backend": "  "}}),
+            "local.backend",
+            "local.backend is required",
+        ),
+        (
+            json!({
+                "mode": "local_model",
+                "local": {
+                    "backend": "x".repeat(MAX_LOCAL_MODEL_PROVIDER_VALUE_BYTES + 1)
+                }
+            }),
+            "local.backend",
+            "must not exceed",
+        ),
+        (
+            json!({
+                "mode": "local_model",
+                "local": {"backend": "worker", "allow_network": true}
+            }),
+            "local.allow_network",
+            "must not use network inference",
+        ),
+        (
+            json!({
+                "mode": "local_model",
+                "local": {"backend": "worker", "max_latency_ms": 0}
+            }),
+            "local.max_latency_ms",
+            "must be greater than zero",
+        ),
+        (
+            json!({
+                "mode": "local_model",
+                "local": {"backend": "worker", "max_latency_ms": 60001}
+            }),
+            "local.max_latency_ms",
+            "must not exceed 60000",
+        ),
+        (
+            json!({
+                "mode": "local_model",
+                "local": {"backend": "worker", "model_id": " "}
+            }),
+            "local.model_id",
+            "must be a non-empty string",
+        ),
+        (
+            json!({
+                "mode": "local_model",
+                "local": {"backend": "worker", "target_paths": ["message"]}
+            }),
+            "local.target_paths",
+            "valid JSON pointers",
+        ),
+        (
+            json!({
+                "mode": "local_model",
+                "local": {
+                    "backend": "worker",
+                    "replacement": "x".repeat(MAX_LOCAL_MODEL_REPLACEMENT_BYTES + 1)
+                }
+            }),
+            "local.replacement",
+            "must not exceed",
+        ),
+    ];
+
+    for (config, field, message) in cases {
+        let report = validate_plugin_config(&plugin_config(config));
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some(field) && diagnostic.message.contains(message)
+        }));
+    }
+}
+
+#[test]
+fn validate_warns_when_local_model_inspects_every_string_leaf() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "local_model",
+        "codec": "openai_chat",
+        "local": {"backend": "worker"}
+    })));
+
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.level == DiagnosticLevel::Warning
+            && diagnostic.code == "pii_redaction.local_model_all_paths"
+            && diagnostic.field.as_deref() == Some("local.target_paths")
+    }));
+}
+
+#[test]
 fn validate_rejects_builtin_mode_without_builtin_section() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1832,28 +2027,31 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
 
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
-    register_local_backend_provider(Arc::new(
-        move |config, _ctx: &mut PluginRegistrationContext| {
-            called_inner.store(true, Ordering::SeqCst);
-            assert_eq!(config.mode, "local_model");
-            Ok(())
-        },
-    ))
-    .unwrap();
-
-    let plugin = PiiRedactionPlugin;
-    let mut ctx = PluginRegistrationContext::with_namespace("test::");
-    let config = json!({
-        "mode": "local_model",
-        "tool_input": true,
+    let _provider = register_test_local_model_provider("test-provider", move |request, _| {
+        called_inner.store(true, Ordering::SeqCst);
+        assert_eq!(request["version"], 1);
+        Ok(json!({"version": 1, "detections": []}))
     });
-    let Json::Object(config) = config else {
-        panic!("component config must be object");
-    };
-
-    futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
-
+    setup_isolated_thread();
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "local_model",
+        "input": false,
+        "output": false,
+        "mark": false,
+        "tool_input": true,
+        "tool_output": false,
+        "local": {"backend": "test-provider"}
+    }))))
+    .unwrap();
+    tool_call(
+        ToolCallParams::builder()
+            .name("test")
+            .args(json!({"text": "hello"}))
+            .build(),
+    )
+    .unwrap();
     assert!(called.load(Ordering::SeqCst));
+    clear_plugin_configuration().unwrap();
 }
 
 #[test]
@@ -1862,7 +2060,15 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
     reset_runtime();
 
     let plugin = PiiRedactionPlugin;
-    let config = json!({"mode": "local_model"});
+    let config = json!({
+        "mode": "local_model",
+        "input": false,
+        "output": false,
+        "mark": false,
+        "tool_input": true,
+        "tool_output": false,
+        "local": {"backend": "missing"}
+    });
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
@@ -1871,20 +2077,26 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
         .expect_err("missing local provider should fail registration");
     assert!(missing.to_string().contains("unavailable"));
 
-    register_local_backend_provider(Arc::new(|_, _| {
-        Err(PluginError::RegistrationFailed(
-            "provider initialization failed".into(),
-        ))
-    }))
-    .unwrap();
+    let _failed = register_test_local_model_provider("failed", |_, _| {
+        Err(PluginError::RegistrationFailed("provider failed".into()))
+    });
+    let config = json!({
+        "mode": "local_model",
+        "input": false,
+        "output": false,
+        "mark": false,
+        "tool_input": true,
+        "tool_output": false,
+        "local": {"backend": "failed"}
+    });
+    let Json::Object(config) = config else {
+        panic!("component config must be object");
+    };
     let mut ctx = PluginRegistrationContext::with_namespace("failed::");
-    let failed = futures::executor::block_on(plugin.register(&config, &mut ctx))
-        .expect_err("failed local provider should fail registration");
-    assert!(
-        failed
-            .to_string()
-            .contains("provider initialization failed")
-    );
+    futures::executor::block_on(plugin.register(&config, &mut ctx))
+        .expect("provider availability should be checked at registration");
+    let mut registrations = ctx.into_registrations();
+    rollback_registrations(&mut registrations);
 }
 
 #[test]

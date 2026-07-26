@@ -3,7 +3,11 @@
 
 package nemo_relay
 
-import "testing"
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+)
 
 func TestPiiRedactionConfigHelpers(t *testing.T) {
 	config := NewPiiRedactionConfig()
@@ -18,8 +22,12 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 		t.Fatalf("unexpected built-in redaction defaults: %#v", builtin)
 	}
 	local := NewPiiRedactionLocalModelConfig()
-	if local != (PiiRedactionLocalModelConfig{}) {
+	if !reflect.DeepEqual(local, PiiRedactionLocalModelConfig{}) {
 		t.Fatalf("unexpected local model defaults: %#v", local)
+	}
+	profile := NewPiiRedactionProfile()
+	if !profile.Enabled || profile.Mode != "builtin" || profile.Priority != 100 {
+		t.Fatalf("unexpected profile defaults: %#v", profile)
 	}
 
 	config.Builtin = &builtin
@@ -39,6 +47,30 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	}
 	if serializedBuiltin["action"] != "remove" {
 		t.Fatalf("unexpected serialized builtin config: %#v", serializedBuiltin)
+	}
+}
+
+func TestPiiRedactionProfilesOmitLegacyTopLevelFields(t *testing.T) {
+	config := NewPiiRedactionConfig()
+	config.Profiles = []PiiRedactionProfile{
+		NewPiiRedactionProfile(),
+	}
+	serialized, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal profile config: %v", err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(serialized, &value); err != nil {
+		t.Fatalf("decode profile config: %v", err)
+	}
+	if _, present := value["mode"]; present {
+		t.Fatalf("profile config retained legacy mode: %#v", value)
+	}
+	if _, present := value["input"]; present {
+		t.Fatalf("profile config retained legacy input: %#v", value)
+	}
+	if len(value["profiles"].([]any)) != 1 {
+		t.Fatalf("unexpected profile config: %#v", value)
 	}
 }
 

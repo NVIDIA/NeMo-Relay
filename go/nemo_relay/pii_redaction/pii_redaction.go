@@ -11,8 +11,11 @@ type Config = nemo_relay.PiiRedactionConfig
 // BuiltinConfig configures deterministic built-in redaction.
 type BuiltinConfig = nemo_relay.PiiRedactionBuiltinConfig
 
-// LocalModelConfig configures the future local-model redaction backend.
+// LocalModelConfig configures a worker-backed local-model redaction provider.
 type LocalModelConfig = nemo_relay.PiiRedactionLocalModelConfig
+
+// Profile configures one ordered PII redaction backend.
+type Profile = nemo_relay.PiiRedactionProfile
 
 // ComponentSpec wraps PII redaction config as a top-level plugin component.
 type ComponentSpec = nemo_relay.PiiRedactionComponentSpec
@@ -39,6 +42,11 @@ func NewBuiltinConfig() BuiltinConfig {
 // NewLocalModelConfig returns default local-model redaction settings.
 func NewLocalModelConfig() LocalModelConfig {
 	return nemo_relay.NewPiiRedactionLocalModelConfig()
+}
+
+// NewProfile returns one enabled built-in profile with default priority.
+func NewProfile() Profile {
+	return nemo_relay.NewPiiRedactionProfile()
 }
 
 // NewComponentSpec wraps PII redaction config as an enabled component.

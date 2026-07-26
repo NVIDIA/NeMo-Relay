@@ -24,7 +24,8 @@ The plugin supports these backend modes:
 - `builtin`
   - Uses a native Rust backend for deterministic payload sanitization.
 - `local_model`
-  - Reserves a future local-model backend lane for more stochastic detection behavior.
+  - Delegates bounded detector inference to a manifest-backed `grpc-v1`
+    worker while the PII component retains sanitization policy.
 
 ## Use This Plugin When
 
@@ -39,6 +40,8 @@ Start here when you need to:
   first-party NeMo Relay components.
 - Use built-in detector presets for common values such as emails, phone
   numbers, URLs, API keys, and IP addresses without writing custom regexes.
+- Compose deterministic recognizers with an optional local contextual
+  classifier without loading model dependencies into the Relay host.
 
 ## Plugin Versus Middleware
 
@@ -90,18 +93,21 @@ The current built-in backend supports five actions:
 The current backend boundary is intentional:
 
 - Managed tool surfaces are sanitized as JSON payloads with exact JSON-pointer
-  targeting.
+  targeting or bounded single-segment wildcard patterns.
 - Managed LLM requests use the active resolved codec for each call, including
   built-in, runtime, and opaque codecs. Normalized response projection requires
   a recognized built-in codec because response codec capabilities are
   decode-only. This lets redaction target normalized Relay shapes such as
-  `/messages/0/content` and `/message`.
+  `/messages/*/content` and `/message`.
 - `mark` sanitizes `data`, `category_profile`, and `metadata` independently on
   every mark event. It defaults to `true`; set `mark = false` to opt out.
 - `input`, `output`, `tool_input`, and `tool_output` sanitize scope metadata on
   their corresponding lifecycle events. Tool and LLM primary data and typed
   profiles remain on their specialized sanitizer paths to avoid applying the
   same mask or hash twice.
+- Local-model workers receive only the selected string values. Relay owns
+  batching, deadlines, confidence and label policy, response validation,
+  replacement, and fail-closed behavior.
 
 ## Observability Boundary
 
@@ -116,20 +122,25 @@ That means:
 For managed LLM requests, codec decode and re-encode can canonicalize the
 emitted provider-shaped start event. For example, Relay can record an OpenAI
 Responses request in the codec's canonical `input` array form rather than the
-original shorthand form.
+original shorthand form. If codec processing fails, the local-model backend
+replaces the entire emitted LLM body rather than applying normalized selectors
+to an incompatible raw provider shape.
 
 ## Current Boundaries
 
 This plugin is intentionally scoped to a deterministic built-in backend plus a
-future local-model extension point.
+local worker-provider extension point.
 
 In particular:
 
-- `local_model` is an extension point, not a complete backend implementation
-  today.
+- Local-model providers are optional dynamic plugins. They register a
+  language-neutral JSON request-response contract through the `grpc-v1`
+  worker protocol.
 - The plugin does not mutate the real callback arguments or return values.
-- The plugin does not add a subtree or prefix selector language beyond exact
-  JSON-pointer matching.
+- `target_path_patterns` supports `*` as one complete JSON-pointer path
+  segment. It does not support recursive or partial-segment matching.
+- `allow_network = false` prohibits network inference by contract, but the
+  worker process is not a network sandbox. Install only trusted providers.
 
 ## Pages
 

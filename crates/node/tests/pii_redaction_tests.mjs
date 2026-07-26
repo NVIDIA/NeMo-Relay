@@ -23,6 +23,11 @@ describe('pii_redaction plugin helpers', () => {
     });
     assert.deepEqual(piiRedaction.builtinConfig(), { action: 'remove' });
     assert.deepEqual(piiRedaction.localModelConfig(), {});
+    assert.deepEqual(piiRedaction.profileConfig(), {
+      enabled: true,
+      mode: 'builtin',
+      priority: 100,
+    });
 
     const component = piiRedaction.ComponentSpec({
       ...piiRedaction.defaultConfig(),
@@ -30,6 +35,29 @@ describe('pii_redaction plugin helpers', () => {
     });
     assert.equal(component.kind, piiRedaction.PII_REDACTION_PLUGIN_KIND);
     assert.equal(component.enabled, true);
+  });
+
+  it('builds profile composition without legacy top-level fields', () => {
+    const config = {
+      version: 1,
+      codec: 'openai_chat',
+      profiles: [
+        piiRedaction.profileConfig({
+          builtin: piiRedaction.builtinConfig({ detector: 'email' }),
+        }),
+        piiRedaction.profileConfig({
+          mode: 'local_model',
+          priority: 110,
+          local: piiRedaction.localModelConfig({
+            backend: 'acme.pii/detector',
+            target_paths: ['/message'],
+          }),
+        }),
+      ],
+    };
+
+    assert.equal(config.mode, undefined);
+    assert.deepEqual(plugin.validate({ version: 1, components: [piiRedaction.ComponentSpec(config)] }).diagnostics, []);
   });
 
   it('lists builtin pii_redaction kind and validates bad values', () => {

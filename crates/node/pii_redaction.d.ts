@@ -26,8 +26,21 @@ export interface LocalModelConfig {
   backend?: string;
   model_id?: string;
   detector_profile?: string;
+  target_paths?: string[];
+  target_path_patterns?: string[];
+  min_score?: number;
+  excluded_labels?: string[];
+  replacement?: string;
   allow_network?: boolean;
   max_latency_ms?: number;
+}
+
+export interface ProfileConfig {
+  enabled?: boolean;
+  mode?: 'builtin' | 'local_model' | string;
+  priority?: number;
+  builtin?: BuiltinConfig;
+  local?: LocalModelConfig;
 }
 
 export interface Config {
@@ -40,6 +53,7 @@ export interface Config {
   mark?: boolean;
   priority?: number;
   codec?: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | string;
+  profiles?: ProfileConfig[];
   builtin?: BuiltinConfig;
   local?: LocalModelConfig;
   policy?: ConfigPolicy;
@@ -57,8 +71,10 @@ export declare const PII_REDACTION_PLUGIN_KIND: 'pii_redaction';
 export declare function defaultConfig(): Config;
 /** Create deterministic built-in redaction backend settings with defaults applied. */
 export declare function builtinConfig(config?: BuiltinConfig): BuiltinConfig;
-/** Create future local-model backend settings with defaults applied. */
+/** Create worker-backed local-model provider settings. */
 export declare function localModelConfig(config?: LocalModelConfig): LocalModelConfig;
+/** Create one ordered redaction profile with defaults applied. */
+export declare function profileConfig(config?: ProfileConfig): ProfileConfig;
 /** Wrap PII redaction config as a top-level plugin component. */
 export declare function ComponentSpec(
   config: Config,

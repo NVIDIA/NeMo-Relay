@@ -24,11 +24,19 @@ use super::builtin::{
 #[cfg(test)]
 pub(crate) use super::builtin::{hex_sha256, mask_text};
 use super::detectors::{detector_regex_pattern, supported_detector_summary};
-use super::local::register_local_backend;
-pub use super::local::{clear_local_backend_provider, register_local_backend_provider};
+use super::local::{register_local_backend, validate_local_backend_config};
 
 /// The plugin kind reserved for the built-in privacy component.
 pub const PII_REDACTION_PLUGIN_KIND: &str = "pii_redaction";
+pub(super) const DEFAULT_LOCAL_MODEL_LATENCY_MS: u64 = 250;
+pub(super) const DEFAULT_LOCAL_MODEL_MIN_SCORE: f64 = 0.4;
+pub(super) const MAX_LOCAL_MODEL_LATENCY_MS: u64 = 60_000;
+pub(super) const MAX_LOCAL_MODEL_TARGET_PATHS: usize = 256;
+pub(super) const MAX_LOCAL_MODEL_TARGET_PATH_BYTES: usize = 1024;
+pub(super) const MAX_LOCAL_MODEL_REPLACEMENT_BYTES: usize = 1024;
+pub(super) const MAX_LOCAL_MODEL_PROVIDER_VALUE_BYTES: usize = 1024;
+pub(super) const MAX_LOCAL_MODEL_EXCLUDED_LABELS: usize = 128;
+pub(super) const MAX_LOCAL_MODEL_LABEL_BYTES: usize = 128;
 
 /// Top-level PII redaction component wrapper.
 #[derive(Debug, Clone)]
@@ -237,23 +245,38 @@ impl Default for BuiltinBackendConfig {
     }
 }
 
-/// Local-backend settings for a future in-process local-model runtime.
+/// Local-backend settings for a same-machine local-model provider.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LocalBackendConfig {
-    /// Optional local-model backend identifier.
+    /// Registered local-model provider identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
-    /// Optional model identifier reserved for future local-model runtimes.
+    /// Optional model identifier passed to the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
-    /// Optional detector profile reserved for future local-model runtimes.
+    /// Optional detector profile passed to the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detector_profile: Option<String>,
-    /// Whether a future local-model backend may use network calls.
+    /// Exact JSON-pointer paths to inspect. Empty means every string leaf.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_paths: Vec<String>,
+    /// JSON-pointer patterns to inspect. A `*` segment matches one path segment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_path_patterns: Vec<String>,
+    /// Minimum provider confidence accepted for redaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_score: Option<f64>,
+    /// Provider labels that should not be redacted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_labels: Vec<String>,
+    /// Replacement applied to every accepted detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<String>,
+    /// Whether the provider may use network calls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_network: Option<bool>,
-    /// Target latency budget hint for a future local-model backend.
+    /// Per-batch provider deadline in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_latency_ms: Option<u64>,
 }
@@ -398,6 +421,11 @@ nemo_relay::editor_config! {
         backend => { label: "backend", kind: String, optional: true },
         model_id => { label: "model_id", kind: String, optional: true },
         detector_profile => { label: "detector_profile", kind: String, optional: true },
+        target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
+        target_path_patterns => { label: "target_path_patterns", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
+        min_score => { label: "min_score", kind: Float, optional: true },
+        excluded_labels => { label: "excluded_labels", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
+        replacement => { label: "replacement", kind: String, optional: true },
         allow_network => { label: "allow_network", kind: Boolean, optional: true },
         max_latency_ms => { label: "max_latency_ms", kind: Integer, optional: true },
     }
@@ -672,6 +700,11 @@ fn validate_pii_redaction_plugin_config_with_policy(
             "backend",
             "model_id",
             "detector_profile",
+            "target_paths",
+            "target_path_patterns",
+            "min_score",
+            "excluded_labels",
+            "replacement",
             "allow_network",
             "max_latency_ms",
         ],
@@ -683,6 +716,7 @@ fn validate_pii_redaction_plugin_config_with_policy(
     validate_builtin_mode_requirements(&mut diagnostics, &config.policy, plugin_config, &config);
     validate_builtin_action_requirements(&mut diagnostics, &config.policy, plugin_config, &config);
     validate_local_mode_requirements(&mut diagnostics, &config.policy, plugin_config, &config);
+    validate_local_backend_requirements(&mut diagnostics, &config.policy, &config);
 
     diagnostics
 }
@@ -774,6 +808,11 @@ fn validate_profile_configuration(
                 "backend",
                 "model_id",
                 "detector_profile",
+                "target_paths",
+                "target_path_patterns",
+                "min_score",
+                "excluded_labels",
+                "replacement",
                 "allow_network",
                 "max_latency_ms",
             ],
@@ -797,16 +836,11 @@ fn validate_profile_configuration(
             raw_profile,
             &profile_config,
         );
-        if profile.mode == "local_model" && !raw_profile.contains_key("local") {
-            push_policy_diag(
-                &mut profile_diagnostics,
-                config.policy.unsupported_value,
-                "pii_redaction.unsupported_value",
-                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
-                Some("local".to_string()),
-                "`local` settings are required for a local-model profile".to_string(),
-            );
-        }
+        validate_local_backend_requirements(
+            &mut profile_diagnostics,
+            &config.policy,
+            &profile_config,
+        );
         prefix_profile_diagnostics(&mut profile_diagnostics, index);
         diagnostics.extend(profile_diagnostics);
     }
@@ -867,6 +901,16 @@ fn validate_local_mode_requirements(
     config: &PiiRedactionConfig,
 ) {
     if config.mode == "local_model" {
+        if !plugin_config.contains_key("local") {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some("local".to_string()),
+                "`local` settings are required when mode = 'local_model'".to_string(),
+            );
+        }
         return;
     }
     if !plugin_config.contains_key("local") {
@@ -881,6 +925,58 @@ fn validate_local_mode_requirements(
         Some("local".to_string()),
         "`local` settings are valid only when mode = 'local_model'".to_string(),
     );
+}
+
+fn validate_local_backend_requirements(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    config: &PiiRedactionConfig,
+) {
+    if config.mode != "local_model" {
+        return;
+    }
+    let Some(local) = config.local.as_ref() else {
+        return;
+    };
+    for violation in validate_local_backend_config(local) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some(violation.field.to_string()),
+            violation.message,
+        );
+    }
+    if local.target_paths.is_empty() && local.target_path_patterns.is_empty() {
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Warning,
+            code: "pii_redaction.local_model_all_paths".to_string(),
+            component: Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            field: Some("local.target_paths".to_string()),
+            message: "local-model PII redaction has no target paths and will inspect every string leaf; configure explicit content paths to avoid classifying identifiers and metadata".to_string(),
+        });
+    }
+}
+
+pub(super) fn is_valid_json_pointer(path: &str) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    if !path.starts_with('/') {
+        return false;
+    }
+    let mut bytes = path.as_bytes().iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte == b'~' && !matches!(bytes.next(), Some(b'0' | b'1')) {
+            return false;
+        }
+    }
+    true
+}
+
+pub(super) fn is_valid_json_pointer_pattern(path: &str) -> bool {
+    is_valid_json_pointer(path)
 }
 
 fn validate_builtin_mode_requirements(

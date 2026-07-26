@@ -96,8 +96,10 @@ For the new callback contract and codec operations, refer to
 - The NeMo Guardrails remote backend inherits its configured service's
   availability, latency, and policy behavior. The local backend requires Python
   3.11 or later and `nemoguardrails==0.22.0`.
-- The PII redaction plugin currently supports its deterministic local backend;
-  local-model backend configuration is reserved for future work.
+- The PII redaction plugin supports deterministic built-in policies and
+  worker-backed local-model providers. Local-model mode requires a separately
+  installed compatible `grpc-v1` provider; the optional Rampart provider
+  supports Latin-script text and does not provide complete PII coverage.
 - Pricing and optimization estimates depend on model names, token data, pricing
   sources, and freshness evidence. Missing or inconsistent evidence produces
   partial or absent cost fields rather than zero values.

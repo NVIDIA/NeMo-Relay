@@ -3,6 +3,8 @@
 
 package nemo_relay
 
+import "encoding/json"
+
 // PiiRedactionPluginKind is the top-level plugin kind used by the built-in PII redaction component.
 const PiiRedactionPluginKind = "pii_redaction"
 
@@ -18,13 +20,27 @@ type PiiRedactionBuiltinConfig struct {
 	UnmaskedSuffix *int32   `json:"unmasked_suffix,omitempty"`
 }
 
-// PiiRedactionLocalModelConfig configures the future local-model redaction backend.
+// PiiRedactionLocalModelConfig configures a worker-backed local-model redaction provider.
 type PiiRedactionLocalModelConfig struct {
-	Backend         string `json:"backend,omitempty"`
-	ModelID         string `json:"model_id,omitempty"`
-	DetectorProfile string `json:"detector_profile,omitempty"`
-	AllowNetwork    *bool  `json:"allow_network,omitempty"`
-	MaxLatencyMS    *int32 `json:"max_latency_ms,omitempty"`
+	Backend            string   `json:"backend,omitempty"`
+	ModelID            string   `json:"model_id,omitempty"`
+	DetectorProfile    string   `json:"detector_profile,omitempty"`
+	TargetPaths        []string `json:"target_paths,omitempty"`
+	TargetPathPatterns []string `json:"target_path_patterns,omitempty"`
+	MinScore           *float64 `json:"min_score,omitempty"`
+	ExcludedLabels     []string `json:"excluded_labels,omitempty"`
+	Replacement        *string  `json:"replacement,omitempty"`
+	AllowNetwork       *bool    `json:"allow_network,omitempty"`
+	MaxLatencyMS       *int32   `json:"max_latency_ms,omitempty"`
+}
+
+// PiiRedactionProfile configures one ordered PII redaction backend.
+type PiiRedactionProfile struct {
+	Enabled  bool                          `json:"enabled"`
+	Mode     string                        `json:"mode"`
+	Priority int32                         `json:"priority"`
+	Builtin  *PiiRedactionBuiltinConfig    `json:"builtin,omitempty"`
+	Local    *PiiRedactionLocalModelConfig `json:"local,omitempty"`
 }
 
 // PiiRedactionConfig is the canonical Go shape for the PII redaction plugin config document.
@@ -38,9 +54,29 @@ type PiiRedactionConfig struct {
 	ToolOutput bool                          `json:"tool_output"`
 	Priority   int32                         `json:"priority,omitempty"`
 	Codec      string                        `json:"codec,omitempty"`
+	Profiles   []PiiRedactionProfile         `json:"profiles,omitempty"`
 	Builtin    *PiiRedactionBuiltinConfig    `json:"builtin,omitempty"`
 	Local      *PiiRedactionLocalModelConfig `json:"local,omitempty"`
 	Policy     *ConfigPolicy                 `json:"policy,omitempty"`
+}
+
+// MarshalJSON omits legacy top-level fields when profile composition is used.
+func (config PiiRedactionConfig) MarshalJSON() ([]byte, error) {
+	if len(config.Profiles) == 0 {
+		type configAlias PiiRedactionConfig
+		return json.Marshal(configAlias(config))
+	}
+	return json.Marshal(struct {
+		Version  uint32                `json:"version,omitempty"`
+		Codec    string                `json:"codec,omitempty"`
+		Profiles []PiiRedactionProfile `json:"profiles"`
+		Policy   *ConfigPolicy         `json:"policy,omitempty"`
+	}{
+		Version:  config.Version,
+		Codec:    config.Codec,
+		Profiles: config.Profiles,
+		Policy:   config.Policy,
+	})
 }
 
 // PiiRedactionComponentSpec wraps one PII redaction config as a top-level plugin component.
@@ -76,6 +112,15 @@ func NewPiiRedactionBuiltinConfig() PiiRedactionBuiltinConfig {
 // NewPiiRedactionLocalModelConfig returns default local-model redaction settings.
 func NewPiiRedactionLocalModelConfig() PiiRedactionLocalModelConfig {
 	return PiiRedactionLocalModelConfig{}
+}
+
+// NewPiiRedactionProfile returns one enabled built-in profile with default priority.
+func NewPiiRedactionProfile() PiiRedactionProfile {
+	return PiiRedactionProfile{
+		Enabled:  true,
+		Mode:     "builtin",
+		Priority: 100,
+	}
 }
 
 // NewPiiRedactionComponentSpec wraps PII redaction config as an enabled component.

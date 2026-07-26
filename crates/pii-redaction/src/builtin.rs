@@ -696,7 +696,7 @@ fn remove_sanitized_json_pointer_value(value: &mut Json, segments: &[String]) ->
     }
 }
 
-fn render_json_pointer_path(path_segments: &[String]) -> String {
+pub(super) fn render_json_pointer_path(path_segments: &[String]) -> String {
     if path_segments.is_empty() {
         return String::new();
     }
@@ -708,7 +708,7 @@ fn render_json_pointer_path(path_segments: &[String]) -> String {
     rendered
 }
 
-fn escape_json_pointer_segment(segment: &str) -> String {
+pub(super) fn escape_json_pointer_segment(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
