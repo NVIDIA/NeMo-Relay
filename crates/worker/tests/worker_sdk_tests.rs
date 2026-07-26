@@ -200,7 +200,22 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 19);
+    assert_eq!(registrations.len(), 21);
+    for local_name in [
+        "llm-sanitize-request",
+        "llm-sanitize-response",
+        "llm-sanitize-omit-request",
+        "llm-sanitize-omit-response",
+    ] {
+        assert_eq!(
+            registrations
+                .iter()
+                .filter(|registration| registration.local_name == local_name)
+                .count(),
+            1,
+            "expected exactly one {local_name} registration"
+        );
+    }
     assert_eq!(
         registrations
             .iter()
