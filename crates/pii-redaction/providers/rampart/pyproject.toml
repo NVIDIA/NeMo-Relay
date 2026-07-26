@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-pii-rampart"
+version = "0.1.0"
+description = "Optional Rampart local-model provider for NeMo Relay PII redaction"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["THIRD_PARTY_NOTICES.md"]
+authors = [
+    { name = "NVIDIA Corporation & Affiliates" },
+]
+dependencies = [
+    "huggingface-hub>=0.34,<2",
+    "nemo-relay-plugin>=0.7,<1.0",
+    "numpy>=1.26,<3",
+    "onnxruntime>=1.20,<2",
+    "tokenizers>=0.21,<1",
+]
+
+[project.scripts]
+nemo-relay-pii-rampart-prefetch = "nemo_relay_pii_rampart.prefetch:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nemo_relay_pii_rampart"]
+
+[tool.setuptools.package-data]
+nemo_relay_pii_rampart = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nemo_relay_pii_rampart", "nemo_relay_plugin"]
+
+[tool.ty.analysis]
+# The model dependencies live only in the worker's managed environment.
+allowed-unresolved-imports = ["huggingface_hub", "numpy", "onnxruntime", "tokenizers"]

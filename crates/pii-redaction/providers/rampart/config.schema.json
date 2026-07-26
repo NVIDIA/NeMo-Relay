@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NeMo Relay Rampart PII Provider",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "default": "nationaldesignstudio/rampart",
+      "description": "Pinned Rampart repository identifier or an explicit local directory containing the same verified snapshot."
+    },
+    "revision": {
+      "type": "string",
+      "const": "b1993e4e68b082835b80ffc65acc03325ea2e501",
+      "default": "b1993e4e68b082835b80ffc65acc03325ea2e501"
+    },
+    "cache_dir": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "local_files_only": {
+      "type": "boolean",
+      "const": true,
+      "default": true
+    },
+    "max_windows_per_request": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 512,
+      "default": 128
+    },
+    "inference_batch_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 16
+    },
+    "max_pending_requests": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 8
+    },
+    "intra_op_threads": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    }
+  }
+}

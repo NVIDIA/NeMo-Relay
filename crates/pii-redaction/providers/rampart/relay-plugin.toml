@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+manifest_version = 1
+
+[plugin]
+id = "nemo_relay.pii_rampart"
+kind = "worker"
+
+[compat]
+relay = ">=0.7,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+manifest_root = "."
+artifact = "nemo_relay_pii_rampart/worker.py"
+
+[integrity]
+sha256 = "sha256:9b4bc53676e6c74c12d48212d8ed7e9438b5763001299224724e9bee56a0fda5"
+
+[load]
+runtime = "python"
+entrypoint = "nemo_relay_pii_rampart.worker:main"
