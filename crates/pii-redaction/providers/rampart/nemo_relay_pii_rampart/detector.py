@@ -29,6 +29,7 @@ SPECIAL_TOKEN_COUNT = 2
 CONTENT_TOKEN_BUDGET = MODEL_MAX_TOKENS - SPECIAL_TOKEN_COUNT
 WINDOW_OVERLAP_TOKENS = 64
 MAX_MODEL_REFERENCE_BYTES = 1024
+MAX_DETECTOR_PROFILE_BYTES = 1024
 MAX_CACHE_PATH_BYTES = 4096
 
 _MODEL_FILE_SHA256 = {
@@ -209,10 +210,9 @@ class RampartDetector:
 
     def detect_request(self, request: Any) -> dict[str, Any]:
         """Validate one provider request and return versioned UTF-8 spans."""
-        texts, requested_model = _parse_request(request)
+        texts, requested_model, profile = _parse_request(request)
         if requested_model is not None and requested_model != DEFAULT_MODEL_ID:
             raise ValueError(f"request model_id {requested_model!r} does not match loaded model {DEFAULT_MODEL_ID!r}")
-        profile = request.get("detector_profile")
         if profile not in (None, "default"):
             raise ValueError(f"unsupported detector_profile {profile!r}")
 
@@ -243,10 +243,12 @@ class RampartDetector:
 
         detections = []
         text_by_id = {item.text_id: item.text for item in texts}
-        byte_offsets_by_id = {text_id: _utf8_offsets(text) for text_id, text in text_by_id.items()}
         for text_id, spans in spans_by_text.items():
-            for span in _merge_overlapping_spans(spans):
-                byte_offsets = byte_offsets_by_id[text_id]
+            merged_spans = _merge_overlapping_spans(spans)
+            if not merged_spans:
+                continue
+            byte_offsets = _utf8_offsets(text_by_id[text_id])
+            for span in merged_spans:
                 detections.append(
                     {
                         "text_id": text_id,
@@ -428,7 +430,7 @@ def _uses_explicit_model_path(model_id: str) -> bool:
     return Path(model_id).expanduser().is_absolute() or model_id.startswith(("./", "../", ".\\", "..\\", "~/", "~\\"))
 
 
-def _parse_request(request: Any) -> tuple[list[_InputText], str | None]:
+def _parse_request(request: Any) -> tuple[list[_InputText], str | None, str | None]:
     if not isinstance(request, dict):
         raise TypeError("local-model request must be a JSON object")
     allowed = {"version", "model_id", "detector_profile", "texts"}
@@ -440,10 +442,10 @@ def _parse_request(request: Any) -> tuple[list[_InputText], str | None]:
         raise ValueError(f"local-model request version must be {CONTRACT_VERSION}")
     model_id = request.get("model_id")
     if model_id is not None:
-        model_id = _nonempty_string(model_id, "model_id")
+        model_id = _bounded_string(model_id, "model_id", MAX_MODEL_REFERENCE_BYTES)
     profile = request.get("detector_profile")
     if profile is not None:
-        _nonempty_string(profile, "detector_profile")
+        profile = _bounded_string(profile, "detector_profile", MAX_DETECTOR_PROFILE_BYTES)
     raw_texts = request.get("texts")
     if not isinstance(raw_texts, list) or not raw_texts:
         raise TypeError("texts must be a non-empty array")
@@ -472,7 +474,7 @@ def _parse_request(request: Any) -> tuple[list[_InputText], str | None]:
             raise ValueError(f"request text exceeds {MAX_REQUEST_TEXT_BYTES} UTF-8 bytes")
         seen_ids.add(text_id)
         texts.append(_InputText(text_id, text))
-    return texts, model_id
+    return texts, model_id, profile
 
 
 def _split_bio_label(raw_label: str | None) -> tuple[str | None, str | None]:

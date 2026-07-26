@@ -179,6 +179,35 @@ def test_request_validation_rejects_duplicate_ids_and_byte_overflow() -> None:
         )
     with pytest.raises(ValueError, match="UTF-8 bytes"):
         _parse_request({"version": 1, "texts": [{"id": 0, "text": "é" * 9000}]})
+    with pytest.raises(ValueError, match="model_id"):
+        _parse_request(
+            {
+                "version": 1,
+                "model_id": "x" * 1025,
+                "texts": [{"id": 0, "text": ""}],
+            }
+        )
+    with pytest.raises(ValueError, match="detector_profile"):
+        _parse_request(
+            {
+                "version": 1,
+                "detector_profile": "x" * 1025,
+                "texts": [{"id": 0, "text": ""}],
+            }
+        )
+
+
+def test_no_detection_does_not_allocate_utf8_offset_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_offsets(_text: str) -> list[int]:
+        raise AssertionError("UTF-8 offsets should be lazy when no spans were detected")
+
+    monkeypatch.setattr(detector_module, "_utf8_offsets", unexpected_offsets)
+    assert detector([], []).detect_request(
+        {
+            "version": 1,
+            "texts": [{"id": 0, "text": "no private values"}],
+        }
+    ) == {"version": 1, "detections": []}
 
 
 def test_detector_returns_utf8_byte_offsets_and_model_labels() -> None:

@@ -434,7 +434,9 @@ impl CompiledLocalBackend {
                     detection.text_id
                 )));
             }
-            if detection.label.trim().is_empty() || detection.label.len() > 128 {
+            if detection.label.trim().is_empty()
+                || detection.label.len() > MAX_LOCAL_MODEL_LABEL_BYTES
+            {
                 return Err(PluginError::RegistrationFailed(
                     "local-model response contained an invalid detection label".into(),
                 ));
@@ -524,7 +526,9 @@ impl CompiledLocalBackend {
             (Vec::new(), content),
         ]);
         let content = values.pop()?;
-        let headers = values.pop()?.as_object()?.clone();
+        let Json::Object(headers) = values.pop()? else {
+            return None;
+        };
         Some((headers, content))
     }
 
