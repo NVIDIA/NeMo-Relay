@@ -21,6 +21,10 @@ Built-in codec for the Anthropic Messages API.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../traits/trait-llmcodec\">LlmCodec</a> for <a href=\"struct-anthropicmessagescodec\">AnthropicMessagesCodec</a>"}} /></pre>
 
+#### `codec_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../traits/trait-llmcodec\">codec_identity</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+
 #### `decode`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../traits/trait-llmcodec\">decode</a>(&amp;self, request: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
@@ -32,6 +36,10 @@ Built-in codec for the Anthropic Messages API.
 ### `impl LlmResponseCodec for AnthropicMessagesCodec`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../traits/trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"struct-anthropicmessagescodec\">AnthropicMessagesCodec</a>"}} /></pre>
+
+#### `codec_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../traits/trait-llmresponsecodec\">codec_identity</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
 
 #### `decode_response`
 

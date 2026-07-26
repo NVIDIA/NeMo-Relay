@@ -191,6 +191,124 @@ guardrails important:
 - If you need to change the real execution path, use an intercept
 - If you need to change only the emitted payload, use a sanitize guardrail
 
+## Codec-Aware LLM Sanitizers
+
+Every LLM sanitize guardrail receives the payload first and a required
+directional, per-call context second:
+
+```text
+request:  (LlmRequest, LlmSanitizeRequestContext) -> Option<LlmRequest>
+response: (Json, LlmSanitizeResponseContext) -> Option<Json>
+```
+
+`context.codec` is a binding-native codec identity, not a JSON payload.
+Python and Node.js expose `kind` and, when applicable, `id` properties.
+In-process Rust and the typed native Rust SDK expose enum variants. The raw
+native ABI exposes the same information through `codec_kind` and `codec_id`.
+
+`codec.kind` is `none` for a call with no codec, `builtin` for
+Relay's built-in `openai_chat`, `openai_responses`, and `anthropic_messages`
+codecs, `runtime` for a named runtime-registered codec, and `opaque` for an
+active codec without a registered identity. `codec.id` is present only for
+`builtin` and `runtime`. Do not infer a provider from an opaque request shape.
+
+Return a payload to continue the sanitizer chain. Return `None` (or `null` in
+JavaScript) only when observing the payload would be unsafe: Relay omits the
+LLM event payload and its annotation, while leaving the client-visible request
+and response unchanged. Omission short-circuits later LLM sanitizers.
+
+All LLM sanitizer callbacks must implement this two-parameter contract. For an
+in-process sanitizer, use `resolve_codec()` to access the active codec
+implementation. A resolver returns no codec for manual calls without one.
+Worker-plugin contexts resolve to an invocation-scoped asynchronous proxy with
+the same directional operations: request codecs provide `decode(request)` and
+`encode(annotated, original)`, while response codecs provide `decode(response)`.
+Python in-process response codecs expose that operation as `decode_response`,
+and Node.js exposes it as `decodeResponse`. An active runtime or opaque codec
+resolves just like a built-in codec; its identity does not limit the available
+operations. Node.js codecs supplied through decode and encode callbacks have
+an `opaque` identity but remain resolvable. The worker proxy is valid only
+while its sanitizer callback is running; do not retain it after the callback
+returns.
+
+<Tabs>
+<Tab title="Python" language="python">
+
+```python
+import nemo_relay
+from nemo_relay import LLMRequest
+from nemo_relay import guardrails
+
+def redact_request(
+    request: LLMRequest,
+    context: nemo_relay.LlmSanitizeRequestContext,
+) -> LLMRequest | None:
+    codec = context.resolve_codec()
+    if (
+        context.codec.kind == "builtin"
+        and context.codec.id == "openai_chat"
+        and codec is not None
+    ):
+        annotated = codec.decode(request)
+        # Apply a policy to the normalized request, then preserve the wire shape.
+        annotated.messages = []
+        return codec.encode(annotated, request)
+    return request
+
+guardrails.register_llm_sanitize_request("redact-openai-chat", 10, redact_request)
+```
+
+</Tab>
+<Tab title="Node.js" language="javascript">
+
+```js
+const relay = require("nemo-relay-node");
+
+relay.registerLlmSanitizeRequestGuardrail(
+  "redact-openai-chat",
+  10,
+  (request, context) => {
+    const codec = context.resolveCodec();
+    if (codec) {
+      const annotated = codec.decode(request);
+      annotated.messages = [];
+      return codec.encode(annotated, request);
+    }
+    return request;
+  },
+);
+```
+
+</Tab>
+<Tab title="Rust" language="rust">
+
+```rust
+use std::sync::Arc;
+use nemo_relay::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay::api::registry::register_llm_sanitize_request_guardrail;
+
+register_llm_sanitize_request_guardrail(
+    "redact-openai-chat",
+    10,
+    Arc::new(|mut request, context| {
+        if context.codec() == &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+            && let Some(codec) = context.resolve_codec()
+            && let Ok(mut annotated) = codec.decode(&request)
+        {
+            annotated.messages.clear();
+            request = codec.encode(&annotated, &request).ok()?;
+        }
+        Some(request)
+    }),
+)?;
+```
+
+</Tab>
+</Tabs>
+
+The same registration names support scope-local and plugin-context
+registrations. Priority and name tie-break ordering are unchanged.
+
 ## Detailed Execution Flow
 
 <MermaidStyles />

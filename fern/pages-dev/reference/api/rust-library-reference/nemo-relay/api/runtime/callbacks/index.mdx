@@ -2,7 +2,7 @@
 title: "Module callbacks"
 sidebar-title: "callbacks"
 description: "Callback type aliases used by the runtime middleware pipeline."
-position: 39
+position: 43
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -16,6 +16,13 @@ The public middleware registration APIs accept callback closures with the signat
 ## Structs
 
 - [LlmJsonStream](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/struct-llmjsonstream): Stream of JSON chunks produced by the managed streaming LLM pipeline.
+- [LlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/struct-llmsanitizerequestcontext): Per-call codec context for LLM request sanitize guardrails.
+- [LlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/struct-llmsanitizeresponsecontext): Per-call codec context for LLM response sanitize guardrails.
+
+## Enums
+
+- [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/enum-builtinllmcodec): Relay's built-in LLM codec identities.
+- [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/enum-llmcodecidentity): Per-call LLM codec identity supplied to sanitize guardrails.
 
 ## Traits
 

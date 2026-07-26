@@ -19,6 +19,74 @@ Author out-of-process NeMo Relay worker plugins in Python.
 
 Observability fields returned by event sanitizer callbacks.
 
+### `LlmCodecIdentity`
+
+Structured identity of the codec active for one worker invocation.
+
+### `LlmSanitizeRequestContext`
+
+Structured per-call context provided to an LLM request sanitizer.
+
+#### Methods
+
+##### `resolve_codec`
+
+```python
+def resolve_codec() -> 'WorkerRequestCodec | None'
+```
+
+Return the active request-codec proxy for this invocation.
+
+### `LlmSanitizeResponseContext`
+
+Structured per-call context provided to an LLM response sanitizer.
+
+#### Methods
+
+##### `resolve_codec`
+
+```python
+def resolve_codec() -> 'WorkerResponseCodec | None'
+```
+
+Return the active response-codec proxy for this invocation.
+
+### `WorkerRequestCodec`
+
+Invocation-scoped async proxy for an active request codec.
+
+#### Methods
+
+##### `decode`
+
+```python
+async def decode(request: LlmRequest) -> AnnotatedLlmRequest
+```
+
+Decode a wire request with the active host codec.
+
+##### `encode`
+
+```python
+async def encode(annotated: AnnotatedLlmRequest, original: LlmRequest) -> LlmRequest
+```
+
+Encode an annotated request with the active host codec.
+
+### `WorkerResponseCodec`
+
+Invocation-scoped async proxy for an active response codec.
+
+#### Methods
+
+##### `decode`
+
+```python
+async def decode(response: Json) -> Json
+```
+
+Decode a wire response with the active host codec.
+
 ### `WorkerSdkError(Exception)`
 
 Report a worker SDK, host-call, or protocol error to plugin code.

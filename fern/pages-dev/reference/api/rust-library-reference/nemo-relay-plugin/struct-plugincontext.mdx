@@ -2,7 +2,7 @@
 title: "Struct Plugin Context"
 sidebar-title: "PluginContext"
 description: "Borrowed safe wrapper around a host plugin registration context."
-position: 31
+position: 39
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -101,13 +101,13 @@ The callback returns a [`ToolExecutionInterceptOutcome`](/reference/api/rust-lib
 
 #### `register_llm_sanitize_request_guardrail`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_request_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"struct-llmrequest\">LlmRequest</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_request_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: for&lt;'ctx&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>&lt;'ctx&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-llmrequest\">LlmRequest</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
 
 Registers a typed LLM sanitize-request guardrail.
 
 #### `register_llm_sanitize_response_guardrail`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_response_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_response_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: for&lt;'ctx&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"type-json\">Json</a>, <a href=\"struct-llmsanitizeresponsecontext\">LlmSanitizeResponseContext</a>&lt;'ctx&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
 
 Registers a typed LLM sanitize-response guardrail.
 
@@ -135,7 +135,7 @@ Registers a typed LLM execution intercept.
 
 Registers a typed LLM stream execution intercept.
 
-Native ABI v1 represents stream execution as one JSON result. The host wraps that result as a one-chunk stream.
+Native ABI v2 represents stream execution as one JSON result. The host wraps that result as a one-chunk stream.
 
 #### `register_subscriber_raw`
 
@@ -229,7 +229,7 @@ Registers a raw tool execution intercept callback.
 
 #### `register_llm_sanitize_request_guardrail_raw`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_sanitize_request_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativellmrequestcb\">NemoRelayNativeLlmRequestCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_sanitize_request_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativellmsanitizerequestcb\">NemoRelayNativeLlmSanitizeRequestCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
 
 Registers a raw LLM sanitize-request guardrail callback.
 
@@ -239,7 +239,7 @@ Registers a raw LLM sanitize-request guardrail callback.
 
 #### `register_llm_sanitize_response_guardrail_raw`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_sanitize_response_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativejsoncb\">NemoRelayNativeJsonCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_sanitize_response_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativellmsanitizeresponsecb\">NemoRelayNativeLlmSanitizeResponseCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
 
 Registers a raw LLM sanitize-response guardrail callback.
 

@@ -104,6 +104,18 @@ Default: `usize::MAX`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn llm_stream_next(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-llmstreamnextrequest\">LlmStreamNextRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;Streaming&lt;<a href=\"../struct-streamchunk\">StreamChunk</a>&gt;&gt;, Status&gt;"}} /></pre>
 
+#### `decode_llm_codec_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn decode_llm_codec_request(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-llmcodecdecoderequest\">LlmCodecDecodeRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-jsonresult\">JsonResult</a>&gt;, Status&gt;"}} /></pre>
+
+#### `encode_llm_codec_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn encode_llm_codec_request(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-llmcodecencoderequest\">LlmCodecEncodeRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-jsonresult\">JsonResult</a>&gt;, Status&gt;"}} /></pre>
+
+#### `decode_llm_codec_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn decode_llm_codec_response(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-llmcodecdecoderesponse\">LlmCodecDecodeResponse</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-jsonresult\">JsonResult</a>&gt;, Status&gt;"}} /></pre>
+
 ## Trait Implementations
 
 ### `impl<T: Clone> Clone for RelayHostRuntimeClient<T>`

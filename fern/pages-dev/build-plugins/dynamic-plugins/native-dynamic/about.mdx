@@ -1,6 +1,6 @@
 ---
 title: "Native Dynamic Plugins (Rust)"
-description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v1."
+description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v2."
 position: 10
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -116,7 +116,7 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
-## Native ABI v1
+## Native ABI v2
 
 The host passes a `NemoRelayNativeHostApiV1` table to the entry symbol. The
 plugin returns a `NemoRelayNativePluginV1` descriptor:
@@ -142,6 +142,35 @@ ABI callbacks can register these runtime surfaces:
 
 Relay keeps the library alive while those registrations exist and deregisters
 them before unloading it.
+
+LLM sanitize callbacks receive their request or response JSON first, followed
+by `NemoRelayNativeLlmSanitizeRequestContext` or
+`NemoRelayNativeLlmSanitizeResponseContext`. Each context contains structured
+codec identity and a borrowed, callback-lifetime codec handle. `codec_kind` is
+`None`, `BuiltIn`, `Runtime`, or `Opaque`. `codec_id` is present for `BuiltIn`
+(one of `openai_chat`, `openai_responses`, or `anthropic_messages`) and
+`Runtime`, and null for `None` and `Opaque`.
+
+The request handle supports host operations to decode an `LlmRequest` into an
+`AnnotatedLlmRequest` and encode normalized changes onto the original request.
+The response handle supports decoding response JSON into an
+`AnnotatedLlmResponse`. A null handle means no codec is active. Runtime and
+opaque codecs still have non-null handles and support the same operations as a
+built-in codec. Do not retain a handle or resolved SDK facade after the
+sanitizer callback returns.
+
+The Rust SDK converts the raw structures into
+`LlmSanitizeRequestContext` and `LlmSanitizeResponseContext`. Call
+`resolve_codec()` to obtain the safe directional facade. Raw ABI consumers use
+the `llm_request_codec_decode`, `llm_request_codec_encode`, and
+`llm_response_codec_decode` host-table functions. The host owns all returned
+JSON string handles, which callers release with the ordinary host string
+release operation.
+
+A successful null sanitizer output omits the LLM observability payload and its
+annotation. Returning an error also fails closed rather than exposing the
+unsanitized payload. Neither case changes the client-visible request or
+response.
 
 Use the `nemo-relay-plugin` crate rather than the host `nemo-relay` runtime
 crate. Refer to [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)

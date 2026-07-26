@@ -19,7 +19,7 @@ This emits an LLM-end event for a handle previously returned by [`llm_call`](/re
 
 - `handle`: LLM handle to close.
 - `response`: Raw provider response associated with the end event.
-- `data`: Optional application payload retained for compatibility. The emitted end event data is the sanitized `response` unless it sanitizes to JSON null, in which case this payload is used.
+- `data`: Optional application payload retained for compatibility. When the raw `response` is JSON null, this payload is sanitized in its place.
 - `metadata`: Optional JSON metadata recorded on the end event.
 - `annotated_response`: Optional normalized response annotation produced by a response codec. When omitted and `response_codec` is supplied, the annotation is decoded from the sanitized end-event payload.
 - `response_codec`: Optional response codec used to produce a normalized response annotation from the sanitized end-event payload.

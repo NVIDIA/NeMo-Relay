@@ -114,6 +114,17 @@ export interface OpenInferenceConfig {
 }
 ```
 
+### `JsLlmCodecIdentity`
+
+Structured codec identity delivered to JavaScript LLM sanitizers.
+
+```ts
+export interface JsLlmCodecIdentity {
+  kind: string
+  id?: string
+}
+```
+
 ### `EventSanitizeFields`
 
 Observability fields returned by mark and scope event sanitizers.
@@ -563,7 +574,7 @@ export declare function scopeStackActive(): boolean
 
 Returns the most recent callback error that could not be surfaced through a direct exception.
 
-This is primarily used for sanitize callback paths that fail open and cannot surface their errors directly.
+This is primarily used for sanitize callback paths that omit observability payloads and cannot surface their errors directly.
 
 ```ts
 export declare function getLastCallbackError(): string | null
@@ -700,7 +711,7 @@ Execute an LLM call end-to-end with full lifecycle management.
 Runs conditional-execution guardrails (on raw request) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema. Returns the final execution response; sanitize guardrails do not rewrite the caller-visible value.
 
 ```ts
-export declare function llmCallExecute(name: string, request: Json, func: (arg: Json) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any | undefined | null, codecEncode?: (arg: Json) => any | undefined | null, responseCodecDecode?: (arg: Json) => any | undefined | null): Promise<unknown>
+export declare function llmCallExecute(name: string, request: Json, func: (arg: Json) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<unknown>
 ```
 
 ### `llmCallExecuteAsync`
@@ -710,7 +721,7 @@ Execute an LLM call end-to-end, supporting both sync and async (Promise-returnin
 Same lifecycle as `llmCallExecute` (guardrails -> intercepts -> func -> response processing), but transparently handles JS callbacks that return Promises.
 
 ```ts
-export declare function llmCallExecuteAsync(name: string, request: Json, func: (...args: any[]) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any | undefined | null, codecEncode?: (arg: Json) => any | undefined | null, responseCodecDecode?: (arg: Json) => any | undefined | null): Promise<unknown>
+export declare function llmCallExecuteAsync(name: string, request: Json, func: (...args: any[]) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<unknown>
 ```
 
 ### `llmStreamCallExecute`
@@ -722,7 +733,7 @@ Like `llmCallExecute`, conditional-execution guardrails run first on the raw req
 The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted or closed early and must return a JSON value representing the aggregated response. Consumers that stop reading early must await `stream.close()` to wait for producer cleanup and surface cleanup errors.
 
 ```ts
-export declare function llmStreamCallExecute(name: string, request: Json, func: (arg: Json) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any | undefined | null, codecEncode?: (arg: Json) => any | undefined | null, responseCodecDecode?: (arg: Json) => any | undefined | null): Promise<LlmStream>
+export declare function llmStreamCallExecute(name: string, request: Json, func: (arg: Json) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<LlmStream>
 ```
 
 ### `registerMarkSanitizeGuardrail`
@@ -877,10 +888,10 @@ export declare function deregisterToolExecutionIntercept(name: string): boolean
 
 Register a guardrail that sanitizes LLM request data before execution.
 
-The `guardrail` callback receives the LLM request as JSON and must return the sanitized request. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(request, context)` and must return the sanitized request, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerLlmSanitizeRequestGuardrail(name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function registerLlmSanitizeRequestGuardrail(name: string, priority: number, guardrail: (request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null): void
 ```
 
 ### `deregisterLlmSanitizeRequestGuardrail`
@@ -897,10 +908,10 @@ export declare function deregisterLlmSanitizeRequestGuardrail(name: string): boo
 
 Register a guardrail that sanitizes LLM response data after execution.
 
-The `guardrail` callback receives the LLM response as a JSON value and must return the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(response, context)` and must return the sanitized response, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerLlmSanitizeResponseGuardrail(name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function registerLlmSanitizeResponseGuardrail(name: string, priority: number, guardrail: (response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null): void
 ```
 
 ### `deregisterLlmSanitizeResponseGuardrail`
@@ -1177,10 +1188,10 @@ export declare function scopeDeregisterToolExecutionIntercept(scopeUuid: string,
 
 Register a scope-local guardrail that sanitizes LLM request data before execution.
 
-The `guardrail` callback receives the LLM request as JSON and must return the sanitized request. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(request, context)` and must return the sanitized request, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterLlmSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function scopeRegisterLlmSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null): void
 ```
 
 ### `scopeDeregisterLlmSanitizeRequestGuardrail`
@@ -1197,10 +1208,10 @@ export declare function scopeDeregisterLlmSanitizeRequestGuardrail(scopeUuid: st
 
 Register a scope-local guardrail that sanitizes LLM response data after execution.
 
-The `guardrail` callback receives the LLM response as a JSON value and must return the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(response, context)` and must return the sanitized response, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterLlmSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function scopeRegisterLlmSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null): void
 ```
 
 ### `scopeDeregisterLlmSanitizeResponseGuardrail`
