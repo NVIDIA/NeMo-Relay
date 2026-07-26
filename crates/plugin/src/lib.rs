@@ -425,7 +425,10 @@ pub type NemoRelayNativeToolExecutionCb = unsafe extern "C" fn(
 ) -> NemoRelayStatus;
 
 /// Native LLM request sanitizer callback. Return a successful null output to
-/// omit the observability payload and annotation.
+/// omit the observability payload and annotation. `request_json` is borrowed,
+/// but may be written directly to `out_request_json` as a pass-through; the
+/// host releases an aliased input/output once. Any other non-null output must
+/// be host-allocated and transfers ownership to the host.
 pub type NemoRelayNativeLlmSanitizeRequestCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
@@ -434,7 +437,10 @@ pub type NemoRelayNativeLlmSanitizeRequestCb = unsafe extern "C" fn(
 ) -> NemoRelayStatus;
 
 /// Native LLM response sanitizer callback. Return a successful null output to
-/// omit the observability payload and annotation.
+/// omit the observability payload and annotation. `payload_json` is borrowed,
+/// but may be written directly to `out_json` as a pass-through; the host
+/// releases an aliased input/output once. Any other non-null output must be
+/// host-allocated and transfers ownership to the host.
 pub type NemoRelayNativeLlmSanitizeResponseCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     payload_json: *const NemoRelayNativeString,

@@ -98,6 +98,9 @@ func TestLlmSanitizeDirectionalContextsPreserveEveryCodecIdentity(t *testing.T) 
 			if codec.CodecID == nil && test.id != nil {
 				t.Fatal("codec ID was lost")
 			}
+			if codec.CodecID != nil && test.id == nil {
+				t.Fatalf("unexpected codec ID %q", *codec.CodecID)
+			}
 			if codec.CodecID != nil && test.id != nil && *codec.CodecID != *test.id {
 				t.Fatalf("codec ID = %q, want %q", *codec.CodecID, *test.id)
 			}

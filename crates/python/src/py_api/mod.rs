@@ -73,6 +73,26 @@ fn py_llm_response_codec(
     })
 }
 
+fn py_llm_codec(codec: Option<&Bound<'_, PyAny>>) -> Option<Arc<dyn LlmCodec>> {
+    codec.and_then(|codec| -> Option<Arc<dyn LlmCodec>> {
+        if codec.is_none() {
+            return None;
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        Some(Arc::new(py_callable::PyLlmCodecWrapper {
+            py_codec: codec.clone().unbind(),
+        }))
+    })
+}
+
 fn py_annotated_llm_response(
     annotated_response: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<Arc<AnnotatedLlmResponse>>> {
@@ -750,11 +770,7 @@ fn llm_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
     let default_fn: LlmExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
-    let codec_arc: Option<Arc<dyn LlmCodec>> = codec.map(|c| {
-        Arc::new(py_callable::PyLlmCodecWrapper {
-            py_codec: c.clone().unbind(),
-        }) as Arc<dyn LlmCodec>
-    });
+    let codec_arc = py_llm_codec(codec);
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
@@ -855,11 +871,7 @@ fn llm_stream_call_execute<'py>(
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
-    let codec_arc: Option<Arc<dyn LlmCodec>> = codec.map(|c| {
-        Arc::new(py_callable::PyLlmCodecWrapper {
-            py_codec: c.clone().unbind(),
-        }) as Arc<dyn LlmCodec>
-    });
+    let codec_arc = py_llm_codec(codec);
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
@@ -1081,7 +1093,8 @@ fn deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM sanitize-request guardrail.
 ///
-/// Callback: ``(request: LlmRequest) -> LlmRequest`` — returns a sanitized request.
+/// Callback: ``(request: LlmRequest, context: LlmSanitizeRequestContext) ->
+/// Optional[LlmRequest]``. Return ``None`` to omit the observability payload and annotation.
 #[pyfunction]
 fn register_llm_sanitize_request_guardrail(
     name: &str,
@@ -1104,7 +1117,8 @@ fn deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
 
 /// Register an LLM sanitize-response guardrail.
 ///
-/// Callback: ``(response: dict) -> dict`` — returns a sanitized response.
+/// Callback: ``(response: Json, context: LlmSanitizeResponseContext) -> Optional[Json]``.
+/// Return ``None`` to omit the observability payload and annotation.
 #[pyfunction]
 fn register_llm_sanitize_response_guardrail(
     name: &str,

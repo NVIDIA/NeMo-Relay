@@ -442,6 +442,44 @@ fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
 }
 
 #[test]
+fn normalized_openai_chat_api_specific_policy_omits_multiple_choices() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "remove".to_string(),
+            target_paths: vec!["/api_specific".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
+
+    assert!(
+        sanitize_response(
+            json!({
+                "id": "chatcmpl-multi",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "first"},
+                        "logprobs": {"content": [{"token": "SECRET-FIRST"}]}
+                    },
+                    {
+                        "index": 1,
+                        "message": {"role": "assistant", "content": "second"},
+                        "logprobs": {"content": [{"token": "SECRET-SECOND"}]}
+                    }
+                ]
+            }),
+            LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::BuiltIn(
+                BuiltinLlmCodec::OpenAiChat,
+            )),
+        )
+        .is_none()
+    );
+}
+
+#[test]
 fn normalized_llm_paths_use_configured_anthropic_codec_without_a_system_message() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
@@ -4047,6 +4085,238 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
     clear_plugin_configuration().unwrap();
 }
 
+#[test]
+fn builtin_backend_removes_targeted_message_names_and_ignores_missing_normalized_paths() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "remove",
+            "target_paths": [
+                "/messages/0/missing",
+                "/messages/0/name",
+                "/messages/1/name"
+            ]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-remove-message-names");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "name": "SECRET-SYSTEM", "content": "instructions"},
+                {"role": "user", "name": "SECRET-USER", "content": "hello"}
+            ]
+        }),
+    };
+
+    llm_call(
+        LlmCallParams::builder()
+            .name("openai")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "headers": {},
+            "content": {
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": "instructions"},
+                    {"role": "user", "content": "hello"}
+                ]
+            }
+        }))
+    );
+    assert!(
+        !serde_json::to_string(&captured_events[0])
+            .unwrap()
+            .contains("SECRET-")
+    );
+
+    deregister_subscriber("pii-redaction-remove-message-names").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_array_removal() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_responses",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "remove",
+            "target_paths": ["/messages/0/content/0"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-unsafe-normalized-array-removal");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4.1-mini",
+            "input": [{
+                "role": "user",
+                "content": [{"type": "input_text", "text": "SECRET-REQUEST"}]
+            }]
+        }),
+    };
+    let annotated_request = Arc::new(OpenAIResponsesCodec.decode(&request).unwrap());
+
+    llm_call(
+        LlmCallParams::builder()
+            .name("openai")
+            .request(&request)
+            .annotated_request(annotated_request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert!(captured_events[0].input().is_none());
+    assert!(captured_events[0].annotated_request().is_none());
+    assert!(
+        !serde_json::to_string(&captured_events[0])
+            .unwrap()
+            .contains("SECRET-REQUEST")
+    );
+
+    deregister_subscriber("pii-redaction-unsafe-normalized-array-removal").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_backend_sanitizes_observable_llm_request_headers() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "redact",
+            "detector": "email"
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-llm-request-headers");
+    let request = LlmRequest {
+        headers: [("x-user-email".to_string(), json!("alice@example.com"))]
+            .into_iter()
+            .collect(),
+        content: json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}]
+        }),
+    };
+
+    llm_call(
+        LlmCallParams::builder()
+            .name("openai")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input().unwrap()["headers"]["x-user-email"],
+        json!("[REDACTED]")
+    );
+    assert!(
+        !serde_json::to_string(&captured_events[0])
+            .unwrap()
+            .contains("alice@example.com")
+    );
+
+    deregister_subscriber("pii-redaction-llm-request-headers").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn trajectory_preset_redacts_opaque_llm_request_header_values() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "preset": "trajectory_context"
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-trajectory-llm-request-headers");
+    let request = LlmRequest {
+        headers: [("model".to_string(), json!("SECRET-HEADER"))]
+            .into_iter()
+            .collect(),
+        content: json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}]
+        }),
+    };
+
+    llm_call(
+        LlmCallParams::builder()
+            .name("openai")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input().unwrap()["headers"]["model"],
+        json!("[REDACTED]")
+    );
+    assert!(
+        !serde_json::to_string(&captured_events[0])
+            .unwrap()
+            .contains("SECRET-HEADER")
+    );
+
+    deregister_subscriber("pii-trajectory-llm-request-headers").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
 #[tokio::test]
 async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sanitized_output() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
@@ -4221,6 +4491,142 @@ async fn builtin_backend_sanitizes_openai_chat_response_from_normalized_message_
 }
 
 #[tokio::test]
+async fn builtin_backend_omits_unprojectable_openai_chat_api_specific_response() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "remove",
+            "target_paths": ["/api_specific/system_fingerprint"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-openai-chat-api-specific-response");
+    let response = json!({
+        "id": "chatcmpl-api-specific",
+        "model": "gpt-4o-mini",
+        "system_fingerprint": "SECRET-FINGERPRINT",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "hello"},
+            "finish_reason": "stop"
+        }]
+    });
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hello"}]
+                }),
+            })
+            .func(noop_openai_chat_exec_fn(response.clone()))
+            .response_codec(Arc::new(OpenAIChatCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, response);
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert!(captured_events[1].output().is_none());
+    assert!(captured_events[1].annotated_response().is_none());
+    assert!(
+        !serde_json::to_string(&captured_events[1])
+            .unwrap()
+            .contains("SECRET-FINGERPRINT")
+    );
+
+    deregister_subscriber("pii-redaction-openai-chat-api-specific-response").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_omits_multi_choice_openai_chat_normalized_response() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/message"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-openai-chat-multi-choice-response");
+    let response = json!({
+        "id": "chatcmpl-multi",
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "sk-first-secret"},
+                "finish_reason": "stop"
+            },
+            {
+                "index": 1,
+                "message": {"role": "assistant", "content": "sk-second-secret"},
+                "finish_reason": "stop"
+            }
+        ]
+    });
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hello"}]
+                }),
+            })
+            .func(noop_openai_chat_exec_fn(response.clone()))
+            .response_codec(Arc::new(OpenAIChatCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, response);
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert!(captured_events[1].output().is_none());
+    assert!(captured_events[1].annotated_response().is_none());
+    let serialized_end = serde_json::to_string(&captured_events[1]).unwrap();
+    assert!(!serialized_end.contains("sk-first-secret"));
+    assert!(!serialized_end.contains("sk-second-secret"));
+
+    deregister_subscriber("pii-redaction-openai-chat-multi-choice-response").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
 async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -4350,6 +4756,65 @@ async fn builtin_backend_sanitizes_anthropic_response_from_normalized_message_pa
 }
 
 #[tokio::test]
+async fn builtin_backend_omits_unprojectable_anthropic_normalized_usage_response() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "anthropic_messages",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "remove",
+            "target_paths": ["/usage/prompt_tokens"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-anthropic-normalized-usage-response");
+    let response = json!({
+        "id": "msg_usage",
+        "model": "claude-sonnet-4-20250514",
+        "role": "assistant",
+        "type": "message",
+        "content": [{"type": "text", "text": "hello"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 123, "output_tokens": 4}
+    });
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("anthropic")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "hello"}]
+                }),
+            })
+            .func(noop_openai_chat_exec_fn(response.clone()))
+            .response_codec(Arc::new(crate::codec::anthropic::AnthropicMessagesCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, response);
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert!(captured_events[1].output().is_none());
+    assert!(captured_events[1].annotated_response().is_none());
+
+    deregister_subscriber("pii-redaction-anthropic-normalized-usage-response").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
 async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_message_path() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -4386,6 +4851,7 @@ async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_mes
                 "id": "resp_123",
                 "model": "gpt-4.1-mini",
                 "status": "completed",
+                "output_text": "sk-responses-secret",
                 "output": [
                     {
                         "type": "message",
@@ -4407,12 +4873,116 @@ async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_mes
         json!("[REDACTED]")
     );
     assert_eq!(
+        captured_events[1].output().unwrap()["output_text"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
         Some("[REDACTED]")
     );
+    assert!(
+        !captured_events[1]
+            .to_json_string()
+            .unwrap()
+            .contains("sk-responses-secret")
+    );
 
     deregister_subscriber("pii-redaction-openai-responses-normalized-response").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_finalization() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/message"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-openai-responses-output-text-stream");
+    let provider: LlmStreamExecutionNextFn = Arc::new(move |_request| {
+        Box::pin(async move {
+            Ok(LlmJsonStream::new(futures::stream::iter(vec![Ok(json!({
+                "type": "response.output_text.delta",
+                "delta": "sk-client-visible"
+            }))])))
+        })
+    });
+    let request_codec: Arc<dyn LlmCodec> = Arc::new(OpenAIResponsesCodec);
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "gpt-4.1-mini",
+                    "input": "hello"
+                }),
+            })
+            .func(provider)
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| {
+                json!({
+                    "id": "resp_stream",
+                    "model": "gpt-4.1-mini",
+                    "status": "completed",
+                    "output_text": "sk-stream-secret",
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "sk-stream-secret"
+                        }]
+                    }]
+                })
+            }))
+            .codec(request_codec)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        stream.next().await.unwrap().unwrap()["delta"],
+        json!("sk-client-visible")
+    );
+    assert!(stream.next().await.is_none());
+
+    let captured_events = captured_events_snapshot(&events);
+    let end = captured_events
+        .iter()
+        .find(|event| event.scope_category() == Some(ScopeCategory::End))
+        .unwrap();
+    assert_eq!(
+        end.output().unwrap()["output"][0]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(end.output().unwrap()["output_text"], json!("[REDACTED]"));
+    assert_eq!(
+        end.annotated_response()
+            .and_then(|response| response.response_text()),
+        Some("[REDACTED]")
+    );
+    assert!(!end.to_json_string().unwrap().contains("sk-stream-secret"));
+
+    deregister_subscriber("pii-redaction-openai-responses-output-text-stream").unwrap();
     clear_plugin_configuration().unwrap();
 }

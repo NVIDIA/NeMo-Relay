@@ -15,7 +15,7 @@ use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
 use nemo_relay_ffi::callable::{
-    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeRequestContext,
+    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
     NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecNextFn,
 };
 use nemo_relay_ffi::convert::nemo_relay_string_free;

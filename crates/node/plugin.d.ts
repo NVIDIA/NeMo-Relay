@@ -13,15 +13,17 @@ export type LlmCodecIdentity =
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };
 
-/** Codec identity available while a managed LLM event is sanitized. */
+/** Codec context available while an LLM request is sanitized. */
 export interface LlmSanitizeRequestContext {
   codec: LlmCodecIdentity;
+  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
   resolveCodec(): LlmCodec | null;
 }
 
 /** Codec context available while an LLM response is sanitized. */
 export interface LlmSanitizeResponseContext {
   codec: LlmCodecIdentity;
+  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
   resolveCodec(): LlmResponseCodec | null;
 }
 

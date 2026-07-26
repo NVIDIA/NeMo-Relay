@@ -11,6 +11,7 @@ use super::{
     status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
     wrap_collector_fn, wrap_finalizer_fn, wrap_llm_exec_fn, wrap_llm_stream_exec_fn,
 };
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use tokio_stream::StreamExt;
 
 /// Decode a request through a callback-scoped sanitizer codec capability.
@@ -29,10 +30,24 @@ pub unsafe extern "C" fn nemo_relay_llm_sanitize_request_codec_decode(
         set_last_error("null sanitizer request codec argument");
         return std::ptr::null_mut();
     }
-    match unsafe { &*codec }.0.decode(&unsafe { &*request }.0) {
-        Ok(annotated) => json_to_c_string(&serde_json::to_value(annotated).unwrap_or_default()),
-        Err(error) => {
-            set_last_error(&error.to_string());
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut c_char, String> {
+            let annotated = unsafe { &*codec }
+                .0
+                .decode(&unsafe { &*request }.0)
+                .map_err(|error| error.to_string())?;
+            let value = serde_json::to_value(annotated).map_err(|error| error.to_string())?;
+            Ok(json_to_c_string(&value))
+        },
+    ));
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(&error);
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("sanitizer request codec decode panicked");
             std::ptr::null_mut()
         }
     }
@@ -53,21 +68,26 @@ pub unsafe extern "C" fn nemo_relay_llm_sanitize_request_codec_encode(
         set_last_error("null sanitizer request codec argument");
         return std::ptr::null_mut();
     }
-    let annotated =
-        match c_str_to_json(annotated_json).and_then(|value| serde_json::from_value(value).ok()) {
-            Some(value) => value,
-            None => {
-                set_last_error("invalid annotated request JSON");
-                return std::ptr::null_mut();
-            }
-        };
-    match unsafe { &*codec }
-        .0
-        .encode(&annotated, &unsafe { &*original }.0)
-    {
-        Ok(request) => Box::into_raw(Box::new(FfiLLMRequest(request))),
-        Err(error) => {
-            set_last_error(&error.to_string());
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut FfiLLMRequest, String> {
+            let annotated = c_str_to_json(annotated_json)
+                .and_then(|value| serde_json::from_value(value).ok())
+                .ok_or_else(|| "invalid annotated request JSON".to_string())?;
+            let request = unsafe { &*codec }
+                .0
+                .encode(&annotated, &unsafe { &*original }.0)
+                .map_err(|error| error.to_string())?;
+            Ok(Box::into_raw(Box::new(FfiLLMRequest(request))))
+        },
+    ));
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(&error);
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("sanitizer request codec encode panicked");
             std::ptr::null_mut()
         }
     }
@@ -89,17 +109,26 @@ pub unsafe extern "C" fn nemo_relay_llm_sanitize_response_codec_decode(
         set_last_error("null sanitizer response codec argument");
         return std::ptr::null_mut();
     }
-    let response = match c_str_to_json(response_json) {
-        Some(value) => value,
-        None => {
-            set_last_error("invalid response JSON");
-            return std::ptr::null_mut();
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut c_char, String> {
+            let response =
+                c_str_to_json(response_json).ok_or_else(|| "invalid response JSON".to_string())?;
+            let annotated = unsafe { &*codec }
+                .0
+                .decode_response(&response)
+                .map_err(|error| error.to_string())?;
+            let value = serde_json::to_value(annotated).map_err(|error| error.to_string())?;
+            Ok(json_to_c_string(&value))
+        },
+    ));
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(&error);
+            std::ptr::null_mut()
         }
-    };
-    match unsafe { &*codec }.0.decode_response(&response) {
-        Ok(annotated) => json_to_c_string(&serde_json::to_value(annotated).unwrap_or_default()),
-        Err(error) => {
-            set_last_error(&error.to_string());
+        Err(_) => {
+            set_last_error("sanitizer response codec decode panicked");
             std::ptr::null_mut()
         }
     }

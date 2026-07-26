@@ -650,11 +650,11 @@ func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest, c
 	defer C.nemo_relay_string_free(cHeaders)
 	defer C.nemo_relay_string_free(cContent)
 	invocation := newLLMSanitizeCodecInvocation()
+	defer invocation.invalidate()
 	sanitized, omit := fn(LLMRequestDTO{
 		Headers: json.RawMessage(C.GoString(cHeaders)),
 		Content: json.RawMessage(C.GoString(cContent)),
 	}, llmSanitizeRequestContextFromC(context, invocation))
-	invocation.invalidate()
 	if omit {
 		return nil
 	}
@@ -702,25 +702,38 @@ func llmCodecIdentity(codecKind uint32, codecID *string) LLMCodec {
 //export goLlmResponseTrampoline
 func goLlmResponseTrampoline(userData unsafe.Pointer, responseJSON *C.char, context C.NemoRelayLlmSanitizeResponseContext) *C.char {
 	fn := lookupClosure(userData).(LLMResponseFunc)
+	invocation := newLLMSanitizeCodecInvocation()
+	defer invocation.invalidate()
+	sanitized, omit := fn(
+		json.RawMessage(C.GoString(responseJSON)),
+		llmSanitizeResponseContextFromC(context, invocation),
+	)
+	if omit {
+		return nil
+	}
+	return C.CString(string(sanitized))
+}
+
+func llmSanitizeResponseContextFromC(
+	context C.NemoRelayLlmSanitizeResponseContext,
+	invocation *llmSanitizeCodecInvocation,
+) LLMSanitizeResponseContext {
 	var codecID *string
 	if context.codec_id != nil {
 		id := C.GoString(context.codec_id)
 		codecID = &id
 	}
 	resolved := (*LLMResponseSanitizeCodec)(nil)
-	invocation := newLLMSanitizeCodecInvocation()
 	if context.codec != nil {
 		resolved = &LLMResponseSanitizeCodec{
 			ptr:        unsafe.Pointer(context.codec),
 			invocation: invocation,
 		}
 	}
-	sanitized, omit := fn(json.RawMessage(C.GoString(responseJSON)), LLMSanitizeResponseContext{Codec: llmCodecIdentity(uint32(context.codec_kind), codecID), resolved: resolved})
-	invocation.invalidate()
-	if omit {
-		return nil
+	return LLMSanitizeResponseContext{
+		Codec:    llmCodecIdentity(uint32(context.codec_kind), codecID),
+		resolved: resolved,
 	}
-	return C.CString(string(sanitized))
 }
 
 //export goLlmConditionalTrampoline

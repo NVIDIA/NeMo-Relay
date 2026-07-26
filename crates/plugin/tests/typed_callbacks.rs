@@ -4287,10 +4287,12 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     assert_eq!(registration.priority, 14);
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
     let context_id = host_string(&host, "openai_chat");
+    let request_codec_placeholder = Box::new(0_usize);
     let native_context = NemoRelayNativeLlmSanitizeRequestContext {
         codec_kind: NemoRelayNativeLlmCodecKind::BuiltIn,
         codec_id: context_id,
-        codec: NonNull::<NemoRelayNativeLlmRequestCodec>::dangling().as_ptr(),
+        codec: std::ptr::from_ref(request_codec_placeholder.as_ref())
+            .cast::<NemoRelayNativeLlmRequestCodec>(),
     };
     let mut out = ptr::null_mut();
     let status = unsafe {
@@ -4337,10 +4339,12 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
     assert_eq!(registration.priority, 15);
     let response = json_host_string(&host, json!({ "output": true }));
     let context_id = host_string(&host, "openai_chat");
+    let response_codec_placeholder = Box::new(0_usize);
     let native_context = NemoRelayNativeLlmSanitizeResponseContext {
         codec_kind: NemoRelayNativeLlmCodecKind::BuiltIn,
         codec_id: context_id,
-        codec: NonNull::<NemoRelayNativeLlmResponseCodec>::dangling().as_ptr(),
+        codec: std::ptr::from_ref(response_codec_placeholder.as_ref())
+            .cast::<NemoRelayNativeLlmResponseCodec>(),
     };
     let mut out = ptr::null_mut();
     let status = unsafe {
@@ -4364,6 +4368,33 @@ fn typed_contextual_llm_sanitize_guardrails_receive_payload_before_context() {
 fn typed_contextual_llm_sanitizer_uses_null_output_to_omit_payload() {
     let _guard = begin_test();
     let host = test_host();
+    let mut ctx = test_context(&host);
+    ctx.register_llm_sanitize_request_guardrail(
+        "contextual-omit-request",
+        16,
+        |_request, _context| None,
+    )
+    .unwrap();
+
+    let registration = take_llm_request_registration();
+    let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
+    let context = native_no_codec_context();
+    let mut out = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            request,
+            context,
+            &mut out,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    assert!(out.is_null(), "null native output must represent omission");
+    unsafe {
+        (host.string_free)(request);
+        registration.free();
+    }
+
     let mut ctx = test_context(&host);
     ctx.register_llm_sanitize_response_guardrail("contextual-omit", 16, |_payload, _context| None)
         .unwrap();

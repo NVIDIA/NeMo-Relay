@@ -250,7 +250,9 @@ The `builtin` section contains:
 When a target matches:
 
 - Object fields are removed.
-- Array elements become `null`.
+- Array elements become `null` on JSON-native surfaces. If a normalized LLM
+  array removal cannot be safely re-encoded, Relay omits the event payload and
+  its annotation instead.
 - Targeted scalar or root values become `null`.
 
 ### `regex_replace`
@@ -323,6 +325,7 @@ The plugin uses different payload boundaries for tools and LLMs:
 - LLM requests use the active resolved codec for that managed call. LLM
   responses use the active built-in codec for normalized projection. Prefer
   normalized Relay paths such as:
+  - `/headers/authorization` for an exact request header field
   - `/messages/0/content` for request message content
   - `/message` for the normalized assistant response text
 - Marks and non-tool, non-LLM scopes sanitize `data`, `category_profile`, and

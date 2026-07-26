@@ -925,6 +925,70 @@ async def test_llm_sanitizers_resolve_directional_codec_proxies():
 
 
 @pytest.mark.parametrize(
+    ("failure", "surface", "registration_name"),
+    [
+        ("DecodeLlmCodecRequest", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
+        ("EncodeLlmCodecRequest", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
+        ("DecodeLlmCodecResponse", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, "response"),
+    ],
+)
+async def test_llm_sanitizer_codec_rpc_failures_return_invocation_errors(
+    failure: str,
+    surface: int,
+    registration_name: str,
+):
+    class CodecFailurePlugin(WorkerPlugin):
+        plugin_id = "tests.llm_codec_failure"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def request_sanitizer(request, context):
+                codec = context.resolve_codec()
+                assert codec is not None
+                annotated = await codec.decode(request)
+                return await codec.encode(annotated, request)
+
+            async def response_sanitizer(response, context):
+                codec = context.resolve_codec()
+                assert codec is not None
+                await codec.decode(response)
+                return response
+
+            ctx.register_llm_sanitize_request_guardrail("request", request_sanitizer)
+            ctx.register_llm_sanitize_response_guardrail("response", response_sanitizer)
+
+    host = RecordingHostStub()
+    host.failures[failure] = "error"
+    service = _service(CodecFailurePlugin(), host)
+    await _register(service)
+
+    if surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
+        payload = _llm_payload(request={"headers": {}, "content": {"model": "test"}})
+        payload.request_sanitize_context.CopyFrom(
+            pb.LlmSanitizeRequestContext(
+                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
+                codec_capability_id="request-capability",
+            )
+        )
+    else:
+        payload = _llm_payload(response={"model": "test", "message": "secret"})
+        payload.response_sanitize_context.CopyFrom(
+            pb.LlmSanitizeResponseContext(
+                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
+                codec_capability_id="response-capability",
+            )
+        )
+
+    result = await service.Invoke(
+        _invoke_request(registration_name, surface, llm=payload),
+        AbortContext(),
+    )
+    assert result.WhichOneof("result") == "error"
+    assert f"{failure} failed" in result.error.message
+
+
+@pytest.mark.parametrize(
     "surface",
     [
         pb.MARK_SANITIZE_GUARDRAIL,

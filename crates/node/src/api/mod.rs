@@ -1262,15 +1262,38 @@ struct NodePluginRegisterCall {
 pub(crate) struct PersistentJsFunction {
     env: napi::sys::napi_env,
     reference: napi::sys::napi_ref,
+    cleanup: napi::sys::napi_threadsafe_function,
 }
 
-// SAFETY: `PersistentJsFunction` only stores raw N-API handles. Callers are
-// responsible for constructing it from a live environment and function
-// reference, and all access goes back through that same environment.
+// SAFETY: Direct function access is restricted by callers to the registration
+// thread. Releasing the cleanup TSFN is thread-safe, and its event-loop
+// finalizer deletes the N-API reference.
 unsafe impl Send for PersistentJsFunction {}
-// SAFETY: The same invariants as `Send` apply. The struct does not provide
-// interior mutation beyond the N-API reference lifecycle managed by Node.
+// SAFETY: The same invariants as `Send` apply. The stored handles are immutable,
+// and reference deletion is serialized by the cleanup TSFN finalizer.
 unsafe impl Sync for PersistentJsFunction {}
+
+unsafe extern "C" fn delete_persistent_js_function_reference(
+    env: napi::sys::napi_env,
+    finalize_data: *mut std::ffi::c_void,
+    _finalize_hint: *mut std::ffi::c_void,
+) {
+    if !env.is_null() && !finalize_data.is_null() {
+        // SAFETY: `finalize_data` is the live N-API reference passed to the
+        // cleanup TSFN at creation. This finalizer runs once on Node's event
+        // loop after the final TSFN release.
+        let _ =
+            unsafe { napi::sys::napi_delete_reference(env, finalize_data as napi::sys::napi_ref) };
+    }
+}
+
+unsafe extern "C" fn persistent_js_function_cleanup_call(
+    _env: napi::sys::napi_env,
+    _js_callback: napi::sys::napi_value,
+    _context: *mut std::ffi::c_void,
+    _data: *mut std::ffi::c_void,
+) {
+}
 
 impl PersistentJsFunction {
     fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
@@ -1280,17 +1303,74 @@ impl PersistentJsFunction {
         // writable storage for the created reference.
         let status =
             unsafe { napi::sys::napi_create_reference(env.raw(), func.raw(), 1, &mut reference) };
-        if status == napi::sys::Status::napi_ok {
-            Ok(Self {
-                env: env.raw(),
-                reference,
-            })
-        } else {
-            Err(napi::Error::from_reason(format!(
+        if status != napi::sys::Status::napi_ok {
+            return Err(napi::Error::from_reason(format!(
                 "failed to create JS function reference: {:?}",
                 napi::Status::from(status)
-            )))
+            )));
         }
+
+        let mut resource_name = ptr::null_mut();
+        let resource_name_bytes = b"nemo_relay_persistent_js_function\0";
+        let status = unsafe {
+            napi::sys::napi_create_string_utf8(
+                env.raw(),
+                resource_name_bytes.as_ptr().cast(),
+                resource_name_bytes.len() - 1,
+                &mut resource_name,
+            )
+        };
+        if status != napi::sys::Status::napi_ok {
+            let _ = unsafe { napi::sys::napi_delete_reference(env.raw(), reference) };
+            return Err(napi::Error::from_reason(format!(
+                "failed to create persistent JS function cleanup resource name: {:?}",
+                napi::Status::from(status)
+            )));
+        }
+
+        let mut cleanup = ptr::null_mut();
+        let status = unsafe {
+            napi::sys::napi_create_threadsafe_function(
+                env.raw(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                resource_name,
+                0,
+                1,
+                reference.cast(),
+                Some(delete_persistent_js_function_reference),
+                ptr::null_mut(),
+                Some(persistent_js_function_cleanup_call),
+                &mut cleanup,
+            )
+        };
+        if status != napi::sys::Status::napi_ok {
+            let _ = unsafe { napi::sys::napi_delete_reference(env.raw(), reference) };
+            return Err(napi::Error::from_reason(format!(
+                "failed to create persistent JS function cleanup handle: {:?}",
+                napi::Status::from(status)
+            )));
+        }
+
+        let status = unsafe { napi::sys::napi_unref_threadsafe_function(env.raw(), cleanup) };
+        if status != napi::sys::Status::napi_ok {
+            let _ = unsafe {
+                napi::sys::napi_release_threadsafe_function(
+                    cleanup,
+                    napi::sys::ThreadsafeFunctionReleaseMode::release,
+                )
+            };
+            return Err(napi::Error::from_reason(format!(
+                "failed to unref persistent JS function cleanup handle: {:?}",
+                napi::Status::from(status)
+            )));
+        }
+
+        Ok(Self {
+            env: env.raw(),
+            reference,
+            cleanup,
+        })
     }
 
     fn call_validate(&self, plugin_config: &Json) -> napi::Result<Json> {
@@ -1545,9 +1625,14 @@ fn node_llm_response_codec(env: &Env, decode: &JsFunction) -> napi::Result<NodeL
 
 impl Drop for PersistentJsFunction {
     fn drop(&mut self) {
-        // SAFETY: `self.reference` was created by `napi_create_reference` for
-        // `self.env` and is deleted exactly once here during drop.
-        let _ = unsafe { napi::sys::napi_delete_reference(self.env, self.reference) };
+        // SAFETY: N-API permits releasing a TSFN from any thread. Its finalizer
+        // runs on the event loop and deletes `self.reference` exactly once.
+        let _ = unsafe {
+            napi::sys::napi_release_threadsafe_function(
+                self.cleanup,
+                napi::sys::ThreadsafeFunctionReleaseMode::release,
+            )
+        };
     }
 }
 
@@ -2298,7 +2383,12 @@ pub fn llm_call_execute(
             codec_references.extend(references);
             Some(codec)
         }
-        _ => None,
+        (None, None) => None,
+        _ => {
+            return Err(napi::Error::from_reason(
+                "codecDecode and codecEncode must be provided together",
+            ));
+        }
     };
     let response_codec = response_codec_decode
         .as_ref()
@@ -2386,7 +2476,12 @@ pub fn llm_call_execute_async(
             codec_references.extend(references);
             Some(codec)
         }
-        _ => None,
+        (None, None) => None,
+        _ => {
+            return Err(napi::Error::from_reason(
+                "codecDecode and codecEncode must be provided together",
+            ));
+        }
     };
     let response_codec = response_codec_decode
         .as_ref()
@@ -2517,7 +2612,12 @@ pub fn llm_stream_call_execute(
             codec_references.extend(references);
             Some(codec)
         }
-        _ => None,
+        (None, None) => None,
+        _ => {
+            return Err(napi::Error::from_reason(
+                "codecDecode and codecEncode must be provided together",
+            ));
+        }
     };
     let response_codec = response_codec_decode
         .as_ref()
@@ -2813,7 +2913,7 @@ pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
 /// Register a guardrail that sanitizes LLM request data before execution.
 ///
 /// The `guardrail` callback receives `(request, context)` and must return the sanitized request,
-/// or `null` to omit the observability payload. Higher `priority` values run first. Throws if a
+/// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists. If the callback throws, Relay omits the payload
 /// and records the error for `getLastCallbackError()`.
 #[napi]
@@ -2822,7 +2922,7 @@ pub fn register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmCodec | null }) => Json | null"
+        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -2846,7 +2946,7 @@ pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
 /// Register a guardrail that sanitizes LLM response data after execution.
 ///
 /// The `guardrail` callback receives `(response, context)` and must return the sanitized response,
-/// or `null` to omit the observability payload. Higher `priority` values run first. Throws if a
+/// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists. If the callback throws, Relay omits the payload
 /// and records the error for `getLastCallbackError()`.
 #[napi]
@@ -2855,7 +2955,7 @@ pub fn register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmResponseCodec | null }) => Json | null"
+        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -3348,7 +3448,7 @@ pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: Strin
 /// Register a scope-local guardrail that sanitizes LLM request data before execution.
 ///
 /// The `guardrail` callback receives `(request, context)` and must return the sanitized request,
-/// or `null` to omit the observability payload. Higher `priority` values run first. Throws if a
+/// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists on the specified scope. If the callback throws,
 /// Relay omits the payload and records the error for `getLastCallbackError()`.
 #[napi]
@@ -3358,7 +3458,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmCodec | null }) => Json | null"
+        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -3392,7 +3492,7 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 /// Register a scope-local guardrail that sanitizes LLM response data after execution.
 ///
 /// The `guardrail` callback receives `(response, context)` and must return the sanitized response,
-/// or `null` to omit the observability payload. Higher `priority` values run first. Throws if a
+/// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists on the specified scope. If the callback throws,
 /// Relay omits the payload and records the error for `getLastCallbackError()`.
 #[napi]
@@ -3402,7 +3502,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: { codec: { kind: 'none' } | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' } | { kind: 'runtime'; id: string } | { kind: 'opaque' }; resolveCodec(): import('./typed').LlmResponseCodec | null }) => Json | null"
+        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {

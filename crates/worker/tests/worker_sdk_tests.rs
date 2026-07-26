@@ -485,7 +485,12 @@ async fn worker_service_invokes_every_registration_surface() {
     let events = plugin.events.clone();
     let (worker_handle, mut client) = spawn_worker(plugin, tcp_endpoint(&host_endpoint)).await;
     let registrations = register_plugin(&mut client).await;
-    for name in ["llm-sanitize-request", "llm-sanitize-response"] {
+    for name in [
+        "llm-sanitize-request",
+        "llm-sanitize-response",
+        "llm-sanitize-omit-request",
+        "llm-sanitize-omit-response",
+    ] {
         assert!(
             registrations
                 .iter()
@@ -640,6 +645,30 @@ async fn worker_service_invokes_every_registration_surface() {
         "phase",
         "llm_sanitize_response",
     );
+    let omitted_request = client
+        .invoke(Request::new(llm_invoke(
+            "llm-sanitize-omit-request",
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+            llm_request(),
+            None,
+            None,
+        )))
+        .await
+        .expect("request omission invoke")
+        .into_inner();
+    assert_empty_response(omitted_request);
+    let omitted_response = client
+        .invoke(Request::new(llm_invoke(
+            "llm-sanitize-omit-response",
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
+            llm_request(),
+            None,
+            Some(json!({})),
+        )))
+        .await
+        .expect("response omission invoke")
+        .into_inner();
+    assert_empty_response(omitted_response);
     let mut codec_request = llm_invoke(
         "llm-sanitize-request",
         RegistrationSurface::LlmSanitizeRequestGuardrail,
@@ -1823,6 +1852,16 @@ impl WorkerPlugin for SurfacePlugin {
                     "llm_sanitize_response",
                 )))
             },
+        );
+        ctx.register_llm_sanitize_request_guardrail(
+            "llm-sanitize-omit-request",
+            1,
+            |_request, _context| async { Ok(None) },
+        );
+        ctx.register_llm_sanitize_response_guardrail(
+            "llm-sanitize-omit-response",
+            1,
+            |_response, _context| async { Ok(None) },
         );
         ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, |request| {
             Ok(request

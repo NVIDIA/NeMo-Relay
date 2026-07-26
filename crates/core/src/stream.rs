@@ -209,6 +209,12 @@ impl LlmStreamWrapper {
             Some(finalizer) => finalizer(),
             None => Json::Null,
         };
+        let response_was_null_without_fallback = aggregated.is_null() && self.handle.data.is_none();
+        let response = if aggregated.is_null() {
+            self.handle.data.clone().unwrap_or(aggregated)
+        } else {
+            aggregated
+        };
 
         let snapshot = {
             let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
@@ -228,17 +234,16 @@ impl LlmStreamWrapper {
             return;
         };
         let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
-            aggregated,
+            response,
             self.sanitize_context.clone(),
             &entries,
         );
-        let payload_omitted = sanitized.is_none();
         let data = match sanitized {
-            None => None,
-            Some(sanitized) if sanitized.is_null() => self.handle.data.clone(),
-            Some(sanitized) => Some(sanitized),
+            Some(response) if response_was_null_without_fallback && response.is_null() => None,
+            response => response,
         };
-        let mut annotated_response: Option<AnnotatedLlmResponse> = (!payload_omitted)
+        let annotation_omitted = data.as_ref().is_none_or(Json::is_null);
+        let mut annotated_response: Option<AnnotatedLlmResponse> = (!annotation_omitted)
             .then(|| {
                 data.as_ref().and_then(|response| {
                     self.response_codec.as_ref().and_then(|codec| {
@@ -263,7 +268,7 @@ impl LlmStreamWrapper {
             self.handle.model_name.as_deref(),
             &pricing,
         );
-        if !payload_omitted
+        if !annotation_omitted
             && annotated_response.is_none()
             && let Some(summary) = summary
         {

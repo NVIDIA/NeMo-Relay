@@ -38,7 +38,7 @@ use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
 
-use crate::convert::json_to_c_string;
+use crate::convert::{c_str_to_json, json_to_c_string};
 use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};
 use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
@@ -135,16 +135,20 @@ pub struct NemoRelayLlmSanitizeResponseContext {
     pub codec: *const crate::types::FfiLlmSanitizeResponseCodec,
 }
 
-/// LLM request sanitizer. It receives the request first and its
-/// codec context second. Return null to omit the observability payload.
+/// LLM request sanitizer. It receives the request first and its codec context
+/// second. Return null to omit the observability payload. The request is
+/// borrowed, but returning that same pointer is supported as a pass-through.
+/// Any other non-null result transfers ownership to Relay.
 pub type NemoRelayLlmSanitizeRequestCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
     context: NemoRelayLlmSanitizeRequestContext,
 ) -> *mut FfiLLMRequest;
 
-/// LLM response sanitizer. It receives response JSON first and its
-/// codec context second. Return null to omit the observability payload.
+/// LLM response sanitizer. It receives response JSON first and its codec
+/// context second. Return null to omit the observability payload. The response
+/// is borrowed, but returning that same pointer is supported as a pass-through.
+/// Any other non-null result transfers ownership to Relay.
 pub type NemoRelayLlmSanitizeResponseCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     response_json: *const c_char,
@@ -684,7 +688,14 @@ pub fn wrap_llm_sanitize_request_fn(
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
-            let (codec_kind, codec_id) = ffi_codec_identity(&context.codec);
+            clear_last_error();
+            let (codec_kind, codec_id) = match ffi_codec_identity(&context.codec) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    set_last_error(&error.to_string());
+                    return None;
+                }
+            };
             let codec = context
                 .resolve_codec()
                 .map(crate::types::FfiLlmSanitizeRequestCodec);
@@ -697,8 +708,15 @@ pub fn wrap_llm_sanitize_request_fn(
             };
             let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
             let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
+            if result_ptr.is_null() {
+                unsafe { drop(Box::from_raw(ffi_req)) };
+                return None;
+            }
+            if result_ptr == ffi_req {
+                return Some(unsafe { Box::from_raw(ffi_req) }.0);
+            }
             unsafe { drop(Box::from_raw(ffi_req)) };
-            (!result_ptr.is_null()).then(|| unsafe { Box::from_raw(result_ptr) }.0)
+            Some(unsafe { Box::from_raw(result_ptr) }.0)
         },
     )
 }
@@ -711,7 +729,14 @@ pub fn wrap_llm_sanitize_response_fn(
 ) -> LlmSanitizeResponseFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
-        let (codec_kind, codec_id) = ffi_codec_identity(&context.codec);
+        clear_last_error();
+        let (codec_kind, codec_id) = match ffi_codec_identity(&context.codec) {
+            Ok(identity) => identity,
+            Err(error) => {
+                set_last_error(&error.to_string());
+                return None;
+            }
+        };
         let codec = context
             .resolve_codec()
             .map(crate::types::FfiLlmSanitizeResponseCodec);
@@ -724,31 +749,38 @@ pub fn wrap_llm_sanitize_response_fn(
         };
         let response_json = json_to_c_string(&response);
         let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };
-        unsafe { nemo_relay_string_free_internal(response_json) };
         if result_ptr.is_null() {
+            unsafe { nemo_relay_string_free_internal(response_json) };
             return None;
         }
-        let result = ptr_to_json(result_ptr);
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        Some(result)
+        let result = c_str_to_json(result_ptr);
+        unsafe {
+            nemo_relay_string_free_internal(response_json);
+            if result_ptr != response_json {
+                nemo_relay_string_free_internal(result_ptr);
+            }
+        }
+        result
     })
 }
 
 fn ffi_codec_identity(
     identity: &LlmCodecIdentity,
-) -> (NemoRelayLlmSanitizeCodecKind, Option<CString>) {
-    match identity {
+) -> Result<(NemoRelayLlmSanitizeCodecKind, Option<CString>)> {
+    Ok(match identity {
         LlmCodecIdentity::None => (NemoRelayLlmSanitizeCodecKind::None, None),
         LlmCodecIdentity::BuiltIn(codec) => (
             NemoRelayLlmSanitizeCodecKind::BuiltIn,
-            CString::new(codec.id()).ok(),
+            Some(CString::new(codec.id()).expect("built-in codec IDs never contain NUL")),
         ),
         LlmCodecIdentity::Runtime(id) => (
             NemoRelayLlmSanitizeCodecKind::Runtime,
-            CString::new(id.as_str()).ok(),
+            Some(CString::new(id.as_str()).map_err(|_| {
+                FlowError::InvalidArgument("runtime codec ID contains an embedded NUL".to_string())
+            })?),
         ),
         LlmCodecIdentity::Opaque => (NemoRelayLlmSanitizeCodecKind::Opaque, None),
-    }
+    })
 }
 
 /// Wrap a C LLM conditional callback into a Rust closure.

@@ -234,11 +234,19 @@ impl NativePlugin for ExampleNativePlugin {
 
         ctx.register_llm_sanitize_request_guardrail("example_llm_sanitize_request", 10, {
             let tag = config.tag.clone();
-            move |request| tag_llm_request(request, "native_llm_sanitize_request", &tag)
+            move |request, _context| {
+                Some(tag_llm_request(
+                    request,
+                    "native_llm_sanitize_request",
+                    &tag,
+                ))
+            }
         })?;
         ctx.register_llm_sanitize_response_guardrail("example_llm_sanitize_response", 10, {
             let tag = config.tag.clone();
-            move |response| tag_json(response, "native_llm_sanitize_response", &tag)
+            move |response, _context| {
+                Some(tag_json(response, "native_llm_sanitize_response", &tag))
+            }
         })?;
         ctx.register_llm_conditional_execution_guardrail("example_llm_conditional", 10, {
             let block_llms = config.block_llms;

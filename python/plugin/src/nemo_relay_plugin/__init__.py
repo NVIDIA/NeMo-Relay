@@ -21,8 +21,8 @@ Public data types:
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
     LlmCodecIdentity: Typed discriminator for the active LLM codec.
-    LlmSanitizeRequestContext: Codec identity supplied to an LLM request sanitizer.
-    LlmSanitizeResponseContext: Codec identity supplied to an LLM response sanitizer.
+    LlmSanitizeRequestContext: Per-call context supplied to an LLM request sanitizer.
+    LlmSanitizeResponseContext: Per-call context supplied to an LLM response sanitizer.
     WorkerRequestCodec: Invocation-scoped async proxy for an active request codec.
     WorkerResponseCodec: Invocation-scoped async proxy for an active response codec.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON

@@ -1067,23 +1067,17 @@ impl WorkerPluginInstance {
                         registration.priority,
                         surface,
                     )?,
-                RegistrationSurface::ToolSanitizeRequestGuardrail => {
-                    self.install_tool_registration(ctx, registration, surface)?
-                }
-                RegistrationSurface::ToolSanitizeResponseGuardrail
-                | RegistrationSurface::ToolConditionalExecutionGuardrail => {
-                    self.install_tool_registration(ctx, registration, surface)?
-                }
-                RegistrationSurface::ToolRequestIntercept
+                RegistrationSurface::ToolSanitizeRequestGuardrail
+                | RegistrationSurface::ToolSanitizeResponseGuardrail
+                | RegistrationSurface::ToolConditionalExecutionGuardrail
+                | RegistrationSurface::ToolRequestIntercept
                 | RegistrationSurface::ToolExecutionIntercept => {
                     self.install_tool_registration(ctx, registration, surface)?
                 }
                 RegistrationSurface::LlmSanitizeRequestGuardrail
                 | RegistrationSurface::LlmSanitizeResponseGuardrail
-                | RegistrationSurface::LlmConditionalExecutionGuardrail => {
-                    self.install_llm_registration(ctx, registration, surface)?
-                }
-                RegistrationSurface::LlmRequestIntercept
+                | RegistrationSurface::LlmConditionalExecutionGuardrail
+                | RegistrationSurface::LlmRequestIntercept
                 | RegistrationSurface::LlmExecutionIntercept
                 | RegistrationSurface::LlmStreamExecutionIntercept => {
                     self.install_llm_registration(ctx, registration, surface)?
@@ -1226,7 +1220,11 @@ impl WorkerPluginInstance {
                     })
                 }),
             ),
-            _ => unreachable!("tool registration surface was pre-filtered"),
+            _ => Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{}' cannot install registration surface {} as a tool callback",
+                self.plugin_kind,
+                surface.as_str_name()
+            ))),
         }
     }
 
@@ -1322,7 +1320,11 @@ impl WorkerPluginInstance {
                         })
                     }),
                 ),
-            _ => unreachable!("LLM registration surface was pre-filtered"),
+            _ => Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{}' cannot install registration surface {} as an LLM callback",
+                self.plugin_kind,
+                surface.as_str_name()
+            ))),
         }
     }
 

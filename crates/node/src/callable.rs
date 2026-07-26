@@ -502,7 +502,14 @@ pub fn wrap_js_llm_sanitize_response_fn(
 fn js_llm_sanitize_request_context(
     context: &LlmSanitizeRequestContext,
 ) -> JsLlmSanitizeRequestContext {
-    let codec = match &context.codec {
+    JsLlmSanitizeRequestContext {
+        codec: js_codec_identity(&context.codec),
+        resolved: context.resolve_codec(),
+    }
+}
+
+fn js_codec_identity(identity: &LlmCodecIdentity) -> JsLlmCodecIdentity {
+    match identity {
         LlmCodecIdentity::None => JsLlmCodecIdentity {
             kind: "none".into(),
             id: None,
@@ -519,36 +526,14 @@ fn js_llm_sanitize_request_context(
             kind: "opaque".into(),
             id: None,
         },
-    };
-    JsLlmSanitizeRequestContext {
-        codec,
-        resolved: context.resolve_codec(),
     }
 }
 
 fn js_llm_sanitize_response_context(
     context: &LlmSanitizeResponseContext,
 ) -> JsLlmSanitizeResponseContext {
-    let codec = match &context.codec {
-        LlmCodecIdentity::None => JsLlmCodecIdentity {
-            kind: "none".into(),
-            id: None,
-        },
-        LlmCodecIdentity::BuiltIn(codec) => JsLlmCodecIdentity {
-            kind: "builtin".into(),
-            id: Some(codec.id().into()),
-        },
-        LlmCodecIdentity::Runtime(id) => JsLlmCodecIdentity {
-            kind: "runtime".into(),
-            id: Some(id.clone()),
-        },
-        LlmCodecIdentity::Opaque => JsLlmCodecIdentity {
-            kind: "opaque".into(),
-            id: None,
-        },
-    };
     JsLlmSanitizeResponseContext {
-        codec,
+        codec: js_codec_identity(&context.codec),
         resolved: context.resolve_codec(),
     }
 }

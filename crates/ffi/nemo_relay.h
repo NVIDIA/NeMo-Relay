@@ -300,8 +300,10 @@ typedef struct NemoRelayLlmSanitizeRequestContext {
 } NemoRelayLlmSanitizeRequestContext;
 
 /**
- * LLM request sanitizer. It receives the request first and its
- * codec context second. Return null to omit the observability payload.
+ * LLM request sanitizer. It receives the request first and its codec context
+ * second. Return null to omit the observability payload. The request is
+ * borrowed, but returning that same pointer is supported as a pass-through.
+ * Any other non-null result transfers ownership to Relay.
  */
 typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
                                                                const struct FfiLLMRequest *request,
@@ -326,8 +328,10 @@ typedef struct NemoRelayLlmSanitizeResponseContext {
 } NemoRelayLlmSanitizeResponseContext;
 
 /**
- * LLM response sanitizer. It receives response JSON first and its
- * codec context second. Return null to omit the observability payload.
+ * LLM response sanitizer. It receives response JSON first and its codec
+ * context second. Return null to omit the observability payload. The response
+ * is borrowed, but returning that same pointer is supported as a pass-through.
+ * Any other non-null result transfers ownership to Relay.
  */
 typedef char *(*NemoRelayLlmSanitizeResponseCb)(void *user_data,
                                                 const char *response_json,

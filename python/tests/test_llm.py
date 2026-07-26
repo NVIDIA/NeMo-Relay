@@ -22,6 +22,7 @@ from nemo_relay import (
     scope,
     subscribers,
 )
+from nemo_relay.codecs import OpenAIChatCodec
 
 
 def make_request():
@@ -115,6 +116,19 @@ class TestLLMAsync:
 
 
 class TestLLMGuardrails:
+    @pytest.mark.parametrize(
+        ("register", "callback"),
+        [
+            (guardrails.register_llm_sanitize_request, lambda request: request),
+            (guardrails.register_llm_sanitize_response, lambda response: response),
+            (guardrails.register_llm_sanitize_request, object()),
+            (guardrails.register_llm_sanitize_response, object()),
+        ],
+    )
+    def test_sanitizer_registration_rejects_legacy_or_uninspectable_callbacks(self, register, callback):
+        with pytest.raises(TypeError, match="payload, context"):
+            register("py_llm_invalid_signature", 1, callback)
+
     def test_sanitize_request_guardrail(self):
         def sanitizer(request, context):
             del context
@@ -162,6 +176,85 @@ class TestLLMGuardrails:
         for context in [*request_contexts, *response_contexts]:
             assert context.codec.kind == "none"
             assert context.codec.id is None
+
+    async def test_sanitizers_resolve_active_builtin_codecs(self):
+        request_codec_used = False
+        response_codec_used = False
+
+        def sanitize_request(request, context):
+            nonlocal request_codec_used
+            assert context.codec.kind == "builtin"
+            assert context.codec.id == "openai_chat"
+            codec = context.resolve_codec()
+            assert codec is not None
+            annotated = codec.decode(request)
+            request_codec_used = True
+            return codec.encode(annotated, request)
+
+        def sanitize_response(response, context):
+            nonlocal response_codec_used
+            assert context.codec.kind == "builtin"
+            assert context.codec.id == "openai_chat"
+            codec = context.resolve_codec()
+            assert codec is not None
+            assert codec.decode_response(response).model == "test-model"
+            response_codec_used = True
+            return response
+
+        codec = OpenAIChatCodec()
+        response = {
+            "id": "chatcmpl-python",
+            "model": "test-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
+        }
+        guardrails.register_llm_sanitize_request("py_llm_builtin_context_request", 1, sanitize_request)
+        guardrails.register_llm_sanitize_response("py_llm_builtin_context_response", 1, sanitize_response)
+        try:
+            result = await llm.execute(
+                "py_llm_builtin_context",
+                make_request(),
+                lambda request: response,
+                codec=codec,
+                response_codec=codec,
+            )
+        finally:
+            guardrails.deregister_llm_sanitize_request("py_llm_builtin_context_request")
+            guardrails.deregister_llm_sanitize_response("py_llm_builtin_context_response")
+
+        assert result == response
+        assert request_codec_used is True
+        assert response_codec_used is True
+
+    def test_none_omits_payload_and_short_circuits_later_sanitizers(self):
+        events = []
+        later_called = False
+
+        def omit(request, context):
+            return None
+
+        def later(request, context):
+            nonlocal later_called
+            later_called = True
+            return request
+
+        subscribers.register("py_llm_none_sanitize_sub", events.append)
+        guardrails.register_llm_sanitize_request("py_llm_none_sanitize_first", 1, omit)
+        guardrails.register_llm_sanitize_request("py_llm_none_sanitize_later", 2, later)
+        try:
+            handle = llm.call("py_llm_none_sanitize", make_request())
+            llm.call_end(handle, {"ok": True})
+        finally:
+            guardrails.deregister_llm_sanitize_request("py_llm_none_sanitize_first")
+            guardrails.deregister_llm_sanitize_request("py_llm_none_sanitize_later")
+            try:
+                subscribers.flush()
+            finally:
+                subscribers.deregister("py_llm_none_sanitize_sub")
+
+        start = _llm_event(events, "py_llm_none_sanitize", "start")
+        assert start.data is None
+        assert start.annotated_request is None
+        assert later_called is False
 
     def test_conditional_execution_guardrail(self):
         def checker(request):

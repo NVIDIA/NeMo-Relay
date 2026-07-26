@@ -135,8 +135,10 @@ following identities:
 Treat identity as descriptive and codec resolution as authoritative. Do not
 infer a provider from the request shape. A request codec supports
 `decode(request)` and `encode(annotated, original)`. A response codec supports
-`decode(response)` in Rust workers, `decode_response(response)` in Python, and
-`decodeResponse(response)` in Node.js; response encoding is not available.
+`decode_response(response)` in in-process Rust and Python,
+`decode(response).await` in Rust workers, `await decode(response)` in Python
+workers, and `decodeResponse(response)` in Node.js; response encoding is not
+available.
 
 Worker codec proxies are scoped to the sanitizer callback and must not be
 stored for later work. Worker codec operations are asynchronous because they
@@ -223,7 +225,7 @@ NeMo Relay 0.7 uses native ABI v2. Recompile native plugins against the 0.7
 0.7 header.
 
 If you already built a plugin against an earlier 0.7 ABI v2 prerelease, rebuild
-it again. The ABI version remains 2, but the pre-release LLM sanitizer callback
+it again. The ABI version remains 2, but the prerelease LLM sanitizer callback
 slots and context layouts changed before release.
 
 The plugin manifest value remains `compat.native_api = "1"`. This manifest

@@ -576,6 +576,20 @@ class TestScopeLocalDeregistration:
 
 
 class TestScopeLocalLlmWrappers:
+    @pytest.mark.parametrize(
+        ("register", "callback"),
+        [
+            (scope_local.register_llm_sanitize_request, lambda request: request),
+            (scope_local.register_llm_sanitize_response, lambda response: response),
+            (scope_local.register_llm_sanitize_request, object()),
+            (scope_local.register_llm_sanitize_response, object()),
+        ],
+    )
+    def test_sanitizer_registration_rejects_legacy_or_uninspectable_callbacks(self, register, callback):
+        with scope.scope("invalid_scope_local_sanitizer", ScopeType.Agent) as handle:
+            with pytest.raises(TypeError, match="payload, context"):
+                register(handle, "invalid_scope_local_sanitizer", 1, callback)
+
     def test_register_and_deregister_scope_local_wrappers(self):
         """Scope-local wrapper functions round-trip through the native API for both tool and LLM middleware."""
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})

@@ -157,6 +157,14 @@ unsafe extern "C" fn llm_request_null_cb(
     std::ptr::null_mut()
 }
 
+unsafe extern "C" fn llm_request_alias_cb(
+    _user_data: *mut libc::c_void,
+    request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeRequestContext,
+) -> *mut FfiLLMRequest {
+    request.cast_mut()
+}
+
 unsafe extern "C" fn llm_conditional_cb(
     _user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
@@ -177,6 +185,30 @@ unsafe extern "C" fn json_cb(
         serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().unwrap()).unwrap();
     value["wrapped"] = json!(true);
     CString::new(value.to_string()).unwrap().into_raw()
+}
+
+unsafe extern "C" fn json_alias_cb(
+    _user_data: *mut libc::c_void,
+    json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
+    json.cast_mut()
+}
+
+unsafe extern "C" fn invalid_json_cb(
+    _user_data: *mut libc::c_void,
+    _json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
+    CString::new("not-json").unwrap().into_raw()
+}
+
+unsafe extern "C" fn invalid_utf8_cb(
+    _user_data: *mut libc::c_void,
+    _json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
+    CString::new([0xff]).unwrap().into_raw()
 }
 
 unsafe extern "C" fn llm_exec_cb(
@@ -392,6 +424,16 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
         None
     );
 
+    let alias_request =
+        wrap_llm_sanitize_request_fn(llm_request_alias_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        alias_request(
+            make_request(),
+            nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+        ),
+        Some(make_request())
+    );
+
     let conditional = wrap_llm_conditional_fn(llm_conditional_cb, std::ptr::null_mut(), None);
     assert_eq!(
         conditional(&LlmRequest {
@@ -411,6 +453,65 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
         )
         .unwrap()["wrapped"],
         json!(true)
+    );
+
+    let alias_response = wrap_llm_sanitize_response_fn(json_alias_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        alias_response(
+            json!({"value": 2}),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+        ),
+        Some(json!({"value": 2}))
+    );
+
+    for callback in [invalid_json_cb, invalid_utf8_cb] {
+        let malformed_response =
+            wrap_llm_sanitize_response_fn(callback, std::ptr::null_mut(), None);
+        assert_eq!(
+            malformed_response(
+                json!({"secret": "must be omitted"}),
+                nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn test_llm_sanitizers_fail_closed_for_runtime_codec_ids_with_embedded_nul() {
+    let runtime_identity =
+        nemo_relay::api::runtime::LlmCodecIdentity::Runtime("runtime\0codec".to_string());
+
+    let request_sanitizer =
+        wrap_llm_sanitize_request_fn(llm_request_alias_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        request_sanitizer(
+            make_request(),
+            nemo_relay::api::runtime::LlmSanitizeRequestContext::with_identity(
+                runtime_identity.clone(),
+            ),
+        ),
+        None
+    );
+    assert!(
+        last_error_message()
+            .unwrap()
+            .contains("runtime codec ID contains an embedded NUL")
+    );
+
+    let response_sanitizer =
+        wrap_llm_sanitize_response_fn(json_alias_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        response_sanitizer(
+            json!({"secret": "must be omitted"}),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::with_identity(runtime_identity),
+        ),
+        None
+    );
+    assert!(
+        last_error_message()
+            .unwrap()
+            .contains("runtime codec ID contains an embedded NUL")
     );
 }
 

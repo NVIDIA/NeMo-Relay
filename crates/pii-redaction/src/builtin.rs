@@ -6,7 +6,7 @@ use std::sync::Arc;
 use regex::Regex;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value as Json;
+use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
 use nemo_relay::api::event::{CategoryProfile, Event};
@@ -336,23 +336,46 @@ impl CompiledBuiltinBackend {
 
         for target_path in self.target_paths.iter() {
             let target_segments = json_pointer_segments(target_path)?;
-            let Some(target_value) = sanitized_json_pointer_value(&sanitized, &target_segments)
-            else {
-                continue;
-            };
-            let target_value = target_value.clone();
             let current_annotated = codec.decode(&sanitized_request).ok()?;
             let mut current = serde_json::to_value(&current_annotated).ok()?;
-            let current_value = sanitized_json_pointer_value(&current, &target_segments)?;
-            if current_value == &target_value {
-                continue;
+            match (
+                sanitized_json_pointer_value(&sanitized, &target_segments),
+                sanitized_json_pointer_value(&current, &target_segments),
+            ) {
+                (None, None) => continue,
+                (Some(target_value), Some(current_value)) if current_value == target_value => {
+                    continue;
+                }
+                (Some(target_value), Some(_)) => {
+                    replace_sanitized_json_pointer_value(
+                        &mut current,
+                        &target_segments,
+                        target_value.clone(),
+                    )?;
+                }
+                (None, Some(_)) if matches!(self.action, BuiltinAction::Remove) => {
+                    remove_sanitized_json_pointer_value(&mut current, &target_segments)?;
+                }
+                _ => return None,
             }
-            replace_sanitized_json_pointer_value(&mut current, &target_segments, target_value)?;
             let updated = serde_json::from_value(current).ok()?;
             sanitized_request = codec.encode(&updated, &sanitized_request).ok()?;
         }
 
         Some(sanitized_request)
+    }
+
+    fn sanitize_request_headers(&self, headers: Map<String, Json>) -> Map<String, Json> {
+        let sanitized = self.sanitize_json_preorder_dfs(Json::Object(
+            [("headers".to_string(), Json::Object(headers))]
+                .into_iter()
+                .collect(),
+        ));
+        sanitized
+            .get("headers")
+            .and_then(Json::as_object)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn sanitize_response_with_codec(
@@ -361,10 +384,72 @@ impl CompiledBuiltinBackend {
         surface: ProviderSurface,
         payload: Json,
     ) -> Option<Json> {
+        if surface == ProviderSurface::OpenAIChat
+            && payload
+                .get("choices")
+                .and_then(Json::as_array)
+                .is_some_and(|choices| choices.len() > 1)
+            && self.targets_normalized_openai_chat_choice()
+        {
+            return None;
+        }
         let codec_name = BuiltinCodecName::from_provider_surface(surface);
         let annotated = codec.decode_response(&payload).ok()?;
+        let annotated_json = serde_json::to_value(&annotated).ok()?;
         let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
-        Some(codec_name.overlay_response_payload(payload, &sanitized_annotated))
+        let sanitized_json = serde_json::to_value(&sanitized_annotated).ok()?;
+        let payload = codec_name.overlay_response_payload(payload, &sanitized_annotated);
+        let payload = self.sanitize_json_preorder_dfs(payload);
+        let target_segments = self
+            .target_paths
+            .iter()
+            .map(|target_path| json_pointer_segments(target_path))
+            .collect::<Option<Vec<_>>>()?;
+        let has_normalized_target = target_segments.iter().any(|target_segments| {
+            sanitized_json_pointer_value(&annotated_json, target_segments).is_some()
+                || sanitized_json_pointer_value(&sanitized_json, target_segments).is_some()
+        });
+        if !has_normalized_target {
+            return Some(payload);
+        }
+        let projected = codec.decode_response(&payload).ok()?;
+        let projected = serde_json::to_value(projected).ok()?;
+        Self::normalized_response_targets_match(
+            &target_segments,
+            &annotated_json,
+            &sanitized_json,
+            &projected,
+        )
+        .then_some(payload)
+    }
+
+    fn normalized_response_targets_match(
+        target_paths: &[Vec<String>],
+        annotated: &Json,
+        sanitized: &Json,
+        projected: &Json,
+    ) -> bool {
+        target_paths.iter().all(|target_segments| {
+            let original = sanitized_json_pointer_value(annotated, target_segments);
+            let expected = sanitized_json_pointer_value(sanitized, target_segments);
+            if original.is_none() && expected.is_none() {
+                return true;
+            }
+            sanitized_json_pointer_value(projected, target_segments) == expected
+        })
+    }
+
+    fn targets_normalized_openai_chat_choice(&self) -> bool {
+        self.target_paths.iter().any(|path| {
+            json_pointer_segments(path)
+                .and_then(|segments| segments.into_iter().next())
+                .is_some_and(|segment| {
+                    matches!(
+                        segment.as_str(),
+                        "message" | "tool_calls" | "finish_reason" | "api_specific"
+                    )
+                })
+        })
     }
 }
 
@@ -436,9 +521,15 @@ pub(super) fn llm_sanitize_request_callback(
 ) -> LlmSanitizeRequestFn {
     Arc::new(move |mut request: LlmRequest, context| {
         if let Some(trajectory) = backend.trajectory.as_ref() {
+            request.headers = trajectory
+                .sanitize_tool_payload(Json::Object(request.headers))
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
             request.content = trajectory.sanitize_provider_payload(request.content);
             return Some(request);
         }
+        request.headers = backend.sanitize_request_headers(request.headers);
         if backend.target_paths.is_empty() {
             request.content = backend.sanitize_json_preorder_dfs(request.content);
             return Some(request);
@@ -489,12 +580,9 @@ pub(super) fn llm_sanitize_response_callback(
             None
         };
         let codec = resolved.as_deref().or(fallback.as_deref());
-        let sanitized = surface
-            .zip(codec)
-            .and_then(|(surface, codec)| {
-                backend.sanitize_response_with_codec(codec, surface, payload)
-            })
-            .map(|payload| backend.sanitize_json_preorder_dfs(payload));
+        let sanitized = surface.zip(codec).and_then(|(surface, codec)| {
+            backend.sanitize_response_with_codec(codec, surface, payload)
+        });
         if sanitized.is_none() {
             log_llm_payload_omitted(
                 "response",
@@ -573,6 +661,24 @@ fn replace_sanitized_json_pointer_value(
             Some(())
         }
         _ => None,
+    }
+}
+
+fn remove_sanitized_json_pointer_value(value: &mut Json, segments: &[String]) -> Option<()> {
+    let (last, parents) = segments.split_last()?;
+    let parent = parents
+        .iter()
+        .try_fold(value, |value, segment| match value {
+            Json::Object(values) => values.get_mut(segment),
+            Json::Array(values) => segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| values.get_mut(index)),
+            _ => None,
+        })?;
+    match parent {
+        Json::Object(values) => values.remove(last).map(|_| ()),
+        Json::Array(_) | Json::Null | Json::Bool(_) | Json::Number(_) | Json::String(_) => None,
     }
 }
 

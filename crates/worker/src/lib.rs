@@ -154,7 +154,7 @@ pub enum BuiltinLlmCodec {
 }
 
 /// Per-call LLM codec identity supplied to worker sanitizers.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlmCodecIdentity {
     /// No codec was active.
     None,

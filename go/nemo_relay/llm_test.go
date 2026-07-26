@@ -294,27 +294,37 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 	var retainedRequestCodec *LLMRequestSanitizeCodec
 	var retainedResponseCodec *LLMResponseSanitizeCodec
 	var retainedRequest LLMRequestDTO
+	var callbackErrorsMu sync.Mutex
+	var callbackErrors []string
+	recordCallbackError := func(format string, args ...any) {
+		callbackErrorsMu.Lock()
+		defer callbackErrorsMu.Unlock()
+		callbackErrors = append(callbackErrors, fmt.Sprintf(format, args...))
+	}
 	if err := RegisterLlmSanitizeRequestGuardrail(
 		requestGuard,
 		0,
 		func(request LLMRequestDTO, context LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			if context.Codec.CodecKind != LLMCodecOpaque ||
 				context.Codec.CodecID != nil {
-				t.Fatalf("unexpected request codec identity: %#v", context.Codec)
+				recordCallbackError("unexpected request codec identity: %#v", context.Codec)
 			}
 			codec := context.ResolveCodec()
 			if codec == nil {
-				t.Fatal("active request codec did not resolve")
+				recordCallbackError("active request codec did not resolve")
+				return request, false
 			}
 			retainedRequestCodec = codec
 			retainedRequest = request
 			annotated, err := codec.Decode(request)
 			if err != nil {
-				t.Fatalf("request codec decode failed: %v", err)
+				recordCallbackError("request codec decode failed: %v", err)
+				return request, false
 			}
 			encoded, err := codec.Encode(annotated, request)
 			if err != nil {
-				t.Fatalf("request codec encode failed: %v", err)
+				recordCallbackError("request codec encode failed: %v", err)
+				return request, false
 			}
 			requestResolved = true
 			return encoded, false
@@ -328,11 +338,13 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 		func(response json.RawMessage, context LLMSanitizeResponseContext) (json.RawMessage, bool) {
 			codec := context.ResolveCodec()
 			if codec == nil {
-				t.Fatal("active response codec did not resolve")
+				recordCallbackError("active response codec did not resolve")
+				return response, false
 			}
 			retainedResponseCodec = codec
 			if _, err := codec.Decode(response); err != nil {
-				t.Fatalf("response codec decode failed: %v", err)
+				recordCallbackError("response codec decode failed: %v", err)
+				return response, false
 			}
 			responseResolved = true
 			return response, false
@@ -359,6 +371,12 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
+	}
+	callbackErrorsMu.Lock()
+	sanitizerErrors := append([]string(nil), callbackErrors...)
+	callbackErrorsMu.Unlock()
+	if len(sanitizerErrors) != 0 {
+		t.Fatalf("sanitizer callbacks failed: %v", sanitizerErrors)
 	}
 	if !requestResolved || !responseResolved {
 		t.Fatalf(
@@ -486,6 +504,13 @@ func TestLlmSanitizeResponseGuardrail(t *testing.T) {
 func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	var capturedInput, capturedOutput json.RawMessage
 	var mu sync.Mutex
+	var callbackErrorsMu sync.Mutex
+	var callbackErrors []string
+	recordCallbackError := func(message string) {
+		callbackErrorsMu.Lock()
+		defer callbackErrorsMu.Unlock()
+		callbackErrors = append(callbackErrors, message)
+	}
 	if err := RegisterSubscriber("go_contextual_llm_sanitize_events", func(event Event) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -503,7 +528,7 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	if err := RegisterLlmSanitizeRequestGuardrail("go_contextual_llm_request", 1,
 		func(request LLMRequestDTO, context LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
 			if context.Codec.CodecKind != LLMCodecNone {
-				t.Fatal("manual registration should not receive an active codec identity")
+				recordCallbackError("manual registration received an active codec identity")
 			}
 			return request, true
 		},
@@ -515,7 +540,7 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	if err := RegisterLlmSanitizeResponseGuardrail("go_contextual_llm_response", 1,
 		func(response json.RawMessage, context LLMSanitizeResponseContext) (json.RawMessage, bool) {
 			if context.Codec.CodecID != nil {
-				t.Fatal("manual registration should not receive a codec ID")
+				recordCallbackError("manual registration received a codec ID")
 			}
 			return response, true
 		},
@@ -531,6 +556,12 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
+	}
+	callbackErrorsMu.Lock()
+	sanitizerErrors := append([]string(nil), callbackErrors...)
+	callbackErrorsMu.Unlock()
+	if len(sanitizerErrors) != 0 {
+		t.Fatalf("sanitizer callbacks failed: %v", sanitizerErrors)
 	}
 	if string(result) != `{"response":"client-visible"}` {
 		t.Fatalf("contextual sanitizers must not change the client result: %s", result)

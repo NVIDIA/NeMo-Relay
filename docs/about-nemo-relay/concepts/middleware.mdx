@@ -201,9 +201,10 @@ request:  (LlmRequest, LlmSanitizeRequestContext) -> Option<LlmRequest>
 response: (Json, LlmSanitizeResponseContext) -> Option<Json>
 ```
 
-`context.codec` is a binding-native codec identity object. Its `kind` and,
-when applicable, `id` fields are available as ordinary Rust, Python, Node.js,
-or native-plugin properties rather than as a JSON payload.
+`context.codec` is a binding-native codec identity, not a JSON payload.
+Python and Node.js expose `kind` and, when applicable, `id` properties.
+In-process Rust and the typed native Rust SDK expose enum variants. The raw
+native ABI exposes the same information through `codec_kind` and `codec_id`.
 
 `codec.kind` is `none` for a call with no codec, `builtin` for
 Relay's built-in `openai_chat`, `openai_responses`, and `anthropic_messages`
@@ -225,8 +226,10 @@ the same directional operations: request codecs provide `decode(request)` and
 Python in-process response codecs expose that operation as `decode_response`,
 and Node.js exposes it as `decodeResponse`. An active runtime or opaque codec
 resolves just like a built-in codec; its identity does not limit the available
-operations. The worker proxy is valid only while its sanitizer callback is
-running; do not retain it after the callback returns.
+operations. Node.js codecs supplied through decode and encode callbacks have
+an `opaque` identity but remain resolvable. The worker proxy is valid only
+while its sanitizer callback is running; do not retain it after the callback
+returns.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -266,11 +269,7 @@ relay.registerLlmSanitizeRequestGuardrail(
   10,
   (request, context) => {
     const codec = context.resolveCodec();
-    if (
-      context.codec.kind === "builtin" &&
-      context.codec.id === "openai_chat" &&
-      codec
-    ) {
+    if (codec) {
       const annotated = codec.decode(request);
       annotated.messages = [];
       return codec.encode(annotated, request);

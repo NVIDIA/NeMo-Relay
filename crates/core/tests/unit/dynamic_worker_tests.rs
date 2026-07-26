@@ -664,6 +664,161 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocation() {
+    enable_operational_logs();
+    type SeenCapability = (String, String, String);
+
+    let host_state = Arc::new(Mutex::new(None::<Arc<WorkerHostRuntimeState>>));
+    let seen = Arc::new(Mutex::new(Vec::<SeenCapability>::new()));
+    let (callback, _shutdown) = fake_callback_service({
+        let host_state = host_state.clone();
+        let seen = seen.clone();
+        move |request| {
+            let invocation_id = request.invocation_id.clone();
+            let registration_name = request.registration_name.clone();
+            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+                request.payload
+            else {
+                panic!("LLM sanitizer must receive an LLM invocation");
+            };
+            let state = host_state
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("host state must be installed before invoking the worker");
+            let capability_id = match invocation
+                .sanitize_context
+                .as_ref()
+                .expect("codec context must be forwarded")
+            {
+                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
+                    context,
+                ) => {
+                    let id = context
+                        .codec_capability_id
+                        .as_deref()
+                        .expect("active request codec must receive a capability");
+                    let codec = state
+                        .request_codec(id, &invocation_id)
+                        .expect("request capability must resolve during invocation");
+                    let request: LlmRequest = decode_json_envelope(
+                        invocation.request.as_ref().expect("request payload"),
+                    )
+                    .expect("request payload must decode");
+                    let annotated = codec
+                        .decode(&request)
+                        .expect("resolved request codec must be usable");
+                    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+                    id.to_owned()
+                }
+                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
+                    context,
+                ) => {
+                    let id = context
+                        .codec_capability_id
+                        .as_deref()
+                        .expect("active response codec must receive a capability");
+                    let codec = state
+                        .response_codec(id, &invocation_id)
+                        .expect("response capability must resolve during invocation");
+                    let response: Json = decode_json_envelope(
+                        invocation.response.as_ref().expect("response payload"),
+                    )
+                    .expect("response payload must decode");
+                    let annotated = codec
+                        .decode_response(&response)
+                        .expect("resolved response codec must be usable");
+                    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+                    id.to_owned()
+                }
+            };
+            seen.lock().unwrap().push((
+                registration_name.clone(),
+                capability_id,
+                invocation_id,
+            ));
+            if registration_name == "response-error" {
+                InvokeResponse {
+                    result: Some(InvokeResult::Error(
+                        nemo_relay_worker_proto::v1::WorkerError {
+                            code: "worker.failed".into(),
+                            message: "boom".into(),
+                            retryable: false,
+                        },
+                    )),
+                }
+            } else {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            }
+        }
+    })
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+
+    let codec = Arc::new(OpenAIChatCodec);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}]
+        }),
+    };
+    assert!(
+        callback
+            .invoke_llm_sanitize_request(
+                "request-success",
+                request,
+                LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+            )
+            .expect("request sanitizer must succeed")
+            .is_none()
+    );
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let error = callback
+        .invoke_llm_sanitize_response(
+            "response-error",
+            response,
+            LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+        )
+        .expect_err("worker sanitizer error must surface");
+    assert!(error.to_string().contains("worker.failed: boom"));
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    let (_, request_capability, request_invocation) = &seen[0];
+    assert_eq!(
+        callback
+            .host_state
+            .request_codec(request_capability, request_invocation)
+            .err()
+            .expect("successful invocation must expire its request capability")
+            .code(),
+        tonic::Code::NotFound
+    );
+    let (_, response_capability, response_invocation) = &seen[1];
+    assert_eq!(
+        callback
+            .host_state
+            .response_codec(response_capability, response_invocation)
+            .err()
+            .expect("failed invocation must expire its response capability")
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn callback_stream_transport_error_surfaces_to_host_stream() {
     enable_operational_logs();
     let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
