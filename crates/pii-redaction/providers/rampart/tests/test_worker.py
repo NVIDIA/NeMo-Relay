@@ -122,6 +122,39 @@ def test_cancelled_callback_holds_admission_until_native_work_finishes(monkeypat
     asyncio.run(exercise())
 
 
+def test_cancelled_queued_callback_does_not_run_native_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    requests: list[int] = []
+
+    class RecordingDetector:
+        def detect_request(self, request: Any) -> dict[str, Any]:
+            requests.append(request["texts"][0]["id"])
+            started.set()
+            release.wait(timeout=5)
+            return {"version": 1, "detections": []}
+
+    monkeypatch.setattr(worker_module.RampartDetector, "load", lambda _settings: RecordingDetector())
+    context = FakeContext()
+    RampartWorker().register(cast(PluginContext, context), {"max_pending_requests": 2})
+
+    async def exercise() -> None:
+        first = asyncio.create_task(context.callback({"version": 1, "texts": [{"id": 0, "text": "one"}]}))
+        assert await asyncio.to_thread(started.wait, 1)
+        second = asyncio.create_task(context.callback({"version": 1, "texts": [{"id": 1, "text": "two"}]}))
+        await asyncio.sleep(0)
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+
+        release.set()
+        await first
+        await context.callback({"version": 1, "texts": [{"id": 2, "text": "three"}]})
+
+    asyncio.run(exercise())
+    assert requests == [0, 2]
+
+
 def test_detector_failure_releases_admission(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(worker_module.RampartDetector, "load", lambda _settings: FailingDetector())
     context = FakeContext()

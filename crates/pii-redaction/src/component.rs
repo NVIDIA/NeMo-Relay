@@ -278,7 +278,7 @@ pub struct LocalBackendConfig {
     /// Whether the provider may use network calls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_network: Option<bool>,
-    /// Per-batch provider deadline in milliseconds.
+    /// Total provider deadline for one selected payload in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_latency_ms: Option<u64>,
 }

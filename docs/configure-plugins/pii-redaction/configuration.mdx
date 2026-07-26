@@ -362,9 +362,9 @@ a process sandbox.
 Provider failures, timeouts, malformed responses, invalid UTF-8 spans,
 overlapping spans, and input-limit violations fail closed for the affected
 batch. If a configured codec cannot decode or safely re-encode an LLM payload,
-Relay replaces the entire emitted request or response body. The default
-deadline is 250 ms for the complete selected payload, including every provider
-batch. Configuration above 60 seconds is rejected.
+Relay omits that request or response payload from the emitted event. The
+default deadline is 250 ms for the complete selected payload, including every
+provider batch. Configuration above 60 seconds is rejected.
 
 Use `profiles` to run deterministic recognizers before a contextual model:
 
@@ -387,7 +387,7 @@ priority = 90
 [components.config.profiles.local]
 backend = "nemo_relay.pii_rampart/detector"
 min_score = 0.4
-max_latency_ms = 1500
+max_latency_ms = 5000
 target_path_patterns = [
   "/messages/*/content",
   "/messages/*/content/*/text",
@@ -403,8 +403,9 @@ policy boundary.
 
 The generic local-model payload deadline defaults to 250 ms. Contextual models
 can need more time for large selected payloads. The Rampart profile above uses
-1500 ms so a request near the 64 KiB provider limit has practical headroom;
-benchmark representative inputs on deployment hardware before lowering it.
+5000 ms so a request near the 64 KiB provider limit has practical headroom on
+typical client hardware; benchmark representative inputs on deployment
+hardware before lowering it.
 
 The optional Rampart provider is distributed as a manifest-backed Python source
 bundle under `crates/pii-redaction/providers/rampart`. Prefetch its pinned model

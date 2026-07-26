@@ -250,7 +250,7 @@ priority = 90
 [components.config.profiles.local]
 backend = "nemo_relay.pii_rampart/detector"
 min_score = 0.4
-max_latency_ms = 1500
+max_latency_ms = 5000
 target_path_patterns = [
   "/messages/*/content",
   "/messages/*/content/*/text",
@@ -279,14 +279,14 @@ redaction policy.
 Provider failures, timeouts, malformed responses, invalid UTF-8 boundaries,
 overlapping spans, and input-limit violations fail closed for the affected
 batch. If a configured codec cannot decode or safely re-encode an LLM payload,
-Relay replaces the entire emitted request or response body; it does not retry
-normalized selectors against the raw provider shape. `allow_network = true` is
-rejected; this lane is for same-machine inference. This setting is a
-configuration invariant, not a network sandbox: Relay's worker launcher does
-not currently prevent a worker process from opening sockets. Only install
-providers whose packaging and runtime behavior satisfy that policy. The
-default deadline is 250 ms for the complete selected payload, including every
-provider batch. Configuration above 60 seconds is rejected.
+Relay omits that request or response payload from the emitted event; it does not
+retry normalized selectors against the raw provider shape.
+`allow_network = true` is rejected; this lane is for same-machine inference.
+This setting is a configuration invariant, not a network sandbox: Relay's
+worker launcher does not currently prevent a worker process from opening
+sockets. Only install providers whose packaging and runtime behavior satisfy
+that policy. The default deadline is 250 ms for the complete selected payload,
+including every provider batch. Configuration above 60 seconds is rejected.
 
 ### Provider Contract
 

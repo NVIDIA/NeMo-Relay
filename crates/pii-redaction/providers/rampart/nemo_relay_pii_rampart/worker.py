@@ -66,15 +66,26 @@ class RampartWorker(WorkerPlugin):
         settings = RampartSettings.from_config(config)
         detector = RampartDetector.load(settings)
         admission = _Admission(settings.max_pending_requests)
+        inference_slot = asyncio.Lock()
 
         async def detect(request: Json) -> Json:
             admission.acquire()
-            work = asyncio.create_task(asyncio.to_thread(detector.detect_request, request))
+            native_started = False
+
+            async def run_native() -> Json:
+                nonlocal native_started
+                async with inference_slot:
+                    native_started = True
+                    return await asyncio.to_thread(detector.detect_request, request)
+
+            work = asyncio.create_task(run_native())
             release_on_completion = False
             try:
                 return await asyncio.shield(work)
             except asyncio.CancelledError:
                 release_on_completion = True
+                if not native_started:
+                    work.cancel()
 
                 def release_after_work(_task: asyncio.Task[Json]) -> None:
                     try:

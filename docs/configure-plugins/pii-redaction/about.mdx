@@ -123,8 +123,8 @@ For managed LLM requests, codec decode and re-encode can canonicalize the
 emitted provider-shaped start event. For example, Relay can record an OpenAI
 Responses request in the codec's canonical `input` array form rather than the
 original shorthand form. If codec processing fails, the local-model backend
-replaces the entire emitted LLM body rather than applying normalized selectors
-to an incompatible raw provider shape.
+omits the emitted LLM body rather than applying normalized selectors to an
+incompatible raw provider shape.
 
 ## Current Boundaries
 

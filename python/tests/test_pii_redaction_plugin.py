@@ -32,6 +32,8 @@ class TestPiiRedactionConfigHelpers:
         assert LocalModelConfig().to_dict() == {}
         assert LocalModelConfig(
             backend="acme.pii/detector",
+            model_id="pii-model-v1",
+            detector_profile="default",
             target_paths=["/message"],
             target_path_patterns=["/messages/*/content"],
             min_score=0.6,
@@ -41,6 +43,8 @@ class TestPiiRedactionConfigHelpers:
             max_latency_ms=250,
         ).to_dict() == {
             "backend": "acme.pii/detector",
+            "model_id": "pii-model-v1",
+            "detector_profile": "default",
             "target_paths": ["/message"],
             "target_path_patterns": ["/messages/*/content"],
             "min_score": 0.6,

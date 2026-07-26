@@ -77,15 +77,34 @@ kind = "pii_redaction"
 enabled = true
 
 [components.config]
-mode = "local_model"
 codec = "openai_chat"
 
-[components.config.local]
+[[components.config.profiles]]
+mode = "builtin"
+priority = 70
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "credit_card"
+
+[[components.config.profiles]]
+mode = "local_model"
+priority = 90
+
+[components.config.profiles.local]
 backend = "nemo_relay.pii_rampart/detector"
 model_id = "nationaldesignstudio/rampart"
 detector_profile = "default"
 allow_network = false
-max_latency_ms = 1500
+max_latency_ms = 5000
 min_score = 0.4
 replacement = "[REDACTED]"
 target_path_patterns = [
@@ -122,7 +141,7 @@ optional `excluded_labels` policy after validating the provider response.
 - CPU inference is serialized per worker process. Host deadlines cancel the
   RPC, while already-running native inference is allowed to finish before its
   admission slot is released.
-- Use a `max_latency_ms` of at least 1500 when the selected payload can approach
+- Use a `max_latency_ms` of at least 5000 when the selected payload can approach
   the 64 KiB provider-request limit. Smaller content-only payloads normally
   complete much faster. Benchmark representative inputs on deployment
   hardware before lowering the deadline.

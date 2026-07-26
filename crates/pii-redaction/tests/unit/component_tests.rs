@@ -318,6 +318,48 @@ impl LlmCodec for IdentifiedRequestCodec {
 }
 
 #[test]
+fn raw_llm_paths_remain_usable_without_a_codec() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_paths: vec!["/message".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize_request = crate::builtin::llm_sanitize_request_callback(backend.clone());
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
+
+    let request = sanitize_request(
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({
+                "message": "sk-request-secret",
+                "model": "sk-model-identifier"
+            }),
+        },
+        no_codec_request_context(),
+    )
+    .expect("raw request paths should not require a codec");
+    assert_eq!(request.content["message"], "[REDACTED]");
+    assert_eq!(request.content["model"], "sk-model-identifier");
+
+    let response = sanitize_response(
+        json!({
+            "message": "sk-response-secret",
+            "model": "sk-model-identifier"
+        }),
+        no_codec_context(),
+    )
+    .expect("raw response paths should not require a codec");
+    assert_eq!(response["message"], "[REDACTED]");
+    assert_eq!(response["model"], "sk-model-identifier");
+}
+
+#[test]
 fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {

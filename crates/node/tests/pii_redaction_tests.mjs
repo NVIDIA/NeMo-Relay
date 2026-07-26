@@ -23,6 +23,32 @@ describe('pii_redaction plugin helpers', () => {
     });
     assert.deepEqual(piiRedaction.builtinConfig(), { action: 'remove' });
     assert.deepEqual(piiRedaction.localModelConfig(), {});
+    assert.deepEqual(
+      piiRedaction.localModelConfig({
+        backend: 'acme.pii/detector',
+        model_id: 'pii-model-v1',
+        detector_profile: 'default',
+        target_paths: ['/message'],
+        target_path_patterns: ['/messages/*/content'],
+        min_score: 0.6,
+        excluded_labels: ['CITY'],
+        replacement: '[PRIVATE]',
+        allow_network: false,
+        max_latency_ms: 250,
+      }),
+      {
+        backend: 'acme.pii/detector',
+        model_id: 'pii-model-v1',
+        detector_profile: 'default',
+        target_paths: ['/message'],
+        target_path_patterns: ['/messages/*/content'],
+        min_score: 0.6,
+        excluded_labels: ['CITY'],
+        replacement: '[PRIVATE]',
+        allow_network: false,
+        max_latency_ms: 250,
+      },
+    );
     assert.deepEqual(piiRedaction.profileConfig(), {
       enabled: true,
       mode: 'builtin',

@@ -3,6 +3,14 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use nemo_relay::api::event::{BaseEvent, CategoryProfile, Event, EventSanitizeFields, MarkEvent};
+use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+use nemo_relay::codec::openai_responses::OpenAIResponsesCodec;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::resolve::{
+    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
+};
+use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::plugin::{
     InferenceProviderDescriptor, InferenceProviderRegistration, InferenceProviderRegistry,
     PluginRegistrationContext,
@@ -13,6 +21,28 @@ use super::*;
 
 struct ProviderGuard {
     _registration: InferenceProviderRegistration,
+}
+
+struct IdentifiedRequestCodec {
+    identity: LlmCodecIdentity,
+}
+
+impl LlmCodec for IdentifiedRequestCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        self.identity.clone()
+    }
+
+    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+        OpenAIResponsesCodec.decode(request)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        OpenAIResponsesCodec.encode(annotated, original)
+    }
 }
 
 fn provider_context(
@@ -182,6 +212,67 @@ fn batches_provider_requests_and_preserves_no_detection_values() {
         format!("value-{MAX_BATCH_ITEMS}")
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn batches_multiple_event_roots_into_one_provider_request() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let (_provider, backend) = backend("local-test-multi-root", move |request, _| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(request["texts"].as_array().unwrap().len(), 3);
+        Ok(json!({"version": 1, "detections": []}))
+    });
+
+    let sanitized = backend.sanitize_json_values(vec![
+        json!({"message": "first"}),
+        json!({"name": "second"}),
+        json!({"trace": "third"}),
+    ]);
+
+    assert_eq!(
+        sanitized,
+        vec![
+            json!({"message": "first"}),
+            json!({"name": "second"}),
+            json!({"trace": "third"}),
+        ]
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn event_callback_batches_all_selected_fields_into_one_provider_request() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let (_provider, backend) = backend("local-test-event-batching", move |request, _| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(request["texts"].as_array().unwrap().len(), 3);
+        Ok(json!({"version": 1, "detections": []}))
+    });
+    let callback = event_sanitize_callback(backend, None);
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("mark").build(),
+        None,
+        None,
+    ));
+
+    let sanitized = callback(
+        &event,
+        EventSanitizeFields {
+            data: Some(json!({"message": "first"})),
+            category_profile: Some(CategoryProfile::builder().subtype("second").build()),
+            metadata: Some(json!({"trace": "third"})),
+        },
+    );
+
+    assert_eq!(sanitized.data.unwrap()["message"], "first");
+    assert_eq!(
+        sanitized.category_profile.unwrap().subtype.as_deref(),
+        Some("second")
+    );
+    assert_eq!(sanitized.metadata.unwrap()["trace"], "third");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -431,6 +522,90 @@ fn target_path_patterns_match_one_segment_without_widening_exact_paths() {
 }
 
 #[test]
+fn exact_paths_match_escaped_object_keys() {
+    let (_provider, ctx) = provider_context("local-test-escaped-path", alice_detector);
+    let backend = CompiledLocalBackend::new(
+        LocalBackendConfig {
+            backend: Some("local-test-escaped-path".into()),
+            target_paths: vec!["/a~1b/~0name".into()],
+            ..LocalBackendConfig::default()
+        },
+        None,
+        &ctx,
+    )
+    .unwrap();
+
+    assert_eq!(
+        backend.sanitize_json(json!({
+            "a/b": {"~name": "Alice", "name": "Alice"},
+            "a~1b": {"~name": "Alice"}
+        })),
+        json!({
+            "a/b": {"~name": "[REDACTED]", "name": "Alice"},
+            "a~1b": {"~name": "Alice"}
+        })
+    );
+}
+
+#[test]
+fn raw_request_paths_batch_headers_and_content_without_a_codec() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let (_provider, ctx) = provider_context("local-test-raw-request", move |request, timeout| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        alice_detector(request, timeout)
+    });
+    let backend = CompiledLocalBackend::new(
+        LocalBackendConfig {
+            backend: Some("local-test-raw-request".into()),
+            target_paths: vec!["/headers/x-user".into(), "/message".into()],
+            ..LocalBackendConfig::default()
+        },
+        None,
+        &ctx,
+    )
+    .unwrap();
+
+    let sanitized = llm_sanitize_request_callback(backend)(
+        LlmRequest {
+            headers: Map::from_iter([("x-user".into(), json!("Alice"))]),
+            content: json!({"message": "Hello Alice", "model": "Alice-model"}),
+        },
+        LlmSanitizeRequestContext::default(),
+    )
+    .expect("raw request paths should not require a codec");
+
+    assert_eq!(sanitized.headers["x-user"], "[REDACTED]");
+    assert_eq!(sanitized.content["message"], "Hello [REDACTED]");
+    assert_eq!(sanitized.content["model"], "Alice-model");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn raw_response_paths_work_without_a_codec() {
+    let (_provider, ctx) = provider_context("local-test-raw-response", alice_detector);
+    let backend = CompiledLocalBackend::new(
+        LocalBackendConfig {
+            backend: Some("local-test-raw-response".into()),
+            target_paths: vec!["/message".into()],
+            ..LocalBackendConfig::default()
+        },
+        None,
+        &ctx,
+    )
+    .unwrap();
+
+    let sanitized = llm_sanitize_response_callback(backend)(
+        json!({"message": "Hello Alice", "model": "Alice-model"}),
+        LlmSanitizeResponseContext::default(),
+    )
+    .expect("raw response paths should not require a codec");
+
+    assert_eq!(sanitized["message"], "Hello [REDACTED]");
+    assert_eq!(sanitized["model"], "Alice-model");
+}
+
+#[test]
 fn request_codec_classifies_only_normalized_content_patterns() {
     let (_provider, ctx) = provider_context("local-test-openai-request", alice_detector);
     let backend = CompiledLocalBackend::new(
@@ -463,10 +638,7 @@ fn request_codec_classifies_only_normalized_content_patterns() {
             ]
         }),
     };
-    let codec = backend
-        .request_codec
-        .as_ref()
-        .expect("configured request codec should exist");
+    let codec = build_request_codec(ProviderSurface::OpenAIChat);
     let annotated = codec
         .decode(&request)
         .expect("OpenAI request should decode");
@@ -476,7 +648,11 @@ fn request_codec_classifies_only_normalized_content_patterns() {
         .encode(&sanitized_annotated, &request)
         .expect("sanitized OpenAI request should encode");
 
-    let sanitized = llm_sanitize_request_callback(backend)(request);
+    let sanitized = llm_sanitize_request_callback(backend)(
+        request,
+        LlmSanitizeRequestContext::for_request_codec(Some(codec)),
+    )
+    .expect("valid request should remain observable");
 
     assert_eq!(sanitized.content["model"], "Alice-model");
     assert_eq!(sanitized.content["trace_id"], "Alice-trace");
@@ -492,6 +668,45 @@ fn request_codec_classifies_only_normalized_content_patterns() {
         sanitized.content["messages"][1]["content"][1]["image_url"]["url"],
         "https://Alice.invalid"
     );
+}
+
+#[test]
+fn request_uses_the_active_codec_instead_of_the_legacy_fallback() {
+    let (_provider, ctx) = provider_context("local-test-active-request-codec", alice_detector);
+    let backend = CompiledLocalBackend::new(
+        LocalBackendConfig {
+            backend: Some("local-test-active-request-codec".into()),
+            target_path_patterns: vec!["/messages/*/content".into()],
+            ..LocalBackendConfig::default()
+        },
+        Some("openai_chat".into()),
+        &ctx,
+    )
+    .unwrap();
+    let sanitize = llm_sanitize_request_callback(backend);
+    let request = || LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "test-model",
+            "input": [{"role": "user", "content": "Email Alice"}]
+        }),
+    };
+
+    for codec in [
+        Arc::new(IdentifiedRequestCodec {
+            identity: LlmCodecIdentity::Runtime("test.responses.v1".into()),
+        }) as Arc<dyn LlmCodec>,
+        Arc::new(IdentifiedRequestCodec {
+            identity: LlmCodecIdentity::Opaque,
+        }) as Arc<dyn LlmCodec>,
+    ] {
+        let sanitized = sanitize(
+            request(),
+            LlmSanitizeRequestContext::for_request_codec(Some(codec)),
+        )
+        .expect("active runtime codecs should remain usable");
+        assert_eq!(sanitized.content["input"][0]["content"], "Email [REDACTED]");
+    }
 }
 
 #[test]
@@ -519,7 +734,11 @@ fn response_codec_classifies_message_content_without_touching_identity_fields() 
     });
 
     let sanitized = backend
-        .sanitize_response_with_codec(response)
+        .sanitize_response_with_codec(
+            build_response_codec(ProviderSurface::OpenAIChat).as_ref(),
+            ProviderSurface::OpenAIChat,
+            response,
+        )
         .expect("configured codec should sanitize the response");
 
     assert_eq!(sanitized["id"], "Alice-response");
@@ -532,7 +751,7 @@ fn response_codec_classifies_message_content_without_touching_identity_fields() 
 }
 
 #[test]
-fn request_codec_failure_replaces_the_observable_body() {
+fn request_codec_failure_omits_the_observable_body() {
     let (_provider, ctx) = provider_context("local-test-invalid-openai-request", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
@@ -556,10 +775,14 @@ fn request_codec_failure_replaces_the_observable_body() {
         }),
     };
 
-    let sanitized = llm_sanitize_request_callback(backend)(request);
+    let sanitized = llm_sanitize_request_callback(backend)(
+        request,
+        LlmSanitizeRequestContext::for_request_codec(Some(build_request_codec(
+            ProviderSurface::OpenAIChat,
+        ))),
+    );
 
-    assert_eq!(sanitized.content, json!("[PRIVATE]"));
-    assert_eq!(sanitized.headers["x-provider-id"], "preserve-header");
+    assert!(sanitized.is_none());
 }
 
 #[test]
@@ -586,13 +809,18 @@ fn request_codec_ambiguous_multi_message_edit_fails_closed() {
         }),
     };
 
-    let sanitized = llm_sanitize_request_callback(backend)(request);
+    let sanitized = llm_sanitize_request_callback(backend)(
+        request,
+        LlmSanitizeRequestContext::for_request_codec(Some(build_request_codec(
+            ProviderSurface::OpenAIChat,
+        ))),
+    );
 
-    assert_eq!(sanitized.content, json!("[PRIVATE]"));
+    assert!(sanitized.is_none());
 }
 
 #[test]
-fn response_codec_failure_replaces_the_observable_payload() {
+fn response_codec_failure_omits_the_observable_payload() {
     let (_provider, ctx) = provider_context("local-test-invalid-openai-response", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
@@ -610,9 +838,14 @@ fn response_codec_failure_replaces_the_observable_payload() {
         "vendor_trace": "Alice-trace"
     });
 
-    let sanitized = llm_sanitize_response_callback(backend)(response);
+    let sanitized = llm_sanitize_response_callback(backend)(
+        response,
+        LlmSanitizeResponseContext::for_response_codec(Some(build_response_codec(
+            ProviderSurface::OpenAIChat,
+        ))),
+    );
 
-    assert_eq!(sanitized, json!("[PRIVATE]"));
+    assert!(sanitized.is_none());
 }
 
 #[test]
