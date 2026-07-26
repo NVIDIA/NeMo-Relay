@@ -39,6 +39,30 @@ pub(super) const MAX_LOCAL_MODEL_REPLACEMENT_BYTES: usize = 1024;
 pub(super) const MAX_LOCAL_MODEL_PROVIDER_VALUE_BYTES: usize = 1024;
 pub(super) const MAX_LOCAL_MODEL_EXCLUDED_LABELS: usize = 128;
 pub(super) const MAX_LOCAL_MODEL_LABEL_BYTES: usize = 128;
+const BUILTIN_BACKEND_CONFIG_FIELDS: &[&str] = &[
+    "preset",
+    "action",
+    "target_paths",
+    "pattern",
+    "detector",
+    "replacement",
+    "mask_char",
+    "unmasked_prefix",
+    "unmasked_suffix",
+    "custom_mark_payload_policy",
+];
+const LOCAL_BACKEND_CONFIG_FIELDS: &[&str] = &[
+    "backend",
+    "model_id",
+    "detector_profile",
+    "target_paths",
+    "target_path_patterns",
+    "min_score",
+    "excluded_labels",
+    "replacement",
+    "allow_network",
+    "max_latency_ms",
+];
 
 /// Top-level PII redaction component wrapper.
 #[derive(Debug, Clone)]
@@ -680,36 +704,14 @@ fn validate_pii_redaction_plugin_config_with_policy(
         &config.policy,
         plugin_config,
         "builtin",
-        &[
-            "preset",
-            "action",
-            "target_paths",
-            "pattern",
-            "detector",
-            "replacement",
-            "mask_char",
-            "unmasked_prefix",
-            "unmasked_suffix",
-            "custom_mark_payload_policy",
-        ],
+        BUILTIN_BACKEND_CONFIG_FIELDS,
     );
     validate_section_fields(
         &mut diagnostics,
         &config.policy,
         plugin_config,
         "local",
-        &[
-            "backend",
-            "model_id",
-            "detector_profile",
-            "target_paths",
-            "target_path_patterns",
-            "min_score",
-            "excluded_labels",
-            "replacement",
-            "allow_network",
-            "max_latency_ms",
-        ],
+        LOCAL_BACKEND_CONFIG_FIELDS,
     );
     validate_version(&mut diagnostics, &config.policy, config.version);
     validate_mode(&mut diagnostics, &config.policy, &config);
@@ -788,36 +790,14 @@ fn validate_profile_configuration(
             &config.policy,
             raw_profile,
             "builtin",
-            &[
-                "preset",
-                "action",
-                "target_paths",
-                "pattern",
-                "detector",
-                "replacement",
-                "mask_char",
-                "unmasked_prefix",
-                "unmasked_suffix",
-                "custom_mark_payload_policy",
-            ],
+            BUILTIN_BACKEND_CONFIG_FIELDS,
         );
         validate_section_fields(
             &mut profile_diagnostics,
             &config.policy,
             raw_profile,
             "local",
-            &[
-                "backend",
-                "model_id",
-                "detector_profile",
-                "target_paths",
-                "target_path_patterns",
-                "min_score",
-                "excluded_labels",
-                "replacement",
-                "allow_network",
-                "max_latency_ms",
-            ],
+            LOCAL_BACKEND_CONFIG_FIELDS,
         );
         validate_mode(&mut profile_diagnostics, &config.policy, &profile_config);
         validate_builtin_mode_requirements(
