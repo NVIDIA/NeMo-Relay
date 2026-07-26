@@ -165,6 +165,26 @@ registers a tool request intercept that updates the request JSON and emits a
 mark through `PluginContext.runtime`. The `main` entrypoint blocks until Relay
 requests shutdown.
 
+### Provide local inference
+
+Use `register_local_model_provider` when a first-party Relay component owns the
+policy and needs an isolated detector or inference implementation:
+
+```python
+async def detect(request: Json) -> Json:
+    return {
+        "version": 1,
+        "detections": await model.detect(request["texts"]),
+    }
+
+
+ctx.register_local_model_provider("detector", detect)
+```
+
+Relay publishes this registration as `<plugin_id>/detector`. The consuming
+component owns the JSON contract, field selection, deadline, response
+validation, and application. The worker should perform inference only.
+
 ## Create the Manifest
 
 Create `relay-plugin.toml` with the following content:

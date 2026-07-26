@@ -48,6 +48,14 @@ pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
 pub mod dynamic;
 pub use dynamic::*;
+mod local_model;
+#[cfg(feature = "worker-grpc")]
+pub(crate) use local_model::deregister_local_model_provider_checked;
+#[doc(hidden)]
+pub use local_model::{
+    LocalModelProviderFn, deregister_local_model_provider, local_model_provider,
+    register_local_model_provider_tracked,
+};
 
 type PluginMap = HashMap<String, RegisteredPlugin>;
 

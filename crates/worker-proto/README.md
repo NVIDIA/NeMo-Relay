@@ -33,6 +33,8 @@ tooling.
   from `v1` without generating protobuf code in a consumer project.
 - **Keep data ownership clear**: Carry Relay DTOs in JSON envelopes backed by
   `nemo-relay-types`; protobuf owns transport control flow.
+- **Implement workers in another language**: Generate a `grpc-v1` service from
+  the protobuf when no maintained language-specific authoring SDK exists.
 
 ## What You Get
 
@@ -41,6 +43,9 @@ tooling.
   clients, servers, services, and messages.
 - **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
   serializing Relay DTOs into protocol payloads.
+- **Language-neutral provider surface**: `LOCAL_MODEL_PROVIDER` carries
+  component-owned request and response JSON without coupling the host to the
+  worker implementation language.
 
 ## Installation
 

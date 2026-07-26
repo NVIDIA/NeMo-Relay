@@ -363,6 +363,9 @@ class AllSurfacesPlugin(WorkerPlugin):
             async for chunk in stream:
                 yield _tag(chunk, "llm_stream_execution")
 
+        async def local_model_provider(request: Json) -> Json:
+            return _tag(request, "local_model")
+
         ctx.register_subscriber("subscriber", subscriber)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
@@ -378,6 +381,7 @@ class AllSurfacesPlugin(WorkerPlugin):
         ctx.register_llm_request_intercept("llm_request", llm_request, priority=9, break_chain=True)
         ctx.register_llm_execution_intercept("llm_execution", llm_execution, priority=10)
         ctx.register_llm_stream_execution_intercept("llm_stream_execution", llm_stream_execution, priority=11)
+        ctx.register_local_model_provider("local_model", local_model_provider)
 
 
 @pytest.fixture(name="host_stub")
@@ -411,6 +415,8 @@ def test_generated_proto_matches_worker_contract():
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
     assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
     assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
+    assert pb.LOCAL_MODEL_PROVIDER == 40
+    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["provider"].number == 13
     assert pb.CUSTOM == 10
 
 
@@ -463,6 +469,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
         ("llm_request", pb.LLM_REQUEST_INTERCEPT, 9, True),
         ("llm_execution", pb.LLM_EXECUTION_INTERCEPT, 10, False),
         ("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT, 11, False),
+        ("local_model", pb.LOCAL_MODEL_PROVIDER, 0, False),
     ]
 
 
@@ -1438,6 +1445,16 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert llm_execution["tag"] == "llm_execution"
     assert llm_execution["next_llm"]["content"]["llm_execute_gpt-test"]
 
+    local_model = await service.Invoke(
+        _provider_request("local_model", {"text": "private"}),
+        AbortContext(),
+    )
+    assert local_model.WhichOneof("result") == "json"
+    assert _envelope_value(local_model.json.value) == {
+        "text": "private",
+        "tag": "local_model",
+    }
+
 
 async def test_unary_invoke_failure_paths(service: _WorkerService):
     await _register(service)
@@ -1451,6 +1468,13 @@ async def test_unary_invoke_failure_paths(service: _WorkerService):
     missing_handler = await service.Invoke(_tool_request("missing", pb.TOOL_REQUEST_INTERCEPT, {}), AbortContext())
     assert missing_handler.WhichOneof("result") == "error"
     assert "not registered" in missing_handler.error.message
+
+    missing_provider = await service.Invoke(
+        _provider_request("missing", {}),
+        AbortContext(),
+    )
+    assert missing_provider.WhichOneof("result") == "error"
+    assert "not registered" in missing_provider.error.message
 
     unsupported = await service.Invoke(
         _tool_request("tool_request", pb.REGISTRATION_SURFACE_UNSPECIFIED, {}),
@@ -2738,6 +2762,15 @@ def _tool_request(registration_name: str, surface: int, value: Json) -> Any:
     )
 
 
+def _provider_request(registration_name: str, value: Json) -> Any:
+    return _invoke_request(
+        registration_name,
+        pb.LOCAL_MODEL_PROVIDER,
+        continuation_id="",
+        provider=_json_envelope(JSON_SCHEMA, value),
+    )
+
+
 def _llm_payload(
     *,
     model_name: str = "model",
@@ -2826,4 +2859,5 @@ def _all_expected_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        pb.LOCAL_MODEL_PROVIDER,
     ]

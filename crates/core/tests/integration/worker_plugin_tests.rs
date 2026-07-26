@@ -27,8 +27,9 @@ use nemo_relay::plugin::dynamic::{
     WorkerPluginLoadSpec, load_worker_plugins,
 };
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-    list_plugin_kinds,
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration, deregister_local_model_provider,
+    initialize_plugins_exact, list_plugin_kinds, local_model_provider,
+    register_local_model_provider_tracked,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -48,6 +49,172 @@ fn worker_activation_with_no_specs_is_empty() {
         .expect("empty worker activation should succeed");
     assert!(activation.is_empty());
     activation.clear();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_local_model_provider_is_preinstalled_times_out_and_clears() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
+    }])
+    .expect("worker plugin should load");
+
+    // Providers must be available before static consumers initialize.
+    let provider = local_model_provider("fixture_worker/fixture_local_model")
+        .expect("worker provider should be installed");
+    assert_eq!(
+        provider(
+            json!({"text": "private"}),
+            std::time::Duration::from_secs(1)
+        )
+        .expect("worker provider should return JSON"),
+        json!({
+            "version": 1,
+            "request": {"text": "private"},
+            "provider": "fixture_local_model"
+        })
+    );
+    let timeout = provider(
+        json!({"delay_ms": 100}),
+        std::time::Duration::from_millis(5),
+    )
+    .expect_err("worker provider should honor the caller deadline")
+    .to_string();
+    assert!(timeout.contains("timed out"), "{timeout}");
+
+    activation.clear();
+    assert!(
+        local_model_provider("fixture_worker/fixture_local_model").is_err(),
+        "provider should be removed when the worker activation clears"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_clear_fails_an_in_flight_local_model_call_without_hanging() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
+    }])
+    .expect("worker plugin should load");
+    let provider = local_model_provider("fixture_worker/fixture_local_model")
+        .expect("worker provider should be installed");
+    let invocation = std::thread::spawn(move || {
+        provider(
+            json!({"delay_ms": 5_000}),
+            std::time::Duration::from_secs(10),
+        )
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    activation.clear();
+
+    let error = invocation
+        .join()
+        .expect("provider invocation thread should join")
+        .expect_err("clearing the worker must fail its in-flight call")
+        .to_string();
+    assert!(
+        error.contains("invocation failed") || error.contains("cancel"),
+        "{error}"
+    );
+    assert!(
+        local_model_provider("fixture_worker/fixture_local_model").is_err(),
+        "provider should remain deregistered after concurrent clear"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_provider_rolls_back_after_later_plugin_registration_failure() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let first_provider = "fixture_local_model_first";
+    let first_provider_key = format!("fixture_worker/{first_provider}");
+    let first = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::from_iter([("local_model_provider_name".into(), json!(first_provider))]),
+    }])
+    .expect("first worker plugin should load");
+
+    let second_provider = "fixture_local_model_rollback";
+    let second_provider_key = format!("fixture_worker/{second_provider}");
+    let second = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::from_iter([("local_model_provider_name".into(), json!(second_provider))]),
+    }]);
+    assert!(
+        second.is_err(),
+        "duplicate plugin kind should fail after the second provider is installed"
+    );
+    assert!(
+        local_model_provider(&second_provider_key).is_err(),
+        "the second provider must be rolled back with its failed activation"
+    );
+    assert!(
+        local_model_provider(&first_provider_key).is_ok(),
+        "rollback must not remove the first activation's provider"
+    );
+
+    first.clear();
+    assert!(local_model_provider(&first_provider_key).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_provider_rolls_back_earlier_provider_after_same_worker_conflict() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let first_provider_key = "fixture_worker/fixture_local_model_unique";
+    let conflicting_provider_key = "fixture_worker/fixture_local_model_conflict";
+    let existing_registration = register_local_model_provider_tracked(
+        conflicting_provider_key,
+        Arc::new(|request, _| Ok(json!({"existing": request}))),
+    )
+    .expect("conflicting provider fixture should register");
+
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::from_iter([(
+            "local_model_provider_names".into(),
+            json!(["fixture_local_model_unique", "fixture_local_model_conflict"]),
+        )]),
+    }]);
+
+    assert!(
+        activation.is_err(),
+        "the worker activation should fail on its second provider"
+    );
+    assert!(
+        local_model_provider(first_provider_key).is_err(),
+        "an earlier provider from the failed worker must be rolled back"
+    );
+    let existing = local_model_provider(conflicting_provider_key)
+        .expect("the existing conflicting provider must remain registered");
+    assert_eq!(
+        existing(json!({"value": 1}), std::time::Duration::from_secs(1))
+            .expect("existing provider should remain callable"),
+        json!({"existing": {"value": 1}})
+    );
+    assert!(
+        deregister_local_model_provider(conflicting_provider_key, existing_registration)
+            .expect("existing provider should deregister")
+    );
 }
 
 #[tokio::test]
@@ -1124,6 +1291,22 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     assert_eq!(
         rewritten["_nemo_relay_plugin"]["tag"],
         "managed-environment"
+    );
+    let local_model = local_model_provider("examples.python_grpc_worker/echo")
+        .expect("Python worker should expose its local-model provider");
+    assert_eq!(
+        local_model(
+            json!({"version": 1, "texts": [{"id": 0, "text": "private"}]}),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("Python local-model provider should round-trip JSON"),
+        json!({
+            "provider": "python_grpc_worker",
+            "request": {
+                "version": 1,
+                "texts": [{"id": 0, "text": "private"}],
+            },
+        }),
     );
     flush_subscribers().expect("Python callback mark should flush");
     find_event(

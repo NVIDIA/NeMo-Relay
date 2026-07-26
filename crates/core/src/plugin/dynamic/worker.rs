@@ -72,8 +72,10 @@ use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin_registration_checked, register_plugin_tracked,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginDeregistrationOutcome, PluginError,
+    PluginRegistrationContext, deregister_local_model_provider_checked,
+    deregister_plugin_registration_checked, register_local_model_provider_tracked,
+    register_plugin_tracked,
 };
 
 use super::{
@@ -129,6 +131,7 @@ pub struct WorkerPluginLoadSpec {
 pub struct WorkerPluginActivation {
     plugins: Vec<Arc<WorkerPluginInstance>>,
     plugin_registrations: Vec<(String, u64)>,
+    local_model_registrations: Vec<(String, u64)>,
 }
 
 impl WorkerPluginActivation {
@@ -144,6 +147,12 @@ impl WorkerPluginActivation {
         deregister_tracked_registrations_checked(&mut self.plugin_registrations, "worker")
     }
 
+    pub(crate) fn deregister_local_model_providers_checked(
+        &mut self,
+    ) -> DynamicPluginTeardownOutcome {
+        deregister_local_model_providers_checked(&mut self.local_model_registrations)
+    }
+
     pub(crate) fn shutdown_plugins_checked(&self) -> DynamicPluginTeardownOutcome {
         let mut outcome = DynamicPluginTeardownOutcome::success();
         for plugin in self.plugins.iter().rev() {
@@ -155,6 +164,7 @@ impl WorkerPluginActivation {
 
 impl Drop for WorkerPluginActivation {
     fn drop(&mut self) {
+        let _ = deregister_local_model_providers_checked(&mut self.local_model_registrations);
         for (plugin_kind, registration_id) in self.plugin_registrations.iter().rev() {
             let _ = deregister_plugin_registration_checked(plugin_kind, *registration_id);
         }
@@ -172,16 +182,23 @@ where
     let mut activation = WorkerPluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
+        local_model_registrations: Vec::new(),
     };
     for spec in specs {
         let instance = load_one_worker_plugin(&spec)?;
+        let local_model_registrations = instance.install_local_model_providers()?;
         let plugin_kind = instance.plugin_kind.clone();
+        // Transfer ownership before the next fallible registration so Drop can
+        // unwind providers and the worker process on partial activation.
+        activation.plugins.push(instance.clone());
+        activation
+            .local_model_registrations
+            .extend(local_model_registrations);
         let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
             instance: instance.clone(),
         }))?;
-        activation.plugins.push(instance);
         activation
             .plugin_registrations
             .push((plugin_kind, registration_id));
@@ -1043,6 +1060,37 @@ fn clear_host_python_environment(command: &mut Command) {
 }
 
 impl WorkerPluginInstance {
+    fn install_local_model_providers(&self) -> crate::plugin::Result<Vec<(String, u64)>> {
+        let mut registrations = Vec::new();
+        for registration in &self.registrations {
+            let surface = RegistrationSurface::try_from(registration.surface).map_err(|_| {
+                PluginError::RegistrationFailed(format!(
+                    "worker plugin '{}' returned unsupported registration surface {}",
+                    self.plugin_kind, registration.surface
+                ))
+            })?;
+            if surface != RegistrationSurface::LocalModelProvider {
+                continue;
+            }
+            let callback_name = registration.local_name.clone();
+            let provider_name = format!("{}/{}", self.plugin_kind, callback_name);
+            let callback = self.clone_for_callback();
+            match register_local_model_provider_tracked(
+                &provider_name,
+                Arc::new(move |request, timeout| {
+                    callback.invoke_local_model_provider(&callback_name, request, timeout)
+                }),
+            ) {
+                Ok(registration_id) => registrations.push((provider_name, registration_id)),
+                Err(error) => {
+                    let _ = deregister_local_model_providers_checked(&mut registrations);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(registrations)
+    }
+
     fn install_registrations(
         &self,
         ctx: &mut PluginRegistrationContext,
@@ -1081,6 +1129,10 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::LlmExecutionIntercept
                 | RegistrationSurface::LlmStreamExecutionIntercept => {
                     self.install_llm_registration(ctx, registration, surface)?
+                }
+                RegistrationSurface::LocalModelProvider => {
+                    // Providers are installed before static component
+                    // initialization so components can resolve them.
                 }
                 RegistrationSurface::Unspecified => {
                     return Err(PluginError::RegistrationFailed(format!(
@@ -1369,6 +1421,36 @@ struct WorkerPluginCallback {
 }
 
 impl WorkerPluginCallback {
+    fn invoke_local_model_provider(
+        &self,
+        registration_name: &str,
+        value: Json,
+        timeout: Duration,
+    ) -> crate::plugin::Result<Json> {
+        let request = self.base_request(
+            registration_name,
+            RegistrationSurface::LocalModelProvider,
+            None,
+            Some(invoke_request_payload::Payload::Provider(
+                json_envelope_infallible(JSON_SCHEMA, &value),
+            )),
+        );
+        let response = block_on_handle(
+            &self.runtime,
+            self.invoke_async_with_timeout(request, timeout),
+        )
+        .map_err(|error| {
+            PluginError::RegistrationFailed(format!(
+                "local-model provider '{registration_name}' invocation failed: {error}"
+            ))
+        })?;
+        json_from_invoke_response(response).map_err(|error| {
+            PluginError::RegistrationFailed(format!(
+                "local-model provider '{registration_name}' returned an invalid response: {error}"
+            ))
+        })
+    }
+
     fn log_callback_fallback(&self, callback_name: &str, surface: RegistrationSurface) {
         log::warn!(
             target: "nemo_relay.worker",
@@ -1379,6 +1461,32 @@ impl WorkerPluginCallback {
             "Worker plugin callback failed; Relay used the safe fallback"
         );
     }
+}
+
+fn deregister_local_model_providers_checked(
+    registrations: &mut Vec<(String, u64)>,
+) -> DynamicPluginTeardownOutcome {
+    let mut outcome = DynamicPluginTeardownOutcome::success();
+    for (name, registration_id) in std::mem::take(registrations).into_iter().rev() {
+        match deregister_local_model_provider_checked(&name, registration_id) {
+            Ok(PluginDeregistrationOutcome::Removed) => {}
+            Ok(PluginDeregistrationOutcome::Missing) => outcome.record_error(
+                format!("local-model provider '{name}' was not registered during teardown"),
+                true,
+            ),
+            Ok(PluginDeregistrationOutcome::Replaced) => outcome.record_error(
+                format!(
+                    "local-model provider '{name}' was replaced during teardown and was left registered"
+                ),
+                true,
+            ),
+            Err(error) => outcome.record_error(
+                format!("failed to deregister local-model provider '{name}': {error}"),
+                false,
+            ),
+        }
+    }
+    outcome
 }
 
 struct WorkerInvocationGuard {

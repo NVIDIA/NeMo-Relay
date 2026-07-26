@@ -26,7 +26,8 @@ protocol.
 - **Isolate plugin dependencies**: Run custom policy, middleware, or exporter
   code outside the Relay host process.
 - **Use the shared runtime contract**: Register subscribers, guardrails, and
-  intercepts through `WorkerPlugin` and `PluginContext`.
+  intercepts or local-model providers through `WorkerPlugin` and
+  `PluginContext`.
 - **Call back into Relay safely**: Emit marks, create scopes, and continue
   managed execution through the host runtime handle.
 - **Keep worker lifecycle managed**: Let Relay provision the worker environment,
@@ -103,6 +104,27 @@ worker process.
 
 For a complete manifest and runnable plugin, see the
 [Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md).
+
+## Local-Model Providers
+
+Use `register_local_model_provider` when a first-party Relay component owns the
+policy and needs isolated model inference:
+
+```python
+async def detect(request: Json) -> Json:
+    return {
+        "version": 1,
+        "detections": await model.detect(request["texts"]),
+    }
+
+
+ctx.register_local_model_provider("detector", detect)
+```
+
+Relay publishes this provider as `<plugin_id>/detector`. The callback may be
+synchronous or asynchronous and should perform inference only. The consuming
+host component owns the payload schema, deadline, field traversal, output
+validation, and result application.
 
 ## Request Intercepts
 

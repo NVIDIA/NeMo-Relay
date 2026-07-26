@@ -68,6 +68,24 @@ identity from `WorkerPlugin::plugin_id()`; custom launchers can use
 credentials and runs until Relay requests shutdown. Do not start the worker
 directly for normal operation.
 
+### Provide local inference
+
+Use `register_local_model_provider` when a first-party Relay component owns the
+policy and needs isolated inference:
+
+```rust
+context.register_local_model_provider("detector", |request| async move {
+    Ok(serde_json::json!({
+        "version": 1,
+        "detections": detect(request)?
+    }))
+});
+```
+
+Relay publishes this registration as `<plugin_id>/detector`. The consuming
+component owns the JSON contract, field selection, deadline, response
+validation, and application. The worker should perform inference only.
+
 ## Package the Worker
 
 Create `relay-plugin.toml` with the following content. The artifact digest must

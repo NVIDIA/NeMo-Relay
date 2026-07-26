@@ -845,6 +845,7 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
     [str, LlmRequest, "LlmStreamNext"],
     Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
 ]
+LocalModelProviderCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
 
 
 @dataclass(slots=True)
@@ -865,6 +866,7 @@ class _Handlers:
     llm_requests: dict[str, LlmRequestCallback]
     llm_executions: dict[str, LlmExecutionCallback]
     llm_stream_executions: dict[str, LlmStreamExecutionCallback]
+    local_model_providers: dict[str, LocalModelProviderCallback]
 
     @classmethod
     def empty(cls) -> _Handlers:
@@ -885,6 +887,7 @@ class _Handlers:
             llm_requests={},
             llm_executions={},
             llm_stream_executions={},
+            local_model_providers={},
         )
 
 
@@ -952,6 +955,26 @@ class PluginContext:
         """
         self._push_registration(name, pb.SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
+
+    def register_local_model_provider(
+        self,
+        name: str,
+        callback: LocalModelProviderCallback,
+    ) -> None:
+        """Register a named local-model request-response provider.
+
+        Args:
+            name: Stable provider name selected by a consuming host component.
+            callback: Function receiving and returning component-owned JSON.
+                The callback can return a value directly or through an
+                awaitable.
+
+        Provider boundary:
+            Providers perform model inference only. The consuming host
+            component owns field selection, policy, and output application.
+        """
+        self._push_registration(name, pb.LOCAL_MODEL_PROVIDER, 0, False)
+        self._handlers.local_model_providers[name] = callback
 
     def _register_event_sanitizer(
         self,
@@ -2060,6 +2083,19 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         ),
                     )
                 )
+            if request.surface == pb.LOCAL_MODEL_PROVIDER:
+                result = await _maybe_await(
+                    self._handler(
+                        self._handlers.local_model_providers,
+                        request.registration_name,
+                    )(
+                        _decode_required_envelope(
+                            request.provider,
+                            "local-model provider request",
+                        )
+                    )
+                )
+                return _json_response(result)
             raise WorkerSdkError(f"unsupported registration surface {request.surface}")
 
     async def _invoke_llm_result(self, request: Any) -> Any:
@@ -2195,6 +2231,7 @@ def _all_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        pb.LOCAL_MODEL_PROVIDER,
     ]
 
 

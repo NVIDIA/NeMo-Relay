@@ -57,6 +57,66 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             ctx.register_subscriber("", |_| {});
             return Ok(());
         }
+        let local_model_provider_names = config
+            .get("local_model_provider_names")
+            .and_then(Json::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                vec![
+                    config
+                        .get("local_model_provider_name")
+                        .and_then(Json::as_str)
+                        .unwrap_or("fixture_local_model")
+                        .to_string(),
+                ]
+            });
+        for provider_name in local_model_provider_names {
+            let callback_provider_name = provider_name.clone();
+            let exit_in_local_model = fixture_flag(config, "exit_in_local_model");
+            ctx.register_local_model_provider(&provider_name, move |request| {
+                let provider_name = callback_provider_name.clone();
+                async move {
+                    if exit_in_local_model {
+                        std::process::exit(45);
+                    }
+                    if let Some(delay_ms) = request.get("delay_ms").and_then(Json::as_u64) {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    }
+                    if let Some(texts) = request.get("texts").and_then(Json::as_array) {
+                        let detections = texts
+                            .iter()
+                            .filter_map(|item| {
+                                let text_id = item.get("id")?.as_u64()?;
+                                let text = item.get("text")?.as_str()?;
+                                let start_utf8 = text.find("PRIVATE")?;
+                                Some(json!({
+                                    "text_id": text_id,
+                                    "start_utf8": start_utf8,
+                                    "end_utf8": start_utf8 + "PRIVATE".len(),
+                                    "label": "fixture_private",
+                                    "score": 1.0
+                                }))
+                            })
+                            .collect::<Vec<_>>();
+                        return Ok(json!({"version": 1, "detections": detections}));
+                    }
+                    Ok(json!({
+                        "version": 1,
+                        "request": request,
+                        "provider": provider_name
+                    }))
+                }
+            });
+        }
+        if fixture_flag(config, "provider_only") {
+            return Ok(());
+        }
 
         let runtime = ctx
             .runtime()

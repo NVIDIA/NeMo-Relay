@@ -270,6 +270,7 @@ type LlmRequestFn = Arc<
 type LlmExecutionFn = Arc<dyn Fn(&str, LlmRequest, LlmNext) -> BoxFutureResult<Json> + Send + Sync>;
 type LlmStreamExecutionFn =
     Arc<dyn Fn(&str, LlmRequest, LlmStreamNext) -> BoxFutureResult<JsonStream> + Send + Sync>;
+type LocalModelProviderFn = Arc<dyn Fn(Json) -> BoxFutureResult<Json> + Send + Sync>;
 
 #[derive(Default)]
 struct WorkerHandlers {
@@ -289,6 +290,7 @@ struct WorkerHandlers {
     llm_requests: HashMap<String, LlmRequestFn>,
     llm_executions: HashMap<String, LlmExecutionFn>,
     llm_stream_executions: HashMap<String, LlmStreamExecutionFn>,
+    local_model_providers: HashMap<String, LocalModelProviderFn>,
 }
 
 /// Registration context passed to [`WorkerPlugin::register`].
@@ -328,6 +330,23 @@ impl PluginContext {
         self.handlers
             .subscribers
             .insert(name.into(), Arc::new(callback));
+    }
+
+    /// Registers a named local-model request-response provider.
+    ///
+    /// The provider receives and returns versioned JSON data owned by the
+    /// consuming host component. It does not register middleware or decide
+    /// which runtime fields are sanitized.
+    pub fn register_local_model_provider<F, Fut>(&mut self, name: &str, callback: F)
+    where
+        F: Fn(Json) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Json>> + Send + 'static,
+    {
+        self.push_registration(name, RegistrationSurface::LocalModelProvider, 0, false);
+        self.handlers.local_model_providers.insert(
+            name.into(),
+            Arc::new(move |request| Box::pin(callback(request))),
+        );
     }
 
     fn register_event_sanitizer<F, Fut>(
@@ -1661,6 +1680,12 @@ impl WorkerService {
             | RegistrationSurface::LlmExecutionIntercept => {
                 self.invoke_llm_response(request, &scope, surface).await
             }
+            RegistrationSurface::LocalModelProvider => {
+                let payload = provider_payload(request.payload)?;
+                let handler = self.local_model_provider(&request.registration_name)?;
+                let future = with_thread_scope(&scope, || handler(payload));
+                Ok(json_response(future.await?))
+            }
             RegistrationSurface::LlmStreamExecutionIntercept | RegistrationSurface::Unspecified => {
                 Err(WorkerSdkError::InvalidInput(
                     "surface must use InvokeStream or is unspecified".into(),
@@ -2056,6 +2081,20 @@ impl WorkerService {
                 WorkerSdkError::InvalidInput(format!("llm execution '{name}' not registered"))
             })
     }
+
+    fn local_model_provider(&self, name: &str) -> Result<LocalModelProviderFn> {
+        self.handlers
+            .lock()
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
+            .local_model_providers
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!(
+                    "local-model provider '{name}' not registered"
+                ))
+            })
+    }
 }
 
 struct ToolPayload {
@@ -2169,6 +2208,19 @@ fn llm_payload(
             sanitize_context: value.sanitize_context,
         }),
         _ => Err(WorkerSdkError::InvalidInput("expected llm payload".into())),
+    }
+}
+
+fn provider_payload(
+    payload: Option<nemo_relay_worker_proto::v1::invoke_request::Payload>,
+) -> Result<Json> {
+    match payload {
+        Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Provider(value)) => {
+            decode_json_envelope::<Json>(&value).map_err(Into::into)
+        }
+        _ => Err(WorkerSdkError::InvalidInput(
+            "expected local-model provider payload".into(),
+        )),
     }
 }
 
@@ -2495,6 +2547,7 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
         RegistrationSurface::MarkSanitizeGuardrail,
         RegistrationSurface::ScopeSanitizeStartGuardrail,
         RegistrationSurface::ScopeSanitizeEndGuardrail,
+        RegistrationSurface::LocalModelProvider,
     ]
 }
 

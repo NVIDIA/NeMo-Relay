@@ -70,5 +70,8 @@ pub mod shared_runtime;
 pub mod stream;
 
 #[cfg(test)]
+#[path = "../tests/unit/local_model_tests.rs"]
+mod local_model_tests;
+#[cfg(test)]
 #[path = "../tests/unit/types_tests.rs"]
 mod types_tests;

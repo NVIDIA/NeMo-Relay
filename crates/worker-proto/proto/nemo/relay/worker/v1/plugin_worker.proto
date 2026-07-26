@@ -52,6 +52,7 @@ enum RegistrationSurface {
   MARK_SANITIZE_GUARDRAIL = 30;
   SCOPE_SANITIZE_START_GUARDRAIL = 31;
   SCOPE_SANITIZE_END_GUARDRAIL = 32;
+  LOCAL_MODEL_PROVIDER = 40;
 }
 
 enum LlmCodecKind {
@@ -158,6 +159,7 @@ message InvokeRequest {
     JsonEnvelope event = 10;
     ToolInvocation tool = 11;
     LlmInvocation llm = 12;
+    JsonEnvelope provider = 13;
   }
 }
 

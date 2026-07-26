@@ -300,6 +300,7 @@ impl PluginHostActivation {
         #[cfg(feature = "worker-grpc")]
         if let Some(worker) = &mut self.worker {
             runtime_outcome.merge(worker.deregister_plugin_kinds_checked());
+            runtime_outcome.merge(worker.deregister_local_model_providers_checked());
         }
 
         // A worker cannot be stopped while its registry adapter might still be

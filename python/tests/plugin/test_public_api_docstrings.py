@@ -35,6 +35,7 @@ _TYPE_ALIASES = {
     "LlmRequestCallback",
     "LlmExecutionCallback",
     "LlmStreamExecutionCallback",
+    "LocalModelProviderCallback",
 }
 
 
