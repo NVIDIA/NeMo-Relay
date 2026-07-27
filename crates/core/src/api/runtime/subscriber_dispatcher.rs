@@ -285,6 +285,9 @@ mod native {
                 return None;
             }
         };
+        if sanitizers.is_empty() {
+            return Some(transformed);
+        }
         let original = transformed.clone();
         Some(
             match catch_unwind(AssertUnwindSafe(|| {

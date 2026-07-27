@@ -207,9 +207,7 @@ immediate value or an awaitable. Python LLM sanitizers must still accept both
 the payload and directional context.
 
 Update Rust worker callbacks to use `async move` and return `Result` from the
-future. Python worker sanitizers can return either an immediate value or an
-awaitable, but Python LLM sanitizers must still accept both the payload and
-directional context.
+future.
 
 <Tabs>
 <Tab title="Rust Worker" language="rust">

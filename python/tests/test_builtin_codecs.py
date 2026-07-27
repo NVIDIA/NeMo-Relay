@@ -432,7 +432,7 @@ class TestResponseCodecObjectParam:
             subscribers.deregister("test-manual-call-end-sanitized-response-codec")
             guardrails.deregister_llm_sanitize_response("test-call-end-codec-sanitizer")
 
-    def test_manual_call_end_response_codec_failure_raises_after_end_event(self):
+    def test_manual_call_end_response_codec_failure_defers_without_raising(self):
         """manual llm.call_end() records deferred response codec failures without blocking."""
         captured_events = []
 

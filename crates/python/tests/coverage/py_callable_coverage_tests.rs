@@ -153,8 +153,7 @@ class RaisingResponseCodec:
             "model": "codec-model"
         }))
         .unwrap();
-        let outcome = tokio::runtime::Runtime::new()
-            .unwrap()
+        let outcome = runtime
             .block_on(request_intercept(
                 "llm".to_string(),
                 make_request(),
@@ -170,8 +169,7 @@ class RaisingResponseCodec:
             module.getattr("request_bad_annotated").unwrap().unbind(),
         );
         assert!(
-            tokio::runtime::Runtime::new()
-                .unwrap()
+            runtime
                 .block_on(bad_request_intercept(
                     "llm".to_string(),
                     make_request(),
@@ -186,8 +184,7 @@ class RaisingResponseCodec:
             module.getattr("request_short_tuple").unwrap().unbind(),
         );
         assert!(
-            tokio::runtime::Runtime::new()
-                .unwrap()
+            runtime
                 .block_on(short_request_intercept(
                     "llm".to_string(),
                     make_request(),
@@ -208,15 +205,13 @@ class RaisingResponseCodec:
         let llm_response =
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_bad_json").unwrap().unbind())
                 .unwrap();
-        assert_eq!(
-            tokio::runtime::Runtime::new()
-                .unwrap()
+        assert!(
+            runtime
                 .block_on(llm_response(
                     json!({"ok": true}),
                     nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
                 ))
-                .unwrap(),
-            None
+                .is_err()
         );
 
         let bad_codec = PyLlmCodecWrapper {

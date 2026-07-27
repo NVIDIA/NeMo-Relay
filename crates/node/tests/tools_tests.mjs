@@ -960,7 +960,7 @@ describe('Tool intercepts', () => {
     }
   });
 
-  it('async execute falls back to unknown error for primitive rejections', async () => {
+  it('async execute preserves primitive rejection details', async () => {
     await assert.rejects(
       () =>
         toolCallExecuteAsync(
@@ -974,7 +974,7 @@ describe('Tool intercepts', () => {
           null,
           null,
         ),
-      /unknown error/i,
+      /42/,
     );
   });
 

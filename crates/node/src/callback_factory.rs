@@ -77,13 +77,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
             : (spread ? fn(...arg0, next) : fn(arg0, next))
         )).then((value) => jsonValue(value === undefined ? null : value)).then(resolve, (error) => {
           let message = 'unknown error';
-          if (typeof error === 'string') {
-            message = error;
-          } else {
-            try {
-              message = typeof error?.message === 'string' ? error.message : String(error);
-            } catch {}
-          }
+          try {
+            message = typeof error?.message === 'string' ? error.message : String(error);
+          } catch {}
           reject(message);
         });
       };

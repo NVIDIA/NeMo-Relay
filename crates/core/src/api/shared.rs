@@ -73,7 +73,14 @@ pub(crate) fn snapshot_event_sanitizers(
         let context = global_context();
         let state = match context.read() {
             Ok(state) => state,
-            Err(_) => return None,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_snapshot_failed";
+                    "Event was dropped because the runtime context lock is poisoned: {error}"
+                );
+                return None;
+            }
         };
         match &event {
             Event::Mark(_) => {
