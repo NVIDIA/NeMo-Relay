@@ -646,27 +646,29 @@ fn test_plugin_registration_context_registers_and_rolls_back() {
         .block_on(TestPlugin.register(&Map::new(), &mut ctx))
         .unwrap();
 
-    let request = futures::executor::block_on(llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    ))
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 
-    let request = futures::executor::block_on(llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    ))
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
@@ -690,25 +692,27 @@ fn test_initialize_plugins_registers_and_clears_components() {
     assert!(!report.has_errors());
     assert!(active_plugin_report().is_some());
 
-    let request = futures::executor::block_on(llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    ))
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     clear_plugin_configuration().unwrap();
-    let request = futures::executor::block_on(llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    ))
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }

@@ -1526,8 +1526,11 @@ fn failed_managed_calls_sanitize_fallback_end_data() {
         1,
         Arc::new(move |response, context| {
             let codec = context.codec().clone();
-            sanitizer_inputs.lock().unwrap().push((response, codec));
-            Box::pin(async { Ok(Some(redacted_response())) })
+            let sanitizer_inputs = Arc::clone(&sanitizer_inputs);
+            Box::pin(async move {
+                sanitizer_inputs.lock().unwrap().push((response, codec));
+                Ok(Some(redacted_response()))
+            })
         }),
     )
     .unwrap();

@@ -221,8 +221,8 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
     assert_eq!(merged_exec, vec![("local", 1), ("global", 15)]);
 }
 
-#[test]
-fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
+#[tokio::test]
+async fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
     let mut state = NemoRelayContextState::new();
     state
         .tool_conditional_execution_guardrails
@@ -251,19 +251,16 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
     });
     let subscribers = [subscriber];
 
-    let rejection = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(
-            NemoRelayContextState::tool_conditional_execution_snapshot_chain(
-                "snapshot_target",
-                &json!({}),
-                &entries,
-                &subscribers,
-                None,
-                None,
-            ),
-        )
-        .unwrap();
+    let rejection = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
+        "snapshot_target",
+        &json!({}),
+        &entries,
+        &subscribers,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(rejection.as_deref(), Some("snapshot_target blocked"));
     flush_subscribers().unwrap();

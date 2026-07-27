@@ -110,7 +110,6 @@ fn test_scope_local_guardrail_registration_and_execution() {
     .unwrap();
 
     // The Start event's input should contain the sanitized args.
-    flush_subscribers().unwrap();
     let captured = captured_snapshot(&events);
     let start_event = &captured[0];
     let input = start_event.input().unwrap();

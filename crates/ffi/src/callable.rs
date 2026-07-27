@@ -913,6 +913,10 @@ pub fn wrap_async_llm_execution_intercept_fn(
 }
 
 /// Wrap a completion-based C LLM stream execution intercept.
+///
+/// The completion ABI resolves one JSON value, so a stream intercept must
+/// resolve to an array of chunks. Relay replays that array as a stream after
+/// completion; incremental chunk delivery is not available through this ABI.
 pub fn wrap_async_llm_stream_execution_intercept_fn(
     cb: NemoRelayAsyncInterceptCb,
     user_data: *mut libc::c_void,

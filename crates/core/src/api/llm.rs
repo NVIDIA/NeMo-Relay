@@ -568,29 +568,7 @@ async fn emit_optimization_marks_with_async<F, Fut>(
         return;
     }
     for (contribution, recorded_at) in contributions {
-        let offset = contribution.sequence.unwrap_or(0).saturating_add(2);
-        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let request_ordered_timestamp = handle.started_at + TimeDelta::microseconds(offset);
-        let timestamp = recorded_at.max(request_ordered_timestamp);
-        let data = serde_json::to_value(&contribution).unwrap_or(Json::Null);
-        let event = Event::Mark(MarkEvent::new(
-            BaseEvent::builder()
-                .name("nemo_relay.llm.optimization")
-                .parent_uuid(handle.uuid)
-                .timestamp(timestamp)
-                .data(data)
-                .data_schema(DataSchema {
-                    name: "nemo.relay.llm_optimization_contribution".to_string(),
-                    version: "1".to_string(),
-                })
-                .build(),
-            Some(EventCategory::custom()),
-            Some(
-                CategoryProfile::builder()
-                    .subtype("nemo_relay.llm.optimization")
-                    .build(),
-            ),
-        ));
+        let event = optimization_mark_event(handle, &contribution, recorded_at);
         let Some(event) = sanitize(event).await else {
             // Sanitizers currently rewrite fields rather than intentionally
             // dropping events. `None` means the sanitizer context was
@@ -606,6 +584,34 @@ async fn emit_optimization_marks_with_async<F, Fut>(
             break;
         }
     }
+}
+
+fn optimization_mark_event(
+    handle: &LlmHandle,
+    contribution: &crate::codec::optimization::LlmOptimizationContribution,
+    recorded_at: DateTime<Utc>,
+) -> Event {
+    let offset = contribution.sequence.unwrap_or(0).saturating_add(2);
+    let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+    let request_ordered_timestamp = handle.started_at + TimeDelta::microseconds(offset);
+    Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("nemo_relay.llm.optimization")
+            .parent_uuid(handle.uuid)
+            .timestamp(recorded_at.max(request_ordered_timestamp))
+            .data(serde_json::to_value(contribution).unwrap_or(Json::Null))
+            .data_schema(DataSchema {
+                name: "nemo.relay.llm_optimization_contribution".to_string(),
+                version: "1".to_string(),
+            })
+            .build(),
+        Some(EventCategory::custom()),
+        Some(
+            CategoryProfile::builder()
+                .subtype("nemo_relay.llm.optimization")
+                .build(),
+        ),
+    ))
 }
 
 /// Synchronous test seam for optimization-mark accounting. Production paths
@@ -625,26 +631,7 @@ fn emit_optimization_marks_with<F>(
         return;
     }
     for (contribution, recorded_at) in contributions {
-        let offset =
-            i64::try_from(contribution.sequence.unwrap_or(0).saturating_add(2)).unwrap_or(i64::MAX);
-        let event = Event::Mark(MarkEvent::new(
-            BaseEvent::builder()
-                .name("nemo_relay.llm.optimization")
-                .parent_uuid(handle.uuid)
-                .timestamp((handle.started_at + TimeDelta::microseconds(offset)).max(recorded_at))
-                .data(serde_json::to_value(&contribution).unwrap_or(Json::Null))
-                .data_schema(DataSchema {
-                    name: "nemo.relay.llm_optimization_contribution".to_string(),
-                    version: "1".to_string(),
-                })
-                .build(),
-            Some(EventCategory::custom()),
-            Some(
-                CategoryProfile::builder()
-                    .subtype("nemo_relay.llm.optimization")
-                    .build(),
-            ),
-        ));
+        let event = optimization_mark_event(handle, &contribution, recorded_at);
         let Some(event) = sanitize(event) else {
             break;
         };
