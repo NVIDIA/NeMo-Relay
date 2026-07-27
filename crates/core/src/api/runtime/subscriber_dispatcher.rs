@@ -41,6 +41,9 @@ mod native {
         Flush {
             done: Sender<()>,
         },
+        Barrier {
+            done: Receiver<()>,
+        },
     }
 
     static DISPATCHER: OnceLock<std::result::Result<Sender<DispatcherMessage>, String>> =
@@ -130,6 +133,18 @@ mod native {
         }
     }
 
+    /// Insert a FIFO barrier for work that will enqueue a publication from an
+    /// async task. A later flush waits for the task to signal completion, then
+    /// drains the event it queued before acknowledging the flush.
+    pub(super) fn register_async_publication() -> Option<Sender<()>> {
+        let sender = dispatcher_sender().ok()?;
+        let (done_tx, done_rx) = mpsc::channel();
+        sender
+            .send(DispatcherMessage::Barrier { done: done_rx })
+            .ok()
+            .map(|_| done_tx)
+    }
+
     pub(super) fn flush_subscribers() -> Result<()> {
         if IN_DISPATCHER.with(Cell::get) {
             return Ok(());
@@ -183,6 +198,9 @@ mod native {
                         let _ = pending.send(());
                     }
                 }
+                DispatcherMessage::Barrier { done } => {
+                    let _ = done.recv();
+                }
                 message => handle_message(message),
             }
         }
@@ -193,6 +211,9 @@ mod native {
         while let Ok(message) = rx.try_recv() {
             match message {
                 DispatcherMessage::Flush { done } => pending_flushes.push(done),
+                DispatcherMessage::Barrier { done } => {
+                    let _ = done.recv();
+                }
                 message => handle_message(message),
             }
         }
@@ -210,6 +231,9 @@ mod native {
             } => deliver_event(event, transform, sanitizers, subscribers, scope_stack),
             DispatcherMessage::Flush { done } => {
                 let _ = done.send(());
+            }
+            DispatcherMessage::Barrier { done } => {
+                let _ = done.recv();
             }
         }
     }
@@ -336,6 +360,14 @@ pub(crate) fn dispatch_transformed_event(
     scope_stack: ScopeStackHandle,
 ) -> bool {
     native::dispatch_transformed_event(event, transform, sanitizers, subscribers, scope_stack)
+}
+
+/// Register a FIFO barrier for async work that will queue a subscriber event.
+///
+/// Dropping the returned sender releases the barrier, so error paths cannot
+/// leave the dispatcher blocked.
+pub(crate) fn register_async_publication() -> Option<std::sync::mpsc::Sender<()>> {
+    native::register_async_publication()
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.
