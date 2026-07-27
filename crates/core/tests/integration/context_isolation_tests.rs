@@ -127,6 +127,25 @@ fn test_propagation_context_rejects_invalid_wire_values() {
 }
 
 #[test]
+fn test_propagation_context_json_round_trips_and_validates_input() {
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(Uuid::now_v7()),
+        parent_uuid: Uuid::now_v7(),
+    };
+
+    let json = context.to_json().unwrap();
+    assert_eq!(PropagationContext::from_json(&json).unwrap(), context);
+    assert!(PropagationContext::from_json("not JSON").is_err());
+    assert!(
+        PropagationContext::from_json(
+            r#"{"version":2,"parent_uuid":"018f13f0-7c1a-7a80-8000-000000000002"}"#,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn test_pop_scope_rejects_non_top_and_unknown_handles() {
     set_thread_scope_stack(create_scope_stack());
 

@@ -1578,6 +1578,37 @@ type PropagationContext struct {
 	ParentUUID string  `json:"parent_uuid"`
 }
 
+// ToJSON serializes a validated propagation context for application-managed transport.
+func (context PropagationContext) ToJSON() (string, error) {
+	if err := validatePropagationContext(context); err != nil {
+		return "", err
+	}
+	// PropagationContext has only JSON-native fields, so marshaling cannot fail.
+	payload, _ := json.Marshal(context)
+	return string(payload), nil
+}
+
+// PropagationContextFromJSON deserializes and validates a transport context.
+func PropagationContextFromJSON(value string) (PropagationContext, error) {
+	var context PropagationContext
+	if err := json.Unmarshal([]byte(value), &context); err != nil {
+		return PropagationContext{}, err
+	}
+	if err := validatePropagationContext(context); err != nil {
+		return PropagationContext{}, err
+	}
+	return context, nil
+}
+
+func validatePropagationContext(context PropagationContext) error {
+	stack, err := NewScopeStackFromPropagation(context)
+	if err != nil {
+		return err
+	}
+	stack.Close()
+	return nil
+}
+
 // CapturePropagationContext captures the current Relay causal parent.
 func CapturePropagationContext() (PropagationContext, error) {
 	var out *C.char
@@ -1585,11 +1616,7 @@ func CapturePropagationContext() (PropagationContext, error) {
 		return PropagationContext{}, err
 	}
 	defer C.nemo_relay_string_free(out)
-	var context PropagationContext
-	if err := json.Unmarshal([]byte(C.GoString(out)), &context); err != nil {
-		return PropagationContext{}, err
-	}
-	return context, nil
+	return PropagationContextFromJSON(C.GoString(out))
 }
 
 // CapturePropagationContextWithRoot captures the current parent with an
@@ -1605,11 +1632,7 @@ func CapturePropagationContextWithRoot(rootUUID *string) (PropagationContext, er
 		return PropagationContext{}, err
 	}
 	defer C.nemo_relay_string_free(out)
-	var context PropagationContext
-	if err := json.Unmarshal([]byte(C.GoString(out)), &context); err != nil {
-		return PropagationContext{}, err
-	}
-	return context, nil
+	return PropagationContextFromJSON(C.GoString(out))
 }
 
 // NewScopeStack creates a new isolated scope stack.

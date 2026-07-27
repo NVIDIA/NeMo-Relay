@@ -19,6 +19,8 @@ const {
   ScopeType,
   ScopeStack,
   createScopeStackFromPropagation,
+  propagationContextFromJson,
+  propagationContextToJson,
   withScopeStack,
 } = lib;
 
@@ -46,6 +48,26 @@ describe('Context isolation', () => {
     }
   });
 
+  it('serializes and validates propagation contexts for transport', () => {
+    const context = {
+      version: 1,
+      rootUuid: '018f13f0-7c1a-7a80-8000-000000000001',
+      parentUuid: '018f13f0-7c1a-7a80-8000-000000000002',
+    };
+    const encoded = propagationContextToJson(context);
+    assert.deepEqual(JSON.parse(encoded), {
+      version: 1,
+      root_uuid: context.rootUuid,
+      parent_uuid: context.parentUuid,
+    });
+    assert.deepEqual(propagationContextFromJson(encoded), context);
+    assert.throws(() => propagationContextFromJson('not JSON'), /invalid propagation context JSON/);
+    assert.throws(
+      () => propagationContextFromJson(`{"version":2,"parent_uuid":"${context.parentUuid}"}`),
+      /unsupported propagation context version 2; expected 1/,
+    );
+  });
+
   it('restores the surrounding stack after withScopeStack', () => {
     const original = currentScopeStack();
     const originalUuid = getHandle().uuid;
@@ -56,7 +78,13 @@ describe('Context isolation', () => {
         assert.equal(getHandle().name, 'temporary-with-scope-stack');
       });
       assert.notEqual(getHandle().name, 'temporary-with-scope-stack');
-      assert.throws(() => withScopeStack(stack, () => { throw new Error('expected'); }), /expected/);
+      assert.throws(
+        () =>
+          withScopeStack(stack, () => {
+            throw new Error('expected');
+          }),
+        /expected/,
+      );
       assert.equal(getHandle().uuid, originalUuid);
     } finally {
       setThreadScopeStack(original);

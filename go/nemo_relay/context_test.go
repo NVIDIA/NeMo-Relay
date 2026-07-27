@@ -332,6 +332,49 @@ func TestPropagationContextCaptureAndValidation(t *testing.T) {
 	}
 }
 
+func TestPropagationContextJSONRoundTripAndValidation(t *testing.T) {
+	rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
+	context := PropagationContext{
+		Version:    1,
+		RootUUID:   &rootUUID,
+		ParentUUID: "018f13f0-7c1a-7a80-8000-000000000002",
+	}
+
+	payload, err := context.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal([]byte(payload), &wire); err != nil {
+		t.Fatalf("serialized context was not JSON: %v", err)
+	}
+	if wire["version"] != float64(1) || wire["root_uuid"] != rootUUID || wire["parent_uuid"] != context.ParentUUID {
+		t.Fatalf("unexpected propagation JSON: %s", payload)
+	}
+
+	decoded, err := PropagationContextFromJSON(payload)
+	if err != nil {
+		t.Fatalf("PropagationContextFromJSON failed: %v", err)
+	}
+	if decoded.Version != context.Version || decoded.RootUUID == nil || *decoded.RootUUID != rootUUID || decoded.ParentUUID != context.ParentUUID {
+		t.Fatalf("expected round-tripped context %+v, got %+v", context, decoded)
+	}
+
+	for _, payload := range []string{
+		"not JSON",
+		`{"version":2,"parent_uuid":"018f13f0-7c1a-7a80-8000-000000000002"}`,
+		`{"version":1,"parent_uuid":"not-a-uuid"}`,
+	} {
+		if _, err := PropagationContextFromJSON(payload); err == nil {
+			t.Fatalf("expected invalid context JSON to be rejected: %s", payload)
+		}
+	}
+
+	if _, err := (PropagationContext{Version: 1, ParentUUID: "not-a-uuid"}).ToJSON(); err == nil {
+		t.Fatal("expected ToJSON to reject an invalid propagation context")
+	}
+}
+
 func TestNewScopeStackFromRootlessAndRootParentPropagation(t *testing.T) {
 	parentUUID := "018f13f0-7c1a-7a80-8000-000000000004"
 	for _, context := range []PropagationContext{

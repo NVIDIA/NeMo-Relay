@@ -56,6 +56,21 @@ impl PropagationContext {
     /// The current wire-format version.
     pub const VERSION: u16 = 1;
 
+    /// Serialize this validated context for application-managed transport.
+    pub fn to_json(&self) -> Result<String> {
+        self.validate()?;
+        Ok(serde_json::to_string(self).expect("PropagationContext is always JSON serializable"))
+    }
+
+    /// Deserialize and validate a context received from application-managed transport.
+    pub fn from_json(value: &str) -> Result<Self> {
+        let context: Self = serde_json::from_str(value).map_err(|error| {
+            FlowError::InvalidArgument(format!("invalid propagation context JSON: {error}"))
+        })?;
+        context.validate()?;
+        Ok(context)
+    }
+
     /// Validate a context received from an untrusted transport.
     pub fn validate(&self) -> Result<()> {
         if self.version != Self::VERSION {

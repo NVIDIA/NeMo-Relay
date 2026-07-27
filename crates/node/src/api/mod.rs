@@ -1803,6 +1803,22 @@ pub fn capture_propagation_context_with_root(
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
+/// Serialize a Relay causal context to the JSON wire format.
+#[napi]
+pub fn propagation_context_to_json(context: PropagationContext) -> napi::Result<String> {
+    propagation_context_from_napi(context)?
+        .to_json()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Deserialize and validate a Relay causal context from the JSON wire format.
+#[napi]
+pub fn propagation_context_from_json(value: String) -> napi::Result<PropagationContext> {
+    nemo_relay::api::runtime::PropagationContext::from_json(&value)
+        .map(propagation_context_to_napi)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
 /// Create an isolated scope stack seeded from a received propagation context.
 #[napi]
 pub fn create_scope_stack_from_propagation(

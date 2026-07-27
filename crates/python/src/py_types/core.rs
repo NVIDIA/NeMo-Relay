@@ -243,6 +243,21 @@ impl PyPropagationContext {
     fn parent_uuid(&self) -> String {
         self.inner.parent_uuid.to_string()
     }
+
+    /// Serialize this context to the Relay JSON wire format.
+    fn to_json(&self) -> PyResult<String> {
+        self.inner
+            .to_json()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    }
+
+    /// Deserialize and validate a context from the Relay JSON wire format.
+    #[staticmethod]
+    fn from_json(value: &str) -> PyResult<Self> {
+        PropagationContext::from_json(value)
+            .map(|inner| Self { inner })
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
