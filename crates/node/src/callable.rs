@@ -764,6 +764,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
                 .map_err(|error| FlowError::Internal(format!(
                     "JS LLM sanitize request callback failed: failed to deserialize LlmRequest: {error}"
                 )))
+                .inspect_err(|error| record_callback_error(error.to_string()))
             })
         },
     )

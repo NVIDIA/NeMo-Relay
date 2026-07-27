@@ -69,7 +69,17 @@ pub(crate) fn snapshot_event_sanitizers(
     scope_stack: &ScopeStackHandle,
 ) -> Option<Vec<Guardrail<EventSanitizeFn>>> {
     let entries = {
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = match scope_stack.read() {
+            Ok(guard) => guard,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_snapshot_failed";
+                    "Event was dropped because the scope stack lock is poisoned: {error}"
+                );
+                return None;
+            }
+        };
         let context = global_context();
         let state = match context.read() {
             Ok(state) => state,

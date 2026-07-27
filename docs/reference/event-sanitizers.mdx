@@ -191,7 +191,10 @@ activation fails.
 The source-first C API retains `NemoRelayEventSanitizeCb` and adds parallel
 completion-based async registration APIs. An async callback returns `Complete`
 or `Pending` and settles its one-shot completion handle with resolve or reject;
-there is no implicit timeout. Global names start with `nemo_relay_register_`,
+there is no implicit timeout. A callback that returns `Pending` must settle the
+handle exactly once, or serial event publication remains blocked. Relay cancels
+the handle when the invocation is abandoned; late or duplicate settlement after
+cancellation is rejected safely. Global names start with `nemo_relay_register_`,
 and scope-local names start with `nemo_relay_scope_register_`.
 
 The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, and

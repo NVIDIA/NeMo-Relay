@@ -621,6 +621,20 @@ describe('Tool guardrails', () => {
     }
   });
 
+  it('conditional guardrail propagates a rejected Promise', async () => {
+    registerToolConditionalExecutionGuardrail('node_tool_cond_reject', 10, async () => {
+      throw new Error('guardrail rejected promise');
+    });
+    try {
+      await assert.rejects(
+        () => toolCallExecute('tool_cond_reject', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        /guardrail rejected promise/i,
+      );
+    } finally {
+      deregisterToolConditionalExecutionGuardrail('node_tool_cond_reject');
+    }
+  });
+
   it('conditional guardrail treats implicit undefined as allow', async () => {
     registerToolConditionalExecutionGuardrail('node_tool_cond_undefined', 10, () => undefined);
     try {
@@ -801,10 +815,32 @@ describe('Tool intercepts', () => {
       return { ...args, promised: true };
     });
     try {
-      const result = await toolCallExecute('tool_req_promise', { original: true }, (args) => args, null, null, null, null);
+      const result = await toolCallExecute(
+        'tool_req_promise',
+        { original: true },
+        (args) => args,
+        null,
+        null,
+        null,
+        null,
+      );
       assert.deepEqual(result, { original: true, promised: true });
     } finally {
       deregisterToolRequestIntercept('node_tool_req_promise');
+    }
+  });
+
+  it('request intercept propagates a rejected Promise', async () => {
+    registerToolRequestIntercept('node_tool_req_reject', 10, false, async () => {
+      throw new Error('request intercept rejected promise');
+    });
+    try {
+      await assert.rejects(
+        () => toolCallExecute('tool_req_reject', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        /request intercept rejected promise/i,
+      );
+    } finally {
+      deregisterToolRequestIntercept('node_tool_req_reject');
     }
   });
 
