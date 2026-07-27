@@ -124,11 +124,6 @@ async fn invoke_async_json(
     user_data: Arc<UserData>,
     invocation: Json,
 ) -> Result<Json> {
-    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-        FlowError::Internal(format!(
-            "async C intercept requires a Tokio runtime: {error}"
-        ))
-    })?;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
@@ -166,6 +161,11 @@ async fn invoke_async_intercept(
     invocation: Json,
     next: AsyncNextInner,
 ) -> Result<Json> {
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+        FlowError::Internal(format!(
+            "async C intercept requires a Tokio runtime: {error}"
+        ))
+    })?;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
