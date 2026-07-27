@@ -132,6 +132,7 @@ from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
 )
+from nemo_relay._native import restore_thread_scope_stack as _restore_thread_scope_stack
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
 from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
@@ -432,7 +433,7 @@ def use_scope_stack(stack: ScopeStack):
         yield stack
     finally:
         _scope_stack_var.reset(token)
-        _sync_thread_scope_stack(previous_native_stack)
+        _restore_thread_scope_stack(previous_native_stack)
 
 
 def set_thread_scope_stack(stack: ScopeStack) -> None:

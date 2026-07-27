@@ -22,8 +22,9 @@ use nemo_relay::api::runtime::{
     capture_thread_scope_stack as capture_thread_scope_stack_handle,
     create_scope_stack as create_scope_stack_handle,
     create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
-    current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
-    set_thread_scope_stack as bind_thread_scope_stack,
+    current_scope_stack as current_scope_stack_handle,
+    restore_thread_scope_stack as restore_thread_scope_stack_handle,
+    scope_stack_active as scope_stack_is_active, set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
 use nemo_relay::api::scope as core_scope_api;
@@ -43,7 +44,8 @@ use crate::py_callable;
 use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest,
     PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
-    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyToolAttributes, PyToolHandle,
+    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
+    PyToolAttributes, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -213,8 +215,15 @@ pub fn set_thread_scope_stack(stack: &PyScopeStack) {
 
 /// Capture the scope stack currently installed in native thread-local storage.
 #[pyfunction]
-pub fn capture_thread_scope_stack() -> PyScopeStack {
-    PyScopeStack(capture_thread_scope_stack_handle().stack())
+pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
+    PyThreadScopeStackBinding(capture_thread_scope_stack_handle())
+}
+
+/// Restore a complete native thread binding captured by
+/// [`capture_thread_scope_stack`].
+#[pyfunction]
+pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
+    restore_thread_scope_stack_handle(binding.0.clone());
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
@@ -1787,6 +1796,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_scope_stack_from_propagation, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(restore_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(sync_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(py_scope_stack_active, m)?)?;
 

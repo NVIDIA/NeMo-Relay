@@ -16,6 +16,7 @@ use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::runtime::{
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
+    ThreadScopeStackBinding,
 };
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 
@@ -187,6 +188,17 @@ pub struct PyScopeStack(pub ScopeStackHandle);
 impl PyScopeStack {
     pub(crate) fn __repr__(&self) -> String {
         "<ScopeStack>".to_string()
+    }
+}
+
+/// Opaque captured native thread binding used to restore a Python scope context.
+#[pyclass(name = "_ThreadScopeStackBinding")]
+pub struct PyThreadScopeStackBinding(pub ThreadScopeStackBinding);
+
+#[pymethods]
+impl PyThreadScopeStackBinding {
+    pub(crate) fn __repr__(&self) -> String {
+        "<_ThreadScopeStackBinding>".to_string()
     }
 }
 

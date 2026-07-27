@@ -9,7 +9,7 @@ use crate::api::event::{
     tool_attributes_to_strings,
 };
 use crate::api::runtime::{
-    NemoRelayContextState, PropagationContext, capture_thread_scope_stack,
+    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding, capture_thread_scope_stack,
     create_scope_stack_from_propagation, global_context, restore_thread_scope_stack,
     set_thread_scope_stack,
 };
@@ -38,6 +38,14 @@ struct ResetPricingResolverGuard;
 impl Drop for ResetPricingResolverGuard {
     fn drop(&mut self) {
         let _ = reset_active_pricing_resolver();
+    }
+}
+
+struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
+
+impl Drop for RestoreThreadScopeStackGuard {
+    fn drop(&mut self) {
+        restore_thread_scope_stack(self.0.clone());
     }
 }
 
@@ -338,7 +346,7 @@ fn make_start_event(
 #[test]
 fn propagated_root_parent_projects_as_a_remote_otel_parent() {
     let root_uuid = Uuid::now_v7();
-    let previous_stack = capture_thread_scope_stack();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
     let imported_stack = create_scope_stack_from_propagation(&PropagationContext {
         version: PropagationContext::VERSION,
         root_uuid: Some(root_uuid),
@@ -355,8 +363,6 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
         ScopeType::Tool,
         None,
     ));
-    restore_thread_scope_stack(previous_stack);
-
     let parent_span = parent_context.span();
     let span_context = parent_span.span_context();
     assert!(span_context.is_remote());
