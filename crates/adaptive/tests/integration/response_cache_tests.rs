@@ -4,8 +4,12 @@
 //! End-to-end tests for the adaptive plugin's `response_cache` feature
 //! (exact-match).
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{
@@ -13,8 +17,8 @@ use nemo_relay::api::llm::{
     llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, NemoRelayContextState,
-    global_context,
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
+    NemoRelayContextState, global_context,
 };
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -28,7 +32,7 @@ use nemo_relay_adaptive::{
 };
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 
 #[path = "response_cache_common.rs"]
 mod response_cache_common;
@@ -98,10 +102,63 @@ fn counting_stream_provider(
     })
 }
 
-/// Runs one managed streaming call and drains it, returning the chunks the
-/// caller observed (after the cache intercept and the managed pipeline).
-async fn stream_call(provider: &LlmStreamExecutionNextFn, request: LlmRequest) -> Vec<Json> {
-    let mut stream = llm_stream_call_execute(
+struct CloseTrackingStream {
+    stream: Pin<Box<dyn Stream<Item = Result<Json, FlowError>> + Send>>,
+    close_calls: Arc<AtomicUsize>,
+    close_error: Option<FlowError>,
+    closed: bool,
+}
+
+impl Stream for CloseTrackingStream {
+    type Item = Result<Json, FlowError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.closed {
+            Poll::Ready(None)
+        } else {
+            self.stream.as_mut().poll_next(cx)
+        }
+    }
+}
+
+impl LlmStreamInner for CloseTrackingStream {
+    fn close(
+        mut self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FlowError>> + Send + '_>> {
+        self.closed = true;
+        self.close_calls.fetch_add(1, Ordering::SeqCst);
+        let close_error = self.close_error.clone();
+        Box::pin(async move { close_error.map_or(Ok(()), Err) })
+    }
+}
+
+fn close_tracking_stream_provider(
+    calls: Arc<AtomicUsize>,
+    close_calls: Arc<AtomicUsize>,
+    chunks: Vec<Json>,
+    close_error: Option<FlowError>,
+) -> LlmStreamExecutionNextFn {
+    Arc::new(move |_req: LlmRequest| {
+        let calls = Arc::clone(&calls);
+        let close_calls = Arc::clone(&close_calls);
+        let chunks = chunks.clone();
+        let close_error = close_error.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(LlmJsonStream::from_closeable(CloseTrackingStream {
+                stream: Box::pin(tokio_stream::iter(
+                    chunks.into_iter().map(Ok::<Json, FlowError>),
+                )),
+                close_calls,
+                close_error,
+                closed: false,
+            }))
+        })
+    })
+}
+
+async fn start_stream(provider: &LlmStreamExecutionNextFn, request: LlmRequest) -> LlmJsonStream {
+    llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
             .name("openai")
             .request(request)
@@ -112,7 +169,13 @@ async fn stream_call(provider: &LlmStreamExecutionNextFn, request: LlmRequest) -
             .build(),
     )
     .await
-    .unwrap();
+    .unwrap()
+}
+
+/// Runs one managed streaming call and drains it, returning the chunks the
+/// caller observed (after the cache intercept and the managed pipeline).
+async fn stream_call(provider: &LlmStreamExecutionNextFn, request: LlmRequest) -> Vec<Json> {
+    let mut stream = start_stream(provider, request).await;
     let mut collected = Vec::new();
     while let Some(item) = stream.next().await {
         collected.push(item.unwrap());
@@ -185,6 +248,7 @@ async fn cosmetic_noise_still_hits_the_cache() {
         content: json!({
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.0,
             "stream": false,
             "user": "user-A"
         }),
@@ -195,7 +259,8 @@ async fn cosmetic_noise_still_hits_the_cache() {
             "user": "user-B",
             "stream": true,
             "messages": [{"role": "user", "content": "hello"}],
-            "model": "gpt-4o"
+            "model": "gpt-4o",
+            "temperature": 0.0
         }),
     };
 
@@ -235,6 +300,67 @@ async fn stateful_responses_calls_bypass_the_cache() {
         2,
         "stateful Responses calls (store=true) must never be cached"
     );
+}
+
+#[tokio::test]
+async fn nondeterministic_calls_emit_bypass_marks_and_run_live() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(ResponseCacheConfig {
+        cache_nondeterministic: false,
+        ..ResponseCacheConfig::default()
+    })
+    .await;
+
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let sink = Arc::clone(&captured);
+    register_subscriber(
+        "response_cache_nondeterministic_bypass_capture",
+        Arc::new(move |event: &Event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_provider(Arc::clone(&calls), sample_body());
+    let sampled = || LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "sampled"}],
+            "temperature": 0.7
+        }),
+    };
+
+    call(&provider, sampled()).await;
+    call(&provider, sampled()).await;
+    flush_subscribers().unwrap();
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "nondeterministic calls must run live when caching them is disabled"
+    );
+    let bypasses = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("bypass")
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nemo_relay.response_cache.reason"))
+                    .and_then(Json::as_str)
+                    == Some("nondeterministic_temperature")
+        })
+        .count();
+    assert_eq!(bypasses, 2, "each live call must emit its bypass decision");
+
+    deregister_subscriber("response_cache_nondeterministic_bypass_capture").unwrap();
 }
 
 #[tokio::test]
@@ -581,6 +707,107 @@ async fn streaming_repeat_is_a_hit_that_skips_the_provider_and_replays_the_aggre
         .find(|chunk| chunk.get("usage").is_some())
         .expect("the replay must carry a usage chunk");
     assert_eq!(usage_chunk["usage"]["total_tokens"], json!(14));
+}
+
+#[tokio::test]
+async fn partially_consumed_stream_close_does_not_cache_and_closes_upstream_once() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(ResponseCacheConfig::default()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let provider = close_tracking_stream_provider(
+        Arc::clone(&calls),
+        Arc::clone(&close_calls),
+        openai_chat_stream_chunks(),
+        None,
+    );
+
+    let mut first = start_stream(&provider, chat_request("close early")).await;
+    assert!(first.next().await.unwrap().is_ok());
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while close_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the tee should drain and close the short upstream stream");
+
+    first.close().await.unwrap();
+    first.close().await.unwrap();
+    assert!(first.next().await.is_none());
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+
+    stream_call(&provider, chat_request("close early")).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "closing before consumer-observed EOF must not populate the cache"
+    );
+    assert_eq!(close_calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn stream_cleanup_error_is_idempotent_and_prevents_caching() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(ResponseCacheConfig::default()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let provider = close_tracking_stream_provider(
+        Arc::clone(&calls),
+        Arc::clone(&close_calls),
+        openai_chat_stream_chunks(),
+        Some(FlowError::NotFound("cache tee cleanup failed".into())),
+    );
+
+    let mut first = start_stream(&provider, chat_request("cleanup failure")).await;
+    assert!(first.next().await.unwrap().is_ok());
+    for _ in 0..2 {
+        let error = first.close().await.expect_err("close should fail");
+        assert!(error.to_string().contains("cache tee cleanup failed"));
+        assert!(matches!(error, FlowError::NotFound(_)));
+    }
+    assert!(first.next().await.is_none());
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+
+    let mut second = start_stream(&provider, chat_request("cleanup failure")).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "an upstream cleanup failure must prevent the cache write"
+    );
+    assert!(second.close().await.is_err());
+    assert_eq!(close_calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn naturally_completed_stream_closes_upstream_before_cache_commit() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(ResponseCacheConfig::default()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let provider = close_tracking_stream_provider(
+        Arc::clone(&calls),
+        Arc::clone(&close_calls),
+        openai_chat_stream_chunks(),
+        None,
+    );
+
+    stream_call(&provider, chat_request("natural completion")).await;
+    assert_eq!(
+        close_calls.load(Ordering::SeqCst),
+        1,
+        "upstream must already be closed once the consumer observes natural EOF"
+    );
+
+    stream_call(&provider, chat_request("natural completion")).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1006,7 +1233,11 @@ async fn no_codec_system_less_anthropic_uses_provider_hint_and_caches() {
     let provider = counting_stream_provider(Arc::clone(&calls), anthropic_stream_chunks());
     let body = || LlmRequest {
         headers: serde_json::Map::new(),
-        content: json!({"model": "claude-haiku-4-5", "messages": [{"role": "user", "content": "hi"}]}),
+        content: json!({
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.0
+        }),
     };
 
     stream_call_named("anthropic.messages", &provider, body()).await; // miss -> stores

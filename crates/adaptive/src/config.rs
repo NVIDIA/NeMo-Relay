@@ -224,7 +224,7 @@ impl Default for ResponseCacheConfig {
             namespace: String::new(),
             priority: 50,
             bypass_rate: 0.0,
-            cache_nondeterministic: true,
+            cache_nondeterministic: false,
             key_strategy: KEY_STRATEGY_EXACT_REQUEST.to_string(),
             header_allowlist: Vec::new(),
             skip_keys: Vec::new(),

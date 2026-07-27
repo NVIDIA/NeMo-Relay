@@ -28,6 +28,9 @@ fn test_typed_section_helpers_default() {
 
     let tool_parallelism = ToolParallelismComponentConfig::default();
     assert_eq!(tool_parallelism.mode, "observe_only");
+
+    let response_cache = ResponseCacheConfig::default();
+    assert!(!response_cache.cache_nondeterministic);
 }
 
 #[test]

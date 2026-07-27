@@ -316,6 +316,11 @@ async fn reinitialized_cache_starts_empty() {
     let second_run = run_once("bench_determinism_b").await;
 
     assert_eq!(
+        first_run, 5,
+        "the first workload must cache all five repeats"
+    );
+    assert_eq!(second_run, 5, "the fresh cache must cache all five repeats");
+    assert_eq!(
         first_run, second_run,
         "entries must not leak across plugin re-initialization: a leaked store \
          would let the second run hit on the first run's distinct prompts"

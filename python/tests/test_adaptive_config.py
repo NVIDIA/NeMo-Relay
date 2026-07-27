@@ -163,7 +163,7 @@ class TestDynamicConfigContract:
             "namespace": "",
             "priority": 50,
             "bypass_rate": 0.0,
-            "cache_nondeterministic": True,
+            "cache_nondeterministic": False,
             "key_strategy": "exact_request",
             "header_allowlist": [],
             "skip_keys": [],

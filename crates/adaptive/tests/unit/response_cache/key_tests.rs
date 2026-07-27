@@ -31,6 +31,13 @@ fn request(content: Json) -> LlmRequest {
     }
 }
 
+fn cache_all_config() -> ResponseCacheConfig {
+    ResponseCacheConfig {
+        cache_nondeterministic: true,
+        ..ResponseCacheConfig::default()
+    }
+}
+
 fn key_of(provider: &str, request: &LlmRequest, config: &ResponseCacheConfig) -> String {
     match build_cache_key(provider, request, config) {
         KeyOutcome::Key(key) => key,
@@ -40,7 +47,7 @@ fn key_of(provider: &str, request: &LlmRequest, config: &ResponseCacheConfig) ->
 
 #[test]
 fn field_order_and_whitespace_do_not_change_the_key() {
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let first = request(
         json!({"model": "m", "messages": [{"role": "user", "content": "hi"}], "tool_choice": "auto"}),
     );
@@ -55,7 +62,7 @@ fn field_order_and_whitespace_do_not_change_the_key() {
 
 #[test]
 fn skiplist_fields_do_not_change_the_key() {
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let base = request(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}));
     let noisy = request(json!({
         "model": "m",
@@ -75,11 +82,11 @@ fn namespace_and_provider_separate_keys() {
     let request = request(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}));
     let ns_a = ResponseCacheConfig {
         namespace: "a".to_string(),
-        ..ResponseCacheConfig::default()
+        ..cache_all_config()
     };
     let ns_b = ResponseCacheConfig {
         namespace: "b".to_string(),
-        ..ResponseCacheConfig::default()
+        ..cache_all_config()
     };
     assert_ne!(
         key_of("openai", &request, &ns_a),
@@ -94,7 +101,7 @@ fn namespace_and_provider_separate_keys() {
 
 #[test]
 fn random_tool_call_ids_are_normalized_to_one_key() {
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let make = |call_id: &str| {
         request(json!({
             "model": "m",
@@ -117,7 +124,7 @@ fn raw_params_objects_do_not_collide_with_typed_caps() {
     // A top-level `params` object lands in the flattened `extra` and
     // overwrites the typed field on serialization — the token caps would
     // vanish from the key.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let make = |cap: u64| {
         request(json!({
             "model": "gpt-4o",
@@ -135,7 +142,7 @@ fn raw_params_objects_do_not_collide_with_typed_caps() {
 
 #[test]
 fn wrong_typed_generation_scalars_do_not_collide() {
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let plain = request(json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "hi"}]
@@ -189,7 +196,7 @@ fn wrong_typed_generation_scalars_do_not_collide() {
 
 #[test]
 fn unmodeled_tool_choice_fields_do_not_collide() {
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let make = |strict: bool| {
         request(json!({
             "model": "gpt-4o",
@@ -207,7 +214,7 @@ fn unmodeled_tool_choice_fields_do_not_collide() {
 
 #[test]
 fn stateful_conversation_and_default_store_bypass() {
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     // Server-side conversation state.
     let with_conversation = request(json!({
         "model": "gpt-4o", "input": "summarize", "store": false,
@@ -255,11 +262,7 @@ fn null_bodies_bypass_the_cache() {
     // The gateway parses unparseable upstream bodies to `null`; every such
     // request would share one key, so they are never cacheable.
     assert_eq!(
-        build_cache_key(
-            "openai",
-            &request(Json::Null),
-            &ResponseCacheConfig::default()
-        ),
+        build_cache_key("openai", &request(Json::Null), &cache_all_config()),
         KeyOutcome::Bypass("unparseable_body")
     );
 }
@@ -268,7 +271,7 @@ fn null_bodies_bypass_the_cache() {
 fn unrepresentable_integers_bypass_the_cache() {
     // 9007199254740995 and 9007199254740996 are distinct ids but the same
     // f64, so without the bypass they canonicalize to one key.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let make = |id: u64| {
         request(json!({
             "model": "claude-sonnet-4",
@@ -293,7 +296,7 @@ fn unrepresentable_integers_bypass_the_cache() {
 
 #[test]
 fn stateful_responses_calls_bypass() {
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let with_store = request(json!({"model": "m", "messages": [], "store": true}));
     assert_eq!(
         build_cache_key("openai", &with_store, &config),
@@ -322,10 +325,7 @@ fn stateful_responses_calls_bypass() {
 #[test]
 fn nondeterministic_calls_bypass_only_when_disabled() {
     let sampled = request(json!({"model": "m", "messages": [], "temperature": 0.7}));
-    let skip = ResponseCacheConfig {
-        cache_nondeterministic: false,
-        ..ResponseCacheConfig::default()
-    };
+    let skip = ResponseCacheConfig::default();
     assert_eq!(
         build_cache_key("openai", &sampled, &skip),
         KeyOutcome::Bypass("nondeterministic_temperature")
@@ -342,9 +342,10 @@ fn nondeterministic_calls_bypass_only_when_disabled() {
         build_cache_key("openai", &pinned, &skip),
         KeyOutcome::Key(_)
     ));
-    // Default keeps caching temperature > 0 calls.
+    // Callers can explicitly opt in to caching nondeterministic calls.
+    let opt_in = cache_all_config();
     assert!(matches!(
-        build_cache_key("openai", &sampled, &ResponseCacheConfig::default()),
+        build_cache_key("openai", &sampled, &opt_in),
         KeyOutcome::Key(_)
     ));
 }
@@ -371,7 +372,7 @@ fn chat_shaped_requests_key_on_the_detected_decode() {
 fn undetectable_shape_falls_back_to_raw_keying() {
     // No `messages`/`input`/`system` top-level key: no surface detects, so
     // the raw body is fingerprinted — still a usable, stable key.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let request = request(json!({"model": "m", "prompt": "hi"}));
     let (body, effective_codec) = resolved_body("openai", &request);
     assert_eq!(effective_codec, None, "nothing must detect this shape");
@@ -385,7 +386,7 @@ fn undetectable_shape_falls_back_to_raw_keying() {
 fn dual_token_caps_do_not_collide() {
     // With both caps present the decode keeps one; requests differing in
     // the other must not merge.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let low = request(json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "write a story"}],
@@ -409,7 +410,7 @@ fn dual_token_caps_do_not_collide() {
 fn anthropic_system_block_metadata_does_not_collide() {
     // System content blocks are flattened to their text on decode; block
     // fields beyond the provider cache hint must not vanish from the key.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let make = |marker: u64| {
         request(json!({
             "model": "claude-sonnet-4",
@@ -430,7 +431,7 @@ fn unmodeled_tool_fields_do_not_collide() {
     // `FunctionDefinition` has no unknown-field catch-all, so a field like
     // OpenAI's `function.strict` is silently dropped on decode; requests
     // differing in it must not merge.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let make = |strict: bool| {
         request(json!({
             "model": "gpt-4o",
@@ -502,7 +503,7 @@ fn unmodeled_message_fields_do_not_collide() {
     // The normalized message types are closed, so an assistant field they
     // do not model — the deprecated `function_call`, `refusal` — decodes
     // to nothing; conversations differing only there must not merge.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let make = |arguments: &str| {
         request(json!({
             "model": "gpt-4o",
@@ -524,7 +525,7 @@ fn unmodeled_message_fields_do_not_collide() {
 fn non_array_stop_forms_do_not_collide_with_a_stopless_request() {
     // Only an array of strings decodes faithfully; every other `stop`
     // form is silently dropped and must stay raw-keyed.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let without = request(json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "count: one END two"}]
@@ -547,7 +548,7 @@ fn non_array_stop_forms_do_not_collide_with_a_stopless_request() {
 fn null_text_system_block_does_not_collide_with_no_system() {
     // A `text: null` block decodes to no system prompt at all; it must
     // not share a key with a request that genuinely has no system.
-    let config = ResponseCacheConfig::default();
+    let config = cache_all_config();
     let malformed = request(json!({
         "model": "claude-sonnet-4",
         "max_tokens": 64,

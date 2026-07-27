@@ -284,8 +284,8 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
  * @param config - Partial response-cache settings to override.
  * @returns A normalized response-cache config object.
  * @remarks The default backend is in-memory; pass a `backend` (e.g.
- * `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`
- * (always reuse / exact replay).
+ * `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`,
+ * while caching nondeterministic requests is opt-in.
  */
 export declare function responseCacheConfig(config?: ResponseCacheConfig): ResponseCacheConfig;
 /**

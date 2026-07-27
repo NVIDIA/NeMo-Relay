@@ -174,7 +174,7 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	backend := NewInMemoryResponseCacheBackend()
 	rc := NewResponseCacheConfig()
 	rc.Namespace = "go-harness"
-	rc.CacheNondeterministic = false // must survive marshal (no omitempty)
+	rc.CacheNondeterministic = true
 	rc.Backend = &backend
 
 	config := NewAdaptiveConfig()
@@ -198,8 +198,8 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	if section["namespace"] != "go-harness" {
 		t.Fatalf("response_cache fields not preserved: %#v", section)
 	}
-	if v, ok := section["cache_nondeterministic"].(bool); !ok || v {
-		t.Fatalf("explicit cache_nondeterministic=false was not preserved: %#v", section["cache_nondeterministic"])
+	if v, ok := section["cache_nondeterministic"].(bool); !ok || !v {
+		t.Fatalf("explicit cache_nondeterministic=true was not preserved: %#v", section["cache_nondeterministic"])
 	}
 	if b, ok := section["backend"].(map[string]any); !ok || b["kind"] != "in_memory" {
 		t.Fatalf("backend not preserved: %#v", section["backend"])

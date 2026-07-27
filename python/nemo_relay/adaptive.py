@@ -276,7 +276,7 @@ class ResponseCacheConfig:
     namespace: str = ""
     priority: int = 50
     bypass_rate: float = 0.0
-    cache_nondeterministic: bool = True
+    cache_nondeterministic: bool = False
     key_strategy: str = "exact_request"
     header_allowlist: list[str] = field(default_factory=list)
     skip_keys: list[str] = field(default_factory=list)

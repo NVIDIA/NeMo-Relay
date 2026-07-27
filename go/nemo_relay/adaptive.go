@@ -83,12 +83,8 @@ type ResponseCacheConfig struct {
 	Priority int32 `json:"priority"`
 	// BypassRate is the probability in [0.0, 1.0] of skipping the cache and running live.
 	BypassRate float64 `json:"bypass_rate,omitempty"`
-	// CacheNondeterministic caches temperature>0 requests too (default true).
-	//
-	// Deliberately NOT omitempty: the Rust default is true, so omitting a false
-	// value would let the core re-apply true and silently re-enable caching of
-	// nondeterministic requests. Always serializing the field keeps an explicit
-	// false expressible — unlike the other zero-default fields here.
+	// CacheNondeterministic lets requests that are not explicitly deterministic
+	// use the cache (default false).
 	CacheNondeterministic bool `json:"cache_nondeterministic"`
 	// KeyStrategy is the key strategy. Only "exact_request" is supported.
 	KeyStrategy string `json:"key_strategy,omitempty"`
@@ -183,14 +179,14 @@ func NewAcgConfig() AcgConfig {
 }
 
 // NewResponseCacheConfig returns default response cache settings, mirroring
-// the Rust ResponseCacheConfig defaults (caching on, exact-request keying). Backend
-// is left nil so the core applies its in-memory default; set it for redis or to tune
-// the in-memory budget.
+// the Rust ResponseCacheConfig defaults (exact-request keying with nondeterministic
+// caching disabled). Backend is left nil so the core applies its in-memory default;
+// set it for redis or to tune the in-memory budget.
 func NewResponseCacheConfig() ResponseCacheConfig {
 	return ResponseCacheConfig{
 		TTLSeconds:            3600,
 		Priority:              50,
-		CacheNondeterministic: true,
+		CacheNondeterministic: false,
 		KeyStrategy:           "exact_request",
 	}
 }

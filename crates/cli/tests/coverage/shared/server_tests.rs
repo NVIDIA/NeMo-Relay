@@ -3868,6 +3868,7 @@ async fn gateway_streaming_hit_carries_event_stream_content_type() {
     let request_body = json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "stream it"}],
+        "temperature": 0.0,
         "stream": true
     });
     let first = client

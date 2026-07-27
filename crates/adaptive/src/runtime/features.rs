@@ -807,9 +807,21 @@ impl AdaptiveFeature for ResponseCacheFeature {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             // Build the backend once, shared by both intercepts. A Redis backend
-            // unreachable at startup fails registration (fail-fast); the
-            // intercepts themselves fail open at runtime.
-            let store = build_store(&self.config).await?;
+            // that is unreachable at startup disables this optional feature;
+            // the intercepts themselves fail open on later store errors.
+            let store = match build_store(&self.config).await {
+                Ok(store) => store,
+                Err(AdaptiveError::Storage(error)) => {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "adaptive_response_cache_store_init_failed";
+                        "Adaptive runtime could not initialize the optional response cache; \
+                         managed LLM calls will run live: {error}"
+                    );
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
             let config = Arc::new(self.config.clone());
             ctx.register_llm_execution_intercept(
                 &self.name,

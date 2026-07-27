@@ -157,8 +157,8 @@ function acgConfig(config = {}) {
  * @param {object} [config={}] - Partial response-cache settings to override.
  * @returns {object} A normalized response-cache config object.
  * @remarks The default backend is in-memory; pass a `backend` (e.g.
- * `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`
- * (always reuse / exact replay).
+ * `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`,
+ * while caching nondeterministic requests is opt-in.
  */
 function responseCacheConfig(config = {}) {
   const { backend, ...rest } = config;
@@ -167,7 +167,7 @@ function responseCacheConfig(config = {}) {
     namespace: '',
     priority: 50,
     bypassRate: 0.0,
-    cacheNondeterministic: true,
+    cacheNondeterministic: false,
     keyStrategy: 'exact_request',
     headerAllowlist: [],
     skipKeys: [],
