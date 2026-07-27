@@ -194,8 +194,10 @@ or `Pending` and settles its one-shot completion handle with resolve or reject;
 there is no implicit timeout. A callback that returns `Pending` must settle the
 handle exactly once, or serial event publication remains blocked. Relay cancels
 the handle when the invocation is abandoned; late or duplicate settlement after
-cancellation is rejected safely. Global names start with `nemo_relay_register_`,
-and scope-local names start with `nemo_relay_scope_register_`.
+cancellation is rejected safely. After resolving or rejecting a retained
+completion, call `nemo_relay_async_completion_release` to release the
+callback-owned reference. Global names start with `nemo_relay_register_`, and
+scope-local names start with `nemo_relay_scope_register_`.
 
 The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, and
 `AsyncMiddlewareFunc` variants for global and scope-local event sanitizers.

@@ -352,13 +352,27 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     let scope_stack = current_scope_stack();
     let (event, subscribers, emission_scope_stack) = {
         let subscribers = if params.name == COMPACTION_EVENT_NAME {
-            let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+            let mut scope_guard = scope_stack.write().map_err(|error| {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "mark_event_scope_stack_unavailable";
+                    "Mark event was dropped because the scope stack lock is poisoned: {error}"
+                );
+                FlowError::Internal(error.to_string())
+            })?;
             let subscribers =
                 snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
             scope_guard.mark_agent_fresh(parent_uuid);
             subscribers
         } else {
-            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            let scope_guard = scope_stack.read().map_err(|error| {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "mark_event_scope_stack_unavailable";
+                    "Mark event was dropped because the scope stack lock is poisoned: {error}"
+                );
+                FlowError::Internal(error.to_string())
+            })?;
             snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
         };
         let context = global_context();

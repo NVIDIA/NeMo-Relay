@@ -463,7 +463,15 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
                 category_profile: fields
                     .category_profile
                     .as_ref()
-                    .and_then(|value| serde_json::to_value(value).ok()),
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        let error = FlowError::Internal(format!(
+                            "failed to serialize JS event sanitizer category profile: {error}"
+                        ));
+                        record_callback_error(error.to_string());
+                        error
+                    })?,
                 metadata: fields.metadata,
             };
             let value = func
@@ -732,7 +740,13 @@ pub fn wrap_js_llm_sanitize_request_fn(
             let func = func.clone();
             Box::pin(async move {
                 let context = js_llm_sanitize_request_context(&context);
-                let request = serde_json::to_value(request).unwrap_or(Json::Null);
+                let request = serde_json::to_value(request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM sanitize request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if func.call_with_return_value(
                     (request.clone(), context),
