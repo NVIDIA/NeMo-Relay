@@ -582,6 +582,10 @@ impl SessionManager {
                 .map_err(CliError::from)
             })
             .await?;
+        // Manual lifecycle events publish on the serial dispatcher. This
+        // test-only seam returns after the matching end event is observable so
+        // a subsequent synthetic provider call cannot overtake it.
+        nemo_relay::api::subscriber::flush_subscribers().map_err(CliError::from)?;
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
             session.record_completed_llm_response(response_for_hints, owner_subagent_id);
