@@ -161,7 +161,7 @@ fn build_completion_unknowns(
         // than settling the middleware future as a rejection.
         let message = ctx
             .get::<String>(0)
-            .unwrap_or_else(|_| "JavaScript callback rejected".to_string());
+            .unwrap_or_else(|_| "unknown error".to_string());
         completion.send(Err(FlowError::Internal(message)));
         ctx.env.get_undefined()
     })?;

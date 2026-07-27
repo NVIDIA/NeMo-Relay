@@ -714,15 +714,19 @@ def invalid(event, fields):
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("raises").unwrap().unbind(),
             )(event.clone(), fields.clone()))
-            .unwrap();
-        assert_eq!(raised, EventSanitizeFields::default());
+            .unwrap_err();
+        assert!(raised.to_string().contains("sanitize boom"));
 
         let invalid = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("invalid").unwrap().unbind(),
             )(event, fields.clone()))
-            .unwrap();
-        assert_eq!(invalid, EventSanitizeFields::default());
+            .unwrap_err();
+        assert!(
+            invalid
+                .to_string()
+                .contains("invalid event sanitizer result")
+        );
     });
 }
