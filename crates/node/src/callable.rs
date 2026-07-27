@@ -1125,15 +1125,27 @@ pub fn wrap_js_event_sanitize_fn(
                 category_profile: fields
                     .category_profile
                     .as_ref()
-                    .and_then(|value| serde_json::to_value(value).ok()),
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        let error = FlowError::Internal(format!(
+                            "failed to serialize JS event sanitizer category profile: {error}"
+                        ));
+                        record_callback_error(error.to_string());
+                        error
+                    })?,
                 metadata: fields.metadata.clone(),
             };
+            let js_fields = serde_json::to_value(js_fields).map_err(|error| {
+                let error = FlowError::Internal(format!(
+                    "failed to serialize JS event sanitizer fields: {error}"
+                ));
+                record_callback_error(error.to_string());
+                error
+            })?;
             let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
-                (
-                    event_json,
-                    serde_json::to_value(js_fields).unwrap_or(Json::Null),
-                ),
+                (event_json, js_fields),
                 ThreadsafeFunctionCallMode::Blocking,
                 move |value: Option<Json>| {
                     let _ = tx.send(callback_json(value));
