@@ -10,8 +10,12 @@
 //!
 //! - **Two API formats** selected by the response `apiFormat`: `GENERIC`
 //!   (`choices`-based, OpenAI-style) and `COHERE` (`text`-based).
-//! - **Key conventions**: The OCI SDKs emit camelCase JSON while the OCI CLI
-//!   emits kebab-case; decode tolerates camelCase, kebab-case, and snake_case.
+//! - **Key conventions**: The same documented schema reaches the codec in the
+//!   three renderings Oracle tooling emits: the REST wire and most SDKs use
+//!   camelCase, `oci.util.to_dict()` on Python SDK models yields snake_case,
+//!   and the OCI CLI prints kebab-case wrapped in a `data` envelope. Decode
+//!   derives the kebab/snake spellings mechanically from the camelCase key and
+//!   unwraps the CLI `data` envelope.
 //! - **Responses**: `ChatResult` payloads (`modelId`, `chatResponse`) where the
 //!   chat response is `choices`-based for `GENERIC` and `text`-based for
 //!   `COHERE`; `usage` counters are `promptTokens`/`completionTokens`/`totalTokens`.
@@ -89,12 +93,13 @@ fn present_key(obj: &serde_json::Map<String, Json>, key: &str) -> Option<String>
 
 /// Map an OCI finish reason string to normalized [`FinishReason`].
 ///
-/// GENERIC responses use OpenAI-style lowercase reasons; COHERE responses use
-/// UPPERCASE Cohere reasons.
+/// GENERIC responses use OpenAI-style lowercase reasons (Gemini models emit
+/// `max_tokens` for the length stop); COHERE responses use UPPERCASE Cohere
+/// reasons.
 fn map_oci_finish_reason(reason: &str) -> FinishReason {
     match reason {
         "stop" | "COMPLETE" => FinishReason::Complete,
-        "length" | "MAX_TOKENS" => FinishReason::Length,
+        "length" | "max_tokens" | "MAX_TOKENS" => FinishReason::Length,
         "tool_calls" => FinishReason::ToolUse,
         other => FinishReason::Unknown(other.to_string()),
     }
@@ -211,6 +216,13 @@ impl LlmResponseCodec for OCIGenAIChatCodec {
             });
         };
 
+        // The OCI CLI wraps chat output in a `data` envelope; unwrap it so
+        // captured CLI payloads decode like SDK and wire payloads.
+        let obj = match obj.get("data").and_then(Json::as_object) {
+            Some(data) if present_key(data, "chatResponse").is_some() => data,
+            _ => obj,
+        };
+
         let (envelope, chat_response) =
             match get_first(obj, "chatResponse").and_then(Json::as_object) {
                 Some(chat_response) => (Some(obj), chat_response),
@@ -282,7 +294,7 @@ fn decode_generic_response_body(
     let message = decode_generic_content(get_first(raw_message, "content"))?;
     let tool_calls = get_first(raw_message, "toolCalls")
         .and_then(Json::as_array)
-        .map(|calls| calls.iter().filter_map(decode_response_tool_call).collect())
+        .map(|calls| decode_response_tool_calls(calls))
         .filter(|calls: &Vec<ResponseToolCall>| !calls.is_empty());
     Ok((message, tool_calls, finish_reason))
 }
@@ -293,12 +305,7 @@ fn decode_cohere_response_body(chat_response: &serde_json::Map<String, Json>) ->
         .map(|text| MessageContent::Text(text.to_string()));
     let tool_calls = get_first(chat_response, "toolCalls")
         .and_then(Json::as_array)
-        .map(|calls| {
-            calls
-                .iter()
-                .filter_map(decode_response_tool_call)
-                .collect::<Vec<_>>()
-        })
+        .map(|calls| decode_response_tool_calls(calls))
         .filter(|calls| !calls.is_empty());
     let finish_reason = get_first(chat_response, "finishReason")
         .and_then(Json::as_str)
@@ -306,11 +313,22 @@ fn decode_cohere_response_body(chat_response: &serde_json::Map<String, Json>) ->
     (message, tool_calls, finish_reason)
 }
 
+/// Convert an OCI response tool-call list into [`ResponseToolCall`]s.
+fn decode_response_tool_calls(calls: &[Json]) -> Vec<ResponseToolCall> {
+    calls
+        .iter()
+        .enumerate()
+        .filter_map(|(index, call)| decode_response_tool_call(index, call))
+        .collect()
+}
+
 /// Convert an OCI response tool call into [`ResponseToolCall`].
 ///
 /// GENERIC calls are flat (`{id, type, name, arguments}`) with `arguments` as a
-/// JSON-encoded string; COHERE calls carry `name` plus parsed `parameters`.
-fn decode_response_tool_call(value: &Json) -> Option<ResponseToolCall> {
+/// JSON-encoded string; COHERE calls carry `name` plus parsed `parameters` and
+/// no `id`, so a positional `call_{index}` id is synthesized to keep parallel
+/// calls distinguishable.
+fn decode_response_tool_call(index: usize, value: &Json) -> Option<ResponseToolCall> {
     let obj = value.as_object()?;
     let name = get_first(obj, "name")?.as_str()?.to_string();
     let arguments = match get_first(obj, "arguments") {
@@ -322,23 +340,31 @@ fn decode_response_tool_call(value: &Json) -> Option<ResponseToolCall> {
         Some(other) => other.clone(),
         None => get_first(obj, "parameters").cloned().unwrap_or(Json::Null),
     };
+    let id = match get_first(obj, "id").and_then(Json::as_str) {
+        Some(id) => id.to_string(),
+        None => format!("call_{index}"),
+    };
     Some(ResponseToolCall {
-        id: get_first(obj, "id")
-            .and_then(Json::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        id,
         name,
         arguments,
     })
 }
 
 /// Map OCI usage counters onto the normalized [`Usage`] field names.
+///
+/// OpenAI and xAI models report cache hits under
+/// `promptTokensDetails.cachedTokens`.
 fn decode_oci_usage(usage: &serde_json::Map<String, Json>) -> Usage {
+    let cache_read_tokens = get_first(usage, "promptTokensDetails")
+        .and_then(Json::as_object)
+        .and_then(|details| get_first(details, "cachedTokens"))
+        .and_then(Json::as_u64);
     Usage {
         prompt_tokens: get_first(usage, "promptTokens").and_then(Json::as_u64),
         completion_tokens: get_first(usage, "completionTokens").and_then(Json::as_u64),
         total_tokens: get_first(usage, "totalTokens").and_then(Json::as_u64),
-        cache_read_tokens: None,
+        cache_read_tokens,
         cache_write_tokens: None,
         cost: None,
     }
