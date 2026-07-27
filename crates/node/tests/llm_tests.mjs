@@ -864,7 +864,15 @@ describe('LLM guardrails', () => {
     try {
       const response = { ok: true };
       await llmCallExecute('llm_san_resp_throw', makeNative(), () => response, null, null, null, null, null);
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(() =>
+        events.some(
+          (event) =>
+            event.name === 'llm_san_resp_throw' &&
+            event.kind === 'scope' &&
+            event.category === 'llm' &&
+            event.scope_category === 'end',
+        ),
+      );
       const end = events.find(
         (event) =>
           event.name === 'llm_san_resp_throw' &&
