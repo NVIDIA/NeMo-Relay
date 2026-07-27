@@ -348,15 +348,15 @@ impl LlmStreamWrapper {
                 Err(_) => None,
             }
         };
-        if let Some(event) = event_snapshot {
-            if let Some(sanitizers) = snapshot_event_sanitizers(&event, &self.scope_stack) {
-                let _ = subscriber_dispatcher::dispatch_sanitized_event(
-                    event,
-                    sanitizers,
-                    &self.subscribers,
-                    self.scope_stack.clone(),
-                );
-            }
+        if let Some(event) = event_snapshot
+            && let Some(sanitizers) = snapshot_event_sanitizers(&event, &self.scope_stack)
+        {
+            let _ = subscriber_dispatcher::dispatch_sanitized_event(
+                event,
+                sanitizers,
+                &self.subscribers,
+                self.scope_stack.clone(),
+            );
         }
     }
 }

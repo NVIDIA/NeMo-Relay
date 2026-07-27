@@ -750,12 +750,12 @@ pub fn wrap_js_llm_sanitize_request_fn(
                         "failed to queue JS LLM sanitize request callback".into(),
                     ));
                 }
-                let value = await_middleware_json_or_value(
+                let value = await_middleware_json_result(
                     rx,
                     "nemo_relay: JS LLM request sanitizer callback failed",
-                    Json::Null,
                 )
-                .await;
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))?;
                 if value.is_null() {
                     return Ok(None);
                 }
@@ -796,12 +796,12 @@ pub fn wrap_js_llm_sanitize_response_fn(
                     "failed to queue JS LLM sanitize response callback".into(),
                 ));
             }
-            let value = await_middleware_json_or_value(
+            let value = await_middleware_json_result(
                 rx,
                 "nemo_relay: JS LLM response sanitizer callback failed",
-                Json::Null,
             )
-            .await;
+            .await
+            .inspect_err(|error| record_callback_error(error.to_string()))?;
             Ok((!value.is_null()).then_some(value))
         })
     })

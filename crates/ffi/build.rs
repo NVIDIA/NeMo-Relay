@@ -18,8 +18,13 @@ fn main() {
         // cbindgen intentionally does not expand declarative macros. Keep the
         // macro-generated async registration functions in the generated C ABI.
         let header = std::fs::read_to_string(&header_path).expect("read generated FFI header");
+        let marker = "\n#endif  /* NEMO_RELAY_H */\n";
+        assert!(
+            header.contains(marker),
+            "generated FFI header is missing its NEMO_RELAY_H closing guard"
+        );
         let header = header.replacen(
-            "\n#endif  /* NEMO_RELAY_H */\n",
+            marker,
             &format!("\n{}\n#endif  /* NEMO_RELAY_H */\n", ASYNC_REGISTRATIONS),
             1,
         );

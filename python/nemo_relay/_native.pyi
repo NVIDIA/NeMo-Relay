@@ -55,7 +55,7 @@ _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolExecutionIntercept: TypeAlias = Callable[
     [str, _Json, Callable[[_Json], Awaitable[_Json]]],
-    "ToolExecutionInterceptOutcome" | Awaitable["ToolExecutionInterceptOutcome"],
+    "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],

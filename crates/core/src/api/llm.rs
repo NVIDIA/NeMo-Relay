@@ -860,7 +860,7 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
     if let Some(event_sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) {
         dispatch_transformed_event(
             event,
-            Box::new(move |_event| {
+            Box::new(move |event| {
                 Box::pin(async move {
                     let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
                         response.clone(),
@@ -918,7 +918,9 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
                         });
                     }
                     let context = global_context();
-                    let state = context.read().expect("runtime state lock poisoned");
+                    let Ok(state) = context.read() else {
+                        return event;
+                    };
                     let end_metadata = metadata_with_otel_status(metadata, "OK", None);
                     state.build_llm_end_event(
                         EndLlmHandleParams::builder()
