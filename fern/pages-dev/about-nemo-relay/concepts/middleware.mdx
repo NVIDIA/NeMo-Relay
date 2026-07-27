@@ -191,6 +191,13 @@ guardrails important:
 - If you need to change the real execution path, use an intercept
 - If you need to change only the emitted payload, use a sanitize guardrail
 
+Before LLM request sanitizers run, Relay removes standard credential headers
+from the event-only request copy: `authorization`, `proxy-authorization`,
+`cookie`, `x-api-key`, `api-key`, `anthropic-api-key`, and `x-goog-api-key`.
+Header-name matching is case-insensitive. This protects sanitizer callbacks,
+subscribers, and exporters without changing the request sent to the provider.
+Configure a PII sanitizer for custom credential header names.
+
 ## Codec-Aware LLM Sanitizers
 
 Every LLM sanitize guardrail receives the payload first and a required

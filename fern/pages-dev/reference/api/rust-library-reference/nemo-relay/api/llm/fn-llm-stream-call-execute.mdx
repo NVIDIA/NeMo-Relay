@@ -40,6 +40,6 @@ Returns [`FlowError::GuardrailRejected`](/reference/api/rust-library-reference/n
 
 ## Notes
 
-The LLM-start event is emitted before stream execution intercepts run.
+The LLM-start event is emitted before stream execution intercepts run. Before sanitize-request guardrails run, the runtime removes standard credential headers from the event-only request copy; the request passed to stream execution is unchanged.
 
 The returned stream emits chunk-level results while the runtime defers the LLM-end event until the collector and finalizer complete.

@@ -37,4 +37,4 @@ Returns an error when the runtime owner check fails or when internal state canno
 
 ## Notes
 
-Sanitize-request guardrails affect only the emitted start-event payload, not the caller-owned [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest). When the owning agent is not fresh, the emitted request annotation is limited to the current user turn. Managed calls with a request codec also apply that projection to the event input, without changing the request used for provider execution.
+The runtime removes standard credential headers (`authorization`, `proxy-authorization`, `cookie`, `x-api-key`, `api-key`, `anthropic-api-key`, and `x-goog-api-key`) from the event-only request copy before sanitize-request guardrails run. This does not change the caller-owned [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest). When the owning agent is not fresh, the emitted request annotation is limited to the current user turn. Managed calls with a request codec also apply that projection to the event input, without changing the request used for provider execution.
