@@ -174,31 +174,34 @@ impl AdaptiveHintsIntercept {
     pub fn into_request_fn(self) -> LlmRequestInterceptFn {
         let this = Arc::new(self);
         Arc::new(
-            move |_name: &str,
+            move |_name: String,
                   mut request: LlmRequest,
                   mut annotated: Option<AnnotatedLlmRequest>| {
-                let scope_path = extract_scope_path();
-                let manual_ls = read_manual_latency_sensitivity();
-                let scope_depth = scope_path.len();
-                let call_index = this.call_counter.fetch_add(1, Ordering::Relaxed);
+                let this = this.clone();
+                Box::pin(async move {
+                    let scope_path = extract_scope_path();
+                    let manual_ls = read_manual_latency_sensitivity();
+                    let scope_depth = scope_path.len();
+                    let call_index = this.call_counter.fetch_add(1, Ordering::Relaxed);
 
-                let effective_agent_id = this.effective_agent_id();
-                let cached_hints =
-                    this.load_hints(&scope_path, &effective_agent_id, call_index, scope_depth);
-                let final_hints = apply_manual_latency_override(
-                    cached_hints,
-                    manual_ls,
-                    &effective_agent_id,
-                    scope_depth,
-                );
+                    let effective_agent_id = this.effective_agent_id();
+                    let cached_hints =
+                        this.load_hints(&scope_path, &effective_agent_id, call_index, scope_depth);
+                    let final_hints = apply_manual_latency_override(
+                        cached_hints,
+                        manual_ls,
+                        &effective_agent_id,
+                        scope_depth,
+                    );
 
-                if let Some(hints) = final_hints {
-                    inject_agent_hints(&mut request, &mut annotated, &hints);
-                }
+                    if let Some(hints) = final_hints {
+                        inject_agent_hints(&mut request, &mut annotated, &hints);
+                    }
 
-                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                    request, annotated,
-                ))
+                    Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                        request, annotated,
+                    ))
+                })
             },
         )
     }

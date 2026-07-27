@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, MarkEvent};
-use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
+use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
     current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
 use crate::api::shared::{
-    ensure_runtime_owner, resolve_parent_uuid, sanitize_event, snapshot_event_subscribers,
+    ensure_runtime_owner, resolve_parent_uuid, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::error::{FlowError, Result};
 use crate::json::Json;
@@ -221,7 +222,7 @@ pub fn get_handle() -> Result<ScopeHandle> {
 pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
-    let (handle, event, subscribers) = {
+    let (handle, event, subscribers, emission_scope_stack) = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
@@ -241,13 +242,16 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
             .build();
         let handle = state.create_scope_handle(handle_params);
         let event = state.build_scope_start_event(&handle, params.input);
-        (handle, event, subscribers)
+        (handle, event, subscribers, scope_stack.clone())
     };
-    let event = sanitize_event(event);
+    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
     task_scope_push(handle.clone());
-    if let Some(event) = event {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    let _ = subscriber_dispatcher::dispatch_sanitized_event(
+        event,
+        sanitizers,
+        &subscribers,
+        emission_scope_stack,
+    );
     Ok(handle)
 }
 
@@ -276,7 +280,7 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
 pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
-    let (scope, event, subscribers) = {
+    let (scope, event, subscribers, emission_scope_stack) = {
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let top = scope_guard.top();
         if top.uuid != *params.handle_uuid {
@@ -302,14 +306,17 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
                 .metadata_opt(params.metadata)
                 .build(),
         );
-        (scope, event, subscribers)
+        (scope, event, subscribers, scope_stack.clone())
     };
-    let event = sanitize_event(event);
+    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    if let Some(event) = event {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    let _ = subscriber_dispatcher::dispatch_sanitized_event(
+        event,
+        sanitizers,
+        &subscribers,
+        emission_scope_stack,
+    );
     Ok(())
 }
 
@@ -341,7 +348,7 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
     let scope_stack = current_scope_stack();
-    let (event, subscribers) = {
+    let (event, subscribers, emission_scope_stack) = {
         let subscribers = if params.name == COMPACTION_EVENT_NAME {
             let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
             let subscribers =
@@ -368,10 +375,14 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
             params.category,
             params.category_profile,
         ));
-        (event, subscribers)
+        (event, subscribers, scope_stack.clone())
     };
-    if let Some(event) = sanitize_event(event) {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
+    let _ = subscriber_dispatcher::dispatch_sanitized_event(
+        event,
+        sanitizers,
+        &subscribers,
+        emission_scope_stack,
+    );
     Ok(())
 }

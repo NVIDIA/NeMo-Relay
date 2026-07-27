@@ -42,8 +42,12 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **`PluginContext`**: Component-scoped registration APIs for middleware and
   subscribers.
 - **`PluginRuntime`**: Typed helpers for Relay-owned scopes and marks.
-- **Stable native ABI v1**: C-compatible host and plugin tables behind the
-  safe Rust authoring interface.
+- **Stable native ABI v3**: C-compatible host and plugin tables behind the
+  safe Rust authoring interface, with a v2-compatible prefix for existing
+  plugins.
+- **Raw async middleware**: Completion-based raw registrations for plugins
+  that need asynchronous guardrails, intercepts, or event sanitizers. Typed
+  Rust callbacks remain synchronous convenience APIs.
 
 ## Installation
 

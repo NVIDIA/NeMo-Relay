@@ -239,6 +239,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             .expect("outer scope should push");
             let outer_uuid = outer.uuid;
             let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
+                .await
                 .expect("native request intercept should run");
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
@@ -446,6 +447,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         .expect("thread outer scope should push");
         let thread_outer_uuid = thread_outer.uuid;
         let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "thread" }))
+            .await
             .expect("native request intercept should run with thread stack");
         assert_eq!(rewritten["native_plugin"], true);
         pop_scope(
@@ -654,6 +656,67 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
 
     drop(cleanup);
     activation.clear();
+}
+
+#[tokio::test]
+async fn native_v3_async_registration_resolves_tool_request_intercepts() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_with_plugin_id_and_symbol(
+        &fixture,
+        "fixture_async",
+        "nemo_relay_fixture_async_entry",
+    );
+
+    let activation = load_native_plugins([NativePluginLoadSpec {
+        plugin_id: "fixture_async".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+    }])
+    .expect("v3 async native fixture should load");
+    let mut config = PluginConfig::default();
+    config.components.push(PluginComponentSpec {
+        kind: "fixture_async".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    initialize_plugins_exact(config)
+        .await
+        .expect("v3 async native fixture should register");
+
+    let rewritten = tool_request_intercepts("async-tool", json!({"input": true}))
+        .await
+        .expect("v3 async request intercept should settle");
+    assert_eq!(rewritten["input"], true);
+    assert_eq!(rewritten["native_async"], true);
+
+    let duplicate = tool_request_intercepts("async-double", json!({"input": true}))
+        .await
+        .expect("duplicate v3 async settlement keeps the first result");
+    assert_eq!(duplicate["native_async"], true);
+
+    let executed = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("async-execution")
+            .args(json!({"input": true}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .expect("v3 async execution intercept should continue with next");
+    assert_eq!(executed["native_async_execution"], true);
+
+    let pending = tokio::spawn(async {
+        tool_request_intercepts("async-pending", json!({"input": true})).await
+    });
+    tokio::task::yield_now().await;
+    clear_plugin_configuration().expect("v3 async native fixture should clear while pending");
+    let pending = pending
+        .await
+        .expect("pending v3 async task should not panic")
+        .expect("pending v3 async request intercept should settle after clear");
+    assert_eq!(pending["native_async"], true);
+
+    drop(activation);
 }
 
 #[tokio::test]
@@ -1218,6 +1281,7 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
             .any(|kind| kind == "fixture_native")
     );
     let rewritten = tool_request_intercepts("host-owned-tool", json!({ "input": true }))
+        .await
         .expect("host-owned intercept should run");
     assert_eq!(rewritten["native_plugin"], true);
 
@@ -1238,6 +1302,7 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
             .any(|kind| kind == "fixture_native")
     );
     let unchanged = tool_request_intercepts("host-owned-tool", json!({ "input": true }))
+        .await
         .expect("cleared intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
 }
@@ -1393,6 +1458,7 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
         .clear()
         .expect("host should clear while a callback snapshot remains in flight");
     let unchanged = tool_request_intercepts("after-clear", json!({ "input": true }))
+        .await
         .expect("new calls should observe the cleared registries");
     assert_eq!(unchanged, json!({ "input": true }));
 

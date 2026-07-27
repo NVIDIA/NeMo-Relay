@@ -66,14 +66,26 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     },
 
     promise(fn) {
-      return function __nemo_relay_promise_wrapper(error, arg0, next, resolve, reject) {
+      return function __nemo_relay_promise_wrapper(error, arg0, spread, next, resolve, reject) {
         if (error != null) {
           reject(error);
           return;
         }
         Promise.resolve().then(() => (
-          next === undefined ? fn(arg0) : fn(arg0, next)
-        )).then((value) => jsonValue(value === undefined ? null : value)).then(resolve, reject);
+          next === undefined
+            ? (spread ? fn(...arg0) : fn(arg0))
+            : (spread ? fn(...arg0, next) : fn(arg0, next))
+        )).then((value) => jsonValue(value === undefined ? null : value)).then(resolve, (error) => {
+          let message = 'unknown error';
+          if (typeof error === 'string') {
+            message = error;
+          } else if (error !== null && typeof error === 'object') {
+            try {
+              if (typeof error.message === 'string') message = error.message;
+            } catch {}
+          }
+          reject(message);
+        });
       };
     },
   };

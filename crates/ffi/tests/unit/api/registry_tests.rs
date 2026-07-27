@@ -169,7 +169,8 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             nemo_relay_deregister_mark_sanitize_guardrail(invalid_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(*lock_unpoisoned(plugin_frees()), 4);
+        // The queued event owns its sanitizer snapshot until it is published.
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 3);
 
         let mut owner = ptr::null_mut();
         let owner_name = cstring("ffi-event-owner");
@@ -269,8 +270,6 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(*lock_unpoisoned(plugin_frees()), 7);
-
         let invalid_uuid = cstring("not-a-uuid");
         let invalid_name = cstring("invalid-scope-event-sanitizer");
         assert_eq!(
@@ -330,6 +329,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
         );
         nemo_relay_scope_handle_free(owner);
         assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 7);
         let events = lock_unpoisoned(event_log());
         let invalid_callback_event = events
             .iter()

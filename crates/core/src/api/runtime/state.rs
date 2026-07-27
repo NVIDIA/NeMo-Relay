@@ -564,7 +564,7 @@ impl NemoRelayContextState {
         ))
     }
 
-    fn emit_guardrail_scope_start(
+    async fn emit_guardrail_scope_start(
         name: &str,
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
@@ -591,13 +591,13 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        if let Some(event) = sanitize_event(event) {
+        if let Some(event) = sanitize_event(event).await {
             Self::emit_event(&event, subscribers);
         }
         handle
     }
 
-    fn emit_guardrail_scope_end(
+    async fn emit_guardrail_scope_end(
         handle: &ScopeHandle,
         output: Json,
         subscribers: &[EventSubscriberFn],
@@ -616,7 +616,7 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        if let Some(event) = sanitize_event(event) {
+        if let Some(event) = sanitize_event(event).await {
             Self::emit_event(&event, subscribers);
         }
     }
@@ -633,13 +633,21 @@ impl NemoRelayContextState {
     }
 
     /// Apply an event sanitizer snapshot to the mutable observability fields.
-    pub(crate) fn event_sanitize_snapshot_chain(
+    pub(crate) async fn event_sanitize_snapshot_chain(
         mut event: Event,
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
         for entry in entries {
-            let fields = (entry.payload)(&event, event.sanitize_fields());
-            event.apply_sanitize_fields(fields);
+            let fields = event.sanitize_fields();
+            match (entry.payload)(event.clone(), fields).await {
+                Ok(fields) => event.apply_sanitize_fields(fields),
+                Err(error) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_failed",
+                    sanitizer = entry.name.as_str();
+                    "Event sanitizer failed; preserving the last valid event snapshot: {error}"
+                ),
+            }
         }
         event
     }
@@ -672,14 +680,22 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized JSON payload after every provided guardrail has run.
-    pub(crate) fn tool_sanitize_request_snapshot_chain(
+    pub(crate) async fn tool_sanitize_request_snapshot_chain(
         name: &str,
         args: Json,
         entries: &[Guardrail<ToolSanitizeFn>],
     ) -> Json {
         let mut value = args;
         for entry in entries {
-            value = (entry.payload)(name, value);
+            match (entry.payload)(name.to_string(), value.clone()).await {
+                Ok(next) => value = next,
+                Err(error) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_request_sanitizer_failed",
+                    sanitizer = entry.name.as_str();
+                    "Tool request sanitizer failed; preserving the last valid payload: {error}"
+                ),
+            }
         }
         value
     }
@@ -712,14 +728,22 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized JSON payload after every provided guardrail has run.
-    pub(crate) fn tool_sanitize_response_snapshot_chain(
+    pub(crate) async fn tool_sanitize_response_snapshot_chain(
         name: &str,
         result: Json,
         entries: &[Guardrail<ToolSanitizeFn>],
     ) -> Json {
         let mut value = result;
         for entry in entries {
-            value = (entry.payload)(name, value);
+            match (entry.payload)(name.to_string(), value.clone()).await {
+                Ok(next) => value = next,
+                Err(error) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_response_sanitizer_failed",
+                    sanitizer = entry.name.as_str();
+                    "Tool response sanitizer failed; preserving the last valid payload: {error}"
+                ),
+            }
         }
         value
     }
@@ -769,7 +793,7 @@ impl NemoRelayContextState {
     /// # Errors
     /// Propagates any error returned by a guardrail callback after emitting the
     /// corresponding guardrail scope end event.
-    pub(crate) fn tool_conditional_execution_snapshot_chain(
+    pub(crate) async fn tool_conditional_execution_snapshot_chain(
         name: &str,
         args: &Json,
         entries: &[Guardrail<ToolConditionalFn>],
@@ -787,8 +811,9 @@ impl NemoRelayContextState {
                     "target_name": name,
                 }),
                 subscribers,
-            );
-            let result = (entry.payload)(name, args);
+            )
+            .await;
+            let result = (entry.payload)(name.to_string(), args.clone()).await;
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -804,7 +829,7 @@ impl NemoRelayContextState {
                     "error": error.to_string(),
                 }),
             };
-            Self::emit_guardrail_scope_end(&handle, output, subscribers);
+            Self::emit_guardrail_scope_end(&handle, output, subscribers).await;
             if let Some(error) = result? {
                 return Ok(Some(error));
             }
@@ -847,14 +872,14 @@ impl NemoRelayContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub(crate) fn tool_request_intercepts_snapshot_chain(
+    pub(crate) async fn tool_request_intercepts_snapshot_chain(
         name: &str,
         args: Json,
         entries: &[Intercept<ToolInterceptFn>],
     ) -> crate::error::Result<Json> {
         let mut value = args;
         for entry in entries {
-            value = (entry.payload.callable)(name, value)?;
+            value = (entry.payload.callable)(name.to_string(), value).await?;
             if entry.payload.break_chain {
                 break;
             }
@@ -964,14 +989,27 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized [`LlmRequest`] after every provided guardrail has run.
-    pub(crate) fn llm_sanitize_request_snapshot_chain(
+    pub(crate) async fn llm_sanitize_request_snapshot_chain(
         request: LlmRequest,
         context: LlmSanitizeRequestContext,
         entries: &[Guardrail<LlmSanitizeRequestFn>],
     ) -> Option<LlmRequest> {
         let mut value = Some(request);
         for entry in entries {
-            value = value.and_then(|value| (entry.payload)(value, context.clone()));
+            if let Some(current) = value.take() {
+                match (entry.payload)(current.clone(), context.clone()).await {
+                    Ok(next) => value = next,
+                    Err(error) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_request_sanitizer_failed",
+                            sanitizer = entry.name.as_str();
+                            "LLM request sanitizer failed; preserving the last valid payload: {error}"
+                        );
+                        value = Some(current);
+                    }
+                }
+            }
         }
         value
     }
@@ -1003,14 +1041,27 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized response payload after every provided guardrail has run.
-    pub(crate) fn llm_sanitize_response_snapshot_chain(
+    pub(crate) async fn llm_sanitize_response_snapshot_chain(
         response: Json,
         context: LlmSanitizeResponseContext,
         entries: &[Guardrail<LlmSanitizeResponseFn>],
     ) -> Option<Json> {
         let mut value = Some(response);
         for entry in entries {
-            value = value.and_then(|value| (entry.payload)(value, context.clone()));
+            if let Some(current) = value.take() {
+                match (entry.payload)(current.clone(), context.clone()).await {
+                    Ok(next) => value = next,
+                    Err(error) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_response_sanitizer_failed",
+                            sanitizer = entry.name.as_str();
+                            "LLM response sanitizer failed; preserving the last valid payload: {error}"
+                        );
+                        value = Some(current);
+                    }
+                }
+            }
         }
         value
     }
@@ -1059,7 +1110,7 @@ impl NemoRelayContextState {
     /// # Errors
     /// Propagates any error returned by a guardrail callback after emitting the
     /// corresponding guardrail scope end event.
-    pub(crate) fn llm_conditional_execution_snapshot_chain(
+    pub(crate) async fn llm_conditional_execution_snapshot_chain(
         request: &LlmRequest,
         entries: &[Guardrail<LlmConditionalFn>],
         subscribers: &[EventSubscriberFn],
@@ -1075,8 +1126,9 @@ impl NemoRelayContextState {
                     "kind": "llm_conditional_execution",
                 }),
                 subscribers,
-            );
-            let result = (entry.payload)(request);
+            )
+            .await;
+            let result = (entry.payload)(request.clone()).await;
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -1092,7 +1144,7 @@ impl NemoRelayContextState {
                     "error": error.to_string(),
                 }),
             };
-            Self::emit_guardrail_scope_end(&handle, output, subscribers);
+            Self::emit_guardrail_scope_end(&handle, output, subscribers).await;
             if let Some(error) = result? {
                 return Ok(Some(error));
             }
@@ -1139,7 +1191,7 @@ impl NemoRelayContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub(crate) fn llm_request_intercepts_snapshot_chain(
+    pub(crate) async fn llm_request_intercepts_snapshot_chain(
         name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
@@ -1154,11 +1206,12 @@ impl NemoRelayContextState {
             codec_active,
             None,
         )
+        .await
     }
 
     /// Run a request-intercept snapshot while ingesting optimization evidence
     /// directly into the managed call's bounded accumulator.
-    pub(crate) fn llm_request_intercepts_snapshot_chain_with_recorder(
+    pub(crate) async fn llm_request_intercepts_snapshot_chain_with_recorder(
         name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
@@ -1172,7 +1225,8 @@ impl NemoRelayContextState {
         let mut optimization_contributions = Vec::new();
         for entry in entries {
             let input_content = request_value.content.clone();
-            let outcome = (entry.payload.callable)(name, request_value, annotated_value)?;
+            let outcome =
+                (entry.payload.callable)(name.to_string(), request_value, annotated_value).await?;
             if codec_active && outcome.request.content != input_content {
                 return Err(crate::error::FlowError::InvalidArgument(format!(
                     "LLM request intercept '{}' changed request.content while a request codec is active; modify annotated_request instead",

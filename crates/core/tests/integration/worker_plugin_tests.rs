@@ -76,6 +76,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
             .any(|kind| kind == "fixture_worker")
     );
     let rewritten = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .await
         .expect("worker host intercept should run");
     assert_eq!(rewritten["worker_plugin"], true);
 
@@ -86,6 +87,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
             .any(|kind| kind == "fixture_worker")
     );
     let unchanged = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .await
         .expect("cleared worker intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
 }
@@ -109,6 +111,7 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     .expect("worker plugin host should activate");
 
     tool_request_intercepts("terminate-worker", json!({ "input": true }))
+        .await
         .expect_err("fixture worker should terminate during callback");
     let error = activation
         .clear()
@@ -159,6 +162,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
             .expect("outer scope should push");
             let outer_uuid = outer.uuid;
             let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
+                .await
                 .expect("worker request intercept should run");
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
@@ -473,6 +477,7 @@ async fn worker_request_intercept_callback_error_surfaces_to_host() {
             .await;
 
     let error = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
+        .await
         .expect_err("worker callback error should surface");
     assert!(
         error
@@ -1120,6 +1125,7 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     cleanup.subscriber_name = Some(subscriber_name);
 
     let rewritten = tool_request_intercepts("lookup", json!({ "query": "relay" }))
+        .await
         .expect("Python callback should emit a mark and return its mutation");
     assert_eq!(
         rewritten["_nemo_relay_plugin"]["tag"],

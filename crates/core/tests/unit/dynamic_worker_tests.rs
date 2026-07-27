@@ -461,6 +461,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             RegistrationSurface::MarkSanitizeGuardrail,
             &event,
         )
+        .await
         .expect_err("invalid event sanitizer fields should fail");
     assert!(
         error
@@ -474,6 +475,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             LlmSanitizeRequestContext::default(),
         )
+        .await
         .expect_err("invalid LLM JSON result should fail");
     assert!(error.to_string().contains("invalid type"));
 
@@ -484,6 +486,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("invalid LLM intercept request should fail");
     assert!(
         error
@@ -498,6 +501,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("legacy outcome schema should fail");
     assert!(
         error
@@ -512,6 +516,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("invalid annotated request should fail");
     assert!(
         error
@@ -521,6 +526,7 @@ async fn callback_helpers_cover_worker_response_edges() {
 
     let error = callback
         .invoke_llm_request_intercept("llm_intercept_error", "model", valid_llm_request(), None)
+        .await
         .expect_err("LLM intercept worker error should surface");
     assert!(error.to_string().contains("worker.failed: boom"));
 
@@ -531,6 +537,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("unexpected LLM intercept result should fail");
     assert!(
         error
@@ -586,6 +593,7 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
                     valid_llm_request(),
                     LlmSanitizeRequestContext::with_identity(identity.clone()),
                 )
+                .await
                 .expect("empty worker result must represent request omission")
                 .is_none()
         );
@@ -596,6 +604,7 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
                     json!({"secret": "value"}),
                     LlmSanitizeResponseContext::with_identity(identity),
                 )
+                .await
                 .expect("empty worker result must represent response omission")
                 .is_none()
         );
@@ -774,6 +783,7 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
                 request,
                 LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
             )
+            .await
             .expect("request sanitizer must succeed")
             .is_none()
     );
@@ -793,6 +803,7 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
             response,
             LlmSanitizeResponseContext::for_response_codec(Some(codec)),
         )
+        .await
         .expect_err("worker sanitizer error must surface");
     assert!(error.to_string().contains("worker.failed: boom"));
 
@@ -1324,6 +1335,7 @@ async fn install_registrations_covers_registry_error_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
 async fn installed_callbacks_apply_surface_specific_fallbacks() {
     struct RuntimeCleanup {
         registrations: Option<PluginRegistrationContext>,
@@ -1423,7 +1435,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
         ] {
             let entries = NemoRelayContextState::event_sanitize_entries(registry, &[]);
             let sanitized =
-                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries);
+                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries).await;
             assert_eq!(sanitized.data(), None);
             assert_eq!(sanitized.metadata(), None);
         }
@@ -1434,7 +1446,8 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
                 "tool",
                 tool_request.clone(),
                 &entries,
-            ),
+            )
+            .await,
             tool_request
         );
         let entries = state.tool_sanitize_response_entries(&[]);
@@ -1443,7 +1456,8 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
                 "tool",
                 tool_response.clone(),
                 &entries,
-            ),
+            )
+            .await,
             tool_response
         );
         let entries = state.llm_sanitize_request_entries(&[]);
@@ -1453,6 +1467,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
                 crate::api::runtime::LlmSanitizeRequestContext::default(),
                 &entries,
             )
+            .await
             .is_none(),
             "a worker request sanitizer failure must omit the observability payload"
         );
@@ -1463,6 +1478,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
                 crate::api::runtime::LlmSanitizeResponseContext::default(),
                 &entries,
             )
+            .await
             .is_none(),
             "a worker response sanitizer failure must omit the observability payload"
         );

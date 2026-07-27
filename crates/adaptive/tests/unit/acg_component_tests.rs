@@ -1087,12 +1087,16 @@ fn acg_component_request_intercept_passes_original_request_and_annotation_when_t
         plugin,
     );
 
-    let outcome = intercept(
-        "anthropic",
-        invalid_request.clone(),
-        Some(annotated.clone()),
-    )
-    .expect("request intercept should pass through");
+    let outcome = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(intercept(
+            "anthropic".to_string(),
+            invalid_request.clone(),
+            Some(annotated.clone()),
+        ))
+        .expect("request intercept should pass through");
     let translated = outcome.request;
     let returned_annotated = outcome.annotated_request;
 
@@ -1335,7 +1339,16 @@ fn acg_component_request_intercept_rewrites_annotation_without_mutating_provider
         plugin,
     );
 
-    let outcome = intercept("anthropic", request, Some(original_annotation.clone())).unwrap();
+    let outcome = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(intercept(
+            "anthropic".to_string(),
+            request,
+            Some(original_annotation.clone()),
+        ))
+        .unwrap();
 
     assert_eq!(outcome.request.content, original_content);
     let annotation = outcome

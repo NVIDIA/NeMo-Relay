@@ -50,6 +50,16 @@ typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* res
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 typedef struct FfiPluginContext FfiPluginContext;
+typedef struct NemoRelayAsyncCompletion NemoRelayAsyncCompletion;
+typedef struct NemoRelayAsyncNext NemoRelayAsyncNext;
+typedef void (*NemoRelayAsyncNextResultCb)(void*, const char*, const char*);
+extern int32_t nemo_relay_async_completion_resolve_json(const NemoRelayAsyncCompletion*, const char*);
+extern int32_t nemo_relay_async_completion_reject(const NemoRelayAsyncCompletion*, const char*);
+extern bool nemo_relay_async_completion_is_cancelled(const NemoRelayAsyncCompletion*);
+extern void nemo_relay_async_completion_release(const NemoRelayAsyncCompletion*);
+extern int32_t nemo_relay_async_next_invoke_callback(const NemoRelayAsyncNext*, const char*, NemoRelayAsyncNextResultCb, void*);
+extern void nemo_relay_async_next_release(const NemoRelayAsyncNext*);
+extern void goAsyncNextResultTrampoline(void*, char*, char*);
 
 // Middleware chain next function types
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
@@ -87,6 +97,7 @@ typedef NemoRelayCodecEncodeCb NemoRelayCodecEncodeFn;
 import "C"
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -166,6 +177,16 @@ type ToolSanitizeFunc func(name string, args json.RawMessage) json.RawMessage
 // proceed. It returns nil to allow execution, or a non-nil pointer to an error
 // message string to reject the call.
 type ToolConditionalFunc func(name string, args json.RawMessage) *string
+
+// AsyncMiddlewareFunc is the common completion-based middleware callback.
+// The JSON envelope identifies the middleware family and invocation fields.
+type AsyncMiddlewareFunc func(ctx context.Context, invocation json.RawMessage) (any, error)
+
+// AsyncNext invokes the remaining execution chain and returns its eventual result.
+type AsyncNext func(ctx context.Context, invocation json.RawMessage) (json.RawMessage, error)
+
+// AsyncExecutionInterceptFunc is an asynchronous execution intercept with an awaitable next helper.
+type AsyncExecutionInterceptFunc func(ctx context.Context, invocation json.RawMessage, next AsyncNext) (any, error)
 
 // ToolExecutionFunc is a callback that executes a tool call, receiving the
 // arguments as JSON and returning the result JSON or an error.
@@ -588,6 +609,102 @@ func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C
 	goArgs := json.RawMessage(C.GoString(argsJSON))
 	result := fn(goName, goArgs)
 	return C.CString(string(result))
+}
+
+//export goAsyncMiddlewareTrampoline
+func goAsyncMiddlewareTrampoline(userData unsafe.Pointer, invocationJSON *C.char, completion *C.NemoRelayAsyncCompletion) C.uint32_t {
+	fn := lookupClosure(userData).(AsyncMiddlewareFunc)
+	invocation := append(json.RawMessage(nil), []byte(C.GoString(invocationJSON))...)
+	go func() {
+		defer C.nemo_relay_async_completion_release(completion)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if bool(C.nemo_relay_async_completion_is_cancelled(completion)) {
+			cancel()
+		}
+		value, err := fn(ctx, invocation)
+		if err != nil {
+			message := C.CString(err.Error())
+			defer C.free(unsafe.Pointer(message))
+			C.nemo_relay_async_completion_reject(completion, message)
+			return
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			message := C.CString(err.Error())
+			defer C.free(unsafe.Pointer(message))
+			C.nemo_relay_async_completion_reject(completion, message)
+			return
+		}
+		result := C.CString(string(encoded))
+		defer C.free(unsafe.Pointer(result))
+		C.nemo_relay_async_completion_resolve_json(completion, result)
+	}()
+	return C.uint32_t(1)
+}
+
+type asyncNextResult struct {
+	value json.RawMessage
+	err   error
+}
+
+//export goAsyncNextResultTrampoline
+func goAsyncNextResultTrampoline(userData unsafe.Pointer, valueJSON *C.char, errorMessage *C.char) {
+	ch := lookupClosure(userData).(chan asyncNextResult)
+	defer unregisterClosure(userData)
+	if errorMessage != nil {
+		ch <- asyncNextResult{err: errors.New(C.GoString(errorMessage))}
+		return
+	}
+	ch <- asyncNextResult{value: append(json.RawMessage(nil), []byte(C.GoString(valueJSON))...)}
+}
+
+//export goAsyncExecutionInterceptTrampoline
+func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON *C.char, next *C.NemoRelayAsyncNext, completion *C.NemoRelayAsyncCompletion) C.uint32_t {
+	fn := lookupClosure(userData).(AsyncExecutionInterceptFunc)
+	invocation := append(json.RawMessage(nil), []byte(C.GoString(invocationJSON))...)
+	go func() {
+		defer C.nemo_relay_async_completion_release(completion)
+		defer C.nemo_relay_async_next_release(next)
+		nextFn := func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+			ch := make(chan asyncNextResult, 1)
+			token := registerClosure(ch)
+			cPayload := C.CString(string(payload))
+			status := C.nemo_relay_async_next_invoke_callback(
+				next, cPayload,
+				(C.NemoRelayAsyncNextResultCb)(C.goAsyncNextResultTrampoline), token,
+			)
+			C.free(unsafe.Pointer(cPayload))
+			if err := checkStatus(status); err != nil {
+				unregisterClosure(token)
+				return nil, err
+			}
+			select {
+			case result := <-ch:
+				return result.value, result.err
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		value, err := fn(context.Background(), invocation, nextFn)
+		if err != nil {
+			message := C.CString(err.Error())
+			C.nemo_relay_async_completion_reject(completion, message)
+			C.free(unsafe.Pointer(message))
+			return
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			message := C.CString(err.Error())
+			C.nemo_relay_async_completion_reject(completion, message)
+			C.free(unsafe.Pointer(message))
+			return
+		}
+		result := C.CString(string(encoded))
+		C.nemo_relay_async_completion_resolve_json(completion, result)
+		C.free(unsafe.Pointer(result))
+	}()
+	return C.uint32_t(1)
 }
 
 //export goToolConditionalTrampoline

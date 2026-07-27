@@ -167,6 +167,7 @@ class TestLLMGuardrails:
         try:
             handle = llm.call("py_llm_structured_context", make_request())
             llm.call_end(handle, {"response": "ok"})
+            subscribers.flush()
         finally:
             guardrails.deregister_llm_sanitize_request("py_llm_structured_context_request")
             guardrails.deregister_llm_sanitize_response("py_llm_structured_context_response")
@@ -275,7 +276,7 @@ class TestLLMGuardrails:
             guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r, context: r)
         guardrails.deregister_llm_sanitize_request("py_llm_dup")
 
-    def test_sanitize_request_callable_error_omits_observability_input(self):
+    def test_sanitize_request_callable_error_preserves_observability_input(self):
         events = []
         subscribers.register("py_llm_sanitize_req_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
@@ -295,10 +296,10 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_sub")
 
         start = _llm_event(events, "llm_sanitize_req_fail", "start")
-        assert start.data is None
+        assert start.data == {"headers": request.headers, "content": request.content}
         assert start.annotated_request is None
 
-    def test_sanitize_request_invalid_return_omits_observability_input(self):
+    def test_sanitize_request_invalid_return_preserves_observability_input(self):
         events = []
         subscribers.register("py_llm_sanitize_req_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
@@ -318,10 +319,10 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_bad_sub")
 
         start = _llm_event(events, "llm_sanitize_req_bad", "start")
-        assert start.data is None
+        assert start.data == {"headers": request.headers, "content": request.content}
         assert start.annotated_request is None
 
-    def test_sanitize_response_callable_error_omits_observability_output(self):
+    def test_sanitize_response_callable_error_preserves_observability_output(self):
         events = []
         subscribers.register("py_llm_sanitize_resp_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
@@ -340,10 +341,10 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_resp_sub")
 
         end = _llm_event(events, "llm_sanitize_resp_fail", "end")
-        assert end.data is None
+        assert end.data == {"ok": True}
         assert end.annotated_response is None
 
-    def test_sanitize_response_invalid_return_omits_observability_output(self):
+    def test_sanitize_response_invalid_return_preserves_observability_output(self):
         events = []
         subscribers.register("py_llm_sanitize_resp_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
@@ -362,7 +363,7 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_resp_bad_sub")
 
         end = _llm_event(events, "llm_sanitize_resp_bad", "end")
-        assert end.data is None
+        assert end.data == {"ok": True}
         assert end.annotated_response is None
 
     def test_sanitize_response_guardrail_accepts_scalar_json_payloads(self):
@@ -398,7 +399,7 @@ class TestLLMGuardrails:
             cast(guardrails.LlmConditionalExecutionGuardrail, lambda request: 123),
         )
         try:
-            with pytest.raises(RuntimeError, match="expected str or None"):
+            with pytest.raises(RuntimeError, match="unexpected type"):
                 llm.conditional_execution(make_request())
         finally:
             guardrails.deregister_llm_conditional_execution("py_llm_cond_bad_type")
@@ -410,7 +411,7 @@ class TestLLMGuardrails:
             lambda request: raise_runtime_error("boom"),
         )
         try:
-            with pytest.raises(RuntimeError, match="callable failed"):
+            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
                 llm.conditional_execution(make_request())
         finally:
             guardrails.deregister_llm_conditional_execution("py_llm_cond_error")

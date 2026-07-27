@@ -12,8 +12,6 @@ Covers:
 
 from typing import cast
 
-import pytest
-
 import nemo_relay
 from nemo_relay import (
     AnnotatedLLMRequest,
@@ -435,7 +433,7 @@ class TestResponseCodecObjectParam:
             guardrails.deregister_llm_sanitize_response("test-call-end-codec-sanitizer")
 
     def test_manual_call_end_response_codec_failure_raises_after_end_event(self):
-        """manual llm.call_end() surfaces response codec failures instead of dropping them."""
+        """manual llm.call_end() records deferred response codec failures without blocking."""
         captured_events = []
 
         def capture(event):
@@ -448,8 +446,7 @@ class TestResponseCodecObjectParam:
                 "manual-codec-error-llm",
                 LLMRequest({}, {"model": "gpt-4", "messages": []}),
             )
-            with pytest.raises(RuntimeError, match="OpenAI Chat response decode"):
-                llm.call_end(handle, "malformed response", response_codec=OpenAIChatCodec())
+            llm.call_end(handle, "malformed response", response_codec=OpenAIChatCodec())
             subscribers.flush()
 
             end_events = [

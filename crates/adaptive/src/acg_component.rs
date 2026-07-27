@@ -582,26 +582,32 @@ pub(crate) fn create_acg_llm_request_intercept(
     provider: String,
     plugin: Arc<dyn ProviderPlugin>,
 ) -> LlmRequestInterceptFn {
-    Arc::new(move |_name: &str, request: LlmRequest, annotated| {
-        let input_content = request.content.clone();
-        let translated =
-            translate_request(&request, &agent_id, &provider, plugin.as_ref(), &hot_cache)
-                .unwrap_or(request);
-        if annotated.is_some() && translated.content != input_content {
-            let translated_annotated = build_semantic_request_view(&translated)
-                .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))?
-                .annotated_request;
-            return Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                LlmRequest {
-                    headers: translated.headers,
-                    content: input_content,
-                },
-                Some(translated_annotated),
-            ));
-        }
-        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-            translated, annotated,
-        ))
+    Arc::new(move |_name: String, request: LlmRequest, annotated| {
+        let hot_cache = hot_cache.clone();
+        let agent_id = agent_id.clone();
+        let provider = provider.clone();
+        let plugin = plugin.clone();
+        Box::pin(async move {
+            let input_content = request.content.clone();
+            let translated =
+                translate_request(&request, &agent_id, &provider, plugin.as_ref(), &hot_cache)
+                    .unwrap_or(request);
+            if annotated.is_some() && translated.content != input_content {
+                let translated_annotated = build_semantic_request_view(&translated)
+                    .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))?
+                    .annotated_request;
+                return Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    LlmRequest {
+                        headers: translated.headers,
+                        content: input_content,
+                    },
+                    Some(translated_annotated),
+                ));
+            }
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                translated, annotated,
+            ))
+        })
     })
 }
 

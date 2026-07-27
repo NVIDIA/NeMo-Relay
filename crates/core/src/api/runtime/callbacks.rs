@@ -27,8 +27,14 @@ use crate::json::Json;
 ///
 /// The callback receives the current event as immutable context and the fields
 /// it may replace. Later callbacks observe fields returned by earlier entries.
-pub type EventSanitizeFn =
-    Arc<dyn Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync>;
+pub type EventSanitizeFn = Arc<
+    dyn Fn(
+            Event,
+            EventSanitizeFields,
+        ) -> Pin<Box<dyn Future<Output = Result<EventSanitizeFields>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Sanitize a tool request payload before the runtime records it.
 ///
@@ -42,7 +48,8 @@ pub type EventSanitizeFn =
 ///
 /// # Returns
 /// Sanitized JSON payload for the emitted event.
-pub type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
+pub type ToolSanitizeFn =
+    Arc<dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Decide whether a tool call is allowed to continue.
 ///
 /// The callback receives the tool name and the current argument payload. It can
@@ -64,7 +71,11 @@ pub type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// guardrail evaluation.
-pub type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
+pub type ToolConditionalFn = Arc<
+    dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Rewrite tool arguments before execution.
 ///
 /// Tool request intercepts run in priority order and can transform the JSON
@@ -80,7 +91,8 @@ pub type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> +
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
-pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
+pub type ToolInterceptFn =
+    Arc<dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Continuation type invoked by tool execution intercepts.
 ///
 /// Execution intercepts receive this callable as their `next` continuation and
@@ -308,8 +320,14 @@ impl LlmSanitizeResponseContext {
 ///
 /// The context is always supplied and distinguishes no codec, built-in codecs,
 /// runtime-registered codecs, and opaque active codecs.
-pub type LlmSanitizeRequestFn =
-    Arc<dyn Fn(LlmRequest, LlmSanitizeRequestContext) -> Option<LlmRequest> + Send + Sync>;
+pub type LlmSanitizeRequestFn = Arc<
+    dyn Fn(
+            LlmRequest,
+            LlmSanitizeRequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<LlmRequest>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Sanitize an LLM response before the runtime records it.
 ///
 /// These callbacks rewrite the JSON response payload captured on LLM-end
@@ -325,8 +343,14 @@ pub type LlmSanitizeRequestFn =
 ///
 /// The context is always supplied and distinguishes no codec, built-in codecs,
 /// runtime-registered codecs, and opaque active codecs.
-pub type LlmSanitizeResponseFn =
-    Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> Option<Json> + Send + Sync>;
+pub type LlmSanitizeResponseFn = Arc<
+    dyn Fn(
+            Json,
+            LlmSanitizeResponseContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Json>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,
@@ -346,7 +370,11 @@ pub type LlmSanitizeResponseFn =
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// guardrail evaluation.
-pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
+pub type LlmConditionalFn = Arc<
+    dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Rewrite or annotate an LLM request before execution.
 ///
 /// Request intercepts can transform the wire request, attach or replace a
@@ -368,7 +396,11 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
 pub type LlmRequestInterceptFn = Arc<
-    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
+    dyn Fn(
+            String,
+            LlmRequest,
+            Option<AnnotatedLlmRequest>,
+        ) -> Pin<Box<dyn Future<Output = Result<LlmRequestInterceptOutcome>> + Send>>
         + Send
         + Sync,
 >;

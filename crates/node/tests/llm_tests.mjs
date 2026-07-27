@@ -718,7 +718,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize request guardrail failures omit the payload and remain usable', async () => {
+  it('sanitize request guardrail failures preserve the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_req_throw_sub', (event) => events.push(event));
@@ -736,8 +736,8 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'start',
       );
-      assert.equal(start.data, null);
-      assert.match(getLastCallbackError() ?? '', /JavaScript callback threw/i);
+      assert.deepEqual(start.data, { headers: request.headers, content: request.content });
+      assert.match(getLastCallbackError() ?? '', /(unknown error|callback)/i);
 
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_throw');
       const result = await llmCallExecute(
@@ -840,7 +840,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize response guardrail failures omit the payload and remain usable', async () => {
+  it('sanitize response guardrail failures preserve the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_resp_throw_sub', (event) => events.push(event));
@@ -858,7 +858,7 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'end',
       );
-      assert.equal(end.data, null);
+      assert.deepEqual(end.data, response);
       assert.match(getLastCallbackError() ?? '', /response sanitizer boom/i);
 
       deregisterLlmSanitizeResponseGuardrail('node_llm_san_resp_throw');
@@ -883,6 +883,19 @@ describe('LLM guardrails', () => {
   it('conditional guardrail (allow)', () => {
     registerLlmConditionalExecutionGuardrail('node_llm_cond', 10, (request) => null);
     deregisterLlmConditionalExecutionGuardrail('node_llm_cond');
+  });
+
+  it('conditional guardrail awaits a Promise result', async () => {
+    registerLlmConditionalExecutionGuardrail('node_llm_cond_promise', 10, async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return null;
+    });
+    try {
+      const result = await llmCallExecute('llm_cond_promise', makeNative(), () => ({ ok: true }), null, null, null, null, null);
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      deregisterLlmConditionalExecutionGuardrail('node_llm_cond_promise');
+    }
   });
 
   it('conditional guardrail treats implicit undefined as allow', async () => {
@@ -1019,6 +1032,28 @@ describe('LLM intercepts', () => {
     );
     assert.equal(result.saw_intercepted, true);
     deregisterLlmRequestIntercept('node_llm_req_mod');
+  });
+
+  it('request intercept awaits a Promise result', async () => {
+    registerLlmRequestIntercept('node_llm_req_promise', 10, false, async ({ request, annotated }) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return { request: { ...request, content: { ...request.content, promised: true } }, annotated };
+    });
+    try {
+      const result = await llmCallExecute(
+        'llm_req_promise',
+        makeNative(),
+        (request) => ({ promised: request.content.promised }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { promised: true });
+    } finally {
+      deregisterLlmRequestIntercept('node_llm_req_promise');
+    }
   });
 
   it('request intercept throws a catchable error without terminating Node', async () => {

@@ -37,20 +37,29 @@ class _EventSanitizeFields(TypedDict):
     category_profile: _JsonObject | None
     metadata: _Json | None
 
-_ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
-_ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
-_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest", "LlmSanitizeRequestContext"], Optional["LLMRequest"]]
-_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_Json, "LlmSanitizeResponseContext"], Optional[_Json]]
-_EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
-_LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
-_ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
+_ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
+_ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str] | Awaitable[Optional[str]]]
+_LlmSanitizeRequestGuardrail: TypeAlias = Callable[
+    ["LLMRequest", "LlmSanitizeRequestContext"],
+    Optional["LLMRequest"] | Awaitable[Optional["LLMRequest"]],
+]
+_LlmSanitizeResponseGuardrail: TypeAlias = Callable[
+    [_Json, "LlmSanitizeResponseContext"],
+    Optional[_Json] | Awaitable[Optional[_Json]],
+]
+_EventSanitizeGuardrail: TypeAlias = Callable[
+    [ScopeEvent | MarkEvent, _EventSanitizeFields],
+    _EventSanitizeFields | Awaitable[_EventSanitizeFields],
+]
+_LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str] | Awaitable[Optional[str]]]
+_ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolExecutionIntercept: TypeAlias = Callable[
     [str, _Json, Callable[[_Json], Awaitable[_Json]]],
     "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],
-    "LLMRequestInterceptOutcome",
+    "LLMRequestInterceptOutcome" | Awaitable["LLMRequestInterceptOutcome"],
 ]
 _LlmExecutionIntercept: TypeAlias = Callable[
     [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[_Json]]],
@@ -1688,7 +1697,7 @@ def llm_stream_call_execute(
     """
     ...
 
-def tool_request_intercepts(name: str, args: _Json) -> _Json:
+def tool_request_intercepts(name: str, args: _Json) -> Awaitable[_Json]:
     """Run the registered tool request-intercept chain.
 
     Args:
@@ -1703,7 +1712,7 @@ def tool_request_intercepts(name: str, args: _Json) -> _Json:
     """
     ...
 
-def tool_conditional_execution(name: str, args: _Json) -> None:
+def tool_conditional_execution(name: str, args: _Json) -> Awaitable[None]:
     """Run tool conditional-execution guardrails.
 
     Args:
@@ -1719,7 +1728,7 @@ def tool_conditional_execution(name: str, args: _Json) -> None:
     """
     ...
 
-def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequestInterceptOutcome:
+def llm_request_intercepts(name: str, request: LLMRequest) -> Awaitable[LLMRequestInterceptOutcome]:
     """Run the registered LLM request-intercept chain.
 
     Args:
@@ -1734,7 +1743,7 @@ def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequestIntercep
     """
     ...
 
-def llm_conditional_execution(request: LLMRequest) -> None:
+def llm_conditional_execution(request: LLMRequest) -> Awaitable[None]:
     """Run LLM conditional-execution guardrails.
 
     Args:

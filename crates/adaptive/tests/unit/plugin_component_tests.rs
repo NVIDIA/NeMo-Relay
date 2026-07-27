@@ -364,6 +364,7 @@ async fn adaptive_plugin_registers_runtime_and_rolls_back_registration() {
             content: json!({}),
         },
     )
+    .await
     .unwrap();
     assert!(request.request.headers.is_empty());
 

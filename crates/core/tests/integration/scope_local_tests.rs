@@ -84,7 +84,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_sanitized".into(), json!(true));
-            args
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -110,6 +110,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     .unwrap();
 
     // The Start event's input should contain the sanitized args.
+    flush_subscribers().unwrap();
     let captured = captured_snapshot(&events);
     let start_event = &captured[0];
     let input = start_event.input().unwrap();
@@ -166,7 +167,7 @@ async fn test_auto_cleanup_on_scope_pop() {
             args.as_object_mut()
                 .unwrap()
                 .insert("ephemeral".into(), json!(true));
-            Ok(args)
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -234,7 +235,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p10".into(), json!(true));
-            Ok(args)
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -250,7 +251,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p30".into(), json!(true));
-            Ok(args)
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -267,7 +268,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p20".into(), json!(true));
-            Ok(args)
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -326,7 +327,7 @@ fn test_name_coexistence_global_and_scope_local() {
         1,
         Arc::new(move |_name, args| {
             c1.fetch_add(1, Ordering::SeqCst);
-            args
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -339,7 +340,7 @@ fn test_name_coexistence_global_and_scope_local() {
         2,
         Arc::new(move |_name, args| {
             c2.fetch_add(1, Ordering::SeqCst);
-            args
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -354,6 +355,7 @@ fn test_name_coexistence_global_and_scope_local() {
     .unwrap();
 
     // Both guardrails with the same name ran.
+    flush_subscribers().unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 2);
 
     // Cleanup
@@ -400,7 +402,7 @@ async fn test_scope_isolation_between_stacks() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("a"));
-                Ok(args)
+                Box::pin(async move { Ok(args) })
             }),
         )
         .unwrap();
@@ -426,7 +428,7 @@ async fn test_scope_isolation_between_stacks() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("b"));
-                Ok(args)
+                Box::pin(async move { Ok(args) })
             }),
         )
         .unwrap();
@@ -506,7 +508,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("global".into(), json!(true));
-            Ok(args)
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -530,7 +532,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_a".into(), json!(true));
-            Ok(args)
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -555,7 +557,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_b".into(), json!(true));
-            Ok(args)
+            Box::pin(async move { Ok(args) })
         }),
     )
     .unwrap();
@@ -702,11 +704,13 @@ async fn test_scope_local_conditional_execution_guardrail() {
         "tool_blocker",
         1,
         Arc::new(|name, _args| {
-            if name == "banned_tool" {
-                Ok(Some("banned_tool is not allowed in this scope".to_string()))
-            } else {
-                Ok(None)
-            }
+            Box::pin(async move {
+                if name == "banned_tool" {
+                    Ok(Some("banned_tool is not allowed in this scope".to_string()))
+                } else {
+                    Ok(None)
+                }
+            })
         }),
     )
     .unwrap();

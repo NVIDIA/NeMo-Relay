@@ -25,10 +25,10 @@ async function waitFor(events, count) {
   assert.ok(events.length >= count, `expected ${count} events, received ${events.length}`);
 }
 
-function assertSanitizerFieldsCleared(event) {
-  assert.equal(event.data, null);
-  assert.equal(event.category_profile, null);
-  assert.equal(event.metadata, null);
+function assertSanitizerFieldsPreserved(event, expectedData, expectedMetadata = expectedData) {
+  assert.deepEqual(event.data, expectedData);
+  assert.equal(event.category_profile?.subtype, 'seeded');
+  assert.deepEqual(event.metadata, expectedMetadata);
 }
 
 async function initializeWithoutDiscoveredPluginConfig(config) {
@@ -107,13 +107,35 @@ describe('event sanitizer registries', () => {
     assert.ok(lifecycle.every((event) => event.category_profile.subtype === 'sanitized'));
   });
 
-  it('fails closed and records invalid direct sanitizer results', async () => {
+  it('awaits Promise-returning mark sanitizers without making event() asynchronous', async () => {
+    const events = capture('node-event-sanitize-promise-sub');
+    let settled = false;
+    lib.registerMarkSanitizeGuardrail('node-event-promise', 0, async (_event, fields) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      settled = true;
+      return { ...fields, data: { sanitized: true } };
+    });
+    try {
+      const result = lib.event('promise-checkpoint', null, { raw: true });
+      assert.equal(result, undefined);
+      assert.equal(settled, false);
+      await lib.flushSubscribers();
+      await waitFor(events, 1);
+    } finally {
+      lib.deregisterMarkSanitizeGuardrail('node-event-promise');
+      lib.deregisterSubscriber('node-event-sanitize-promise-sub');
+    }
+    assert.equal(settled, true);
+    assert.deepEqual(events.at(-1).data, { sanitized: true });
+  });
+
+  it('fails open and records invalid sanitizer results', async () => {
     const events = capture('node-event-sanitize-invalid-sub');
     const invalidResults = {
       scalar: () => 'invalid',
       emptyObject: () => ({}),
       array: () => [],
-      promise: () => Promise.resolve({ data: { changed: true } }),
+      promise: () => Promise.resolve([]),
     };
     try {
       for (const [kind, sanitizer] of Object.entries(invalidResults)) {
@@ -135,8 +157,8 @@ describe('event sanitizer registries', () => {
           lib.deregisterMarkSanitizeGuardrail(seedName);
           lib.deregisterMarkSanitizeGuardrail(name);
         }
-        assertSanitizerFieldsCleared(events.at(-1));
-        assert.match(lib.getLastCallbackError(), /event sanitizer callback failed/);
+        assertSanitizerFieldsPreserved(events.at(-1), { kept: kind });
+        assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
       }
     } finally {
       lib.deregisterSubscriber('node-event-sanitize-invalid-sub');
@@ -163,12 +185,12 @@ describe('event sanitizer registries', () => {
     assert.equal(start.metadata.background, true);
   });
 
-  it('fails closed and records invalid thread-safe sanitizer results', async () => {
+  it('fails open and records invalid queued sanitizer results', async () => {
     const events = capture('node-event-sanitize-background-invalid-sub');
     const invalidResults = {
       emptyObject: () => ({}),
       array: () => [],
-      promise: () => Promise.resolve({ data: { changed: true } }),
+      promise: () => Promise.resolve([]),
     };
     try {
       for (const [kind, sanitizer] of Object.entries(invalidResults)) {
@@ -193,7 +215,7 @@ describe('event sanitizer registries', () => {
         const start = events.find(
           (event) => event.kind === 'scope' && event.name === name && event.scope_category === 'start',
         );
-        assertSanitizerFieldsCleared(start);
+        assertSanitizerFieldsPreserved(start, { kept: kind });
         assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
       }
     } finally {
@@ -201,7 +223,7 @@ describe('event sanitizer registries', () => {
     }
   });
 
-  it('fails closed when a thread-safe sanitizer throws', async () => {
+  it('fails open when a queued sanitizer throws', async () => {
     const events = capture('node-event-sanitize-background-throw-sub');
     lib.clearLastCallbackError();
     lib.registerScopeSanitizeStartGuardrail('node-background-throw-seed', -1, (_event, fields) => ({
@@ -220,7 +242,7 @@ describe('event sanitizer registries', () => {
       const start = events.find(
         (event) => event.kind === 'scope' && event.name === 'background-throw-tool' && event.scope_category === 'start',
       );
-      assertSanitizerFieldsCleared(start);
+      assertSanitizerFieldsPreserved(start, { kept: true });
       assert.match(lib.getLastCallbackError() ?? '', /background sanitizer boom/i);
     } finally {
       lib.deregisterScopeSanitizeStartGuardrail('node-background-throw-seed');
@@ -289,7 +311,7 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(marks.cleared.data, { raw: true });
   });
 
-  it('fails closed when a plugin-owned sanitizer throws', async () => {
+  it('fails open when a plugin-owned sanitizer throws', async () => {
     const kind = `node.test.event-sanitize-throw.${Date.now()}`;
     const events = capture('node-event-sanitize-plugin-throw-sub');
     plugin.register(kind, {
@@ -314,7 +336,7 @@ describe('event sanitizer registries', () => {
       lib.event('plugin-throw', null, { raw: true }, { raw: true });
       lib.flushSubscribers();
       await waitFor(events, 1);
-      assertSanitizerFieldsCleared(events.at(-1));
+      assertSanitizerFieldsPreserved(events.at(-1), { raw: true });
       assert.match(lib.getLastCallbackError() ?? '', /plugin sanitizer boom/i);
     } finally {
       plugin.clear();

@@ -168,8 +168,9 @@ fn stale_process_runtime_owner_is_reclaimed() {
     reset_global();
 }
 
-#[test]
-fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
+async fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     let _guard = lock_runtime_owner();
     reset_global();
 
@@ -178,11 +179,13 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         1,
         false,
         Arc::new(|_name, mut request, annotated| {
-            assert!(annotated.is_none());
-            request.headers.insert("x-no-codec".into(), json!(true));
-            let mut annotated = SharedTestCodec.decode(&request)?;
-            annotated.model = Some("interceptor-model".into());
-            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            Box::pin(async move {
+                assert!(annotated.is_none());
+                request.headers.insert("x-no-codec".into(), json!(true));
+                let mut annotated = SharedTestCodec.decode(&request)?;
+                annotated.model = Some("interceptor-model".into());
+                Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            })
         }),
     )
     .unwrap();
@@ -196,6 +199,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
             },
             None,
         )
+        .await
         .unwrap();
     assert_eq!(
         request_without_codec.headers.get("x-no-codec"),
@@ -215,10 +219,12 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         1,
         false,
         Arc::new(|_name, mut request, annotated| {
-            let mut annotated = annotated.expect("codec should provide annotated request");
-            annotated.model = Some("intercepted-model".into());
-            request.headers.insert("x-codec".into(), json!(true));
-            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            Box::pin(async move {
+                let mut annotated = annotated.expect("codec should provide annotated request");
+                annotated.model = Some("intercepted-model".into());
+                request.headers.insert("x-codec".into(), json!(true));
+                Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            })
         }),
     )
     .unwrap();
@@ -233,6 +239,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
             },
             Some(codec),
         )
+        .await
         .unwrap();
 
     assert_eq!(
@@ -259,8 +266,9 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     reset_global();
 }
 
-#[test]
-fn managed_request_chain_records_contributions_incrementally_while_standalone_retains_them() {
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
+async fn managed_request_chain_records_contributions_incrementally_while_standalone_retains_them() {
     let _guard = lock_runtime_owner();
     reset_global();
 
@@ -269,11 +277,12 @@ fn managed_request_chain_records_contributions_incrementally_while_standalone_re
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(
-                LlmRequestInterceptOutcome::new(request, annotated).with_optimization_contribution(
-                    LlmOptimizationContribution::new("accepted", "custom"),
-                ),
-            )
+            Box::pin(async move {
+                Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_optimization_contribution(LlmOptimizationContribution::new(
+                        "accepted", "custom",
+                    )))
+            })
         }),
     )
     .unwrap();
@@ -282,14 +291,13 @@ fn managed_request_chain_records_contributions_incrementally_while_standalone_re
         2,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(
-                LlmRequestInterceptOutcome::new(request, annotated).with_optimization_contribution(
-                    LlmOptimizationContribution::new(
+            Box::pin(async move {
+                Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_optimization_contribution(LlmOptimizationContribution::new(
                         "x".repeat(MAX_LLM_OPTIMIZATION_CONTRIBUTION_BYTES),
                         "custom",
-                    ),
-                ),
-            )
+                    )))
+            })
         }),
     )
     .unwrap();
@@ -302,6 +310,7 @@ fn managed_request_chain_records_contributions_incrementally_while_standalone_re
         },
         None,
     )
+    .await
     .unwrap();
     assert_eq!(standalone.3.len(), 2);
     assert!(standalone.3.iter().all(|item| item.sequence.is_none()));
@@ -316,6 +325,7 @@ fn managed_request_chain_records_contributions_incrementally_while_standalone_re
         None,
         &recorder,
     )
+    .await
     .unwrap();
     assert!(managed.3.is_empty());
     let recorded = recorder.unemitted();
@@ -326,8 +336,9 @@ fn managed_request_chain_records_contributions_incrementally_while_standalone_re
     reset_global();
 }
 
-#[test]
-fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
+async fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
     let _guard = lock_runtime_owner();
     reset_global();
 
@@ -369,6 +380,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
         },
         None,
     )
+    .await
     .unwrap();
     assert_eq!(
         request.headers.get(DYNAMO_SESSION_ID_HEADER_KEY),
@@ -396,6 +408,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
         },
         Some(Arc::new(SharedTestCodec)),
     )
+    .await
     .unwrap();
     assert_eq!(
         request_with_codec.headers.get(DYNAMO_SESSION_ID_HEADER_KEY),
@@ -433,6 +446,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
         },
         None,
     )
+    .await
     .unwrap();
     assert_eq!(
         request.headers.get(DYNAMO_SESSION_ID_HEADER_KEY),
@@ -475,6 +489,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
         },
         None,
     )
+    .await
     .unwrap();
     assert!(!request.headers.contains_key(DYNAMO_SESSION_ID_HEADER_KEY));
     assert!(

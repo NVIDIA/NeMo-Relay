@@ -196,15 +196,19 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
         stream: None,
         extra: serde_json::Map::new(),
     };
-    let outcome = req_fn(
-        "model",
-        LlmRequest {
-            headers: serde_json::Map::new(),
-            content: serde_json::json!({}),
-        },
-        Some(annotated.clone()),
-    )
-    .unwrap();
+    let outcome = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(req_fn(
+            "model".to_string(),
+            LlmRequest {
+                headers: serde_json::Map::new(),
+                content: serde_json::json!({}),
+            },
+            Some(annotated.clone()),
+        ))
+        .unwrap();
     let request = outcome.request;
     let returned_annotated = outcome.annotated_request;
 
@@ -266,15 +270,19 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
     }));
     let req_fn =
         AdaptiveHintsIntercept::new(hot_cache, "fallback-agent".to_string()).into_request_fn();
-    let outcome = req_fn(
-        "model",
-        LlmRequest {
-            headers: serde_json::Map::new(),
-            content: serde_json::json!({}),
-        },
-        None,
-    )
-    .unwrap();
+    let outcome = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(req_fn(
+            "model".to_string(),
+            LlmRequest {
+                headers: serde_json::Map::new(),
+                content: serde_json::json!({}),
+            },
+            None,
+        ))
+        .unwrap();
     let request = outcome.request;
     let annotated = outcome.annotated_request;
     assert_eq!(
@@ -305,15 +313,19 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
     });
     let poisoned_req_fn =
         AdaptiveHintsIntercept::new(poisoned_cache, "fallback-agent".to_string()).into_request_fn();
-    let poisoned_outcome = poisoned_req_fn(
-        "model",
-        LlmRequest {
-            headers: serde_json::Map::new(),
-            content: serde_json::json!({"existing": true}),
-        },
-        None,
-    )
-    .unwrap();
+    let poisoned_outcome = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(poisoned_req_fn(
+            "model".to_string(),
+            LlmRequest {
+                headers: serde_json::Map::new(),
+                content: serde_json::json!({"existing": true}),
+            },
+            None,
+        ))
+        .unwrap();
     let poisoned_request = poisoned_outcome.request;
     assert!(
         poisoned_request

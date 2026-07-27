@@ -46,7 +46,7 @@ fn scope_stack_tracks_scope_local_registries_and_subscribers() {
             priority: 10,
             payload: RequestIntercept {
                 break_chain: false,
-                callable: Arc::new(|_, value| Ok(value)),
+                callable: Arc::new(|_, value| Box::pin(async move { Ok(value) })),
             },
         })
         .unwrap();
@@ -229,7 +229,9 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
         .register(Guardrail {
             name: "snapshot_guardrail".to_string(),
             priority: 1,
-            payload: Arc::new(|name, _args| Ok(Some(format!("{name} blocked")))),
+            payload: Arc::new(|name, _args| {
+                Box::pin(async move { Ok(Some(format!("{name} blocked"))) })
+            }),
         })
         .unwrap();
 
@@ -249,15 +251,19 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
     });
     let subscribers = [subscriber];
 
-    let rejection = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
-        "snapshot_target",
-        &json!({}),
-        &entries,
-        &subscribers,
-        None,
-        None,
-    )
-    .unwrap();
+    let rejection = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(
+            NemoRelayContextState::tool_conditional_execution_snapshot_chain(
+                "snapshot_target",
+                &json!({}),
+                &entries,
+                &subscribers,
+                None,
+                None,
+            ),
+        )
+        .unwrap();
 
     assert_eq!(rejection.as_deref(), Some("snapshot_target blocked"));
     flush_subscribers().unwrap();
@@ -320,12 +326,14 @@ fn context_state_supports_extensions_events_and_builders() {
         content: json!({"messages": []}),
     };
     let entries = state.llm_sanitize_request_entries(&[]);
-    let sanitized = NemoRelayContextState::llm_sanitize_request_snapshot_chain(
-        request.clone(),
-        crate::api::runtime::LlmSanitizeRequestContext::default(),
-        &entries,
-    )
-    .expect("an empty sanitizer chain must retain the request");
+    let sanitized = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+            request.clone(),
+            crate::api::runtime::LlmSanitizeRequestContext::default(),
+            &entries,
+        ))
+        .expect("an empty sanitizer chain must retain the request");
     assert!(sanitized.headers.is_empty());
 
     let events = Arc::new(Mutex::new(Vec::<String>::new()));

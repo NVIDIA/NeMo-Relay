@@ -14,17 +14,23 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
+    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayCodecDecodeFn,
+    NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
     NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb,
     NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb,
     NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb, NemoRelayPluginRegisterCb,
     NemoRelayPluginValidateCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
-    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn, wrap_collector_fn,
-    wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn,
-    wrap_llm_exec_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_fn,
-    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_fn,
-    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_async_event_sanitize_fn,
+    wrap_async_llm_conditional_fn, wrap_async_llm_execution_intercept_fn,
+    wrap_async_llm_request_intercept_fn, wrap_async_llm_sanitize_request_fn,
+    wrap_async_llm_sanitize_response_fn, wrap_async_llm_stream_execution_intercept_fn,
+    wrap_async_tool_conditional_fn, wrap_async_tool_execution_intercept_fn,
+    wrap_async_tool_json_fn, wrap_codec_fn, wrap_collector_fn, wrap_event_sanitize_fn,
+    wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn, wrap_llm_exec_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn,
+    wrap_tool_conditional_fn, wrap_tool_exec_fn, wrap_tool_exec_intercept_fn,
+    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::convert::{
     c_str_to_json, c_str_to_opt_json, c_str_to_string, json_to_c_string, nemo_relay_string_free,
@@ -141,7 +147,7 @@ pub unsafe extern "C" fn nemo_relay_tool_request_intercepts(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match core_tool_api::tool_request_intercepts(&name, args) {
+    match tokio_runtime().block_on(core_tool_api::tool_request_intercepts(&name, args)) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
             NemoRelayStatus::Ok
@@ -179,7 +185,7 @@ pub unsafe extern "C" fn nemo_relay_tool_conditional_execution(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match core_tool_api::tool_conditional_execution(&name, &args) {
+    match tokio_runtime().block_on(core_tool_api::tool_conditional_execution(&name, &args)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -233,7 +239,7 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match core_llm_api::llm_request_intercepts(name_str, request) {
+    match tokio_runtime().block_on(core_llm_api::llm_request_intercepts(name_str, request)) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
@@ -396,7 +402,7 @@ pub unsafe extern "C" fn nemo_relay_llm_conditional_execution(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match core_llm_api::llm_conditional_execution(&request) {
+    match tokio_runtime().block_on(core_llm_api::llm_conditional_execution(&request)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }

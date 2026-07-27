@@ -2,11 +2,141 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoRelayFreeFn, NemoRelayStatus, NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb,
-    NemoRelayToolSanitizeCb, c_char, c_str_to_string, clear_last_error, core_registry_api,
-    status_from_error, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
+    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayFreeFn, NemoRelayStatus,
+    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, c_char,
+    c_str_to_string, clear_last_error, core_registry_api, status_from_error,
+    wrap_async_tool_conditional_fn, wrap_async_tool_execution_intercept_fn,
+    wrap_async_tool_json_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
     wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
+
+macro_rules! async_tool_json_registration {
+    ($name:ident, $register:path) => {
+        /// Register a completion-based asynchronous tool middleware callback.
+        #[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(
+            name: *const c_char,
+            priority: i32,
+            break_chain: bool,
+            cb: NemoRelayAsyncJsonCb,
+            user_data: *mut libc::c_void,
+            free_fn: NemoRelayFreeFn,
+        ) -> NemoRelayStatus {
+            clear_last_error();
+            let name = match c_str_to_string(name) {
+                Ok(name) => name,
+                Err(status) => return status,
+            };
+            let callback = wrap_async_tool_json_fn(cb, user_data, free_fn);
+            match $register(&name, priority, break_chain, callback) {
+                Ok(()) => NemoRelayStatus::Ok,
+                Err(error) => status_from_error(&error),
+            }
+        }
+    };
+}
+
+/// Register a completion-based asynchronous tool request sanitizer.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_tool_sanitize_request_guardrail_async(
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayAsyncJsonCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    let name = match c_str_to_string(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match core_registry_api::register_tool_sanitize_request_guardrail(
+        &name,
+        priority,
+        wrap_async_tool_json_fn(cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
+/// Register a completion-based asynchronous tool response sanitizer.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_tool_sanitize_response_guardrail_async(
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayAsyncJsonCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    let name = match c_str_to_string(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match core_registry_api::register_tool_sanitize_response_guardrail(
+        &name,
+        priority,
+        wrap_async_tool_json_fn(cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
+/// Register a completion-based asynchronous tool conditional guardrail.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_tool_conditional_execution_guardrail_async(
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayAsyncJsonCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    let name = match c_str_to_string(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match core_registry_api::register_tool_conditional_execution_guardrail(
+        &name,
+        priority,
+        wrap_async_tool_conditional_fn(cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
+async_tool_json_registration!(
+    nemo_relay_register_tool_request_intercept_async,
+    core_registry_api::register_tool_request_intercept
+);
+
+/// Register a completion-based asynchronous tool execution intercept.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_tool_execution_intercept_async(
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayAsyncInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    let name = match c_str_to_string(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match core_registry_api::register_tool_execution_intercept(
+        &name,
+        priority,
+        wrap_async_tool_execution_intercept_fn(cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tool guardrail registrations

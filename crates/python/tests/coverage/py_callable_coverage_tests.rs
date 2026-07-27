@@ -153,7 +153,14 @@ class RaisingResponseCodec:
             "model": "codec-model"
         }))
         .unwrap();
-        let outcome = request_intercept("llm", make_request(), Some(annotated.clone())).unwrap();
+        let outcome = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(request_intercept(
+                "llm".to_string(),
+                make_request(),
+                Some(annotated.clone()),
+            ))
+            .unwrap();
         assert_eq!(
             outcome.annotated_request.unwrap().last_user_message(),
             Some("annotated")
@@ -163,7 +170,13 @@ class RaisingResponseCodec:
             module.getattr("request_bad_annotated").unwrap().unbind(),
         );
         assert!(
-            bad_request_intercept("llm", make_request(), Some(annotated))
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(bad_request_intercept(
+                    "llm".to_string(),
+                    make_request(),
+                    Some(annotated),
+                ))
                 .unwrap_err()
                 .to_string()
                 .contains("must return LLMRequestInterceptOutcome")
@@ -173,7 +186,13 @@ class RaisingResponseCodec:
             module.getattr("request_short_tuple").unwrap().unbind(),
         );
         assert!(
-            short_request_intercept("llm", make_request(), None)
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(short_request_intercept(
+                    "llm".to_string(),
+                    make_request(),
+                    None
+                ))
                 .unwrap_err()
                 .to_string()
                 .contains("must return LLMRequestInterceptOutcome")
@@ -190,10 +209,13 @@ class RaisingResponseCodec:
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_bad_json").unwrap().unbind())
                 .unwrap();
         assert_eq!(
-            llm_response(
-                json!({"ok": true}),
-                nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
-            ),
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(llm_response(
+                    json!({"ok": true}),
+                    nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
+                ))
+                .unwrap(),
             None
         );
 
@@ -683,23 +705,29 @@ def invalid(event, fields):
             metadata: Some(json!({"secret": true})),
         };
 
-        let sanitized = wrap_py_event_sanitize_fn(module.getattr("sanitize").unwrap().unbind())(
-            &event,
-            fields.clone(),
-        );
+        let sanitized = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(wrap_py_event_sanitize_fn(
+                module.getattr("sanitize").unwrap().unbind(),
+            )(event.clone(), fields.clone()))
+            .unwrap();
         assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
         assert_eq!(sanitized.metadata, None);
 
-        let raised = wrap_py_event_sanitize_fn(module.getattr("raises").unwrap().unbind())(
-            &event,
-            fields.clone(),
-        );
+        let raised = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(wrap_py_event_sanitize_fn(
+                module.getattr("raises").unwrap().unbind(),
+            )(event.clone(), fields.clone()))
+            .unwrap();
         assert_eq!(raised, EventSanitizeFields::default());
 
-        let invalid = wrap_py_event_sanitize_fn(module.getattr("invalid").unwrap().unbind())(
-            &event,
-            fields.clone(),
-        );
+        let invalid = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(wrap_py_event_sanitize_fn(
+                module.getattr("invalid").unwrap().unbind(),
+            )(event, fields.clone()))
+            .unwrap();
         assert_eq!(invalid, EventSanitizeFields::default());
     });
 }

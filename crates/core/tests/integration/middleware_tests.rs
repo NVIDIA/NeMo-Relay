@@ -10,6 +10,8 @@
 
 #![allow(clippy::await_holding_lock)]
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -80,6 +82,18 @@ use serde_json::json;
 // All tests share the global context, so we serialize them.
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
+fn ready<T: Send + 'static>(
+    value: T,
+) -> Pin<Box<dyn Future<Output = nemo_relay::error::Result<T>> + Send>> {
+    Box::pin(async move { Ok(value) })
+}
+
+fn ready_result<T: Send + 'static>(
+    value: nemo_relay::error::Result<T>,
+) -> Pin<Box<dyn Future<Output = nemo_relay::error::Result<T>> + Send>> {
+    Box::pin(async move { value })
+}
+
 fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCategory) -> bool {
     event.scope_type() == Some(scope_type) && event.scope_category() == Some(scope_category)
 }
@@ -149,8 +163,8 @@ fn assert_middleware_callback_labels(
 
 /// Register 3 tool sanitize request guardrails at priorities 1, 3, 2;
 /// verify execution order is 1, 2, 3.
-#[test]
-fn test_sanitize_guardrail_priority_ordering() {
+#[tokio::test]
+async fn test_sanitize_guardrail_priority_ordering() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -164,7 +178,7 @@ fn test_sanitize_guardrail_priority_ordering() {
         1,
         Arc::new(move |_name, args| {
             o1.lock().unwrap().push(1);
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -176,7 +190,7 @@ fn test_sanitize_guardrail_priority_ordering() {
         3,
         Arc::new(move |_name, args| {
             o3.lock().unwrap().push(3);
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -188,7 +202,7 @@ fn test_sanitize_guardrail_priority_ordering() {
         2,
         Arc::new(move |_name, args| {
             o2.lock().unwrap().push(2);
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -201,6 +215,7 @@ fn test_sanitize_guardrail_priority_ordering() {
             .build(),
     )
     .unwrap();
+    flush_subscribers().unwrap();
 
     let recorded = order.lock().unwrap();
     assert_eq!(
@@ -217,8 +232,8 @@ fn test_sanitize_guardrail_priority_ordering() {
 
 /// Register 3 tool request intercepts at priorities 1, 3, 2;
 /// verify execution order is 1, 2, 3.
-#[test]
-fn test_request_intercept_priority_ordering() {
+#[tokio::test]
+async fn test_request_intercept_priority_ordering() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -232,7 +247,7 @@ fn test_request_intercept_priority_ordering() {
         false,
         Arc::new(move |_name, args| {
             o1.lock().unwrap().push(1);
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -244,7 +259,7 @@ fn test_request_intercept_priority_ordering() {
         false,
         Arc::new(move |_name, args| {
             o3.lock().unwrap().push(3);
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -256,13 +271,15 @@ fn test_request_intercept_priority_ordering() {
         false,
         Arc::new(move |_name, args| {
             o2.lock().unwrap().push(2);
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
     // Use the standalone intercept chain function
-    let _result = tool_request_intercepts("test_tool", json!({})).unwrap();
+    let _result = tool_request_intercepts("test_tool", json!({}))
+        .await
+        .unwrap();
 
     let recorded = order.lock().unwrap();
     assert_eq!(
@@ -278,8 +295,8 @@ fn test_request_intercept_priority_ordering() {
 }
 
 /// Verify that deregistering and re-registering at a different priority re-sorts.
-#[test]
-fn test_re_registration_at_different_priority_re_sorts() {
+#[tokio::test]
+async fn test_re_registration_at_different_priority_re_sorts() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -293,7 +310,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
         false,
         Arc::new(move |_name, args| {
             o_a.lock().unwrap().push("a_p10".into());
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -305,13 +322,13 @@ fn test_re_registration_at_different_priority_re_sorts() {
         false,
         Arc::new(move |_name, args| {
             o_b.lock().unwrap().push("b_p20".into());
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
     // First call: a runs before b
-    let _ = tool_request_intercepts("test", json!({})).unwrap();
+    let _ = tool_request_intercepts("test", json!({})).await.unwrap();
     {
         let recorded = order.lock().unwrap();
         assert_eq!(*recorded, vec!["a_p10", "b_p20"]);
@@ -326,14 +343,14 @@ fn test_re_registration_at_different_priority_re_sorts() {
         false,
         Arc::new(move |_name, args| {
             o_a2.lock().unwrap().push("a_p30".into());
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
     // Clear and re-run
     order.lock().unwrap().clear();
-    let _ = tool_request_intercepts("test", json!({})).unwrap();
+    let _ = tool_request_intercepts("test", json!({})).await.unwrap();
     {
         let recorded = order.lock().unwrap();
         assert_eq!(
@@ -354,8 +371,8 @@ fn test_re_registration_at_different_priority_re_sorts() {
 
 /// Register 2 request intercepts, first with break_chain=true.
 /// Verify second intercept is NOT called and the result from the first is used.
-#[test]
-fn test_break_chain_stops_subsequent_intercepts() {
+#[tokio::test]
+async fn test_break_chain_stops_subsequent_intercepts() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -370,7 +387,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
             args.as_object_mut()
                 .unwrap()
                 .insert("breaker_ran".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -385,12 +402,12 @@ fn test_break_chain_stops_subsequent_intercepts() {
             args.as_object_mut()
                 .unwrap()
                 .insert("after_ran".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
-    let result = tool_request_intercepts("tool", json!({})).unwrap();
+    let result = tool_request_intercepts("tool", json!({})).await.unwrap();
 
     // First intercept's transformation should be applied
     assert_eq!(result["breaker_ran"], true);
@@ -410,8 +427,8 @@ fn test_break_chain_stops_subsequent_intercepts() {
 }
 
 /// With break_chain=false on all intercepts, both should be called.
-#[test]
-fn test_no_break_chain_runs_all_intercepts() {
+#[tokio::test]
+async fn test_no_break_chain_runs_all_intercepts() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -425,7 +442,7 @@ fn test_no_break_chain_runs_all_intercepts() {
         false,
         Arc::new(move |_name, args| {
             c1.fetch_add(1, Ordering::SeqCst);
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -437,12 +454,12 @@ fn test_no_break_chain_runs_all_intercepts() {
         false,
         Arc::new(move |_name, args| {
             c2.fetch_add(1, Ordering::SeqCst);
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
-    let _ = tool_request_intercepts("tool", json!({})).unwrap();
+    let _ = tool_request_intercepts("tool", json!({})).await.unwrap();
 
     assert_eq!(
         call_count.load(Ordering::SeqCst),
@@ -696,7 +713,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
             let mut metadata = fields.metadata.unwrap_or_else(|| json!({}));
             metadata["sanitized"] = json!(true);
             fields.metadata = Some(metadata);
-            fields
+            ready(fields)
         }),
     )
     .unwrap();
@@ -1332,7 +1349,7 @@ async fn test_conditional_guardrail_rejects() {
     register_tool_conditional_execution_guardrail(
         "rejector",
         1,
-        Arc::new(|_name, _args| Ok(Some("not allowed".to_string()))),
+        Arc::new(|_name, _args| Box::pin(async { Ok(Some("not allowed".to_string())) })),
     )
     .unwrap();
 
@@ -1366,8 +1383,12 @@ async fn test_conditional_guardrail_allows() {
     reset_global();
     setup_isolated_thread();
 
-    register_tool_conditional_execution_guardrail("allower", 1, Arc::new(|_name, _args| Ok(None)))
-        .unwrap();
+    register_tool_conditional_execution_guardrail(
+        "allower",
+        1,
+        Arc::new(|_name, _args| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
@@ -1405,12 +1426,16 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
     )
     .unwrap();
 
-    register_tool_conditional_execution_guardrail("tool_scope_allow", 1, Arc::new(|_, _| Ok(None)))
-        .unwrap();
+    register_tool_conditional_execution_guardrail(
+        "tool_scope_allow",
+        1,
+        Arc::new(|_, _| ready(None)),
+    )
+    .unwrap();
     register_tool_conditional_execution_guardrail(
         "tool_scope_reject",
         2,
-        Arc::new(|_, _| Ok(Some("blocked by tool guardrail".to_string()))),
+        Arc::new(|_, _| ready(Some("blocked by tool guardrail".to_string()))),
     )
     .unwrap();
 
@@ -1490,13 +1515,17 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     reset_global();
     setup_isolated_thread();
 
-    register_tool_conditional_execution_guardrail("allows", 1, Arc::new(|_name, _args| Ok(None)))
-        .unwrap();
+    register_tool_conditional_execution_guardrail(
+        "allows",
+        1,
+        Arc::new(|_name, _args| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
 
     register_tool_conditional_execution_guardrail(
         "rejects",
         2,
-        Arc::new(|_name, _args| Ok(Some("blocked by second".to_string()))),
+        Arc::new(|_name, _args| Box::pin(async { Ok(Some("blocked by second".to_string())) })),
     )
     .unwrap();
 
@@ -1536,9 +1565,9 @@ async fn test_conditional_guardrail_tool_name_filtering() {
         1,
         Arc::new(|name, _args| {
             if name == "dangerous_tool" {
-                Ok(Some("dangerous_tool is forbidden".to_string()))
+                ready(Some("dangerous_tool is forbidden".to_string()))
             } else {
-                Ok(None)
+                ready(None)
             }
         }),
     )
@@ -1578,8 +1607,8 @@ async fn test_conditional_guardrail_tool_name_filtering() {
 
 /// Push scope, register scope-local guardrail, verify it applies,
 /// pop scope, verify it no longer applies.
-#[test]
-fn test_scope_local_guardrail_lifecycle() {
+#[tokio::test]
+async fn test_scope_local_guardrail_lifecycle() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     let handle = setup_isolated_scope("lifecycle_scope");
@@ -1594,7 +1623,7 @@ fn test_scope_local_guardrail_lifecycle() {
         1,
         Arc::new(move |_name, args| {
             cc.fetch_add(1, Ordering::SeqCst);
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -1607,6 +1636,7 @@ fn test_scope_local_guardrail_lifecycle() {
             .build(),
     )
     .unwrap();
+    flush_subscribers().unwrap();
     assert_eq!(
         call_count.load(Ordering::SeqCst),
         1,
@@ -1703,8 +1733,8 @@ async fn test_scope_local_execution_intercept_cleanup() {
 /// Register global guardrail at priority 5, scope-local guardrail at priority 3.
 /// Verify scope-local runs first (lower priority number = higher priority).
 /// Verify both are applied.
-#[test]
-fn test_scope_local_and_global_guardrail_merge_priority() {
+#[tokio::test]
+async fn test_scope_local_and_global_guardrail_merge_priority() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     let handle = setup_isolated_scope("merge_scope");
@@ -1721,7 +1751,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
             args.as_object_mut()
                 .unwrap()
                 .insert("global".into(), json!(true));
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -1737,7 +1767,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
             args.as_object_mut()
                 .unwrap()
                 .insert("local".into(), json!(true));
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -1760,6 +1790,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
             .build(),
     )
     .unwrap();
+    flush_subscribers().unwrap();
 
     // Verify order: local (priority 3) runs before global (priority 5)
     let recorded = order.lock().unwrap();
@@ -1890,7 +1921,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
     register_tool_conditional_execution_guardrail(
         "gate",
         1,
-        Arc::new(|_name, _args| Ok(Some("blocked".to_string()))),
+        Arc::new(|_name, _args| Box::pin(async { Ok(Some("blocked".to_string())) })),
     )
     .unwrap();
 
@@ -1902,7 +1933,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
         false,
         Arc::new(move |_name, args| {
             ic.store(true, Ordering::SeqCst);
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -1941,7 +1972,7 @@ async fn test_conditional_rejection_prevents_execution() {
     register_tool_conditional_execution_guardrail(
         "gate2",
         1,
-        Arc::new(|_name, _args| Ok(Some("no execution".to_string()))),
+        Arc::new(|_name, _args| Box::pin(async { Ok(Some("no execution".to_string())) })),
     )
     .unwrap();
 
@@ -1992,8 +2023,8 @@ async fn test_conditional_rejection_prevents_execution() {
 // =========================================================================
 
 /// Sanitize guardrails pipe data through sequentially.
-#[test]
-fn test_sanitize_guardrails_pipe_data() {
+#[tokio::test]
+async fn test_sanitize_guardrails_pipe_data() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -2006,7 +2037,7 @@ fn test_sanitize_guardrails_pipe_data() {
             args.as_object_mut()
                 .unwrap()
                 .insert("field_a".into(), json!(true));
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -2021,7 +2052,7 @@ fn test_sanitize_guardrails_pipe_data() {
             args.as_object_mut()
                 .unwrap()
                 .insert("field_b".into(), json!(has_a));
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -2064,8 +2095,8 @@ fn test_sanitize_guardrails_pipe_data() {
 }
 
 /// Response sanitize guardrails also pipe through.
-#[test]
-fn test_response_sanitize_guardrails_pipe() {
+#[tokio::test]
+async fn test_response_sanitize_guardrails_pipe() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -2078,7 +2109,7 @@ fn test_response_sanitize_guardrails_pipe() {
                 .as_object_mut()
                 .unwrap()
                 .insert("sanitized".into(), json!(true));
-            result
+            ready(result)
         }),
     )
     .unwrap();
@@ -2130,8 +2161,8 @@ fn test_response_sanitize_guardrails_pipe() {
 
 /// Use multiple threads to register/deregister guardrails concurrently.
 /// Verify no panics or data races.
-#[test]
-fn test_concurrent_register_deregister() {
+#[tokio::test]
+async fn test_concurrent_register_deregister() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
@@ -2148,7 +2179,7 @@ fn test_concurrent_register_deregister() {
                 let res = register_tool_sanitize_request_guardrail(
                     &name,
                     i,
-                    Arc::new(|_name, args| args),
+                    Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
                 );
                 assert!(res.is_ok(), "Registration should succeed for {name}");
 
@@ -2176,8 +2207,8 @@ fn test_concurrent_register_deregister() {
 }
 
 /// Concurrent register/deregister of intercepts across multiple threads.
-#[test]
-fn test_concurrent_intercept_mutations() {
+#[tokio::test]
+async fn test_concurrent_intercept_mutations() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
@@ -2194,7 +2225,7 @@ fn test_concurrent_intercept_mutations() {
                     &name,
                     i,
                     false,
-                    Arc::new(|_name, args| Ok(args)),
+                    Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
                 );
                 assert!(res.is_ok());
 
@@ -2220,8 +2251,8 @@ fn test_concurrent_intercept_mutations() {
 }
 
 /// Interleaved register and tool call execution from multiple threads.
-#[test]
-fn test_concurrent_register_and_read() {
+#[tokio::test]
+async fn test_concurrent_register_and_read() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
@@ -2230,7 +2261,7 @@ fn test_concurrent_register_and_read() {
         register_tool_sanitize_request_guardrail(
             &format!("stable_{i}"),
             i,
-            Arc::new(|_name, args| args),
+            Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
         )
         .unwrap();
     }
@@ -2249,7 +2280,7 @@ fn test_concurrent_register_and_read() {
                     let _ = register_tool_sanitize_request_guardrail(
                         &name,
                         100 + i,
-                        Arc::new(|_name, args| args),
+                        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
                     );
                     std::thread::yield_now();
                     let _ = deregister_tool_sanitize_request_guardrail(&name);
@@ -2283,8 +2314,8 @@ fn test_concurrent_register_and_read() {
 // Lock Regression Tests
 // =========================================================================
 
-#[test]
-fn test_tool_request_intercept_registry_mutations_apply_to_later_calls() {
+#[tokio::test]
+async fn test_tool_request_intercept_registry_mutations_apply_to_later_calls() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -2311,23 +2342,27 @@ fn test_tool_request_intercept_registry_mutations_apply_to_later_calls() {
                     Arc::new(move |_, args| {
                         record_middleware_callback(&tracked, "tool_request_late");
                         assert_middleware_callback_locks_are_free();
-                        Ok(args)
+                        ready(args)
                     }),
                 )
                 .unwrap();
             }
 
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
-    let args = tool_request_intercepts("tool", json!({"round": 1})).unwrap();
+    let args = tool_request_intercepts("tool", json!({"round": 1}))
+        .await
+        .unwrap();
     assert_eq!(args["round"], 1);
     assert_middleware_callback_labels(&callbacks, &["tool_request_initial"]);
 
     callbacks.lock().unwrap().clear();
-    let args = tool_request_intercepts("tool", json!({"round": 2})).unwrap();
+    let args = tool_request_intercepts("tool", json!({"round": 2}))
+        .await
+        .unwrap();
     assert_eq!(args["round"], 2);
     assert_middleware_callback_labels(&callbacks, &["tool_request_initial", "tool_request_late"]);
 
@@ -2335,8 +2370,8 @@ fn test_tool_request_intercept_registry_mutations_apply_to_later_calls() {
     deregister_tool_request_intercept("snapshot_tool_request_late").unwrap();
 }
 
-#[test]
-fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
+#[tokio::test]
+async fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -2363,7 +2398,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
                     Arc::new(move |_, request, annotated| {
                         record_middleware_callback(&tracked, "llm_request_late");
                         assert_middleware_callback_locks_are_free();
-                        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                        ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                             request, annotated,
                         ))
                     }),
@@ -2371,7 +2406,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
                 .unwrap();
             }
 
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 request, annotated,
             ))
         }),
@@ -2384,6 +2419,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
             content: json!({"round": 1}),
         },
     )
+    .await
     .unwrap();
     assert_eq!(request.request.content["round"], 1);
     assert_middleware_callback_labels(&callbacks, &["llm_request_initial"]);
@@ -2396,6 +2432,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
             content: json!({"round": 2}),
         },
     )
+    .await
     .unwrap();
     assert_eq!(request.request.content["round"], 2);
     assert_middleware_callback_labels(&callbacks, &["llm_request_initial", "llm_request_late"]);
@@ -2418,7 +2455,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, _| {
             record_middleware_callback(&tracked, "tool_conditional_global");
             assert_middleware_callback_locks_are_free();
-            Ok(None)
+            ready(None)
         }),
     )
     .unwrap();
@@ -2430,7 +2467,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, _| {
             record_middleware_callback(&tracked, "tool_conditional_scope");
             assert_middleware_callback_locks_are_free();
-            Ok(None)
+            ready(None)
         }),
     )
     .unwrap();
@@ -2442,7 +2479,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_request_global");
             assert_middleware_callback_locks_are_free();
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -2455,7 +2492,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_request_scope");
             assert_middleware_callback_locks_are_free();
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -2466,7 +2503,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_sanitize_request_global");
             assert_middleware_callback_locks_are_free();
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -2478,7 +2515,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_sanitize_request_scope");
             assert_middleware_callback_locks_are_free();
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -2512,7 +2549,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, result| {
             record_middleware_callback(&tracked, "tool_sanitize_response_global");
             assert_middleware_callback_locks_are_free();
-            result
+            ready(result)
         }),
     )
     .unwrap();
@@ -2524,7 +2561,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, result| {
             record_middleware_callback(&tracked, "tool_sanitize_response_scope");
             assert_middleware_callback_locks_are_free();
-            result
+            ready(result)
         }),
     )
     .unwrap();
@@ -2589,7 +2626,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_| {
             record_middleware_callback(&tracked, "llm_conditional_global");
             assert_middleware_callback_locks_are_free();
-            Ok(None)
+            ready(None)
         }),
     )
     .unwrap();
@@ -2601,7 +2638,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_| {
             record_middleware_callback(&tracked, "llm_conditional_scope");
             assert_middleware_callback_locks_are_free();
-            Ok(None)
+            ready(None)
         }),
     )
     .unwrap();
@@ -2613,7 +2650,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, request, annotated| {
             record_middleware_callback(&tracked, "llm_request_global");
             assert_middleware_callback_locks_are_free();
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 request, annotated,
             ))
         }),
@@ -2628,7 +2665,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, request, annotated| {
             record_middleware_callback(&tracked, "llm_request_scope");
             assert_middleware_callback_locks_are_free();
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 request, annotated,
             ))
         }),
@@ -2641,7 +2678,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_global");
             assert_middleware_callback_locks_are_free();
-            Some(request)
+            ready(Some(request))
         }),
     )
     .unwrap();
@@ -2653,7 +2690,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_scope");
             assert_middleware_callback_locks_are_free();
-            Some(request)
+            ready(Some(request))
         }),
     )
     .unwrap();
@@ -2710,7 +2747,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_global");
             assert_middleware_callback_locks_are_free();
-            Some(response)
+            ready(Some(response))
         }),
     )
     .unwrap();
@@ -2722,7 +2759,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_scope");
             assert_middleware_callback_locks_are_free();
-            Some(response)
+            ready(Some(response))
         }),
     )
     .unwrap();
@@ -2785,6 +2822,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     while let Some(chunk) = stream.next().await {
         chunk.unwrap();
     }
+    stream.close().await.unwrap();
     assert_middleware_callback_labels(
         &callbacks,
         &[
@@ -2855,7 +2893,7 @@ async fn test_full_pipeline_integration() {
             args.as_object_mut()
                 .unwrap()
                 .insert("intercepted".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -2867,7 +2905,7 @@ async fn test_full_pipeline_integration() {
         1,
         Arc::new(move |_name, args| {
             o2.lock().unwrap().push("sanitize_request".into());
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -2879,7 +2917,7 @@ async fn test_full_pipeline_integration() {
         1,
         Arc::new(move |_name, _args| {
             o3.lock().unwrap().push("conditional".into());
-            Ok(None) // Allow
+            ready(None) // Allow
         }),
     )
     .unwrap();
@@ -2906,7 +2944,7 @@ async fn test_full_pipeline_integration() {
         1,
         Arc::new(move |_name, result| {
             o5.lock().unwrap().push("sanitize_response".into());
-            result
+            ready(result)
         }),
     )
     .unwrap();
@@ -2964,15 +3002,23 @@ async fn test_full_pipeline_integration() {
 // =========================================================================
 
 /// Attempting to register a guardrail with the same name returns AlreadyExists.
-#[test]
-fn test_duplicate_guardrail_registration_returns_error() {
+#[tokio::test]
+async fn test_duplicate_guardrail_registration_returns_error() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    register_tool_sanitize_request_guardrail("duplicate", 1, Arc::new(|_name, args| args)).unwrap();
+    register_tool_sanitize_request_guardrail(
+        "duplicate",
+        1,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
 
-    let err =
-        register_tool_sanitize_request_guardrail("duplicate", 2, Arc::new(|_name, args| args));
+    let err = register_tool_sanitize_request_guardrail(
+        "duplicate",
+        2,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    );
 
     assert!(err.is_err());
     match err.unwrap_err() {
@@ -2987,19 +3033,24 @@ fn test_duplicate_guardrail_registration_returns_error() {
 }
 
 /// Attempting to register an intercept with the same name returns AlreadyExists.
-#[test]
-fn test_duplicate_intercept_registration_returns_error() {
+#[tokio::test]
+async fn test_duplicate_intercept_registration_returns_error() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    register_tool_request_intercept("dup_intercept", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    register_tool_request_intercept(
+        "dup_intercept",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
 
     let err = register_tool_request_intercept(
         "dup_intercept",
         2,
         false,
-        Arc::new(|_name, args| Ok(args)),
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
     );
 
     assert!(err.is_err());
@@ -3019,8 +3070,8 @@ fn test_duplicate_intercept_registration_returns_error() {
 // =========================================================================
 
 /// Deregistering a non-existent guardrail returns false.
-#[test]
-fn test_deregister_nonexistent_returns_false() {
+#[tokio::test]
+async fn test_deregister_nonexistent_returns_false() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
@@ -3032,8 +3083,8 @@ fn test_deregister_nonexistent_returns_false() {
 }
 
 /// Deregistering removes the guardrail from the chain.
-#[test]
-fn test_deregister_removes_from_chain() {
+#[tokio::test]
+async fn test_deregister_removes_from_chain() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -3046,7 +3097,7 @@ fn test_deregister_removes_from_chain() {
         1,
         Arc::new(move |_name, args| {
             cc.fetch_add(1, Ordering::SeqCst);
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -3059,6 +3110,7 @@ fn test_deregister_removes_from_chain() {
             .build(),
     )
     .unwrap();
+    flush_subscribers().unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
 
     // Deregister
@@ -3073,6 +3125,7 @@ fn test_deregister_removes_from_chain() {
             .build(),
     )
     .unwrap();
+    flush_subscribers().unwrap();
     assert_eq!(
         call_count.load(Ordering::SeqCst),
         1,
@@ -3094,7 +3147,7 @@ async fn test_llm_conditional_guardrail_rejects() {
     register_llm_conditional_execution_guardrail(
         "llm_gate",
         1,
-        Arc::new(|_req| Ok(Some("LLM call rejected".to_string()))),
+        Arc::new(|_req| ready(Some("LLM call rejected".to_string()))),
     )
     .unwrap();
 
@@ -3145,12 +3198,12 @@ async fn test_llm_conditional_guardrail_emits_guardrail_scope() {
     )
     .unwrap();
 
-    register_llm_conditional_execution_guardrail("llm_scope_allow", 1, Arc::new(|_| Ok(None)))
+    register_llm_conditional_execution_guardrail("llm_scope_allow", 1, Arc::new(|_| ready(None)))
         .unwrap();
     register_llm_conditional_execution_guardrail(
         "llm_scope_reject",
         2,
-        Arc::new(|_| Ok(Some("blocked by llm guardrail".to_string()))),
+        Arc::new(|_| ready(Some("blocked by llm guardrail".to_string()))),
     )
     .unwrap();
 
@@ -3239,9 +3292,9 @@ async fn test_llm_request_intercept_transforms() {
         "llm_req_i",
         1,
         false,
-        Arc::new(|_name: &str, mut req: LlmRequest, annotated| {
+        Arc::new(|_name: String, mut req: LlmRequest, annotated| {
             req.headers.insert("x-intercepted".into(), json!(true));
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -3253,15 +3306,15 @@ async fn test_llm_request_intercept_transforms() {
         content: json!({"prompt": "hello"}),
     };
 
-    let result = llm_request_intercepts("test_llm", request).unwrap();
+    let result = llm_request_intercepts("test_llm", request).await.unwrap();
     assert_eq!(result.request.headers["x-intercepted"], true);
 
     // Cleanup
     deregister_llm_request_intercept("llm_req_i").unwrap();
 }
 
-#[test]
-fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
+#[tokio::test]
+async fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -3276,8 +3329,10 @@ fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
             priority,
             break_chain,
             Arc::new(move |_name, request, annotated| {
-                Ok(LlmRequestInterceptOutcome::new(request, annotated)
-                    .with_pending_mark(PendingMarkSpec::builder().name(mark_name).build()))
+                ready(
+                    LlmRequestInterceptOutcome::new(request, annotated)
+                        .with_pending_mark(PendingMarkSpec::builder().name(mark_name).build()),
+                )
             }),
         )
         .unwrap();
@@ -3290,6 +3345,7 @@ fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
             content: json!({"prompt": "hello"}),
         },
     )
+    .await
     .unwrap();
 
     assert_eq!(
@@ -3325,7 +3381,7 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
         1,
         Arc::new(|event, mut fields| {
             fields.metadata = Some(json!({"sanitized_mark": event.name()}));
-            fields
+            ready(fields)
         }),
     )
     .unwrap();
@@ -3334,24 +3390,26 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated)
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("request.optimized")
-                        .category(EventCategory::custom())
-                        .category_profile(
-                            CategoryProfile::builder()
-                                .subtype("optimizer.saved_tokens")
-                                .build(),
-                        )
-                        .data(json!({"saved_tokens": 12}))
-                        .build(),
-                )
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("request.optimized.second")
-                        .build(),
-                ))
+            ready(
+                LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("request.optimized")
+                            .category(EventCategory::custom())
+                            .category_profile(
+                                CategoryProfile::builder()
+                                    .subtype("optimizer.saved_tokens")
+                                    .build(),
+                            )
+                            .data(json!({"saved_tokens": 12}))
+                            .build(),
+                    )
+                    .with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("request.optimized.second")
+                            .build(),
+                    ),
+            )
         }),
     )
     .unwrap();
@@ -3452,7 +3510,7 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
                 data.insert("payload".to_string(), json!({"secret": "[redacted]"}));
                 data.remove("future_secret");
             }
-            fields
+            ready(fields)
         }),
     )
     .unwrap();
@@ -3469,7 +3527,7 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
                 contribution.payload = Some(json!({"secret": "[scope-end-redacted]"}));
                 contribution.extra.remove("future_secret");
             }
-            fields
+            ready(fields)
         }),
     )
     .unwrap();
@@ -3495,8 +3553,10 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
             contribution
                 .extra
                 .insert("future_secret".to_string(), json!("classified"));
-            Ok(LlmRequestInterceptOutcome::new(request, annotated)
-                .with_optimization_contribution(contribution))
+            ready(
+                LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_optimization_contribution(contribution),
+            )
         }),
     )
     .unwrap();
@@ -3701,7 +3761,7 @@ async fn test_stream_optimization_mark_uses_the_llm_captured_sanitizer_scope() {
             {
                 data.insert("payload".to_string(), json!({"secret": "[redacted]"}));
             }
-            fields
+            ready(fields)
         }),
     )
     .unwrap();
@@ -3756,6 +3816,7 @@ async fn test_stream_optimization_mark_uses_the_llm_captured_sanitizer_scope() {
     while let Some(item) = stream.next().await {
         item.unwrap();
     }
+    stream.close().await.unwrap();
     set_thread_scope_stack(original_stack);
 
     let captured = captured_events_snapshot(&events);
@@ -3801,8 +3862,10 @@ async fn test_concurrent_managed_llm_calls_keep_optimization_evidence_isolated()
                 saved: Some(LlmOptimizationTokens::saved_prompt(saved_tokens)),
                 ..LlmOptimizationTokenImpact::default()
             });
-            Ok(LlmRequestInterceptOutcome::new(request, annotated)
-                .with_optimization_contribution(contribution))
+            ready(
+                LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_optimization_contribution(contribution),
+            )
         }),
     )
     .unwrap();
@@ -3893,8 +3956,10 @@ async fn test_failed_request_intercept_does_not_emit_pending_marks_or_start_scop
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated)
-                .with_pending_mark(PendingMarkSpec::builder().name("must.not.emit").build()))
+            ready(
+                LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_pending_mark(PendingMarkSpec::builder().name("must.not.emit").build()),
+            )
         }),
     )
     .unwrap();
@@ -3903,7 +3968,7 @@ async fn test_failed_request_intercept_does_not_emit_pending_marks_or_start_scop
         2,
         false,
         Arc::new(|_name, _request, _annotated| {
-            Err(FlowError::Internal("request intercept failed".into()))
+            ready_result(Err(FlowError::Internal("request intercept failed".into())))
         }),
     )
     .unwrap();
@@ -4018,7 +4083,7 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
                 .as_object_mut()
                 .unwrap()
                 .insert("phase".into(), json!("request"));
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -4112,7 +4177,7 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
                 .as_object_mut()
                 .unwrap()
                 .insert("phase".into(), json!("request"));
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -4165,6 +4230,7 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
     while let Some(chunk) = stream.next().await {
         chunk.unwrap();
     }
+    stream.close().await.unwrap();
 
     assert!(
         !original_called.load(Ordering::SeqCst),
@@ -4193,19 +4259,19 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
 // =========================================================================
 
 /// tool_conditional_execution returns Ok(()) when no guardrails reject.
-#[test]
-fn test_standalone_conditional_execution_passes() {
+#[tokio::test]
+async fn test_standalone_conditional_execution_passes() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
 
-    let result = tool_conditional_execution("tool", &json!({}));
+    let result = tool_conditional_execution("tool", &json!({})).await;
     assert!(result.is_ok(), "No guardrails means no rejection");
 }
 
 /// tool_conditional_execution returns GuardrailRejected when a guardrail rejects.
-#[test]
-fn test_standalone_conditional_execution_rejects() {
+#[tokio::test]
+async fn test_standalone_conditional_execution_rejects() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -4213,11 +4279,11 @@ fn test_standalone_conditional_execution_rejects() {
     register_tool_conditional_execution_guardrail(
         "standalone_gate",
         1,
-        Arc::new(|_name, _args| Ok(Some("rejected by standalone".to_string()))),
+        Arc::new(|_name, _args| Box::pin(async { Ok(Some("rejected by standalone".to_string())) })),
     )
     .unwrap();
 
-    let result = tool_conditional_execution("tool", &json!({}));
+    let result = tool_conditional_execution("tool", &json!({})).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         FlowError::GuardrailRejected(reason) => {
@@ -4260,12 +4326,14 @@ async fn test_empty_chain_passthrough() {
 }
 
 /// Standalone intercept chain with no registrations returns input unchanged.
-#[test]
-fn test_empty_request_intercept_chain() {
+#[tokio::test]
+async fn test_empty_request_intercept_chain() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
 
-    let result = tool_request_intercepts("tool", json!({"key": "val"})).unwrap();
+    let result = tool_request_intercepts("tool", json!({"key": "val"}))
+        .await
+        .unwrap();
     assert_eq!(result["key"], "val");
 }

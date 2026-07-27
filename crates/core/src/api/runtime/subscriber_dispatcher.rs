@@ -4,8 +4,17 @@
 //! Asynchronous subscriber delivery for native targets.
 
 use crate::api::event::Event;
-use crate::api::runtime::EventSubscriberFn;
+use crate::api::registry::Guardrail;
+use crate::api::runtime::{
+    EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
+};
 use crate::error::Result;
+use std::future::Future;
+use std::pin::Pin;
+
+pub(crate) type EventTransformFn = Box<
+    dyn FnOnce(Event) -> Pin<Box<dyn Future<Output = Event> + Send + 'static>> + Send + 'static,
+>;
 
 mod native {
     use std::cell::Cell;
@@ -24,6 +33,8 @@ mod native {
     enum DispatcherMessage {
         Deliver {
             event: Box<Event>,
+            transform: Option<EventTransformFn>,
+            sanitizers: Vec<Guardrail<EventSanitizeFn>>,
             subscribers: Vec<EventSubscriberFn>,
             scope_stack: ScopeStackHandle,
         },
@@ -46,6 +57,8 @@ mod native {
         }
         let message = DispatcherMessage::Deliver {
             event: Box::new(event.clone()),
+            transform: None,
+            sanitizers: Vec::new(),
             subscribers: subscribers.to_vec(),
             scope_stack: current_scope_stack(),
         };
@@ -72,6 +85,45 @@ mod native {
                 );
                 false
             }
+            Err(_) => false,
+        }
+    }
+
+    pub(super) fn dispatch_sanitized_event(
+        event: Event,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> bool {
+        let message = DispatcherMessage::Deliver {
+            event: Box::new(event),
+            transform: None,
+            sanitizers,
+            subscribers: subscribers.to_vec(),
+            scope_stack,
+        };
+        match dispatcher_sender() {
+            Ok(sender) => sender.send(message).is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    pub(super) fn dispatch_transformed_event(
+        event: Event,
+        transform: EventTransformFn,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> bool {
+        let message = DispatcherMessage::Deliver {
+            event: Box::new(event),
+            transform: Some(transform),
+            sanitizers,
+            subscribers: subscribers.to_vec(),
+            scope_stack,
+        };
+        match dispatcher_sender() {
+            Ok(sender) => sender.send(message).is_ok(),
             Err(_) => false,
         }
     }
@@ -149,9 +201,11 @@ mod native {
         match message {
             DispatcherMessage::Deliver {
                 event,
+                transform,
+                sanitizers,
                 subscribers,
                 scope_stack,
-            } => deliver_event(event, subscribers, scope_stack),
+            } => deliver_event(event, transform, sanitizers, subscribers, scope_stack),
             DispatcherMessage::Flush { done } => {
                 let _ = done.send(());
             }
@@ -160,12 +214,15 @@ mod native {
 
     fn deliver_event(
         event: Box<Event>,
+        transform: Option<EventTransformFn>,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         subscribers: Vec<EventSubscriberFn>,
         scope_stack: ScopeStackHandle,
     ) {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         IN_DISPATCHER.with(|flag| flag.set(true));
+        let event = sanitize_event_snapshot(*event, transform, sanitizers);
         for subscriber in subscribers {
             if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
                 log::error!(
@@ -178,11 +235,78 @@ mod native {
         IN_DISPATCHER.with(|flag| flag.set(false));
         restore_thread_scope_stack(previous_scope_stack);
     }
+
+    /// Apply sanitizers on the dispatcher thread. A sanitizer panic must not
+    /// drop or partially clear an event: retain the last successful snapshot
+    /// and continue publication (fail open).
+    fn sanitize_event_snapshot(
+        event: Event,
+        transform: Option<EventTransformFn>,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    ) -> Event {
+        let original = event.clone();
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_runtime_failed";
+                    "Event sanitizer runtime failed; publishing the original event snapshot: {error}"
+                );
+                return original;
+            }
+        };
+        match catch_unwind(AssertUnwindSafe(|| {
+            runtime.block_on(async move {
+                let event = match transform {
+                    Some(transform) => transform(event).await,
+                    None => event,
+                };
+                NemoRelayContextState::event_sanitize_snapshot_chain(event, &sanitizers).await
+            })
+        })) {
+            Ok(event) => event,
+            Err(_) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_panicked";
+                    "Event sanitizer panicked; publishing the original event snapshot"
+                );
+                original
+            }
+        }
+    }
 }
 
 /// Queue an event for subscriber delivery.
 pub(crate) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
     native::dispatch_event(event, subscribers)
+}
+
+/// Queue a snapshot for serial event sanitization followed by subscriber
+/// delivery. Used by synchronous scope and mark APIs.
+pub(crate) fn dispatch_sanitized_event(
+    event: Event,
+    sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> bool {
+    native::dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
+}
+
+/// Queue a snapshot for a middleware-specific asynchronous transformation,
+/// followed by event sanitization and subscriber delivery.
+pub(crate) fn dispatch_transformed_event(
+    event: Event,
+    transform: EventTransformFn,
+    sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> bool {
+    native::dispatch_transformed_event(event, transform, sanitizers, subscribers, scope_stack)
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.
