@@ -17,6 +17,17 @@ import { callGatewayStatus, type TestGatewayMethodHandler } from './gateway-stat
 
 const liveSmokeEnabled = process.env.NEMO_RELAY_OPENCLAW_LIVE_SMOKE === '1';
 
+async function waitForExportFile(outputDir: string, prefix: string, timeoutMs = 2_000): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const files = await fs.readdir(outputDir);
+    const exportedPath = files.find((file) => file.startsWith(prefix) && file.endsWith('.json'));
+    if (exportedPath) return exportedPath;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return undefined;
+}
+
 it(
   'runs a live NeMo Relay binding smoke for session ATIF export and hook replay',
   { skip: !liveSmokeEnabled },
@@ -133,8 +144,7 @@ it(
         { sessionId: '../live-session:1' },
       );
 
-      const files = await fs.readdir(outputDir);
-      const exportedPath = files.find((file) => file.startsWith('live-') && file.endsWith('.json'));
+      const exportedPath = await waitForExportFile(outputDir, 'live-');
       assert.ok(exportedPath, 'expected generic observability ATIF export');
       const exported = JSON.parse(await fs.readFile(path.join(outputDir, exportedPath), 'utf8')) as unknown;
       assert.equal(typeof exported, 'object');
