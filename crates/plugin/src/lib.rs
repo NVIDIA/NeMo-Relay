@@ -40,6 +40,8 @@ use serde_json::Map;
 /// Version 3 reserves the native async middleware extension. Hosts retain a
 /// version-2 table for already-built plugins during entry-point negotiation.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 3;
+/// ABI version that introduced completion-based asynchronous middleware.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
@@ -842,7 +844,7 @@ pub type NemoRelayNativeAsyncMiddlewareCb =
 /// treating the pointer as a [`NemoRelayNativeHostApiV1`].
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct NemoRelayNativeHostApiV2 {
+pub struct NemoRelayNativeHostApiV3 {
     /// Compatibility prefix for ABI-v1/v2 plugins.
     pub v1: NemoRelayNativeHostApiV1,
     /// Resolves an async callback completion with a JSON value.
@@ -882,8 +884,8 @@ pub struct NemoRelayNativeHostApiV2 {
     ) -> NemoRelayStatus,
 }
 
-unsafe impl Send for NemoRelayNativeHostApiV2 {}
-unsafe impl Sync for NemoRelayNativeHostApiV2 {}
+unsafe impl Send for NemoRelayNativeHostApiV3 {}
+unsafe impl Sync for NemoRelayNativeHostApiV3 {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -2383,12 +2385,12 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
-            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV2>()
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
             return NemoRelayStatus::InvalidArg;
         }
-        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV2) };
+        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
         self.with_name(name, |_, name| unsafe {
             (host.plugin_context_register_async_middleware)(
                 self.raw,

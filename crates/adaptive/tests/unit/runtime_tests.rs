@@ -636,11 +636,8 @@ async fn adaptive_runtime_bind_scope_requires_registration_and_passes_through_wi
         }),
     };
 
-    let translated = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(llm_request_intercepts("anthropic", request.clone()))
+    let translated = llm_request_intercepts("anthropic", request.clone())
+        .await
         .expect("request intercept chain should pass through when no hot-cache state exists");
 
     assert_eq!(translated.request.content, request.content);

@@ -1111,58 +1111,58 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
     Arc::new(move |event: Event, fields: EventSanitizeFields| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
-            let result = Python::attach(|py| -> FlowResult<Py<PyAny>> {
-                let py_event = match &event {
-                    Event::Scope(inner) => Py::new(
-                        py,
-                        crate::py_types::PyScopeEvent {
-                            inner: inner.clone(),
-                        },
-                    )
-                    .map(|value| value.into_any()),
-                    Event::Mark(inner) => Py::new(
-                        py,
-                        crate::py_types::PyMarkEvent {
-                            inner: inner.clone(),
-                        },
-                    )
-                    .map(|value| value.into_any()),
-                };
-                let py_event = match py_event {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!("nemo_relay: failed to convert event sanitizer context: {error}");
-                        return Err(FlowError::Internal(error.to_string()));
-                    }
-                };
-                let fields_json = match serde_json::to_value(&fields) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!(
-                            "nemo_relay: failed to serialize event sanitizer fields: {error}"
-                        );
-                        return Err(FlowError::Internal(error.to_string()));
-                    }
-                };
-                let py_fields = match json_to_py(py, &fields_json) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!("nemo_relay: failed to convert event sanitizer fields: {error}");
-                        return Err(FlowError::Internal(error.to_string()));
-                    }
-                };
-                let result = py_fn
-                    .call1(py, (py_event, py_fields))
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                if result.bind(py).getattr("__await__").is_ok() {
-                    py.import("asyncio")
-                        .and_then(|asyncio| asyncio.call_method1("run", (result,)))
-                        .map(|value| value.unbind())
-                        .map_err(|error| FlowError::Internal(error.to_string()))
-                } else {
-                    Ok(result)
-                }
-            })?;
+            let result = Python::attach(
+                |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
+                    let py_event = match &event {
+                        Event::Scope(inner) => Py::new(
+                            py,
+                            crate::py_types::PyScopeEvent {
+                                inner: inner.clone(),
+                            },
+                        )
+                        .map(|value| value.into_any()),
+                        Event::Mark(inner) => Py::new(
+                            py,
+                            crate::py_types::PyMarkEvent {
+                                inner: inner.clone(),
+                            },
+                        )
+                        .map(|value| value.into_any()),
+                    };
+                    let py_event = match py_event {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!(
+                                "nemo_relay: failed to convert event sanitizer context: {error}"
+                            );
+                            return Err(FlowError::Internal(error.to_string()));
+                        }
+                    };
+                    let fields_json = match serde_json::to_value(&fields) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!(
+                                "nemo_relay: failed to serialize event sanitizer fields: {error}"
+                            );
+                            return Err(FlowError::Internal(error.to_string()));
+                        }
+                    };
+                    let py_fields = match json_to_py(py, &fields_json) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!(
+                                "nemo_relay: failed to convert event sanitizer fields: {error}"
+                            );
+                            return Err(FlowError::Internal(error.to_string()));
+                        }
+                    };
+                    let result = py_fn
+                        .call1(py, (py_event, py_fields))
+                        .map_err(|error| FlowError::Internal(error.to_string()))?;
+                    split_py_object_or_future(py, result)
+                },
+            );
+            let result = resolve_py_object_or_future(result).await?;
             Python::attach(|py| {
                 py_to_json(result.bind(py))
                     .map_err(|error| FlowError::Internal(error.to_string()))

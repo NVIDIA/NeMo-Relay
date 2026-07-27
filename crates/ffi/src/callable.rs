@@ -84,6 +84,7 @@ pub type NemoRelayAsyncJsonCb = unsafe extern "C" fn(
 /// Runtime-owned asynchronous `next` continuation for execution intercepts.
 pub struct NemoRelayAsyncNext {
     inner: AsyncNextInner,
+    runtime: tokio::runtime::Handle,
 }
 
 enum AsyncNextInner {
@@ -123,6 +124,11 @@ async fn invoke_async_json(
     user_data: Arc<UserData>,
     invocation: Json,
 ) -> Result<Json> {
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+        FlowError::Internal(format!(
+            "async C intercept requires a Tokio runtime: {error}"
+        ))
+    })?;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
@@ -134,6 +140,16 @@ async fn invoke_async_json(
     unsafe { nemo_relay_string_free_internal(invocation) };
     if state == NemoRelayAsyncCallbackState::Complete {
         unsafe { drop(Arc::from_raw(callback_ref)) };
+        if completion
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+        {
+            return Err(FlowError::Internal(
+                "async C callback returned Complete without settling".into(),
+            ));
+        }
     }
     let mut wait = CompletionWait {
         completion,
@@ -156,7 +172,10 @@ async fn invoke_async_intercept(
         cancelled: AtomicBool::new(false),
     });
     let callback_ref = Arc::into_raw(completion.clone());
-    let next = Arc::new(NemoRelayAsyncNext { inner: next });
+    let next = Arc::new(NemoRelayAsyncNext {
+        inner: next,
+        runtime,
+    });
     let next_ref = Arc::into_raw(next);
     let invocation = json_to_c_string(&invocation);
     let state = unsafe { cb(user_data.ptr, invocation, next_ref, callback_ref) };
@@ -164,6 +183,16 @@ async fn invoke_async_intercept(
     if state == NemoRelayAsyncCallbackState::Complete {
         unsafe { drop(Arc::from_raw(callback_ref)) };
         unsafe { drop(Arc::from_raw(next_ref)) };
+        if completion
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+        {
+            return Err(FlowError::Internal(
+                "async C intercept returned Complete without settling".into(),
+            ));
+        }
     }
     let mut wait = CompletionWait {
         completion,
@@ -202,57 +231,67 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke(
     };
     unsafe { Arc::increment_strong_count(completion) };
     let completion = unsafe { Arc::from_raw(completion) };
-    let future: Pin<Box<dyn Future<Output = Result<Json>> + Send>> =
-        match &next.inner {
-            AsyncNextInner::Tool(next) => {
-                let next = next.clone();
-                Box::pin(async move {
-                    let outcome = next(invocation).await?;
-                    serde_json::to_value(outcome)
-                        .map_err(|error| FlowError::Internal(error.to_string()))
-                })
-            }
-            AsyncNextInner::Llm(next) => {
-                let request = match serde_json::from_value(invocation) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        return {
-                            let _ = completion.sender.lock().unwrap().take().map(|sender| {
-                                sender.send(Err(FlowError::Internal(error.to_string())))
-                            });
-                            NemoRelayStatus::InvalidJson
-                        };
-                    }
-                };
-                let next = next.clone();
-                Box::pin(async move { next(request).await })
-            }
-            AsyncNextInner::LlmStream(next) => {
-                let request = match serde_json::from_value(invocation) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        return {
-                            let _ = completion.sender.lock().unwrap().take().map(|sender| {
-                                sender.send(Err(FlowError::Internal(error.to_string())))
-                            });
-                            NemoRelayStatus::InvalidJson
-                        };
-                    }
-                };
-                let next = next.clone();
-                Box::pin(async move {
-                    let mut stream = next(request).await?;
-                    let mut chunks = Vec::new();
-                    while let Some(chunk) = stream.next().await {
-                        chunks.push(chunk?);
-                    }
-                    Ok(Json::Array(chunks))
-                })
-            }
-        };
-    tokio::spawn(async move {
+    let future: Pin<Box<dyn Future<Output = Result<Json>> + Send>> = match &next.inner {
+        AsyncNextInner::Tool(next) => {
+            let next = next.clone();
+            Box::pin(async move {
+                let outcome = next(invocation).await?;
+                serde_json::to_value(outcome)
+                    .map_err(|error| FlowError::Internal(error.to_string()))
+            })
+        }
+        AsyncNextInner::Llm(next) => {
+            let request = match serde_json::from_value(invocation) {
+                Ok(request) => request,
+                Err(error) => {
+                    return {
+                        let _ = completion
+                            .sender
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take()
+                            .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
+                        NemoRelayStatus::InvalidJson
+                    };
+                }
+            };
+            let next = next.clone();
+            Box::pin(async move { next(request).await })
+        }
+        AsyncNextInner::LlmStream(next) => {
+            let request = match serde_json::from_value(invocation) {
+                Ok(request) => request,
+                Err(error) => {
+                    return {
+                        let _ = completion
+                            .sender
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take()
+                            .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
+                        NemoRelayStatus::InvalidJson
+                    };
+                }
+            };
+            let next = next.clone();
+            Box::pin(async move {
+                let mut stream = next(request).await?;
+                let mut chunks = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    chunks.push(chunk?);
+                }
+                Ok(Json::Array(chunks))
+            })
+        }
+    };
+    next.runtime.spawn(async move {
         let result = future.await;
-        if let Some(sender) = completion.sender.lock().unwrap().take() {
+        if let Some(sender) = completion
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
             let _ = sender.send(result);
         }
     });
@@ -307,7 +346,7 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke_callback(
         }
     };
     let user_data = user_data as usize;
-    tokio::spawn(async move {
+    next.runtime.spawn(async move {
         match future.await {
             Ok(value) => {
                 let value = json_to_c_string(&value);
@@ -339,7 +378,12 @@ pub unsafe extern "C" fn nemo_relay_async_completion_resolve_json(
     let Some(value) = c_str_to_json(value_json) else {
         return NemoRelayStatus::InvalidJson;
     };
-    let Some(sender) = completion.sender.lock().unwrap().take() else {
+    let Some(sender) = completion
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    else {
         return NemoRelayStatus::InvalidArg;
     };
     let _ = sender.send(Ok(value));
@@ -366,7 +410,12 @@ pub unsafe extern "C" fn nemo_relay_async_completion_reject(
             .to_string_lossy()
             .into_owned()
     };
-    let Some(sender) = completion.sender.lock().unwrap().take() else {
+    let Some(sender) = completion
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    else {
         return NemoRelayStatus::InvalidArg;
     };
     let _ = sender.send(Err(FlowError::Internal(message)));

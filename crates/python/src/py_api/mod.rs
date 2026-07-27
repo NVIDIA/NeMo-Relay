@@ -1326,12 +1326,15 @@ fn tool_request_intercepts<'py>(
         .call_method0("get_running_loop")
         .is_err()
     {
+        let scope_stack = current_scope_stack_handle();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| to_py_err(FlowError::Internal(error.to_string())))?;
         let result = runtime
-            .block_on(core_tool_api::tool_request_intercepts(&name, args_json))
+            .block_on(TASK_SCOPE_STACK.scope(scope_stack, async move {
+                core_tool_api::tool_request_intercepts(&name, args_json).await
+            }))
             .map_err(to_py_err)?;
         return json_to_py(py, &result).map(|value| value.into_bound(py));
     }

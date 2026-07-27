@@ -673,14 +673,13 @@ def event_fail(event):
         );
 
         let tool_fail = wrap_py_tool_fn(module.getattr("tool_fail").unwrap().unbind());
-        assert_eq!(
+        assert!(
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap()
                 .block_on(tool_fail("demo".to_string(), json!({"x": 1})))
-                .unwrap(),
-            json!({"x": 1})
+                .is_err()
         );
 
         let tool_cond =

@@ -27,6 +27,7 @@ macro_rules! async_llm_registration {
             user_data: *mut libc::c_void,
             free_fn: NemoRelayFreeFn,
         ) -> NemoRelayStatus {
+            clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(name) => name,
                 Err(status) => return status,
@@ -62,6 +63,7 @@ macro_rules! async_llm_execution_registration {
             user_data: *mut libc::c_void,
             free_fn: NemoRelayFreeFn,
         ) -> NemoRelayStatus {
+            clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(name) => name,
                 Err(status) => return status,

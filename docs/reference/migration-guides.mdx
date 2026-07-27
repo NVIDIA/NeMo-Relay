@@ -34,7 +34,7 @@ and event sanitizers. Relay awaits each registered callback sequentially in
 priority order. A callback that rejects or returns an error preserves the
 existing error behavior for its middleware family.
 
-| Surface | 0.6 callback | 0.7 callback |
+| Surface | 0.6 Callback | 0.7 Callback |
 | --- | --- | --- |
 | Rust | `Fn(...) -> Result<T>` | `Fn(...) -> Pin<Box<dyn Future<Output = Result<T>> + Send>>` |
 | Python | Direct return value | Direct return value or awaitable |
@@ -52,7 +52,7 @@ use nemo_relay::api::registry::register_tool_conditional_execution_guardrail;
 register_tool_conditional_execution_guardrail(
     "policy",
     10,
-    Arc::new(|name, args| {
+    Arc::new(|_name, _args| {
         Box::pin(async move {
             // Await policy I/O here when needed.
             Ok(None) // Return Some(reason) to block execution.
@@ -297,7 +297,7 @@ after the callback returns. Release host-owned output strings with the standard
 host string release operation.
 
 For the complete ABI contract, refer to
-[Native ABI v2](/build-plugins/dynamic-plugins/native-dynamic/about#native-abi-v2).
+[Native ABI v3](/build-plugins/dynamic-plugins/native-dynamic/about#native-abi-v3).
 
 ### Update PII Redaction Configuration
 

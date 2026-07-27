@@ -55,11 +55,11 @@ _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolExecutionIntercept: TypeAlias = Callable[
     [str, _Json, Callable[[_Json], Awaitable[_Json]]],
-    "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
+    "ToolExecutionInterceptOutcome" | Awaitable["ToolExecutionInterceptOutcome"],
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],
-    "LLMRequestInterceptOutcome" | Awaitable["LLMRequestInterceptOutcome"],
+    "LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]",
 ]
 _LlmExecutionIntercept: TypeAlias = Callable[
     [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[_Json]]],
@@ -1697,7 +1697,7 @@ def llm_stream_call_execute(
     """
     ...
 
-def tool_request_intercepts(name: str, args: _Json) -> Awaitable[_Json]:
+def tool_request_intercepts(name: str, args: _Json) -> _Json | Awaitable[_Json]:
     """Run the registered tool request-intercept chain.
 
     Args:
@@ -1705,14 +1705,15 @@ def tool_request_intercepts(name: str, args: _Json) -> Awaitable[_Json]:
         args: Current JSON-compatible tool arguments.
 
     Returns:
-        Transformed tool arguments after all applicable request intercepts.
+        Transformed tool arguments directly outside an event loop, or an
+        awaitable resolving to them from an async caller.
 
     Exceptional flow:
         Callback exceptions and native middleware errors propagate unchanged.
     """
     ...
 
-def tool_conditional_execution(name: str, args: _Json) -> Awaitable[None]:
+def tool_conditional_execution(name: str, args: _Json) -> None | Awaitable[None]:
     """Run tool conditional-execution guardrails.
 
     Args:
@@ -1720,7 +1721,8 @@ def tool_conditional_execution(name: str, args: _Json) -> Awaitable[None]:
         args: Current JSON-compatible tool arguments.
 
     Returns:
-        ``None`` when all guardrails allow execution.
+        ``None`` when all guardrails allow execution, directly outside an event
+        loop or through an awaitable from an async caller.
 
     Exceptional flow:
         Raises a native rejection error when a guardrail returns a rejection
@@ -1728,7 +1730,9 @@ def tool_conditional_execution(name: str, args: _Json) -> Awaitable[None]:
     """
     ...
 
-def llm_request_intercepts(name: str, request: LLMRequest) -> Awaitable[LLMRequestInterceptOutcome]:
+def llm_request_intercepts(
+    name: str, request: LLMRequest
+) -> LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]:
     """Run the registered LLM request-intercept chain.
 
     Args:
@@ -1736,21 +1740,23 @@ def llm_request_intercepts(name: str, request: LLMRequest) -> Awaitable[LLMReque
         request: Current LLM request.
 
     Returns:
-        Transformed request after all applicable request intercepts.
+        Transformed request directly outside an event loop, or an awaitable
+        resolving to it from an async caller.
 
     Exceptional flow:
         Callback exceptions and native middleware errors propagate unchanged.
     """
     ...
 
-def llm_conditional_execution(request: LLMRequest) -> Awaitable[None]:
+def llm_conditional_execution(request: LLMRequest) -> None | Awaitable[None]:
     """Run LLM conditional-execution guardrails.
 
     Args:
         request: LLM request to evaluate.
 
     Returns:
-        ``None`` when all guardrails allow execution.
+        ``None`` when all guardrails allow execution, directly outside an event
+        loop or through an awaitable from an async caller.
 
     Exceptional flow:
         Raises a native rejection error when a guardrail returns a rejection

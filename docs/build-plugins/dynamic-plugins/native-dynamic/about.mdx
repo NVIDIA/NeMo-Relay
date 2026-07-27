@@ -118,12 +118,13 @@ with validation, middleware, scopes, and configuration schema support.
 
 ## Native ABI v3
 
-The host passes a `NemoRelayNativeHostApiV1` table to the entry symbol. The
-plugin returns a `NemoRelayNativePluginV1` descriptor:
+The host passes a v3 `NemoRelayNativeHostApiV3` table, whose prefix remains
+compatible with `NemoRelayNativeHostApiV1`, to the entry symbol. The plugin
+returns a `NemoRelayNativePluginV1` descriptor:
 
 ```rust
 extern "C" fn nemo_relay_register_plugin(
-    host: *const NemoRelayNativeHostApiV1,
+    host: *const NemoRelayNativeHostApiV3,
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus
 ```
@@ -144,6 +145,10 @@ runtime work is dropped; late and duplicate settlement is rejected safely.
 Event sanitizers registered through this extension still run on Relay's serial
 publication dispatcher. Scope and mark emission remain synchronous and their
 sanitized events are delivered later in emission order.
+
+Legacy v1/v2 middleware callbacks are synchronous and run on the runtime's
+execution path. They must not block on I/O; use the v3 completion-based API for
+long-running work.
 
 Text and JSON data cross this boundary as host-owned
 `NemoRelayNativeString` handles. ABI structs also carry scalars, opaque

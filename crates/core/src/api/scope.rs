@@ -244,14 +244,15 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
         let event = state.build_scope_start_event(&handle, params.input);
         (handle, event, subscribers, scope_stack.clone())
     };
-    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
     task_scope_push(handle.clone());
-    let _ = subscriber_dispatcher::dispatch_sanitized_event(
-        event,
-        sanitizers,
-        &subscribers,
-        emission_scope_stack,
-    );
+    if let Some(sanitizers) = snapshot_event_sanitizers(&event, &emission_scope_stack) {
+        let _ = subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            &subscribers,
+            emission_scope_stack,
+        );
+    }
     Ok(handle)
 }
 
@@ -308,15 +309,16 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
         );
         (scope, event, subscribers, scope_stack.clone())
     };
-    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    let _ = subscriber_dispatcher::dispatch_sanitized_event(
-        event,
-        sanitizers,
-        &subscribers,
-        emission_scope_stack,
-    );
+    if let Some(sanitizers) = snapshot_event_sanitizers(&event, &emission_scope_stack) {
+        let _ = subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            &subscribers,
+            emission_scope_stack,
+        );
+    }
     Ok(())
 }
 
@@ -377,12 +379,13 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
         ));
         (event, subscribers, scope_stack.clone())
     };
-    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
-    let _ = subscriber_dispatcher::dispatch_sanitized_event(
-        event,
-        sanitizers,
-        &subscribers,
-        emission_scope_stack,
-    );
+    if let Some(sanitizers) = snapshot_event_sanitizers(&event, &emission_scope_stack) {
+        let _ = subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            &subscribers,
+            emission_scope_stack,
+        );
+    }
     Ok(())
 }

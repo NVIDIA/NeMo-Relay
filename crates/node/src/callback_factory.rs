@@ -79,9 +79,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           let message = 'unknown error';
           if (typeof error === 'string') {
             message = error;
-          } else if (error !== null && typeof error === 'object') {
+          } else {
             try {
-              if (typeof error.message === 'string') message = error.message;
+              message = typeof error?.message === 'string' ? error.message : String(error);
             } catch {}
           }
           reject(message);

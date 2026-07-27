@@ -102,6 +102,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -187,6 +188,29 @@ type AsyncNext func(ctx context.Context, invocation json.RawMessage) (json.RawMe
 
 // AsyncExecutionInterceptFunc is an asynchronous execution intercept with an awaitable next helper.
 type AsyncExecutionInterceptFunc func(ctx context.Context, invocation json.RawMessage, next AsyncNext) (any, error)
+
+const asyncCallbackPending = C.uint32_t(1)
+
+func contextForCompletion(completion *C.NemoRelayAsyncCompletion) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if bool(C.nemo_relay_async_completion_is_cancelled(completion)) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, func() { close(done); cancel() }
+}
 
 // ToolExecutionFunc is a callback that executes a tool call, receiving the
 // arguments as JSON and returning the result JSON or an error.
@@ -613,15 +637,19 @@ func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C
 
 //export goAsyncMiddlewareTrampoline
 func goAsyncMiddlewareTrampoline(userData unsafe.Pointer, invocationJSON *C.char, completion *C.NemoRelayAsyncCompletion) C.uint32_t {
-	fn := lookupClosure(userData).(AsyncMiddlewareFunc)
+	fn, ok := lookupClosure(userData).(AsyncMiddlewareFunc)
+	if !ok {
+		message := C.CString("nemo_relay: async middleware callback is not registered")
+		defer C.free(unsafe.Pointer(message))
+		C.nemo_relay_async_completion_reject(completion, message)
+		C.nemo_relay_async_completion_release(completion)
+		return asyncCallbackPending
+	}
 	invocation := append(json.RawMessage(nil), []byte(C.GoString(invocationJSON))...)
 	go func() {
 		defer C.nemo_relay_async_completion_release(completion)
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := contextForCompletion(completion)
 		defer cancel()
-		if bool(C.nemo_relay_async_completion_is_cancelled(completion)) {
-			cancel()
-		}
 		value, err := fn(ctx, invocation)
 		if err != nil {
 			message := C.CString(err.Error())
@@ -640,7 +668,7 @@ func goAsyncMiddlewareTrampoline(userData unsafe.Pointer, invocationJSON *C.char
 		defer C.free(unsafe.Pointer(result))
 		C.nemo_relay_async_completion_resolve_json(completion, result)
 	}()
-	return C.uint32_t(1)
+	return asyncCallbackPending
 }
 
 type asyncNextResult struct {
@@ -650,23 +678,47 @@ type asyncNextResult struct {
 
 //export goAsyncNextResultTrampoline
 func goAsyncNextResultTrampoline(userData unsafe.Pointer, valueJSON *C.char, errorMessage *C.char) {
-	ch := lookupClosure(userData).(chan asyncNextResult)
-	defer unregisterClosure(userData)
-	if errorMessage != nil {
-		ch <- asyncNextResult{err: errors.New(C.GoString(errorMessage))}
+	ch, ok := lookupClosure(userData).(chan asyncNextResult)
+	if !ok {
 		return
 	}
-	ch <- asyncNextResult{value: append(json.RawMessage(nil), []byte(C.GoString(valueJSON))...)}
+	defer unregisterClosure(userData)
+	if errorMessage != nil {
+		select {
+		case ch <- asyncNextResult{err: errors.New(C.GoString(errorMessage))}:
+		default:
+		}
+		return
+	}
+	select {
+	case ch <- asyncNextResult{value: append(json.RawMessage(nil), []byte(C.GoString(valueJSON))...)}:
+	default:
+	}
 }
 
 //export goAsyncExecutionInterceptTrampoline
 func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON *C.char, next *C.NemoRelayAsyncNext, completion *C.NemoRelayAsyncCompletion) C.uint32_t {
-	fn := lookupClosure(userData).(AsyncExecutionInterceptFunc)
+	fn, ok := lookupClosure(userData).(AsyncExecutionInterceptFunc)
+	if !ok {
+		message := C.CString("nemo_relay: async execution intercept callback is not registered")
+		defer C.free(unsafe.Pointer(message))
+		C.nemo_relay_async_completion_reject(completion, message)
+		C.nemo_relay_async_completion_release(completion)
+		C.nemo_relay_async_next_release(next)
+		return asyncCallbackPending
+	}
 	invocation := append(json.RawMessage(nil), []byte(C.GoString(invocationJSON))...)
 	go func() {
 		defer C.nemo_relay_async_completion_release(completion)
+		ctx, cancel := contextForCompletion(completion)
+		defer cancel()
 		defer C.nemo_relay_async_next_release(next)
+		var nextOpen atomic.Bool
+		nextOpen.Store(true)
 		nextFn := func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+			if !nextOpen.Load() {
+				return nil, context.Canceled
+			}
 			ch := make(chan asyncNextResult, 1)
 			token := registerClosure(ch)
 			cPayload := C.CString(string(payload))
@@ -686,7 +738,8 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 				return nil, ctx.Err()
 			}
 		}
-		value, err := fn(context.Background(), invocation, nextFn)
+		value, err := fn(ctx, invocation, nextFn)
+		nextOpen.Store(false)
 		if err != nil {
 			message := C.CString(err.Error())
 			C.nemo_relay_async_completion_reject(completion, message)
@@ -704,7 +757,7 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 		C.nemo_relay_async_completion_resolve_json(completion, result)
 		C.free(unsafe.Pointer(result))
 	}()
-	return C.uint32_t(1)
+	return asyncCallbackPending
 }
 
 //export goToolConditionalTrampoline

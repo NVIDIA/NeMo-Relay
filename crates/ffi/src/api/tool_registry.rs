@@ -47,6 +47,7 @@ pub unsafe extern "C" fn nemo_relay_register_tool_sanitize_request_guardrail_asy
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
+    clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(name) => name,
         Err(status) => return status,
@@ -71,6 +72,7 @@ pub unsafe extern "C" fn nemo_relay_register_tool_sanitize_response_guardrail_as
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
+    clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(name) => name,
         Err(status) => return status,
@@ -95,6 +97,7 @@ pub unsafe extern "C" fn nemo_relay_register_tool_conditional_execution_guardrai
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
+    clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(name) => name,
         Err(status) => return status,
@@ -124,6 +127,7 @@ pub unsafe extern "C" fn nemo_relay_register_tool_execution_intercept_async(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
+    clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(name) => name,
         Err(status) => return status,

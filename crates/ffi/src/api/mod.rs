@@ -105,6 +105,15 @@ fn tokio_runtime() -> &'static Runtime {
     })
 }
 
+fn block_on_sync_ffi<T>(future: impl Future<Output = FlowResult<T>>) -> FlowResult<T> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(nemo_relay::error::FlowError::Internal(
+            "synchronous FFI middleware helpers cannot run on a Tokio runtime thread; use the completion-based async registration API".into(),
+        ));
+    }
+    tokio_runtime().block_on(future)
+}
+
 // ---------------------------------------------------------------------------
 // Standalone middleware chains
 // ---------------------------------------------------------------------------
@@ -147,7 +156,7 @@ pub unsafe extern "C" fn nemo_relay_tool_request_intercepts(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match tokio_runtime().block_on(core_tool_api::tool_request_intercepts(&name, args)) {
+    match block_on_sync_ffi(core_tool_api::tool_request_intercepts(&name, args)) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
             NemoRelayStatus::Ok
@@ -185,7 +194,7 @@ pub unsafe extern "C" fn nemo_relay_tool_conditional_execution(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match tokio_runtime().block_on(core_tool_api::tool_conditional_execution(&name, &args)) {
+    match block_on_sync_ffi(core_tool_api::tool_conditional_execution(&name, &args)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -239,7 +248,7 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match tokio_runtime().block_on(core_llm_api::llm_request_intercepts(name_str, request)) {
+    match block_on_sync_ffi(core_llm_api::llm_request_intercepts(name_str, request)) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
@@ -402,7 +411,7 @@ pub unsafe extern "C" fn nemo_relay_llm_conditional_execution(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match tokio_runtime().block_on(core_llm_api::llm_conditional_execution(&request)) {
+    match block_on_sync_ffi(core_llm_api::llm_conditional_execution(&request)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }

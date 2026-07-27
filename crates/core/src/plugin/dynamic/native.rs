@@ -25,7 +25,7 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
-    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV2, NemoRelayNativeLlmCodecKind,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeLlmCodecKind,
     NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
     NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
@@ -794,7 +794,7 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
-    static HOST_API: OnceLock<NemoRelayNativeHostApiV2> = OnceLock::new();
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV3> = OnceLock::new();
     &HOST_API.get_or_init(build_native_host_api_v3).v1 as *const NemoRelayNativeHostApiV1
 }
 
@@ -863,11 +863,11 @@ fn build_native_host_api_legacy() -> NemoRelayNativeHostApiV1 {
     }
 }
 
-fn build_native_host_api_v3() -> NemoRelayNativeHostApiV2 {
+fn build_native_host_api_v3() -> NemoRelayNativeHostApiV3 {
     let mut v1 = build_native_host_api_legacy();
     v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
-    v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV2>();
-    NemoRelayNativeHostApiV2 {
+    v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV3>();
+    NemoRelayNativeHostApiV3 {
         v1,
         async_completion_resolve_json: native_async_completion_resolve_json,
         async_completion_reject: native_async_completion_reject,
@@ -1365,6 +1365,7 @@ enum NativeAsyncNextInner {
 
 struct NativeAsyncNext {
     inner: NativeAsyncNextInner,
+    runtime: tokio::runtime::Handle,
 }
 
 async fn invoke_native_async_callback(
@@ -1373,16 +1374,31 @@ async fn invoke_native_async_callback(
     invocation: Json,
     next: Option<NativeAsyncNextInner>,
 ) -> FlowResult<Json> {
+    let runtime = if next.is_some() {
+        Some(tokio::runtime::Handle::try_current().map_err(|error| {
+            FlowError::Internal(format!(
+                "native async intercept requires a Tokio runtime: {error}"
+            ))
+        })?)
+    } else {
+        None
+    };
+    let invocation = native_string_from_json(&invocation)
+        .ok_or_else(|| FlowError::Internal("failed to allocate native async invocation".into()))?
+        as usize;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
     });
     let completion_ref = Arc::into_raw(completion.clone()) as usize;
-    let next_ref = next.map(|inner| Arc::into_raw(Arc::new(NativeAsyncNext { inner })) as usize);
-    let invocation = native_string_from_json(&invocation)
-        .ok_or_else(|| FlowError::Internal("failed to allocate native async invocation".into()))?
-        as usize;
+    let next_ref = match (next, runtime) {
+        (Some(inner), Some(runtime)) => {
+            Some(Arc::into_raw(Arc::new(NativeAsyncNext { inner, runtime })) as usize)
+        }
+        (None, None) => None,
+        _ => unreachable!("runtime is present exactly for native async intercepts"),
+    };
     let state = match catch_unwind(AssertUnwindSafe(|| unsafe {
         cb(
             user_data.ptr,
@@ -1417,6 +1433,16 @@ async fn invoke_native_async_callback(
                 drop(Arc::from_raw(next_ref as *const NativeAsyncNext));
             }
         }
+        if completion
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+        {
+            return Err(FlowError::Internal(
+                "native async callback returned Complete without settling".into(),
+            ));
+        }
     }
     let mut wait = NativeAsyncWait {
         completion,
@@ -1442,7 +1468,12 @@ unsafe extern "C" fn native_async_completion_resolve_json(
         Ok(value) => value,
         Err(status) => return status,
     };
-    let Some(sender) = completion.sender.lock().unwrap().take() else {
+    let Some(sender) = completion
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    else {
         return NemoRelayStatus::InvalidArg;
     };
     let _ = sender.send(Ok(value));
@@ -1471,7 +1502,12 @@ unsafe extern "C" fn native_async_completion_reject(
             }
         }
     };
-    let Some(sender) = completion.sender.lock().unwrap().take() else {
+    let Some(sender) = completion
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    else {
         return NemoRelayStatus::InvalidArg;
     };
     let _ = sender.send(Err(FlowError::Internal(message)));
@@ -1530,32 +1566,34 @@ unsafe extern "C" fn native_async_next_invoke(
             })
         }
         NativeAsyncNextInner::Llm(next) => {
-            let request =
-                match serde_json::from_value(invocation) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        let _ =
-                            completion.sender.lock().unwrap().take().map(|sender| {
-                                sender.send(Err(FlowError::Internal(error.to_string())))
-                            });
-                        return NemoRelayStatus::InvalidArg;
-                    }
-                };
+            let request = match serde_json::from_value(invocation) {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = completion
+                        .sender
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                        .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
+                    return NemoRelayStatus::InvalidArg;
+                }
+            };
             let next = next.clone();
             Box::pin(async move { next(request).await })
         }
         NativeAsyncNextInner::LlmStream(next) => {
-            let request =
-                match serde_json::from_value(invocation) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        let _ =
-                            completion.sender.lock().unwrap().take().map(|sender| {
-                                sender.send(Err(FlowError::Internal(error.to_string())))
-                            });
-                        return NemoRelayStatus::InvalidArg;
-                    }
-                };
+            let request = match serde_json::from_value(invocation) {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = completion
+                        .sender
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                        .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
+                    return NemoRelayStatus::InvalidArg;
+                }
+            };
             let next = next.clone();
             Box::pin(async move {
                 let mut stream = next(request).await?;
@@ -1567,9 +1605,14 @@ unsafe extern "C" fn native_async_next_invoke(
             })
         }
     };
-    tokio::spawn(async move {
+    next.runtime.spawn(async move {
         let result = future.await;
-        if let Some(sender) = completion.sender.lock().unwrap().take() {
+        if let Some(sender) = completion
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
             let _ = sender.send(result);
         }
     });

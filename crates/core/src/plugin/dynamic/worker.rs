@@ -1869,8 +1869,22 @@ impl WorkerPluginCallback {
     }
 
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
-        self.invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
-            .await
+        let callback_name = request.registration_name.clone();
+        let surface = request.surface;
+        let result = self
+            .invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
+            .await;
+        if let Err(error) = &result {
+            log::warn!(
+                target: "nemo_relay.worker",
+                event = "worker_callback_failed",
+                plugin_id = self.plugin_kind.as_str(),
+                callback = callback_name.as_str(),
+                surface;
+                "Worker plugin callback failed: {error}"
+            );
+        }
+        result
     }
 
     async fn invoke_async_with_timeout(

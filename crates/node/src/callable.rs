@@ -207,18 +207,62 @@ fn recv_middleware_option_string_result(
     }
 }
 
+async fn await_middleware_json_result(
+    rx: tokio::sync::oneshot::Receiver<Json>,
+    error_prefix: &str,
+) -> Result<Json> {
+    let value = rx
+        .await
+        .map_err(|error| FlowError::Internal(format!("{error_prefix}: {error}")))?;
+    unwrap_middleware_result(value, error_prefix)
+}
+
+async fn await_middleware_json_or_value(
+    rx: tokio::sync::oneshot::Receiver<Json>,
+    error_prefix: &str,
+    fallback: Json,
+) -> Json {
+    match await_middleware_json_result(rx, error_prefix).await {
+        Ok(value) => value,
+        Err(error) => {
+            record_callback_error(error.to_string());
+            fallback
+        }
+    }
+}
+
+async fn await_middleware_option_string_result(
+    rx: tokio::sync::oneshot::Receiver<Json>,
+    error_prefix: &str,
+) -> Result<Option<String>> {
+    match await_middleware_json_result(rx, error_prefix).await? {
+        Json::Null => Ok(None),
+        Json::String(value) => Ok(Some(value)),
+        other => Err(FlowError::Internal(format!(
+            "{error_prefix}: expected string or null, got {other:?}",
+        ))),
+    }
+}
+
 /// Wrap a Promise-aware JS `(name, args) => string | null` tool guardrail.
 pub fn wrap_js_tool_conditional_promise_fn(func: Arc<PromiseAwareFn>) -> ToolConditionalFn {
     Arc::new(move |name: String, args: Json| {
         let func = func.clone();
         Box::pin(async move {
-            let value = func.call_spread(vec![Json::String(name), args]).await?;
+            let value = func
+                .call_spread(vec![Json::String(name), args])
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))?;
             match value {
                 Json::Null => Ok(None),
                 Json::String(reason) => Ok(Some(reason)),
-                other => Err(FlowError::Internal(format!(
-                    "JS tool conditional callback failed: expected string or null, got {other:?}"
-                ))),
+                other => {
+                    let error = FlowError::Internal(format!(
+                        "JS tool conditional callback failed: expected string or null, got {other:?}"
+                    ));
+                    record_callback_error(error.to_string());
+                    Err(error)
+                }
             }
         })
     })
@@ -228,7 +272,11 @@ pub fn wrap_js_tool_conditional_promise_fn(func: Arc<PromiseAwareFn>) -> ToolCon
 pub fn wrap_js_tool_request_intercept_promise_fn(func: Arc<PromiseAwareFn>) -> ToolInterceptFn {
     Arc::new(move |name: String, args: Json| {
         let func = func.clone();
-        Box::pin(async move { func.call_spread(vec![Json::String(name), args]).await })
+        Box::pin(async move {
+            func.call_spread(vec![Json::String(name), args])
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))
+        })
     })
 }
 
@@ -329,13 +377,18 @@ pub fn wrap_js_llm_conditional_promise_fn(func: Arc<PromiseAwareFn>) -> LlmCondi
         Box::pin(async move {
             let value = func
                 .call(serde_json::to_value(request).unwrap_or(Json::Null))
-                .await?;
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))?;
             match value {
                 Json::Null => Ok(None),
                 Json::String(reason) => Ok(Some(reason)),
-                other => Err(FlowError::Internal(format!(
-                    "JS LLM conditional callback failed: expected string or null, got {other:?}"
-                ))),
+                other => {
+                    let error = FlowError::Internal(format!(
+                        "JS LLM conditional callback failed: expected string or null, got {other:?}"
+                    ));
+                    record_callback_error(error.to_string());
+                    Err(error)
+                }
             }
         })
     })
@@ -371,9 +424,11 @@ pub fn wrap_js_llm_request_intercept_promise_fn(
                     optimization_contributions: Vec<LlmOptimizationContribution>,
                 }
                 let outcome: JsOutcome = serde_json::from_value(value).map_err(|error| {
-                    FlowError::Internal(format!(
+                    let error = FlowError::Internal(format!(
                         "invalid JS LLM request intercept outcome: {error}"
-                    ))
+                    ));
+                    record_callback_error(error.to_string());
+                    error
                 })?;
                 Ok(LlmRequestInterceptOutcome {
                     request: outcome.request,
@@ -497,7 +552,7 @@ pub fn wrap_js_tool_fn(
     Arc::new(move |name: String, args: Json| {
         let func = func.clone();
         Box::pin(async move {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
                 (name, args),
                 ThreadsafeFunctionCallMode::Blocking,
@@ -511,7 +566,7 @@ pub fn wrap_js_tool_fn(
                     "failed to queue JS tool callback: {status:?}"
                 )));
             }
-            recv_middleware_json_result(rx, "nemo_relay: JS tool callback failed")
+            await_middleware_json_result(rx, "nemo_relay: JS tool callback failed").await
         })
     })
 }
@@ -524,7 +579,7 @@ pub fn wrap_js_tool_conditional_fn(
     Arc::new(move |name: String, args: Json| {
         let func = func.clone();
         Box::pin(async move {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
                 (name, args),
                 ThreadsafeFunctionCallMode::Blocking,
@@ -538,7 +593,7 @@ pub fn wrap_js_tool_conditional_fn(
                     "failed to queue JS tool conditional callback: {status:?}",
                 )));
             }
-            recv_middleware_option_string_result(rx, "JS tool conditional callback failed")
+            await_middleware_option_string_result(rx, "JS tool conditional callback failed").await
         })
     })
 }
@@ -551,7 +606,7 @@ pub fn wrap_js_tool_request_intercept_fn(
     Arc::new(move |name: String, args: Json| {
         let func = func.clone();
         Box::pin(async move {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
                 (name, args),
                 ThreadsafeFunctionCallMode::Blocking,
@@ -565,7 +620,7 @@ pub fn wrap_js_tool_request_intercept_fn(
                     "failed to queue JS tool callback: {status:?}",
                 )));
             }
-            recv_middleware_json_result(rx, "JS tool callback failed")
+            await_middleware_json_result(rx, "JS tool callback failed").await
         })
     })
 }
@@ -623,7 +678,7 @@ pub fn wrap_js_llm_request_intercept_fn(
                     "request": req_json,
                     "annotated": annotated_json,
                 });
-                let (tx, rx) = std::sync::mpsc::channel();
+                let (tx, rx) = tokio::sync::oneshot::channel();
                 let status = func.call_with_return_value(
                     arg,
                     ThreadsafeFunctionCallMode::Blocking,
@@ -638,7 +693,8 @@ pub fn wrap_js_llm_request_intercept_fn(
                     )));
                 }
                 let result =
-                    recv_middleware_json_result(rx, "JS LLM request intercept callback failed")?;
+                    await_middleware_json_result(rx, "JS LLM request intercept callback failed")
+                        .await?;
 
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -677,7 +733,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
             Box::pin(async move {
                 let context = js_llm_sanitize_request_context(&context);
                 let request = serde_json::to_value(request).unwrap_or(Json::Null);
-                let (tx, rx) = std::sync::mpsc::channel();
+                let (tx, rx) = tokio::sync::oneshot::channel();
                 if func.call_with_return_value(
                     (request.clone(), context),
                     ThreadsafeFunctionCallMode::Blocking,
@@ -694,11 +750,12 @@ pub fn wrap_js_llm_sanitize_request_fn(
                         "failed to queue JS LLM sanitize request callback".into(),
                     ));
                 }
-                let value = recv_middleware_json_or_value(
+                let value = await_middleware_json_or_value(
                     rx,
                     "nemo_relay: JS LLM request sanitizer callback failed",
                     Json::Null,
-                );
+                )
+                .await;
                 if value.is_null() {
                     return Ok(None);
                 }
@@ -722,7 +779,7 @@ pub fn wrap_js_llm_sanitize_response_fn(
         let func = func.clone();
         Box::pin(async move {
             let context = js_llm_sanitize_response_context(&context);
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = tokio::sync::oneshot::channel();
             if func.call_with_return_value(
                 (response, context),
                 ThreadsafeFunctionCallMode::Blocking,
@@ -739,11 +796,12 @@ pub fn wrap_js_llm_sanitize_response_fn(
                     "failed to queue JS LLM sanitize response callback".into(),
                 ));
             }
-            let value = recv_middleware_json_or_value(
+            let value = await_middleware_json_or_value(
                 rx,
                 "nemo_relay: JS LLM response sanitizer callback failed",
                 Json::Null,
-            );
+            )
+            .await;
             Ok((!value.is_null()).then_some(value))
         })
     })
@@ -903,7 +961,7 @@ pub fn wrap_js_llm_conditional_fn(
         let func = func.clone();
         Box::pin(async move {
             let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
                 req_json,
                 ThreadsafeFunctionCallMode::Blocking,
@@ -917,7 +975,7 @@ pub fn wrap_js_llm_conditional_fn(
                     "failed to queue JS LLM conditional callback: {status:?}",
                 )));
             }
-            recv_middleware_option_string_result(rx, "JS LLM conditional callback failed")
+            await_middleware_option_string_result(rx, "JS LLM conditional callback failed").await
         })
     })
 }
@@ -1055,7 +1113,7 @@ pub fn wrap_js_event_sanitize_fn(
                     .and_then(|value| serde_json::to_value(value).ok()),
                 metadata: fields.metadata.clone(),
             };
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
                 (
                     event_json,
@@ -1075,11 +1133,12 @@ pub fn wrap_js_event_sanitize_fn(
                     "failed to queue JS event sanitizer callback: {status:?}"
                 )));
             }
-            let sanitized = (|| -> Result<_> {
-                let result = recv_middleware_json_result(
+            let sanitized: Result<CoreEventSanitizeFields> = async {
+                let result = await_middleware_json_result(
                     rx,
                     "nemo_relay: JS event sanitizer callback failed",
-                )?;
+                )
+                .await?;
                 let result = event_sanitize_fields_from_json(result).map_err(|error| {
                     FlowError::Internal(format!(
                         "nemo_relay: invalid JS event sanitizer result: {error}"
@@ -1099,7 +1158,8 @@ pub fn wrap_js_event_sanitize_fn(
                     category_profile,
                     metadata: result.metadata,
                 })
-            })();
+            }
+            .await;
             match sanitized {
                 Ok(sanitized) => Ok(sanitized),
                 Err(error) => {

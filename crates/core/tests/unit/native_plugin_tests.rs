@@ -257,7 +257,7 @@ fn native_string_and_json_helpers_cover_abi_boundaries() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV2>()
+        std::mem::size_of::<NemoRelayNativeHostApiV3>()
     );
 }
 

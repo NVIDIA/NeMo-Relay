@@ -304,17 +304,23 @@ impl LlmStreamWrapper {
             if let Some(event) = event_snapshot
                 && let Some(event) = sanitize_event_with_scope_stack(event, &scope_stack).await
             {
-                NemoRelayContextState::emit_event(&event, &subscribers);
+                let _ = subscriber_dispatcher::dispatch_sanitized_event(
+                    event,
+                    Vec::new(),
+                    &subscribers,
+                    scope_stack.clone(),
+                );
             }
         };
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => Some(handle.spawn(finalize)),
             Err(_) => {
-                std::thread::spawn(move || {
-                    if let Ok(runtime) = tokio::runtime::Builder::new_current_thread().build() {
-                        runtime.block_on(finalize);
-                    }
-                });
+                if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    runtime.block_on(finalize);
+                }
                 None
             }
         }
@@ -343,14 +349,14 @@ impl LlmStreamWrapper {
             }
         };
         if let Some(event) = event_snapshot {
-            let sanitizers =
-                snapshot_event_sanitizers(&event, &self.scope_stack).unwrap_or_default();
-            let _ = subscriber_dispatcher::dispatch_sanitized_event(
-                event,
-                sanitizers,
-                &self.subscribers,
-                self.scope_stack.clone(),
-            );
+            if let Some(sanitizers) = snapshot_event_sanitizers(&event, &self.scope_stack) {
+                let _ = subscriber_dispatcher::dispatch_sanitized_event(
+                    event,
+                    sanitizers,
+                    &self.subscribers,
+                    self.scope_stack.clone(),
+                );
+            }
         }
     }
 }

@@ -258,7 +258,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
                 .timestamp_opt(params.timestamp)
                 .build(),
         );
-        let event = state.build_tool_start_event(&handle, Some(raw_args.clone()));
+        let event = state.build_tool_start_event(&handle, None);
         let marks = skill_loads
             .into_iter()
             .map(|skill_load| {
@@ -280,29 +280,31 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
             .collect::<Vec<_>>();
         (handle, event, marks)
     };
-    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     let tool_name = handle.name.clone();
-    dispatch_transformed_event(
-        event,
-        Box::new(move |mut event| {
-            Box::pin(async move {
-                let sanitized = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
-                    &tool_name, raw_args, &entries,
-                )
-                .await;
-                let mut fields = event.sanitize_fields();
-                fields.data = Some(sanitized);
-                event.apply_sanitize_fields(fields);
-                event
-            })
-        }),
-        event_sanitizers,
-        &subscribers,
-        scope_stack.clone(),
-    );
+    if let Some(event_sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) {
+        dispatch_transformed_event(
+            event,
+            Box::new(move |mut event| {
+                Box::pin(async move {
+                    let sanitized = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                        &tool_name, raw_args, &entries,
+                    )
+                    .await;
+                    let mut fields = event.sanitize_fields();
+                    fields.data = Some(sanitized);
+                    event.apply_sanitize_fields(fields);
+                    event
+                })
+            }),
+            event_sanitizers,
+            &subscribers,
+            scope_stack.clone(),
+        );
+    }
     for mark in marks {
-        let sanitizers = snapshot_event_sanitizers(&mark, &scope_stack).unwrap_or_default();
-        dispatch_sanitized_event(mark, sanitizers, &subscribers, scope_stack.clone());
+        if let Some(sanitizers) = snapshot_event_sanitizers(&mark, &scope_stack) {
+            dispatch_sanitized_event(mark, sanitizers, &subscribers, scope_stack.clone());
+        }
     }
     Ok(handle)
 }
@@ -454,36 +456,37 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         state.build_tool_end_event(
             EndToolHandleParams::builder()
                 .handle(params.handle)
-                .data(result.clone())
+                .data(Json::Null)
                 .metadata_opt(params.metadata)
                 .timestamp_opt(params.timestamp)
                 .build(),
         )
     };
-    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     let tool_name = params.handle.name.clone();
-    dispatch_transformed_event(
-        event,
-        Box::new(move |mut event| {
-            Box::pin(async move {
-                let sanitized = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
-                    &tool_name, result, &entries,
-                )
-                .await;
-                let mut fields = event.sanitize_fields();
-                fields.data = if sanitized.is_null() {
-                    fallback
-                } else {
-                    Some(sanitized)
-                };
-                event.apply_sanitize_fields(fields);
-                event
-            })
-        }),
-        event_sanitizers,
-        &subscribers,
-        scope_stack,
-    );
+    if let Some(event_sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) {
+        dispatch_transformed_event(
+            event,
+            Box::new(move |mut event| {
+                Box::pin(async move {
+                    let sanitized = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+                        &tool_name, result, &entries,
+                    )
+                    .await;
+                    let mut fields = event.sanitize_fields();
+                    fields.data = if sanitized.is_null() {
+                        fallback
+                    } else {
+                        Some(sanitized)
+                    };
+                    event.apply_sanitize_fields(fields);
+                    event
+                })
+            }),
+            event_sanitizers,
+            &subscribers,
+            scope_stack,
+        );
+    }
     Ok(())
 }
 

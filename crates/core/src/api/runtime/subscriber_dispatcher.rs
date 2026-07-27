@@ -45,6 +45,8 @@ mod native {
 
     static DISPATCHER: OnceLock<std::result::Result<Sender<DispatcherMessage>, String>> =
         OnceLock::new();
+    static SANITIZER_RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
+        OnceLock::new();
     static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
     thread_local! {
@@ -222,7 +224,11 @@ mod native {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         IN_DISPATCHER.with(|flag| flag.set(true));
-        let event = sanitize_event_snapshot(*event, transform, sanitizers);
+        let Some(event) = sanitize_event_snapshot(*event, transform, sanitizers) else {
+            IN_DISPATCHER.with(|flag| flag.set(false));
+            restore_thread_scope_stack(previous_scope_stack);
+            return;
+        };
         for subscriber in subscribers {
             if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
                 log::error!(
@@ -236,48 +242,68 @@ mod native {
         restore_thread_scope_stack(previous_scope_stack);
     }
 
-    /// Apply sanitizers on the dispatcher thread. A sanitizer panic must not
-    /// drop or partially clear an event: retain the last successful snapshot
-    /// and continue publication (fail open).
+    /// Apply a transform and sanitizers on the dispatcher thread. A transform
+    /// failure drops the event because it may be responsible for inserting the
+    /// sanitized payload. A sanitizer failure retains the transformed snapshot
+    /// and continues publication (fail open).
     fn sanitize_event_snapshot(
         event: Event,
         transform: Option<EventTransformFn>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
-    ) -> Event {
-        let original = event.clone();
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-        {
+    ) -> Option<Event> {
+        let runtime = match SANITIZER_RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())
+        }) {
             Ok(runtime) => runtime,
             Err(error) => {
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_runtime_failed";
-                    "Event sanitizer runtime failed; publishing the original event snapshot: {error}"
+                    "Event sanitizer runtime failed; dropping the event: {error}"
                 );
-                return original;
+                return None;
             }
         };
-        match catch_unwind(AssertUnwindSafe(|| {
+        let transformed = match catch_unwind(AssertUnwindSafe(|| {
             runtime.block_on(async move {
-                let event = match transform {
+                match transform {
                     Some(transform) => transform(event).await,
                     None => event,
-                };
-                NemoRelayContextState::event_sanitize_snapshot_chain(event, &sanitizers).await
+                }
             })
         })) {
             Ok(event) => event,
             Err(_) => {
                 log::error!(
                     target: "nemo_relay.runtime",
-                    event = "event_sanitizer_panicked";
-                    "Event sanitizer panicked; publishing the original event snapshot"
+                    event = "event_transform_panicked";
+                    "Event transform panicked; dropping the event"
                 );
-                original
+                return None;
             }
-        }
+        };
+        let original = transformed.clone();
+        Some(
+            match catch_unwind(AssertUnwindSafe(|| {
+                runtime.block_on(NemoRelayContextState::event_sanitize_snapshot_chain(
+                    transformed,
+                    &sanitizers,
+                ))
+            })) {
+                Ok(event) => event,
+                Err(_) => {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_sanitizer_panicked";
+                        "Event sanitizer panicked; publishing the transformed event snapshot"
+                    );
+                    original
+                }
+            },
+        )
     }
 }
 
