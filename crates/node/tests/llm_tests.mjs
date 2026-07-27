@@ -57,6 +57,17 @@ async function flushSubscriberCallbacks() {
   }
 }
 
+async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
+  flushSubscribers();
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('timed out waiting for subscriber callbacks');
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 function makeNative() {
   return {
     headers: {},
@@ -291,7 +302,10 @@ describe('LLM execute', () => {
         /llm status failure/,
       );
 
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(
+        () => events.some((e) => e.name === 'exec_status_ok_llm' && e.scope_category === 'end')
+          && events.some((e) => e.name === 'exec_status_error_llm' && e.scope_category === 'end'),
+      );
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'end',
