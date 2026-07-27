@@ -75,6 +75,16 @@ class NonFiniteSession(FakeSession):
         return [logits]
 
 
+class RecordingSession(FakeSession):
+    def __init__(self) -> None:
+        super().__init__([], [])
+        self.shapes: list[tuple[int, int]] = []
+
+    def run(self, output_names: list[str], input_feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+        self.shapes.append(input_feed["input_ids"].shape)
+        return super().run(output_names, input_feed)
+
+
 def detector(
     label_ids: list[int],
     scores: list[float],
@@ -284,6 +294,30 @@ def test_request_window_limit_is_enforced_before_inference() -> None:
     text = " ".join(f"word{index}" for index in range(600))
     with pytest.raises(ValueError, match="max_windows_per_request"):
         current.detect_request({"version": 1, "texts": [{"id": 0, "text": text}]})
+
+
+def test_inference_batches_short_windows_and_isolates_full_windows() -> None:
+    session = RecordingSession()
+    current = RampartDetector(
+        RampartSettings.from_config({"inference_batch_size": 16}),
+        FakeTokenizer(),
+        session,
+        {0: "O", 1: "B-GIVEN_NAME", 2: "I-GIVEN_NAME", 3: "B-CITY", 4: "I-CITY"},
+    )
+    full_window = " ".join("word" for _ in range(detector_module.CONTENT_TOKEN_BUDGET))
+    texts = [{"id": index, "text": "short"} for index in range(16)]
+    texts.extend(
+        [
+            {"id": 16, "text": full_window},
+            {"id": 17, "text": full_window},
+        ]
+    )
+
+    assert current.detect_request({"version": 1, "texts": texts}) == {
+        "version": 1,
+        "detections": [],
+    }
+    assert session.shapes == [(16, 3), (1, detector_module.MODEL_MAX_TOKENS), (1, detector_module.MODEL_MAX_TOKENS)]
 
 
 def test_detector_rejects_invalid_model_outputs() -> None:

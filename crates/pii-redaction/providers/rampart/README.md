@@ -69,6 +69,10 @@ inference_batch_size = 16
 max_pending_requests = 8
 ```
 
+`inference_batch_size` is an upper bound. The worker batches short token
+windows together but automatically reduces the batch width for longer windows
+to bound ONNX intermediate memory.
+
 Add the PII component to the same `plugins.toml`:
 
 ```toml

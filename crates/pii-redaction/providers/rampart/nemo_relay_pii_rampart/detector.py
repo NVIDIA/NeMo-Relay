@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,6 +28,7 @@ MODEL_MAX_TOKENS = 512
 SPECIAL_TOKEN_COUNT = 2
 CONTENT_TOKEN_BUDGET = MODEL_MAX_TOKENS - SPECIAL_TOKEN_COUNT
 WINDOW_OVERLAP_TOKENS = 64
+MAX_PADDED_TOKENS_PER_BATCH = MODEL_MAX_TOKENS
 MAX_MODEL_REFERENCE_BYTES = 1024
 MAX_DETECTOR_PROFILE_BYTES = 1024
 MAX_CACHE_PATH_BYTES = 4096
@@ -235,8 +236,7 @@ class RampartDetector:
     def _detect_texts(self, texts: list[_InputText]) -> list[dict[str, Any]]:
         windows = self._build_windows(texts)
         spans_by_text: dict[int, list[_Span]] = {item.text_id: [] for item in texts}
-        for start in range(0, len(windows), self.settings.inference_batch_size):
-            batch = windows[start : start + self.settings.inference_batch_size]
+        for batch in _inference_batches(windows, self.settings.inference_batch_size):
             logits = self._infer(batch)
             for window, window_logits in zip(batch, logits, strict=True):
                 spans_by_text[window.text_id].extend(self._decode_window(window, window_logits))
@@ -363,6 +363,23 @@ class RampartDetector:
                 current_count += 1
         finish()
         return spans
+
+
+def _inference_batches(windows: list[_Window], max_batch_size: int) -> Iterator[list[_Window]]:
+    ordered = sorted(windows, key=lambda window: len(window.input_ids))
+    batch: list[_Window] = []
+    max_tokens = 0
+    for window in ordered:
+        next_max_tokens = max(max_tokens, len(window.input_ids))
+        padded_tokens = (len(batch) + 1) * next_max_tokens
+        if batch and (len(batch) >= max_batch_size or padded_tokens > MAX_PADDED_TOKENS_PER_BATCH):
+            yield batch
+            batch = []
+            max_tokens = 0
+        batch.append(window)
+        max_tokens = max(max_tokens, len(window.input_ids))
+    if batch:
+        yield batch
 
 
 def _resolve_model_root(settings: RampartSettings) -> Path:
