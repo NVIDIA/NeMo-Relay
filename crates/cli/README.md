@@ -130,11 +130,22 @@ Project config lives at `./.nemo-relay/config.toml`; user config lives at
 The project layer overrides system config, and the user layer overrides the
 project layer.
 
-General options are configured through the top-level config. Edit the config with:
+Set up agent entries in the top-level config with:
 
 ```bash
 nemo-relay config
 ```
+
+Edit gateway limits, provider upstreams, and operational logging with the
+structured user-config editor:
+
+```bash
+nemo-relay config edit
+```
+
+Use `--project` for the nearest project `config.toml`, or `--global` for
+`/etc/nemo-relay/config.toml`. The editor keeps authorization headers hidden;
+prefer their corresponding environment variables for credentials.
 
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:
