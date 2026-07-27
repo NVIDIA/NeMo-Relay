@@ -373,6 +373,13 @@ pub struct ThreadScopeStackBinding {
     explicit: bool,
 }
 
+impl ThreadScopeStackBinding {
+    /// Return the captured thread-local scope stack handle.
+    pub fn stack(&self) -> ScopeStackHandle {
+        self.stack.clone()
+    }
+}
+
 /// Create a new scope stack handle with an implicit root scope.
 ///
 /// The returned handle wraps a freshly initialized [`ScopeStack`] inside an

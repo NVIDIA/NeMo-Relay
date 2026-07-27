@@ -38,20 +38,29 @@ describe('Context isolation', () => {
     const rootUuid = '018f13f0-7c1a-7a80-8000-000000000001';
     const parentUuid = '018f13f0-7c1a-7a80-8000-000000000002';
     const stack = createScopeStackFromPropagation({ version: 1, rootUuid, parentUuid });
-    setThreadScopeStack(stack);
-    assert.equal(getHandle().uuid, parentUuid);
-    setThreadScopeStack(original);
+    try {
+      setThreadScopeStack(stack);
+      assert.equal(getHandle().uuid, parentUuid);
+    } finally {
+      setThreadScopeStack(original);
+    }
   });
 
   it('restores the surrounding stack after withScopeStack', () => {
     const original = currentScopeStack();
+    const originalUuid = getHandle().uuid;
     const stack = createScopeStack();
-    withScopeStack(stack, () => {
-      pushScope('temporary-with-scope-stack', ScopeType.Agent, null, null);
-      assert.equal(getHandle().name, 'temporary-with-scope-stack');
-    });
-    assert.notEqual(getHandle().name, 'temporary-with-scope-stack');
-    setThreadScopeStack(original);
+    try {
+      withScopeStack(stack, () => {
+        pushScope('temporary-with-scope-stack', ScopeType.Agent, null, null);
+        assert.equal(getHandle().name, 'temporary-with-scope-stack');
+      });
+      assert.notEqual(getHandle().name, 'temporary-with-scope-stack');
+      assert.throws(() => withScopeStack(stack, () => { throw new Error('expected'); }), /expected/);
+      assert.equal(getHandle().uuid, originalUuid);
+    } finally {
+      setThreadScopeStack(original);
+    }
   });
 
   it('currentScopeStack returns same in same context', () => {
@@ -68,17 +77,16 @@ describe('Context isolation', () => {
     const original = currentScopeStack();
     const newStack = createScopeStack();
 
-    // Switch to new stack and push a scope on it
-    setThreadScopeStack(newStack);
-    const scope = pushScope('isolated_scope', ScopeType.Agent, null, null);
-    const handle = getHandle();
-    assert.equal(handle.name, 'isolated_scope');
-    popScope(scope);
-
-    // Restore original stack — the isolated scope should not be visible
-    setThreadScopeStack(original);
-    const restored = getHandle();
-    assert.notEqual(restored.name, 'isolated_scope');
+    try {
+      setThreadScopeStack(newStack);
+      const scope = pushScope('isolated_scope', ScopeType.Agent, null, null);
+      const handle = getHandle();
+      assert.equal(handle.name, 'isolated_scope');
+      popScope(scope);
+    } finally {
+      setThreadScopeStack(original);
+    }
+    assert.notEqual(getHandle().name, 'isolated_scope');
   });
 
   it('scopeStackActive returns true after setThreadScopeStack', () => {

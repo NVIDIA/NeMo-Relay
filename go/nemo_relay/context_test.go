@@ -283,6 +283,69 @@ func TestNewScopeStackFromPropagationUsesParentAsCurrentHandle(t *testing.T) {
 	})
 }
 
+func TestPropagationContextCaptureAndValidation(t *testing.T) {
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf(newScopeStackFailed, err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		context, err := CapturePropagationContext()
+		if err != nil {
+			t.Fatalf("CapturePropagationContext failed: %v", err)
+		}
+		if context.Version != 1 || context.RootUUID != nil || context.ParentUUID == "" {
+			t.Fatalf("unexpected rootless context: %+v", context)
+		}
+
+		rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
+		withRoot, err := CapturePropagationContextWithRoot(&rootUUID)
+		if err != nil {
+			t.Fatalf("CapturePropagationContextWithRoot failed: %v", err)
+		}
+		if withRoot.RootUUID == nil || *withRoot.RootUUID != rootUUID {
+			t.Fatalf("expected root UUID %s, got %+v", rootUUID, withRoot.RootUUID)
+		}
+	})
+
+	for _, context := range []PropagationContext{
+		{Version: 2, ParentUUID: "018f13f0-7c1a-7a80-8000-000000000002"},
+		{Version: 1, ParentUUID: "not-a-uuid"},
+	} {
+		if _, err := NewScopeStackFromPropagation(context); err == nil {
+			t.Fatalf("expected invalid context to be rejected: %+v", context)
+		}
+	}
+}
+
+func TestPropagatedScopeStacksRemainIsolated(t *testing.T) {
+	rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
+	first, err := NewScopeStackFromPropagation(PropagationContext{Version: 1, RootUUID: &rootUUID, ParentUUID: "018f13f0-7c1a-7a80-8000-000000000002"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := NewScopeStackFromPropagation(PropagationContext{Version: 1, RootUUID: &rootUUID, ParentUUID: "018f13f0-7c1a-7a80-8000-000000000003"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	first.Run(func() {
+		handle, _ := GetHandle()
+		if handle.UUID() != "018f13f0-7c1a-7a80-8000-000000000002" {
+			t.Fatalf("unexpected first propagated parent: %s", handle.UUID())
+		}
+	})
+	second.Run(func() {
+		handle, _ := GetHandle()
+		if handle.UUID() != "018f13f0-7c1a-7a80-8000-000000000003" {
+			t.Fatalf("unexpected second propagated parent: %s", handle.UUID())
+		}
+	})
+}
+
 func TestConcurrentScopeStacksWithToolCalls(t *testing.T) {
 	const goroutines = 5
 	var wg sync.WaitGroup

@@ -30,6 +30,18 @@ def test_propagation_context_installs_and_restores_a_scoped_stack():
     assert nemo_relay.get_scope_stack() is original
 
 
+def test_use_scope_stack_restores_a_previously_bound_native_stack():
+    previous = nemo_relay.create_scope_stack()
+    replacement = nemo_relay.create_scope_stack()
+    nemo_relay.set_thread_scope_stack(previous)
+    previous_uuid = nemo_relay.scope.get_handle().uuid
+
+    with nemo_relay.use_scope_stack(replacement):
+        assert nemo_relay.scope.get_handle().uuid != previous_uuid
+
+    assert nemo_relay.scope.get_handle().uuid == previous_uuid
+
+
 def test_get_scope_stack_returns_same_in_same_context():
     """get_scope_stack returns the same instance within the same context."""
     s1 = nemo_relay.get_scope_stack()

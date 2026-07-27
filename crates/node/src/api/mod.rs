@@ -1815,8 +1815,8 @@ pub fn create_scope_stack_from_propagation(
 
 /// Run a synchronous callback with an isolated scope stack installed.
 ///
-/// For asynchronous JavaScript request handlers, keep the stack installed with
-/// `setThreadScopeStack` for the handler's lifetime instead.
+/// The stack is restored before this function returns. Asynchronous callbacks
+/// must not rely on this installation after their first `await`.
 #[napi]
 pub fn with_scope_stack(stack: &ScopeStack, callback: JsFunction) -> napi::Result<JsUnknown> {
     with_scope_stack_handle(stack.inner.clone(), || {

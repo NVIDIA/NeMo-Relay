@@ -19,6 +19,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    capture_thread_scope_stack as capture_thread_scope_stack_handle,
     create_scope_stack as create_scope_stack_handle,
     create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
@@ -208,6 +209,12 @@ pub fn create_scope_stack_from_propagation(
 #[pyfunction]
 pub fn set_thread_scope_stack(stack: &PyScopeStack) {
     bind_thread_scope_stack(stack.0.clone());
+}
+
+/// Capture the scope stack currently installed in native thread-local storage.
+#[pyfunction]
+pub fn capture_thread_scope_stack() -> PyScopeStack {
+    PyScopeStack(capture_thread_scope_stack_handle().stack())
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
@@ -1779,6 +1786,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(capture_propagation_context_with_root, m)?)?;
     m.add_function(wrap_pyfunction!(create_scope_stack_from_propagation, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(sync_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(py_scope_stack_active, m)?)?;
 

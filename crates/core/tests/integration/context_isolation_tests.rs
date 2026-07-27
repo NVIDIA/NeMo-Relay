@@ -88,6 +88,44 @@ fn test_rootless_propagation_context_uses_the_parent_as_root() {
 }
 
 #[test]
+fn test_propagation_context_with_root_as_parent_uses_one_synthetic_root() {
+    let root_uuid = Uuid::now_v7();
+    let stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid: root_uuid,
+    })
+    .unwrap();
+    let stack = stack.read().unwrap();
+    assert_eq!(stack.root_uuid(), root_uuid);
+    assert_eq!(stack.top().uuid, root_uuid);
+    assert_eq!(stack.scopes().len(), 1);
+}
+
+#[test]
+fn test_propagation_context_rejects_invalid_wire_values() {
+    for context in [
+        PropagationContext {
+            version: PropagationContext::VERSION + 1,
+            root_uuid: None,
+            parent_uuid: Uuid::now_v7(),
+        },
+        PropagationContext {
+            version: PropagationContext::VERSION,
+            root_uuid: None,
+            parent_uuid: Uuid::nil(),
+        },
+        PropagationContext {
+            version: PropagationContext::VERSION,
+            root_uuid: Some(Uuid::from_u128(1_u128 << 64)),
+            parent_uuid: Uuid::now_v7(),
+        },
+    ] {
+        assert!(create_scope_stack_from_propagation(&context).is_err());
+    }
+}
+
+#[test]
 fn test_pop_scope_rejects_non_top_and_unknown_handles() {
     set_thread_scope_stack(create_scope_stack());
 

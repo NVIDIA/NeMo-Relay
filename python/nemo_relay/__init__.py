@@ -127,6 +127,7 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     capture_propagation_context_with_root as _capture_propagation_context_with_root,
 )
+from nemo_relay._native import capture_thread_scope_stack as _capture_thread_scope_stack
 from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
@@ -424,13 +425,14 @@ def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeSta
 @contextmanager
 def use_scope_stack(stack: ScopeStack):
     """Temporarily install ``stack`` in the current Python context."""
+    previous_native_stack = _capture_thread_scope_stack()
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)
     try:
         yield stack
     finally:
         _scope_stack_var.reset(token)
-        _sync_thread_scope_stack(get_scope_stack())
+        _sync_thread_scope_stack(previous_native_stack)
 
 
 def set_thread_scope_stack(stack: ScopeStack) -> None:
