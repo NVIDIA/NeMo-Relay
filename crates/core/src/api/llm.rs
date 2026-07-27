@@ -42,13 +42,14 @@ pub use nemo_relay_types::api::llm::{
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
 };
 
-const OBSERVABILITY_CREDENTIAL_HEADERS: [&str; 6] = [
+const OBSERVABILITY_CREDENTIAL_HEADERS: [&str; 7] = [
     "authorization",
     "proxy-authorization",
     "cookie",
     "x-api-key",
     "api-key",
     "anthropic-api-key",
+    "x-goog-api-key",
 ];
 
 #[derive(Clone)]
@@ -621,13 +622,13 @@ fn emit_optimization_marks_with(
 ///
 /// # Notes
 /// The runtime removes standard credential headers (`authorization`,
-/// `proxy-authorization`, `cookie`, `x-api-key`, `api-key`, and
-/// `anthropic-api-key`) from the event-only request copy before sanitize-request
-/// guardrails run. This does not change the caller-owned [`LlmRequest`]. When
-/// the owning agent is not fresh, the emitted request annotation is limited to
-/// the current user turn. Managed calls with a request codec also apply that
-/// projection to the event input, without changing the request used for
-/// provider execution.
+/// `proxy-authorization`, `cookie`, `x-api-key`, `api-key`,
+/// `anthropic-api-key`, and `x-goog-api-key`) from the event-only request copy
+/// before sanitize-request guardrails run. This does not change the
+/// caller-owned [`LlmRequest`]. When the owning agent is not fresh, the emitted
+/// request annotation is limited to the current user turn. Managed calls with a
+/// request codec also apply that projection to the event input, without changing
+/// the request used for provider execution.
 pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
     let handle_params = CreateLlmHandleParams::builder()
         .name(params.name)

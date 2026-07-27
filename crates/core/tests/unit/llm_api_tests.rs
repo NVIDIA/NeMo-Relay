@@ -73,6 +73,7 @@ fn request_with_credential_headers() -> LlmRequest {
         ("X-Api-Key", "x-api-key-secret"),
         ("API-KEY", "api-key-secret"),
         ("Anthropic-Api-Key", "anthropic-api-key-secret"),
+        ("X-GoOg-Api-Key", "x-goog-api-key-secret"),
     ] {
         headers.insert(name.to_string(), json!(value));
     }
