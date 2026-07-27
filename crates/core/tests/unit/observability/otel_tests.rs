@@ -18,8 +18,8 @@ use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
-    reset_active_pricing_resolver, set_active_pricing_resolver,
+    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
+    Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
@@ -1334,6 +1334,66 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
         Some(&"7".to_string())
     );
     assert!(!embed_attributes.contains_key("gen_ai.usage.output_tokens"));
+}
+
+#[test]
+fn gen_ai_projection_emits_normalized_response_attributes() {
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"answer": "ok"})),
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    id: Some("response-1".to_string()),
+                    model: Some("model-1".to_string()),
+                    finish_reason: Some(FinishReason::ToolUse),
+                    usage: Some(Usage {
+                        prompt_tokens: Some(13),
+                        completion_tokens: Some(8),
+                        total_tokens: Some(21),
+                        cache_read_tokens: Some(5),
+                        cache_write_tokens: Some(3),
+                        cost: None,
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("gen_ai.response.id"),
+        Some(&"response-1".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.response.model"),
+        Some(&"model-1".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.response.finish_reasons"),
+        Some(&"[\"tool_calls\"]".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.input_tokens"),
+        Some(&"13".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.output_tokens"),
+        Some(&"8".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_read.input_tokens"),
+        Some(&"5".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        Some(&"3".to_string())
+    );
 }
 
 #[test]
