@@ -6,9 +6,10 @@
 use std::sync::Arc;
 
 use nemo_relay::api::runtime::{
-    ScopeStack, TASK_SCOPE_STACK, create_scope_stack, current_scope_stack,
-    propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
-    task_scope_push, task_scope_remove, task_scope_top,
+    PropagationContext, ScopeStack, TASK_SCOPE_STACK, create_scope_stack,
+    create_scope_stack_from_propagation, current_scope_stack, propagate_scope_to_thread,
+    scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack, task_scope_push,
+    task_scope_remove, task_scope_top,
 };
 use nemo_relay::api::scope::{
     PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
@@ -53,6 +54,37 @@ fn test_two_scope_stacks_are_independent() {
     let root_b_uuid = stack_b.read().unwrap().top().uuid;
     // They each have their own root
     assert_ne!(root_a_uuid, root_b_uuid); // scope_a != scope_b
+}
+
+#[test]
+fn test_propagation_context_seeds_a_synthetic_root_and_parent() {
+    let root_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid,
+    })
+    .unwrap();
+    let stack = stack.read().unwrap();
+    assert_eq!(stack.root_uuid(), root_uuid);
+    assert_eq!(stack.top().uuid, parent_uuid);
+    assert_eq!(stack.scopes().len(), 2);
+}
+
+#[test]
+fn test_rootless_propagation_context_uses_the_parent_as_root() {
+    let parent_uuid = Uuid::now_v7();
+    let stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: None,
+        parent_uuid,
+    })
+    .unwrap();
+    let stack = stack.read().unwrap();
+    assert_eq!(stack.root_uuid(), parent_uuid);
+    assert_eq!(stack.top().uuid, parent_uuid);
+    assert_eq!(stack.scopes().len(), 1);
 }
 
 #[test]

@@ -229,6 +229,9 @@ extern void nemo_relay_string_free(char* ptr);
 
 // Scope stack isolation
 extern int32_t nemo_relay_scope_stack_create(FfiScopeStack** out);
+extern int32_t nemo_relay_capture_propagation_context_json(char** out);
+extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
+extern int32_t nemo_relay_scope_stack_create_from_propagation_json(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
 extern int32_t nemo_relay_scope_stack_restore_thread(FfiThreadScopeStackBinding* binding);
@@ -1567,10 +1570,66 @@ type ScopeStack struct {
 	ptr *C.FfiScopeStack
 }
 
+// PropagationContext is the versioned, transport-neutral causal context used
+// to continue Relay work in another process.
+type PropagationContext struct {
+	Version    uint16  `json:"version"`
+	RootUUID   *string `json:"root_uuid,omitempty"`
+	ParentUUID string  `json:"parent_uuid"`
+}
+
+// CapturePropagationContext captures the current Relay causal parent.
+func CapturePropagationContext() (PropagationContext, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_propagation_context_json(&out)); err != nil {
+		return PropagationContext{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+	var context PropagationContext
+	if err := json.Unmarshal([]byte(C.GoString(out)), &context); err != nil {
+		return PropagationContext{}, err
+	}
+	return context, nil
+}
+
+// CapturePropagationContextWithRoot captures the current parent with an
+// application-supplied stable session root. Pass nil when no root is known.
+func CapturePropagationContextWithRoot(rootUUID *string) (PropagationContext, error) {
+	var cRoot *C.char
+	if rootUUID != nil {
+		cRoot = C.CString(*rootUUID)
+		defer C.free(unsafe.Pointer(cRoot))
+	}
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_propagation_context_with_root_json(cRoot, &out)); err != nil {
+		return PropagationContext{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+	var context PropagationContext
+	if err := json.Unmarshal([]byte(C.GoString(out)), &context); err != nil {
+		return PropagationContext{}, err
+	}
+	return context, nil
+}
+
 // NewScopeStack creates a new isolated scope stack.
 // The caller must call Close() when done.
 func NewScopeStack() (*ScopeStack, error) {
 	return newScopeStackFunc()
+}
+
+// NewScopeStackFromPropagation creates an isolated stack seeded from a
+// received propagation context. The caller must call Close when done.
+func NewScopeStackFromPropagation(context PropagationContext) (*ScopeStack, error) {
+	payload, err := json.Marshal(context)
+	if err != nil {
+		return nil, err
+	}
+	cPayload := C.CString(string(payload))
+	defer C.free(unsafe.Pointer(cPayload))
+	var ptr *C.FfiScopeStack
+	status := C.nemo_relay_scope_stack_create_from_propagation_json(cPayload, &ptr)
+	return checkedValue(int32(status), &ScopeStack{ptr: ptr})
 }
 
 // Close frees the scope stack. After calling Close, the ScopeStack must not be used.

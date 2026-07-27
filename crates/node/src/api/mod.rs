@@ -36,9 +36,13 @@ use nemo_relay::api::runtime::{
     ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
-    TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
+    TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
+    capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    create_scope_stack as create_scope_stack_handle,
+    create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
+    with_scope_stack as with_scope_stack_handle,
 };
 use nemo_relay::api::scope as core_scope_api;
 use nemo_relay::api::scope::ScopeAttributes;
@@ -1726,12 +1730,98 @@ impl Plugin for NodePlugin {
 // Scope stack isolation
 // ---------------------------------------------------------------------------
 
+/// Transport-neutral Relay causal context for application-managed transport.
+#[napi(object)]
+pub struct PropagationContext {
+    pub version: u32,
+    pub root_uuid: Option<String>,
+    pub parent_uuid: String,
+}
+
+fn propagation_context_from_napi(
+    context: PropagationContext,
+) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+    let root_uuid = context
+        .root_uuid
+        .as_deref()
+        .map(uuid::Uuid::parse_str)
+        .transpose()
+        .map_err(|error| napi::Error::from_reason(format!("invalid root UUID: {error}")))?;
+    let parent_uuid = uuid::Uuid::parse_str(&context.parent_uuid)
+        .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+    let version = u16::try_from(context.version)
+        .map_err(|_| napi::Error::from_reason("propagation context version is out of range"))?;
+    let context = nemo_relay::api::runtime::PropagationContext {
+        version,
+        root_uuid,
+        parent_uuid,
+    };
+    context
+        .validate()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    Ok(context)
+}
+
+fn propagation_context_to_napi(
+    context: nemo_relay::api::runtime::PropagationContext,
+) -> PropagationContext {
+    PropagationContext {
+        version: u32::from(context.version),
+        root_uuid: context.root_uuid.map(|uuid| uuid.to_string()),
+        parent_uuid: context.parent_uuid.to_string(),
+    }
+}
+
 /// Creates a new isolated scope stack.
 #[napi]
 pub fn create_scope_stack() -> ScopeStack {
     ScopeStack {
         inner: create_scope_stack_handle(),
     }
+}
+
+/// Capture the current Relay causal parent for application-managed transport.
+#[napi]
+pub fn capture_propagation_context() -> napi::Result<PropagationContext> {
+    capture_propagation_context_handle()
+        .map(propagation_context_to_napi)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Capture the current parent with an optional stable application session root.
+#[napi]
+pub fn capture_propagation_context_with_root(
+    root_uuid: Option<String>,
+) -> napi::Result<PropagationContext> {
+    let root_uuid = root_uuid
+        .as_deref()
+        .map(uuid::Uuid::parse_str)
+        .transpose()
+        .map_err(|error| napi::Error::from_reason(format!("invalid root UUID: {error}")))?;
+    capture_propagation_context_with_root_handle(root_uuid)
+        .map(propagation_context_to_napi)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Create an isolated scope stack seeded from a received propagation context.
+#[napi]
+pub fn create_scope_stack_from_propagation(
+    context: PropagationContext,
+) -> napi::Result<ScopeStack> {
+    create_scope_stack_from_propagation_handle(&propagation_context_from_napi(context)?)
+        .map(ScopeStack::from)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Run a synchronous callback with an isolated scope stack installed.
+///
+/// For asynchronous JavaScript request handlers, keep the stack installed with
+/// `setThreadScopeStack` for the handler's lifetime instead.
+#[napi]
+pub fn with_scope_stack(stack: &ScopeStack, callback: JsFunction) -> napi::Result<JsUnknown> {
+    with_scope_stack_handle(stack.inner.clone(), || {
+        callback.call::<JsUnknown>(None, &[])
+    })
 }
 
 /// Returns the current execution context's scope stack handle.

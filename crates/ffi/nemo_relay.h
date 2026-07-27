@@ -2342,6 +2342,39 @@ NemoRelayStatus nemo_relay_scope_deregister_subscriber(const char *scope_uuid, c
 NemoRelayStatus nemo_relay_scope_stack_create(struct FfiScopeStack **out);
 
 /**
+ * Serialize the current causal parent as a versioned propagation context.
+ *
+ * The returned JSON must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_json(char **out);
+
+/**
+ * Serialize the current causal parent with an application-supplied root UUID.
+ *
+ * Pass null for `root_uuid` to omit the root. The returned JSON must be freed
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * When non-null, `root_uuid` must point to a valid NUL-terminated C string;
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_with_root_json(const char *root_uuid,
+                                                                      char **out);
+
+/**
+ * Create an isolated scope stack from propagation-context JSON.
+ *
+ * # Safety
+ * `context_json` must point to a valid NUL-terminated C string and `out` must
+ * be a valid, writable pointer to a scope-stack output slot.
+ */
+NemoRelayStatus nemo_relay_scope_stack_create_from_propagation_json(const char *context_json,
+                                                                    struct FfiScopeStack **out);
+
+/**
  * Bind an isolated scope stack to the current OS thread.
  *
  * After this call, all NeMo Relay scope operations on the current thread

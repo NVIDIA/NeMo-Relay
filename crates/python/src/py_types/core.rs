@@ -14,7 +14,9 @@ use super::{
 };
 use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+use nemo_relay::api::runtime::{
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
+};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 
 /// Structured identity of the codec active during LLM sanitization.
@@ -185,6 +187,49 @@ pub struct PyScopeStack(pub ScopeStackHandle);
 impl PyScopeStack {
     pub(crate) fn __repr__(&self) -> String {
         "<ScopeStack>".to_string()
+    }
+}
+
+/// Transport-neutral causal context used to continue Relay work remotely.
+#[pyclass(name = "PropagationContext", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyPropagationContext {
+    pub(crate) inner: PropagationContext,
+}
+
+#[pymethods]
+impl PyPropagationContext {
+    #[new]
+    #[pyo3(signature = (parent_uuid, root_uuid=None, version=1))]
+    fn new(parent_uuid: &str, root_uuid: Option<&str>, version: u16) -> PyResult<Self> {
+        let context = PropagationContext {
+            version,
+            root_uuid: root_uuid
+                .map(uuid::Uuid::parse_str)
+                .transpose()
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+            parent_uuid: uuid::Uuid::parse_str(parent_uuid)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+        };
+        context
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(Self { inner: context })
+    }
+
+    #[getter]
+    fn version(&self) -> u16 {
+        self.inner.version
+    }
+
+    #[getter]
+    fn root_uuid(&self) -> Option<String> {
+        self.inner.root_uuid.map(|uuid| uuid.to_string())
+    }
+
+    #[getter]
+    fn parent_uuid(&self) -> String {
+        self.inner.parent_uuid.to_string()
     }
 }
 

@@ -259,6 +259,30 @@ func TestCreateScopeStackCreatesFreshStack(t *testing.T) {
 	}
 }
 
+func TestNewScopeStackFromPropagationUsesParentAsCurrentHandle(t *testing.T) {
+	rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
+	parentUUID := "018f13f0-7c1a-7a80-8000-000000000002"
+	stack, err := NewScopeStackFromPropagation(PropagationContext{
+		Version:    1,
+		RootUUID:   &rootUUID,
+		ParentUUID: parentUUID,
+	})
+	if err != nil {
+		t.Fatalf("NewScopeStackFromPropagation failed: %v", err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		handle, err := GetHandle()
+		if err != nil {
+			t.Fatalf("GetHandle failed: %v", err)
+		}
+		if handle.UUID() != parentUUID {
+			t.Fatalf("expected parent UUID %s, got %s", parentUUID, handle.UUID())
+		}
+	})
+}
+
 func TestConcurrentScopeStacksWithToolCalls(t *testing.T) {
 	const goroutines = 5
 	var wg sync.WaitGroup

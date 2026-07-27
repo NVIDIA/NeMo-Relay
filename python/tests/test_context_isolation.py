@@ -4,6 +4,7 @@
 """Tests for per-request scope stack isolation via ContextVar."""
 
 import asyncio
+import uuid
 
 import nemo_relay
 
@@ -13,6 +14,20 @@ def test_create_scope_stack_returns_scope_stack():
     stack = nemo_relay.create_scope_stack()
     assert isinstance(stack, nemo_relay.ScopeStack)
     assert repr(stack) == "<ScopeStack>"
+
+
+def test_propagation_context_installs_and_restores_a_scoped_stack():
+    original = nemo_relay.get_scope_stack()
+    root_uuid = str(uuid.uuid4())
+    parent_uuid = str(uuid.uuid4())
+    context = nemo_relay.PropagationContext(parent_uuid, root_uuid)
+    stack = nemo_relay.create_scope_stack_from_propagation(context)
+
+    with nemo_relay.use_scope_stack(stack):
+        assert nemo_relay.get_scope_stack() is stack
+        assert nemo_relay.scope.get_handle().uuid == parent_uuid
+
+    assert nemo_relay.get_scope_stack() is original
 
 
 def test_get_scope_stack_returns_same_in_same_context():

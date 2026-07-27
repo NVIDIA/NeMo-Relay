@@ -18,6 +18,8 @@ const {
   popScope,
   ScopeType,
   ScopeStack,
+  createScopeStackFromPropagation,
+  withScopeStack,
 } = lib;
 
 // ===========================================================================
@@ -29,6 +31,27 @@ describe('Context isolation', () => {
     const stack = createScopeStack();
     assert.ok(stack, 'Expected a non-null scope stack');
     assert.ok(stack instanceof ScopeStack, 'Expected instance of ScopeStack');
+  });
+
+  it('creates an imported stack with the propagated parent on top', () => {
+    const original = currentScopeStack();
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000001';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000002';
+    const stack = createScopeStackFromPropagation({ version: 1, rootUuid, parentUuid });
+    setThreadScopeStack(stack);
+    assert.equal(getHandle().uuid, parentUuid);
+    setThreadScopeStack(original);
+  });
+
+  it('restores the surrounding stack after withScopeStack', () => {
+    const original = currentScopeStack();
+    const stack = createScopeStack();
+    withScopeStack(stack, () => {
+      pushScope('temporary-with-scope-stack', ScopeType.Agent, null, null);
+      assert.equal(getHandle().name, 'temporary-with-scope-stack');
+    });
+    assert.notEqual(getHandle().name, 'temporary-with-scope-stack');
+    setThreadScopeStack(original);
   });
 
   it('currentScopeStack returns same in same context', () => {
