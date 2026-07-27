@@ -15,6 +15,7 @@ workspace = true
 
 [features]
 default = []
+rampart = ["dep:tokio", "dep:tract-onnx", "dep:unicode_categories", "dep:unicode-normalization"]
 schema = ["dep:schemars", "nemo-relay/schema"]
 
 [dependencies]
@@ -25,6 +26,10 @@ serde_json = "1"
 regex = "1"
 sha2 = "0.11"
 schemars = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
+tract-onnx = { version = "0.23.4", optional = true }
+unicode_categories = { version = "0.1.1", optional = true }
+unicode-normalization = { version = "0.1.25", optional = true }
 
 [dev-dependencies]
 nemo-relay = { workspace = true, features = ["openinference", "otel"] }

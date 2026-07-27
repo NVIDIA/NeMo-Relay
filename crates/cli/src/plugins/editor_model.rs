@@ -14,6 +14,7 @@ use nemo_relay::plugins::nemo_guardrails::component::{
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
+use nemo_relay_pii_redaction::rampart::{RAMPART_PII_PLUGIN_KIND, RampartPiiConfig};
 #[cfg(feature = "switchyard")]
 use nemo_relay_switchyard::{SWITCHYARD_PLUGIN_KIND, SwitchyardConfig};
 use serde::Serialize;
@@ -40,6 +41,7 @@ pub(super) enum EditableComponent {
     Adaptive(Box<ComponentEditorState<AdaptiveConfig>>),
     NemoGuardrails(Box<ComponentEditorState<NeMoGuardrailsConfig>>),
     PiiRedaction(Box<ComponentEditorState<PiiRedactionConfig>>),
+    RampartPii(Box<ComponentEditorState<RampartPiiConfig>>),
     #[cfg(feature = "switchyard")]
     Switchyard(Box<ComponentEditorState<SwitchyardConfig>>),
 }
@@ -51,6 +53,7 @@ impl EditableComponent {
             Self::Adaptive(_) => "Adaptive",
             Self::NemoGuardrails(_) => "NeMo Guardrails",
             Self::PiiRedaction(_) => "PII Redaction",
+            Self::RampartPii(_) => "Rampart PII",
             #[cfg(feature = "switchyard")]
             Self::Switchyard(_) => "Switchyard Decision API",
         }
@@ -62,6 +65,7 @@ impl EditableComponent {
             Self::Adaptive(_) => AdaptiveConfig::editor_schema().fields,
             Self::NemoGuardrails(_) => NeMoGuardrailsConfig::editor_schema().fields,
             Self::PiiRedaction(_) => PiiRedactionConfig::editor_schema().fields,
+            Self::RampartPii(_) => RampartPiiConfig::editor_schema().fields,
             #[cfg(feature = "switchyard")]
             Self::Switchyard(_) => SwitchyardConfig::editor_schema().fields,
         }
@@ -73,6 +77,7 @@ impl EditableComponent {
             Self::Adaptive(state) => state.enabled,
             Self::NemoGuardrails(state) => state.enabled,
             Self::PiiRedaction(state) => state.enabled,
+            Self::RampartPii(state) => state.enabled,
             #[cfg(feature = "switchyard")]
             Self::Switchyard(state) => state.enabled,
         }
@@ -84,6 +89,7 @@ impl EditableComponent {
             Self::Adaptive(state) => state.toggle_enabled(),
             Self::NemoGuardrails(state) => state.toggle_enabled(),
             Self::PiiRedaction(state) => state.toggle_enabled(),
+            Self::RampartPii(state) => state.toggle_enabled(),
             #[cfg(feature = "switchyard")]
             Self::Switchyard(state) => state.toggle_enabled(),
         }
@@ -95,6 +101,7 @@ impl EditableComponent {
             Self::Adaptive(state) => state.set_enabled(enabled),
             Self::NemoGuardrails(state) => state.set_enabled(enabled),
             Self::PiiRedaction(state) => state.set_enabled(enabled),
+            Self::RampartPii(state) => state.set_enabled(enabled),
             #[cfg(feature = "switchyard")]
             Self::Switchyard(state) => state.set_enabled(enabled),
         }
@@ -106,6 +113,7 @@ impl EditableComponent {
             Self::Adaptive(state) => state.reset_enabled(),
             Self::NemoGuardrails(state) => state.reset_enabled(),
             Self::PiiRedaction(state) => state.reset_enabled(),
+            Self::RampartPii(state) => state.reset_enabled(),
             #[cfg(feature = "switchyard")]
             Self::Switchyard(state) => state.reset_enabled(),
         }
@@ -117,6 +125,7 @@ impl EditableComponent {
             Self::Adaptive(state) => adaptive_summary(state),
             Self::NemoGuardrails(state) => nemo_guardrails_summary(state),
             Self::PiiRedaction(state) => pii_redaction_summary(state),
+            Self::RampartPii(state) => rampart_pii_summary(state),
             #[cfg(feature = "switchyard")]
             Self::Switchyard(state) => switchyard_summary(state),
         }
@@ -130,6 +139,9 @@ impl EditableComponent {
                 config_field_configured(&state.config, field).unwrap_or(false)
             }
             Self::PiiRedaction(state) => {
+                config_field_configured(&state.config, field).unwrap_or(false)
+            }
+            Self::RampartPii(state) => {
                 config_field_configured(&state.config, field).unwrap_or(false)
             }
             #[cfg(feature = "switchyard")]
@@ -154,6 +166,10 @@ impl EditableComponent {
                 state.mark_config_touched();
             }
             Self::PiiRedaction(state) => {
+                reset_config_field(&mut state.config, field)?;
+                state.mark_config_touched();
+            }
+            Self::RampartPii(state) => {
                 reset_config_field(&mut state.config, field)?;
                 state.mark_config_touched();
             }
@@ -187,6 +203,10 @@ impl EditableComponent {
                 remove_struct_field(&mut state.config, field.name)?;
                 state.mark_config_touched();
             }
+            Self::RampartPii(state) => {
+                remove_struct_field(&mut state.config, field.name)?;
+                state.mark_config_touched();
+            }
             #[cfg(feature = "switchyard")]
             Self::Switchyard(state) => {
                 remove_struct_field(&mut state.config, field.name)?;
@@ -202,6 +222,7 @@ impl EditableComponent {
             Self::Adaptive(state) => store_adaptive_state(config, state),
             Self::NemoGuardrails(state) => store_nemo_guardrails_state(config, state),
             Self::PiiRedaction(state) => store_pii_redaction_state(config, state),
+            Self::RampartPii(state) => store_rampart_pii_state(config, state),
             #[cfg(feature = "switchyard")]
             Self::Switchyard(state) => store_switchyard_state(config, state),
         }
@@ -232,6 +253,7 @@ pub(super) fn editable_components(
         EditableComponent::Adaptive(Box::new(component_adaptive_state(config)?)),
         EditableComponent::NemoGuardrails(Box::new(component_nemo_guardrails_state(config)?)),
         EditableComponent::PiiRedaction(Box::new(component_pii_redaction_state(config)?)),
+        EditableComponent::RampartPii(Box::new(component_rampart_pii_state(config)?)),
     ];
     #[cfg(feature = "switchyard")]
     let components = {
@@ -446,6 +468,12 @@ pub(super) fn component_pii_redaction_state(
     component_editor_state(config, PII_REDACTION_PLUGIN_KIND, false)
 }
 
+pub(super) fn component_rampart_pii_state(
+    config: &PluginConfig,
+) -> Result<ComponentEditorState<RampartPiiConfig>, CliError> {
+    component_editor_state(config, RAMPART_PII_PLUGIN_KIND, false)
+}
+
 #[cfg(feature = "switchyard")]
 pub(super) fn component_switchyard_state(
     config: &PluginConfig,
@@ -512,6 +540,22 @@ pub(super) fn store_pii_redaction_state(
             state.enabled,
             pii_redaction_config_map(&state.config)?,
             merge_pii_redaction_editor_config,
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn store_rampart_pii_state(
+    config: &mut PluginConfig,
+    state: &ComponentEditorState<RampartPiiConfig>,
+) -> Result<(), CliError> {
+    if state.should_store(state.config_touched || rampart_pii_configured(&state.config)) {
+        store_component_editor_config(
+            config,
+            RAMPART_PII_PLUGIN_KIND,
+            state.enabled,
+            rampart_pii_config_map(&state.config)?,
+            merge_rampart_pii_editor_config,
         );
     }
     Ok(())
@@ -882,6 +926,23 @@ pub(super) fn pii_redaction_config_map(
     }
 }
 
+pub(super) fn rampart_pii_config_map(
+    config: &RampartPiiConfig,
+) -> Result<Map<String, Value>, CliError> {
+    let value = serde_json::to_value(config).map_err(serde_error)?;
+    match value {
+        Value::Object(mut map) => {
+            if is_version_one(map.get("version")) {
+                map.remove("version");
+            }
+            Ok(map)
+        }
+        _ => Err(CliError::Config(
+            "pii_rampart config must serialize to an object".into(),
+        )),
+    }
+}
+
 #[cfg(feature = "switchyard")]
 pub(super) fn switchyard_config_map(
     config: &SwitchyardConfig,
@@ -954,6 +1015,21 @@ pub(super) fn merge_pii_redaction_editor_config(
         edited,
         &nested_editor_keys(PiiRedactionConfig::editor_schema()),
         PiiRedactionConfig::editor_schema(),
+    );
+}
+
+pub(super) fn merge_rampart_pii_editor_config(
+    existing: &mut Map<String, Value>,
+    edited: Map<String, Value>,
+) {
+    if is_version_one(existing.get("version")) {
+        existing.remove("version");
+    }
+    merge_known_editor_object(
+        existing,
+        edited,
+        &nested_editor_keys(RampartPiiConfig::editor_schema()),
+        RampartPiiConfig::editor_schema(),
     );
 }
 
@@ -1155,6 +1231,33 @@ pub(super) fn pii_redaction_configured(config: &PiiRedactionConfig) -> bool {
 
 pub(super) fn pii_redaction_summary(state: &ComponentEditorState<PiiRedactionConfig>) -> String {
     let configured_fields = PiiRedactionConfig::editor_schema()
+        .fields
+        .iter()
+        .filter(|field| field.name != POLICY_SECTION)
+        .filter(|field| config_field_configured(&state.config, **field).unwrap_or(false))
+        .map(|field| field.label)
+        .collect::<Vec<_>>();
+    format!(
+        "component {}, fields {}",
+        if state.enabled { "enabled" } else { "disabled" },
+        if configured_fields.is_empty() {
+            "none".into()
+        } else {
+            configured_fields.join(", ")
+        }
+    )
+}
+
+pub(super) fn rampart_pii_configured(config: &RampartPiiConfig) -> bool {
+    RampartPiiConfig::editor_schema()
+        .fields
+        .iter()
+        .filter(|field| field.name != POLICY_SECTION)
+        .any(|field| config_field_configured(config, *field).unwrap_or(false))
+}
+
+pub(super) fn rampart_pii_summary(state: &ComponentEditorState<RampartPiiConfig>) -> String {
+    let configured_fields = RampartPiiConfig::editor_schema()
         .fields
         .iter()
         .filter(|field| field.name != POLICY_SECTION)
