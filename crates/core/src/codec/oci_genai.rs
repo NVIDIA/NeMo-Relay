@@ -10,15 +10,14 @@
 //!
 //! - **Two API formats** selected by the response `apiFormat`: `GENERIC`
 //!   (`choices`-based, OpenAI-style) and `COHERE` (`text`-based).
-//! - **Key conventions**: The same documented schema reaches the codec in the
-//!   three renderings Oracle tooling emits: the REST wire and most SDKs use
-//!   camelCase, `oci.util.to_dict()` on Python SDK models yields snake_case,
-//!   and the OCI CLI prints kebab-case wrapped in a `data` envelope. Decode
-//!   derives the kebab/snake spellings mechanically from the camelCase key and
-//!   unwraps the CLI `data` envelope.
 //! - **Responses**: `ChatResult` payloads (`modelId`, `chatResponse`) where the
 //!   chat response is `choices`-based for `GENERIC` and `text`-based for
 //!   `COHERE`; `usage` counters are `promptTokens`/`completionTokens`/`totalTokens`.
+//!
+//! The codec accepts the REST wire format only: camelCase keys, as documented
+//! in the OCI API reference. Alternate renderings produced by Oracle tooling
+//! (the CLI's kebab-case `data` envelope, `oci.util.to_dict()` snake_case
+//! dicts) are the caller's responsibility to convert.
 
 use crate::error::{FlowError, Result};
 use crate::json::Json;
@@ -35,57 +34,6 @@ use super::traits::LlmResponseCodec;
 
 /// Built-in codec for the OCI Generative AI chat API.
 pub struct OCIGenAIChatCodec;
-
-// ---------------------------------------------------------------------------
-// Key-convention helpers
-// ---------------------------------------------------------------------------
-
-/// Convert a camelCase key to its kebab-case form (`maxTokens` -> `max-tokens`).
-fn camel_to_kebab(key: &str) -> String {
-    camel_with_separator(key, '-')
-}
-
-/// Convert a camelCase key to its snake_case form (`maxTokens` -> `max_tokens`).
-fn camel_to_snake(key: &str) -> String {
-    camel_with_separator(key, '_')
-}
-
-fn camel_with_separator(key: &str, separator: char) -> String {
-    let mut out = String::with_capacity(key.len() + 4);
-    for c in key.chars() {
-        if c.is_ascii_uppercase() {
-            out.push(separator);
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Return the value for the first present key spelling across naming conventions.
-///
-/// The OCI SDKs emit camelCase JSON while the OCI CLI emits kebab-case; callers
-/// pass camelCase keys and kebab-case/snake_case fallbacks are derived.
-fn get_first<'a>(obj: &'a serde_json::Map<String, Json>, key: &str) -> Option<&'a Json> {
-    present_key(obj, key).and_then(|present| obj.get(&present))
-}
-
-/// Return the concrete key spelling present in `obj` for a camelCase `key`.
-fn present_key(obj: &serde_json::Map<String, Json>, key: &str) -> Option<String> {
-    if obj.contains_key(key) {
-        return Some(key.to_string());
-    }
-    let kebab = camel_to_kebab(key);
-    if obj.contains_key(&kebab) {
-        return Some(kebab);
-    }
-    let snake = camel_to_snake(key);
-    if obj.contains_key(&snake) {
-        return Some(snake);
-    }
-    None
-}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -158,10 +106,10 @@ fn flatten_all_text_parts(parts: &[Json]) -> Option<String> {
     let mut text = String::new();
     for part in parts {
         let obj = part.as_object()?;
-        if get_first(obj, "type").and_then(Json::as_str) != Some("TEXT") {
+        if obj.get("type").and_then(Json::as_str) != Some("TEXT") {
             return None;
         }
-        match get_first(obj, "text") {
+        match obj.get("text") {
             None | Some(Json::Null) => {}
             Some(Json::String(part_text)) => text.push_str(part_text),
             Some(_) => return None,
@@ -176,9 +124,10 @@ fn decode_generic_content_part(value: &Json) -> Result<ContentPart> {
             "OCI GenAI GENERIC content part must be an object".into(),
         ));
     };
-    match get_first(obj, "type").and_then(Json::as_str) {
+    match obj.get("type").and_then(Json::as_str) {
         Some("TEXT") => Ok(ContentPart::Text {
-            text: get_first(obj, "text")
+            text: obj
+                .get("text")
                 .and_then(Json::as_str)
                 .unwrap_or_default()
                 .to_string(),
@@ -216,28 +165,21 @@ impl LlmResponseCodec for OCIGenAIChatCodec {
             });
         };
 
-        // The OCI CLI wraps chat output in a `data` envelope; unwrap it so
-        // captured CLI payloads decode like SDK and wire payloads.
-        let obj = match obj.get("data").and_then(Json::as_object) {
-            Some(data) if present_key(data, "chatResponse").is_some() => data,
-            _ => obj,
+        let (envelope, chat_response) = match obj.get("chatResponse").and_then(Json::as_object) {
+            Some(chat_response) => (Some(obj), chat_response),
+            None => (None, obj),
         };
 
-        let (envelope, chat_response) =
-            match get_first(obj, "chatResponse").and_then(Json::as_object) {
-                Some(chat_response) => (Some(obj), chat_response),
-                None => (None, obj),
-            };
-
         let model = envelope
-            .and_then(|envelope| get_first(envelope, "modelId"))
+            .and_then(|envelope| envelope.get("modelId"))
             .and_then(Json::as_str)
             .map(str::to_string);
         let model_version = envelope
-            .and_then(|envelope| get_first(envelope, "modelVersion"))
+            .and_then(|envelope| envelope.get("modelVersion"))
             .and_then(Json::as_str)
             .map(str::to_string);
-        let api_format = get_first(chat_response, "apiFormat")
+        let api_format = chat_response
+            .get("apiFormat")
             .and_then(Json::as_str)
             .unwrap_or("GENERIC")
             .to_uppercase();
@@ -248,7 +190,8 @@ impl LlmResponseCodec for OCIGenAIChatCodec {
             decode_generic_response_body(chat_response)?
         };
 
-        let usage = get_first(chat_response, "usage")
+        let usage = chat_response
+            .get("usage")
             .and_then(Json::as_object)
             .map(decode_oci_usage);
 
@@ -278,21 +221,24 @@ type ResponseBody = (
 fn decode_generic_response_body(
     chat_response: &serde_json::Map<String, Json>,
 ) -> Result<ResponseBody> {
-    let Some(first_choice) = get_first(chat_response, "choices")
+    let Some(first_choice) = chat_response
+        .get("choices")
         .and_then(Json::as_array)
         .and_then(|choices| choices.first())
         .and_then(Json::as_object)
     else {
         return Ok((None, None, None));
     };
-    let finish_reason = get_first(first_choice, "finishReason")
+    let finish_reason = first_choice
+        .get("finishReason")
         .and_then(Json::as_str)
         .map(str::to_string);
-    let Some(raw_message) = get_first(first_choice, "message").and_then(Json::as_object) else {
+    let Some(raw_message) = first_choice.get("message").and_then(Json::as_object) else {
         return Ok((None, None, finish_reason));
     };
-    let message = decode_generic_content(get_first(raw_message, "content"))?;
-    let tool_calls = get_first(raw_message, "toolCalls")
+    let message = decode_generic_content(raw_message.get("content"))?;
+    let tool_calls = raw_message
+        .get("toolCalls")
         .and_then(Json::as_array)
         .map(|calls| decode_response_tool_calls(calls))
         .filter(|calls: &Vec<ResponseToolCall>| !calls.is_empty());
@@ -300,14 +246,17 @@ fn decode_generic_response_body(
 }
 
 fn decode_cohere_response_body(chat_response: &serde_json::Map<String, Json>) -> ResponseBody {
-    let message = get_first(chat_response, "text")
+    let message = chat_response
+        .get("text")
         .and_then(Json::as_str)
         .map(|text| MessageContent::Text(text.to_string()));
-    let tool_calls = get_first(chat_response, "toolCalls")
+    let tool_calls = chat_response
+        .get("toolCalls")
         .and_then(Json::as_array)
         .map(|calls| decode_response_tool_calls(calls))
         .filter(|calls| !calls.is_empty());
-    let finish_reason = get_first(chat_response, "finishReason")
+    let finish_reason = chat_response
+        .get("finishReason")
         .and_then(Json::as_str)
         .map(str::to_string);
     (message, tool_calls, finish_reason)
@@ -330,17 +279,17 @@ fn decode_response_tool_calls(calls: &[Json]) -> Vec<ResponseToolCall> {
 /// calls distinguishable.
 fn decode_response_tool_call(index: usize, value: &Json) -> Option<ResponseToolCall> {
     let obj = value.as_object()?;
-    let name = get_first(obj, "name")?.as_str()?.to_string();
-    let arguments = match get_first(obj, "arguments") {
+    let name = obj.get("name")?.as_str()?.to_string();
+    let arguments = match obj.get("arguments") {
         Some(Json::String(text)) => {
             // CRITICAL: GENERIC arguments arrive JSON-encoded; parse for the
             // normalized shape, preserving the raw string when unparseable.
             serde_json::from_str::<Json>(text).unwrap_or_else(|_| Json::String(text.clone()))
         }
         Some(other) => other.clone(),
-        None => get_first(obj, "parameters").cloned().unwrap_or(Json::Null),
+        None => obj.get("parameters").cloned().unwrap_or(Json::Null),
     };
-    let id = match get_first(obj, "id").and_then(Json::as_str) {
+    let id = match obj.get("id").and_then(Json::as_str) {
         Some(id) => id.to_string(),
         None => format!("call_{index}"),
     };
@@ -356,14 +305,15 @@ fn decode_response_tool_call(index: usize, value: &Json) -> Option<ResponseToolC
 /// OpenAI and xAI models report cache hits under
 /// `promptTokensDetails.cachedTokens`.
 fn decode_oci_usage(usage: &serde_json::Map<String, Json>) -> Usage {
-    let cache_read_tokens = get_first(usage, "promptTokensDetails")
+    let cache_read_tokens = usage
+        .get("promptTokensDetails")
         .and_then(Json::as_object)
-        .and_then(|details| get_first(details, "cachedTokens"))
+        .and_then(|details| details.get("cachedTokens"))
         .and_then(Json::as_u64);
     Usage {
-        prompt_tokens: get_first(usage, "promptTokens").and_then(Json::as_u64),
-        completion_tokens: get_first(usage, "completionTokens").and_then(Json::as_u64),
-        total_tokens: get_first(usage, "totalTokens").and_then(Json::as_u64),
+        prompt_tokens: usage.get("promptTokens").and_then(Json::as_u64),
+        completion_tokens: usage.get("completionTokens").and_then(Json::as_u64),
+        total_tokens: usage.get("totalTokens").and_then(Json::as_u64),
         cache_read_tokens,
         cache_write_tokens: None,
         cost: None,

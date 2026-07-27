@@ -103,106 +103,25 @@ fn test_cohere_chat_result() {
 }
 
 #[test]
-fn test_kebab_case_cli_shape() {
-    let cli_shaped = json!({
-        "model-id": DEDICATED_ENDPOINT,
-        "chat-response": {
-            "api-format": "GENERIC",
-            "choices": [
-                {
-                    "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "hello"}]},
-                    "finish-reason": "stop"
-                }
-            ],
-            "usage": {"total-tokens": 9}
-        }
-    });
-    let annotated = OCIGenAIChatCodec.decode_response(&cli_shaped).unwrap();
-
-    assert_eq!(annotated.model.as_deref(), Some(DEDICATED_ENDPOINT));
-    assert_eq!(
-        annotated.message,
-        Some(MessageContent::Text("hello".into()))
-    );
-    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
-    assert_eq!(annotated.usage.as_ref().unwrap().total_tokens, Some(9));
-}
-
-#[test]
-fn test_cli_data_envelope_unwrapped() {
-    // Shape observed from live `oci generative-ai-inference chat-result chat`
-    // output: kebab-case keys wrapped in a `data` envelope.
-    let cli_output = json!({
-        "data": {
-            "model-id": "meta.llama-4-maverick-17b-128e-instruct-fp8",
-            "model-version": "1.0.0",
-            "chat-response": {
-                "api-format": "GENERIC",
-                "choices": [
-                    {
-                        "finish-reason": "stop",
-                        "index": 0,
-                        "message": {
-                            "role": "ASSISTANT",
-                            "content": [{"type": "TEXT", "text": "Hello, how are you today?"}],
-                            "tool-calls": []
-                        }
-                    }
-                ],
-                "usage": {"completion-tokens": 8, "prompt-tokens": 16, "total-tokens": 24}
-            }
-        }
-    });
-    let annotated = OCIGenAIChatCodec.decode_response(&cli_output).unwrap();
-
-    assert_eq!(
-        annotated.model.as_deref(),
-        Some("meta.llama-4-maverick-17b-128e-instruct-fp8")
-    );
-    assert_eq!(
-        annotated.message,
-        Some(MessageContent::Text("Hello, how are you today?".into()))
-    );
-    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
-    assert_eq!(annotated.usage.as_ref().unwrap().prompt_tokens, Some(16));
-    assert_eq!(annotated.tool_calls, None);
-}
-
-#[test]
-fn test_snake_case_sdk_dict_shape() {
-    // Shape observed from live `oci.util.to_dict(response.data)` on a Python
-    // SDK ChatResult: snake_case keys, no envelope wrapper.
-    let sdk_dict = json!({
-        "model_id": "meta.llama-4-maverick-17b-128e-instruct-fp8",
-        "model_version": "1.0.0",
+fn test_non_wire_renderings_are_not_decoded() {
+    // The codec accepts the REST wire format only (camelCase). Alternate
+    // renderings from Oracle tooling (CLI kebab-case, SDK-dict snake_case)
+    // are the caller's responsibility to convert first.
+    let snake_cased = json!({
+        "model_id": DEDICATED_ENDPOINT,
         "chat_response": {
             "api_format": "GENERIC",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "ASSISTANT",
-                        "content": [{"type": "TEXT", "text": "Hello, it's nice to meet."}],
-                        "tool_calls": []
-                    },
-                    "finish_reason": "stop"
-                }
-            ],
-            "usage": {"completion_tokens": 8, "prompt_tokens": 16, "total_tokens": 24}
+            "choices": [{
+                "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "hello"}]},
+                "finish_reason": "stop"
+            }]
         }
     });
-    let annotated = OCIGenAIChatCodec.decode_response(&sdk_dict).unwrap();
+    let annotated = OCIGenAIChatCodec.decode_response(&snake_cased).unwrap();
 
-    assert_eq!(
-        annotated.model.as_deref(),
-        Some("meta.llama-4-maverick-17b-128e-instruct-fp8")
-    );
-    assert_eq!(
-        annotated.message,
-        Some(MessageContent::Text("Hello, it's nice to meet.".into()))
-    );
-    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
-    assert_eq!(annotated.usage.as_ref().unwrap().total_tokens, Some(24));
+    assert_eq!(annotated.model, None);
+    assert_eq!(annotated.message, None);
+    assert_eq!(annotated.finish_reason, None);
 }
 
 #[test]
