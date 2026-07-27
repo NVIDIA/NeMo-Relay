@@ -169,8 +169,10 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             nemo_relay_deregister_mark_sanitize_guardrail(invalid_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
-        // The queued event owns its sanitizer snapshot until it is published.
-        assert_eq!(*lock_unpoisoned(plugin_frees()), 3);
+        // A queued event owns its sanitizer snapshot until publication. Flush
+        // before observing the callback-data destructor.
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 4);
 
         let mut owner = ptr::null_mut();
         let owner_name = cstring("ffi-event-owner");

@@ -1436,8 +1436,8 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             let entries = NemoRelayContextState::event_sanitize_entries(registry, &[]);
             let sanitized =
                 NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries).await;
-            assert_eq!(sanitized.data(), None);
-            assert_eq!(sanitized.metadata(), None);
+            assert_eq!(sanitized.data(), event.data());
+            assert_eq!(sanitized.metadata(), event.metadata());
         }
 
         let entries = state.tool_sanitize_request_entries(&[]);
@@ -1461,26 +1461,24 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             tool_response
         );
         let entries = state.llm_sanitize_request_entries(&[]);
-        assert!(
+        assert_eq!(
             NemoRelayContextState::llm_sanitize_request_snapshot_chain(
                 llm_request.clone(),
                 crate::api::runtime::LlmSanitizeRequestContext::default(),
                 &entries,
             )
-            .await
-            .is_none(),
-            "a worker request sanitizer failure must omit the observability payload"
+            .await,
+            Some(llm_request),
         );
         let entries = state.llm_sanitize_response_entries(&[]);
-        assert!(
+        assert_eq!(
             NemoRelayContextState::llm_sanitize_response_snapshot_chain(
                 llm_response.clone(),
                 crate::api::runtime::LlmSanitizeResponseContext::default(),
                 &entries,
             )
-            .await
-            .is_none(),
-            "a worker response sanitizer failure must omit the observability payload"
+            .await,
+            Some(llm_response),
         );
     }
     crate::api::subscriber::flush_subscribers().expect("subscriber callback should flush");

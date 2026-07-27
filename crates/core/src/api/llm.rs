@@ -732,7 +732,7 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
                     let request_changed = sanitized_request
                         .as_ref()
                         .is_some_and(|sanitized| sanitized != &request);
-                    let mut annotation = if request_changed {
+                    let mut annotation = if sanitized_request.is_none() || request_changed {
                         None
                     } else {
                         annotated_request

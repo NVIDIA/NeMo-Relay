@@ -309,9 +309,13 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
         );
         (scope, event, subscribers, scope_stack.clone())
     };
+    // Capture the scope-local chain before removing its owner. The event is
+    // published later, but scope cleanup must not change the middleware that
+    // was visible when the end event was emitted.
+    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack);
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    if let Some(sanitizers) = snapshot_event_sanitizers(&event, &emission_scope_stack) {
+    if let Some(sanitizers) = sanitizers {
         let _ = subscriber_dispatcher::dispatch_sanitized_event(
             event,
             sanitizers,

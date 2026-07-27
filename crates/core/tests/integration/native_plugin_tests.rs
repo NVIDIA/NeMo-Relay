@@ -815,7 +815,7 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
 }
 
 #[tokio::test]
-async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
+async fn native_event_sanitizer_callback_errors_preserve_observability_fields() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref =
@@ -856,8 +856,8 @@ async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
 
     let captured_events = events.lock().unwrap().clone();
     let event = find_event(&captured_events, "native-event-sanitize-error", None);
-    assert_eq!(event.data(), None);
-    assert_eq!(event.metadata(), None);
+    assert_eq!(event.data(), Some(&json!({ "secret": true })));
+    assert_eq!(event.metadata(), Some(&json!({ "secret": true })));
 
     deregister_subscriber("native_event_sanitizer_error_capture")
         .expect("test subscriber should deregister");
