@@ -790,9 +790,6 @@ impl OtelEventProcessor {
             return Context::new();
         }
         let root_uuid = stack.root_uuid();
-        if parent_uuid == root_uuid {
-            return Context::new();
-        }
         Context::new().with_remote_span_context(SpanContext::new(
             relay_trace_id(root_uuid),
             relay_span_id(parent_uuid),

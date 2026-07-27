@@ -100,6 +100,7 @@ fn test_propagation_context_with_root_as_parent_uses_one_synthetic_root() {
     assert_eq!(stack.root_uuid(), root_uuid);
     assert_eq!(stack.top().uuid, root_uuid);
     assert_eq!(stack.scopes().len(), 1);
+    assert!(stack.is_propagated_parent(root_uuid));
 }
 
 #[test]

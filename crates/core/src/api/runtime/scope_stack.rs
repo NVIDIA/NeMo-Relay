@@ -137,10 +137,7 @@ impl ScopeStack {
             stack,
             scope_registries: HashMap::new(),
             fresh_agents: HashSet::from([root_uuid]),
-            propagated_parent_uuid: context
-                .root_uuid
-                .filter(|root_uuid| *root_uuid != context.parent_uuid)
-                .map(|_| context.parent_uuid),
+            propagated_parent_uuid: context.root_uuid.map(|_| context.parent_uuid),
         })
     }
 
