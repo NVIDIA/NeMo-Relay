@@ -95,11 +95,11 @@ def validate_config(config: RampartPiiConfig | JsonObject) -> ConfigReport:
 
 
 __all__ = [
-    "ComponentSpec",
-    "ConfigReport",
     "RAMPART_MODEL_ID",
     "RAMPART_MODEL_REVISION",
     "RAMPART_PII_PLUGIN_KIND",
+    "ComponentSpec",
+    "ConfigReport",
     "RampartPiiConfig",
     "validate_config",
 ]
