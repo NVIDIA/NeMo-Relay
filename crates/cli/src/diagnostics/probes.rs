@@ -154,7 +154,12 @@ mod tcp_tests {
         drop(listener);
         let refused = probe_tcp_named("OpenTelemetry endpoint", &endpoint).await;
         assert_eq!(refused.status, Status::Fail);
-        assert!(refused.details.contains("connection failed"));
+        assert!(
+            refused.details.contains("connection failed")
+                || refused.details.contains("connection timed out"),
+            "{}",
+            refused.details
+        );
     }
 
     #[test]

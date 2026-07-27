@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::configuration::ResolvedDynamicPluginConfig;
-use crate::test_support::{EnvScope, accept_bounded};
+use crate::test_support::{EnvScope, accept_bounded, read_headers};
 
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1000,6 +1000,7 @@ async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let accept = std::thread::spawn(move || {
         let mut stream = accept_bounded(&listener);
+        let _ = read_headers(&mut stream);
         stream
             .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
