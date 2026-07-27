@@ -42,6 +42,16 @@ pub use nemo_relay_types::api::llm::{
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
 };
 
+const OBSERVABILITY_CREDENTIAL_HEADERS: [&str; 7] = [
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "x-api-key",
+    "api-key",
+    "anthropic-api-key",
+    "x-goog-api-key",
+];
+
 #[derive(Clone)]
 struct CapturedLlmScopeStack(ScopeStackHandle);
 
@@ -430,14 +440,15 @@ fn emit_llm_start_with_subscribers(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.llm_sanitize_request_entries(&scope_locals)
     };
+    let observable_request = remove_observability_credential_headers(request.clone());
     let mut sanitized_request = NemoRelayContextState::llm_sanitize_request_snapshot_chain(
-        request.clone(),
+        observable_request.clone(),
         LlmSanitizeRequestContext::for_request_codec(request_codec.clone()),
         &entries,
     );
     let request_changed = sanitized_request
         .as_ref()
-        .is_some_and(|sanitized_request| sanitized_request != request);
+        .is_some_and(|sanitized_request| sanitized_request != &observable_request);
     let mut annotated_request = match (sanitized_request.as_ref(), request_codec.as_deref()) {
         (Some(sanitized_request), Some(codec)) if request_changed => {
             codec.decode(sanitized_request).ok().map(Arc::new)
@@ -472,6 +483,15 @@ fn emit_llm_start_with_subscribers(
         NemoRelayContextState::emit_event(&event, subscribers);
     }
     Ok(())
+}
+
+fn remove_observability_credential_headers(mut request: LlmRequest) -> LlmRequest {
+    request.headers.retain(|name, _| {
+        !OBSERVABILITY_CREDENTIAL_HEADERS
+            .iter()
+            .any(|credential_header| name.eq_ignore_ascii_case(credential_header))
+    });
+    request
 }
 
 fn emit_pending_request_marks(
@@ -601,11 +621,14 @@ fn emit_optimization_marks_with(
 /// cannot be read safely.
 ///
 /// # Notes
-/// Sanitize-request guardrails affect only the emitted start-event payload, not
-/// the caller-owned [`LlmRequest`]. When the owning agent is not fresh, the
-/// emitted request annotation is limited to the current user turn. Managed
-/// calls with a request codec also apply that projection to the event input,
-/// without changing the request used for provider execution.
+/// The runtime removes standard credential headers (`authorization`,
+/// `proxy-authorization`, `cookie`, `x-api-key`, `api-key`,
+/// `anthropic-api-key`, and `x-goog-api-key`) from the event-only request copy
+/// before sanitize-request guardrails run. This does not change the
+/// caller-owned [`LlmRequest`]. When the owning agent is not fresh, the emitted
+/// request annotation is limited to the current user turn. Managed calls with a
+/// request codec also apply that projection to the event input, without changing
+/// the request used for provider execution.
 pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
     let handle_params = CreateLlmHandleParams::builder()
         .name(params.name)
@@ -917,9 +940,11 @@ fn emit_llm_end_without_output(
 /// execution intercepts, codecs, or the callback itself.
 ///
 /// # Notes
-/// The LLM-start event is emitted before execution intercepts run. When
-/// execution fails after that point, the runtime still emits an LLM-end event
-/// without an output payload.
+/// The LLM-start event is emitted before execution intercepts run. Before
+/// sanitize-request guardrails run, the runtime removes standard credential
+/// headers from the event-only request copy; the request passed to execution is
+/// unchanged. When execution fails after that point, the runtime still emits an
+/// LLM-end event without an output payload.
 ///
 /// Response codecs enrich observability output only and do not change the
 /// value returned to the caller.
@@ -1108,6 +1133,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 ///
 /// # Notes
 /// The LLM-start event is emitted before stream execution intercepts run.
+/// Before sanitize-request guardrails run, the runtime removes standard
+/// credential headers from the event-only request copy; the request passed to
+/// stream execution is unchanged.
 ///
 /// The returned stream emits chunk-level results while the runtime defers the
 /// LLM-end event until the collector and finalizer complete.

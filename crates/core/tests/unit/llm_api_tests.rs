@@ -64,6 +64,34 @@ fn request() -> LlmRequest {
     }
 }
 
+fn request_with_credential_headers() -> LlmRequest {
+    let mut headers = serde_json::Map::new();
+    for (name, value) in [
+        ("Authorization", "Bearer authorization-secret"),
+        ("PrOxY-AuThOrIzAtIoN", "Basic proxy-secret"),
+        ("COOKIE", "session=cookie-secret"),
+        ("X-Api-Key", "x-api-key-secret"),
+        ("API-KEY", "api-key-secret"),
+        ("Anthropic-Api-Key", "anthropic-api-key-secret"),
+        ("X-GoOg-Api-Key", "x-goog-api-key-secret"),
+    ] {
+        headers.insert(name.to_string(), json!(value));
+    }
+    headers.insert("x-request-id".to_string(), json!("safe-request-id"));
+    LlmRequest {
+        headers,
+        content: json!({"messages": [], "model": "demo"}),
+    }
+}
+
+fn assert_observable_credential_headers_are_removed(request: &LlmRequest) {
+    assert_eq!(request.headers.len(), 1);
+    assert_eq!(
+        request.headers.get("x-request-id"),
+        Some(&json!("safe-request-id"))
+    );
+}
+
 fn multi_turn_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
@@ -251,6 +279,124 @@ fn redacted_request() -> LlmRequest {
             "messages": [{"role": "user", "content": "[REDACTED]"}]
         }),
     }
+}
+
+#[test]
+fn credential_headers_are_removed_before_request_sanitizers_and_event_emission() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+
+    let request = request_with_credential_headers();
+    let sanitizer_requests = Arc::new(Mutex::new(Vec::<LlmRequest>::new()));
+    let sanitizer_capture = Arc::clone(&sanitizer_requests);
+    register_llm_sanitize_request_guardrail(
+        "credential-header-redaction",
+        1,
+        Arc::new(move |request, _context| {
+            sanitizer_capture.lock().unwrap().push(request.clone());
+            Some(request)
+        }),
+    )
+    .unwrap();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let event_capture = Arc::clone(&events);
+    register_subscriber(
+        "credential-header-redaction",
+        Arc::new(move |event| event_capture.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    llm_call(
+        LlmCallParams::builder()
+            .name("credential-header-manual")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let provider_requests = Arc::new(Mutex::new(Vec::<LlmRequest>::new()));
+    let buffered_provider_requests = Arc::clone(&provider_requests);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("credential-header-buffered")
+                .request(request.clone())
+                .func(Arc::new(move |request| {
+                    buffered_provider_requests.lock().unwrap().push(request);
+                    Box::pin(async { Ok(json!({"ok": true})) })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        let streaming_provider_requests = Arc::clone(&provider_requests);
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("credential-header-streaming")
+                .request(request.clone())
+                .func(Arc::new(move |request| {
+                    streaming_provider_requests.lock().unwrap().push(request);
+                    Box::pin(async {
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                            "chunk": true
+                        }))])))
+                    })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| json!({"ok": true})))
+                .build(),
+        )
+        .await
+        .unwrap();
+        while let Some(chunk) = stream.next().await {
+            chunk.unwrap();
+        }
+    });
+
+    flush_subscribers().unwrap();
+    for sanitized in sanitizer_requests.lock().unwrap().iter() {
+        assert_observable_credential_headers_are_removed(sanitized);
+    }
+    assert_eq!(sanitizer_requests.lock().unwrap().len(), 3);
+
+    let events = events.lock().unwrap();
+    let start_events = [
+        "credential-header-manual",
+        "credential-header-buffered",
+        "credential-header-streaming",
+    ]
+    .into_iter()
+    .map(|name| {
+        events
+            .iter()
+            .find(|event| {
+                event.name() == name && event.scope_category() == Some(ScopeCategory::Start)
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("missing LLM start event {name}"))
+    })
+    .collect::<Vec<_>>();
+    drop(events);
+    assert_eq!(start_events.len(), 3);
+    for event in start_events {
+        let input: LlmRequest = serde_json::from_value(event.input().cloned().unwrap()).unwrap();
+        assert_observable_credential_headers_are_removed(&input);
+    }
+
+    let provider_requests = provider_requests.lock().unwrap();
+    assert_eq!(provider_requests.len(), 2);
+    assert!(
+        provider_requests
+            .iter()
+            .all(|provider| provider == &request)
+    );
+
+    assert!(deregister_llm_sanitize_request_guardrail("credential-header-redaction").unwrap());
+    assert!(deregister_subscriber("credential-header-redaction").unwrap());
 }
 
 fn secret_response() -> Json {
