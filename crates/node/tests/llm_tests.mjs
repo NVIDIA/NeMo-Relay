@@ -1375,11 +1375,21 @@ describe('LLM intercepts', () => {
     deregisterLlmRequestIntercept('node_llm_req_helper');
   });
 
-  it('generated request-intercept declarations preserve the open optimization kind', () => {
+  it('generated request-intercept declarations reference the canonical open optimization type', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const pluginDeclarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
     const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
 
-    assert.equal(declarations.split(openKind).length - 1, 3);
+    assert.equal(declarations.split(openKind).length - 1, 1);
+    assert.equal(pluginDeclarations.split(openKind).length - 1, 1);
+    assert.match(
+      declarations,
+      /registerLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/,
+    );
+    assert.match(
+      declarations,
+      /scopeRegisterLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/,
+    );
   });
 
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
