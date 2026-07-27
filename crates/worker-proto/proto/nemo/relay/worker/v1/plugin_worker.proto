@@ -52,7 +52,6 @@ enum RegistrationSurface {
   MARK_SANITIZE_GUARDRAIL = 30;
   SCOPE_SANITIZE_START_GUARDRAIL = 31;
   SCOPE_SANITIZE_END_GUARDRAIL = 32;
-  WORKER_INFERENCE = 40;
 }
 
 enum LlmCodecKind {
@@ -143,7 +142,7 @@ message Registration {
   RegistrationSurface surface = 2;
   int32 priority = 3;
   bool break_chain = 4;
-  string contract = 5;
+  reserved 5;
 }
 
 message InvokeRequest {
@@ -159,7 +158,6 @@ message InvokeRequest {
     JsonEnvelope event = 10;
     ToolInvocation tool = 11;
     LlmInvocation llm = 12;
-    JsonEnvelope worker_inference = 13;
   }
 }
 

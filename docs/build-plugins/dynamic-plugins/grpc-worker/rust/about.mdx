@@ -68,29 +68,6 @@ identity from `WorkerPlugin::plugin_id()`; custom launchers can use
 credentials and runs until Relay requests shutdown. Do not start the worker
 directly for normal operation.
 
-### Register worker inference
-
-Use `register_worker_inference` when a first-party Relay component owns a
-versioned contract and needs isolated inference:
-
-```rust
-context.register_worker_inference(
-    "detector",
-    "acme.pii_detection.v1",
-    |request| async move {
-        Ok(serde_json::json!({
-            "version": 1,
-            "detections": detect(request)?
-        }))
-    },
-);
-```
-
-Relay publishes this registration as `<plugin_id>/detector`. The consuming
-component selects the exact contract and owns its JSON schema, field selection,
-deadline, response validation, and application. The worker should perform
-inference only.
-
 ## Package the Worker
 
 Create `relay-plugin.toml` with the following content. The artifact digest must

@@ -39,28 +39,13 @@ function builtinConfig(config = {}) {
 }
 
 /**
- * Create worker-backed local-model redaction settings.
+ * Create future local-model backend settings with defaults applied.
  *
  * @param {object} [config={}] - Partial local-model settings to override.
  * @returns {object} A normalized local-model backend config object.
  */
 function localModelConfig(config = {}) {
   return {
-    ...config,
-  };
-}
-
-/**
- * Create one ordered redaction profile with defaults applied.
- *
- * @param {object} [config={}] - Partial profile settings to override.
- * @returns {object} A normalized redaction profile object.
- */
-function profileConfig(config = {}) {
-  return {
-    enabled: true,
-    mode: 'builtin',
-    priority: 100,
     ...config,
   };
 }
@@ -83,6 +68,5 @@ module.exports = {
   defaultConfig,
   builtinConfig,
   localModelConfig,
-  profileConfig,
   ComponentSpec,
 };

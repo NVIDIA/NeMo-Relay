@@ -12,8 +12,6 @@ use serde_json::json;
 
 struct FixtureWorkerPlugin;
 
-const DEFAULT_INFERENCE_CONTRACT: &str = "nemo.relay.pii_detection.v1";
-
 impl WorkerPlugin for FixtureWorkerPlugin {
     fn plugin_id(&self) -> &str {
         if std::env::var("FIXTURE_WORKER_PLUGIN_ID").as_deref() == Ok("other_worker") {
@@ -57,70 +55,6 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         }
         if fixture_flag(config, "empty_registration_name") {
             ctx.register_subscriber("", |_| {});
-            return Ok(());
-        }
-        let worker_inference_names = config
-            .get("worker_inference_names")
-            .and_then(Json::as_array)
-            .map(|names| {
-                names
-                    .iter()
-                    .filter_map(Json::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| {
-                vec![
-                    config
-                        .get("worker_inference_name")
-                        .and_then(Json::as_str)
-                        .unwrap_or("fixture_local_model")
-                        .to_string(),
-                ]
-            });
-        for inference_name in worker_inference_names {
-            let callback_inference_name = inference_name.clone();
-            let exit_in_local_model = fixture_flag(config, "exit_in_local_model");
-            let contract = config
-                .get("worker_inference_contract")
-                .and_then(Json::as_str)
-                .unwrap_or(DEFAULT_INFERENCE_CONTRACT);
-            ctx.register_worker_inference(&inference_name, contract, move |request| {
-                let inference_name = callback_inference_name.clone();
-                async move {
-                    if exit_in_local_model {
-                        std::process::exit(45);
-                    }
-                    if let Some(delay_ms) = request.get("delay_ms").and_then(Json::as_u64) {
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    }
-                    if let Some(texts) = request.get("texts").and_then(Json::as_array) {
-                        let detections = texts
-                            .iter()
-                            .filter_map(|item| {
-                                let text_id = item.get("id")?.as_u64()?;
-                                let text = item.get("text")?.as_str()?;
-                                let start_utf8 = text.find("PRIVATE")?;
-                                Some(json!({
-                                    "text_id": text_id,
-                                    "start_utf8": start_utf8,
-                                    "end_utf8": start_utf8 + "PRIVATE".len(),
-                                    "label": "fixture_private",
-                                    "score": 1.0
-                                }))
-                            })
-                            .collect::<Vec<_>>();
-                        return Ok(json!({"version": 1, "detections": detections}));
-                    }
-                    Ok(json!({
-                        "version": 1,
-                        "request": request,
-                        "worker_inference": inference_name
-                    }))
-                }
-            });
-        }
-        if fixture_flag(config, "worker_inference_only") {
             return Ok(());
         }
 

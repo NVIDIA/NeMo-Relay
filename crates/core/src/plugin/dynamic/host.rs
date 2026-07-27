@@ -17,7 +17,7 @@ use serde_json::{Map, Value as Json};
 
 use crate::plugin::{
     ConfigReport, PluginComponentSpec, PluginConfig, PluginHostLease, Result,
-    WorkerInferenceRegistry, acquire_plugin_host_lease, clear_plugin_configuration_for_host,
+    acquire_plugin_host_lease, clear_plugin_configuration_for_host,
     ensure_builtin_plugins_registered, initialize_plugins_exact_for_host, resolve_plugin_config,
     run_owned_plugin_mutation,
 };
@@ -186,18 +186,10 @@ impl PluginHostActivation {
         );
         let rollback_failures = Arc::new(Mutex::new(Vec::new()));
         let owner_id = claim.owner_id();
-        #[cfg(feature = "worker-grpc")]
-        let worker_inference = worker
-            .as_ref()
-            .map(WorkerPluginActivation::worker_inference_registry)
-            .unwrap_or_else(WorkerInferenceRegistry::default);
-        #[cfg(not(feature = "worker-grpc"))]
-        let worker_inference = WorkerInferenceRegistry::default();
         let initialization = tokio::spawn(initialize_plugins_exact_for_host(
             config,
             owner_id,
             Arc::clone(&rollback_failures),
-            worker_inference,
         ))
         .await
         .map_err(|error| {
@@ -270,16 +262,6 @@ impl PluginHostActivation {
         self.active
     }
 
-    /// Returns the worker inference registry owned by this activation.
-    #[doc(hidden)]
-    pub fn worker_inference_registry(&self) -> WorkerInferenceRegistry {
-        #[cfg(feature = "worker-grpc")]
-        if let Some(worker) = &self.worker {
-            return worker.worker_inference_registry();
-        }
-        WorkerInferenceRegistry::default()
-    }
-
     /// Clear registered callbacks before unloading libraries and workers.
     pub fn clear(mut self) -> Result<()> {
         self.clear_inner()
@@ -318,7 +300,6 @@ impl PluginHostActivation {
         #[cfg(feature = "worker-grpc")]
         if let Some(worker) = &mut self.worker {
             runtime_outcome.merge(worker.deregister_plugin_kinds_checked());
-            runtime_outcome.merge(worker.deregister_worker_inference_checked());
         }
 
         // A worker cannot be stopped while its registry adapter might still be

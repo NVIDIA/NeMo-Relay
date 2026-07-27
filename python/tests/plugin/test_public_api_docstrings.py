@@ -35,7 +35,6 @@ _TYPE_ALIASES = {
     "LlmRequestCallback",
     "LlmExecutionCallback",
     "LlmStreamExecutionCallback",
-    "WorkerInferenceCallback",
 }
 
 

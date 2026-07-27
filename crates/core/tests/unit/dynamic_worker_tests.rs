@@ -246,7 +246,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Subscriber as i32,
                 priority: 0,
                 break_chain: false,
-                contract: String::new(),
             }],
             error: None,
         },
@@ -262,7 +261,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: 999,
                 priority: 0,
                 break_chain: false,
-                contract: String::new(),
             }],
             error: None,
         },
@@ -282,7 +280,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Unspecified as i32,
                 priority: 0,
                 break_chain: false,
-                contract: String::new(),
             }],
             error: None,
         },
@@ -293,44 +290,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
             .to_string()
             .contains("unspecified registration surface")
     );
-
-    let missing_contract = validate_registration_plan(
-        "fixture_worker",
-        &RegisterResponse {
-            registrations: vec![registration(
-                RegistrationSurface::WorkerInference,
-                "detector",
-            )],
-            error: None,
-        },
-    )
-    .expect_err("worker inference must declare a contract");
-    assert!(missing_contract.to_string().contains("without a contract"));
-
-    let contract_on_middleware = validate_registration_plan(
-        "fixture_worker",
-        &RegisterResponse {
-            registrations: vec![Registration {
-                contract: "test.detector.v1".into(),
-                ..registration(RegistrationSurface::Subscriber, "subscriber")
-            }],
-            error: None,
-        },
-    )
-    .expect_err("middleware registrations must not declare inference contracts");
-    assert!(contract_on_middleware.to_string().contains("non-inference"));
-
-    validate_registration_plan(
-        "fixture_worker",
-        &RegisterResponse {
-            registrations: vec![Registration {
-                contract: "test.detector.v1".into(),
-                ..registration(RegistrationSurface::WorkerInference, "detector")
-            }],
-            error: None,
-        },
-    )
-    .expect("versioned worker inference contract should be accepted");
 
     let cases = [
         (ProtoScopeType::Agent, crate::api::scope::ScopeType::Agent),
@@ -2189,7 +2148,6 @@ fn registration(surface: RegistrationSurface, local_name: &str) -> Registration 
         surface: surface as i32,
         priority: 0,
         break_chain: false,
-        contract: String::new(),
     }
 }
 

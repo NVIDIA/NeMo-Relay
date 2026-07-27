@@ -13,7 +13,6 @@ from nemo_relay.pii_redaction import (
     ConfigPolicy,
     LocalModelConfig,
     PiiRedactionConfig,
-    PiiRedactionProfile,
     validate_config,
 )
 
@@ -30,29 +29,6 @@ class TestPiiRedactionConfigHelpers:
             "unsupported_value": "error",
         }
         assert LocalModelConfig().to_dict() == {}
-        assert LocalModelConfig(
-            backend="acme.pii/detector",
-            model_id="pii-model-v1",
-            detector_profile="default",
-            target_paths=["/message"],
-            target_path_patterns=["/messages/*/content"],
-            min_score=0.6,
-            excluded_labels=["CITY"],
-            replacement="[PRIVATE]",
-            allow_network=False,
-            max_latency_ms=250,
-        ).to_dict() == {
-            "backend": "acme.pii/detector",
-            "model_id": "pii-model-v1",
-            "detector_profile": "default",
-            "target_paths": ["/message"],
-            "target_path_patterns": ["/messages/*/content"],
-            "min_score": 0.6,
-            "excluded_labels": ["CITY"],
-            "replacement": "[PRIVATE]",
-            "allow_network": False,
-            "max_latency_ms": 250,
-        }
 
         wrapped = ComponentSpec(PiiRedactionConfig()).to_dict()
         assert wrapped["kind"] == PII_REDACTION_PLUGIN_KIND
@@ -65,36 +41,6 @@ class TestPiiRedactionConfigHelpers:
 
         opted_out = PiiRedactionConfig(mark=False).to_dict()
         assert opted_out["mark"] is False
-
-    def test_profile_config_omits_legacy_top_level_fields(self):
-        config = PiiRedactionConfig(
-            codec="openai_chat",
-            profiles=[
-                PiiRedactionProfile(
-                    mode="builtin",
-                    builtin=BuiltinConfig(detector="email"),
-                ),
-                PiiRedactionProfile(
-                    mode="local_model",
-                    priority=110,
-                    local=LocalModelConfig(
-                        backend="acme.pii/detector",
-                        target_path_patterns=["/messages/*/content"],
-                    ),
-                ),
-            ],
-        ).to_dict()
-
-        profiles = config["profiles"]
-        assert isinstance(profiles, list)
-        local_profile = profiles[1]
-        assert isinstance(local_profile, dict)
-        local = local_profile["local"]
-        assert isinstance(local, dict)
-        assert local["backend"] == "acme.pii/detector"
-        assert "mode" not in config
-        assert "input" not in config
-        assert validate_config(config)["diagnostics"] == []
 
     def test_validation_rejects_bad_values(self):
         report = validate_config(

@@ -363,9 +363,6 @@ class AllSurfacesPlugin(WorkerPlugin):
             async for chunk in stream:
                 yield _tag(chunk, "llm_stream_execution")
 
-        async def worker_inference(request: Json) -> Json:
-            return _tag(request, "local_model")
-
         ctx.register_subscriber("subscriber", subscriber)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
@@ -381,11 +378,6 @@ class AllSurfacesPlugin(WorkerPlugin):
         ctx.register_llm_request_intercept("llm_request", llm_request, priority=9, break_chain=True)
         ctx.register_llm_execution_intercept("llm_execution", llm_execution, priority=10)
         ctx.register_llm_stream_execution_intercept("llm_stream_execution", llm_stream_execution, priority=11)
-        ctx.register_worker_inference(
-            "local_model",
-            "test.echo.v1",
-            worker_inference,
-        )
 
 
 @pytest.fixture(name="host_stub")
@@ -419,9 +411,6 @@ def test_generated_proto_matches_worker_contract():
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
     assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
     assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
-    assert pb.WORKER_INFERENCE == 40
-    assert pb.Registration.DESCRIPTOR.fields_by_name["contract"].number == 5
-    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["worker_inference"].number == 13
     assert pb.CUSTOM == 10
 
 
@@ -455,32 +444,25 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
 
     register = await _register(service)
     registrations = [
-        (
-            registration.local_name,
-            registration.surface,
-            registration.priority,
-            registration.break_chain,
-            registration.contract,
-        )
+        (registration.local_name, registration.surface, registration.priority, registration.break_chain)
         for registration in register.registrations
     ]
     assert registrations == [
-        ("subscriber", pb.SUBSCRIBER, 0, False, ""),
-        ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False, ""),
-        ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False, ""),
-        ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False, ""),
-        ("tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL, 1, False, ""),
-        ("tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL, 2, False, ""),
-        ("tool_conditional", pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, 3, False, ""),
-        ("tool_request", pb.TOOL_REQUEST_INTERCEPT, 4, True, ""),
-        ("tool_execution", pb.TOOL_EXECUTION_INTERCEPT, 5, False, ""),
-        ("llm_sanitize_request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, 6, False, ""),
-        ("llm_sanitize_response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, 7, False, ""),
-        ("llm_conditional", pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL, 8, False, ""),
-        ("llm_request", pb.LLM_REQUEST_INTERCEPT, 9, True, ""),
-        ("llm_execution", pb.LLM_EXECUTION_INTERCEPT, 10, False, ""),
-        ("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT, 11, False, ""),
-        ("local_model", pb.WORKER_INFERENCE, 0, False, "test.echo.v1"),
+        ("subscriber", pb.SUBSCRIBER, 0, False),
+        ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
+        ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
+        ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
+        ("tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL, 1, False),
+        ("tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL, 2, False),
+        ("tool_conditional", pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, 3, False),
+        ("tool_request", pb.TOOL_REQUEST_INTERCEPT, 4, True),
+        ("tool_execution", pb.TOOL_EXECUTION_INTERCEPT, 5, False),
+        ("llm_sanitize_request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, 6, False),
+        ("llm_sanitize_response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, 7, False),
+        ("llm_conditional", pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL, 8, False),
+        ("llm_request", pb.LLM_REQUEST_INTERCEPT, 9, True),
+        ("llm_execution", pb.LLM_EXECUTION_INTERCEPT, 10, False),
+        ("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT, 11, False),
     ]
 
 
@@ -1456,16 +1438,6 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert llm_execution["tag"] == "llm_execution"
     assert llm_execution["next_llm"]["content"]["llm_execute_gpt-test"]
 
-    local_model = await service.Invoke(
-        _worker_inference_request("local_model", {"text": "private"}),
-        AbortContext(),
-    )
-    assert local_model.WhichOneof("result") == "json"
-    assert _envelope_value(local_model.json.value) == {
-        "text": "private",
-        "tag": "local_model",
-    }
-
 
 async def test_unary_invoke_failure_paths(service: _WorkerService):
     await _register(service)
@@ -1479,13 +1451,6 @@ async def test_unary_invoke_failure_paths(service: _WorkerService):
     missing_handler = await service.Invoke(_tool_request("missing", pb.TOOL_REQUEST_INTERCEPT, {}), AbortContext())
     assert missing_handler.WhichOneof("result") == "error"
     assert "not registered" in missing_handler.error.message
-
-    missing_provider = await service.Invoke(
-        _worker_inference_request("missing", {}),
-        AbortContext(),
-    )
-    assert missing_provider.WhichOneof("result") == "error"
-    assert "not registered" in missing_provider.error.message
 
     unsupported = await service.Invoke(
         _tool_request("tool_request", pb.REGISTRATION_SURFACE_UNSPECIFIED, {}),
@@ -2773,15 +2738,6 @@ def _tool_request(registration_name: str, surface: int, value: Json) -> Any:
     )
 
 
-def _worker_inference_request(registration_name: str, value: Json) -> Any:
-    return _invoke_request(
-        registration_name,
-        pb.WORKER_INFERENCE,
-        continuation_id="",
-        worker_inference=_json_envelope(JSON_SCHEMA, value),
-    )
-
-
 def _llm_payload(
     *,
     model_name: str = "model",
@@ -2870,5 +2826,4 @@ def _all_expected_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        pb.WORKER_INFERENCE,
     ]

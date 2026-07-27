@@ -165,31 +165,6 @@ registers a tool request intercept that updates the request JSON and emits a
 mark through `PluginContext.runtime`. The `main` entrypoint blocks until Relay
 requests shutdown.
 
-### Register worker inference
-
-Use `register_worker_inference` when a first-party Relay component owns a
-versioned contract and needs an isolated detector or inference implementation:
-
-```python
-async def detect(request: Json) -> Json:
-    return {
-        "version": 1,
-        "detections": await model.detect(request["texts"]),
-    }
-
-
-ctx.register_worker_inference(
-    "detector",
-    "acme.pii_detection.v1",
-    detect,
-)
-```
-
-Relay publishes this registration as `<plugin_id>/detector`. The consuming
-component selects the exact contract and owns its JSON schema, field selection,
-deadline, response validation, and application. The worker should perform
-inference only.
-
 ## Create the Manifest
 
 Create `relay-plugin.toml` with the following content:

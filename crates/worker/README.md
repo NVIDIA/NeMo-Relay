@@ -25,8 +25,7 @@ communicates with Relay through the versioned `grpc-v1` worker protocol.
 - **Isolate plugin code**: Run custom runtime behavior outside the Relay host
   process.
 - **Use typed registration APIs**: Implement `WorkerPlugin` and register
-  subscribers, guardrails, intercepts, or worker inference callbacks with
-  `PluginContext`.
+  subscribers, guardrails, or intercepts with `PluginContext`.
 - **Call the host runtime**: Emit marks, manage scopes, and invoke middleware
   continuations through `PluginRuntime`.
 - **Keep lifecycle managed**: Let Relay provide authenticated endpoints and
@@ -85,29 +84,6 @@ async fn main() -> Result<()> {
 Relay supplies the socket, activation ID, and authentication token through the
 worker environment. Use `serve_plugin` for Relay-spawned workers; explicit
 server configuration is intended for tests and custom launchers.
-
-## Worker Inference
-
-A worker can expose contract-scoped inference to a first-party host component
-without owning middleware policy:
-
-```rust
-ctx.register_worker_inference(
-    "detector",
-    "acme.pii_detection.v1",
-    |request| async move {
-        Ok(serde_json::json!({
-            "version": 1,
-            "detections": detect(request)?
-        }))
-    },
-);
-```
-
-The host publishes the callback as `<plugin_id>/detector`. The consuming
-component selects the exact contract and owns the request and response schema,
-deadline, field selection, validation, and application of the result. The
-worker callback should perform inference only.
 
 ## Concurrency and Cancellation
 

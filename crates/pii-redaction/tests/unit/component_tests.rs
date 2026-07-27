@@ -29,11 +29,9 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
     ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
-    PluginRegistrationContext, UnsupportedBehavior, WorkerInferenceDescriptor,
-    WorkerInferenceRegistration, WorkerInferenceRegistry, clear_plugin_configuration,
+    PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
     ensure_builtin_plugins_registered, initialize_plugins_exact as initialize_plugins,
-    initialize_plugins_with_worker_inference, list_plugin_kinds, rollback_registrations,
-    validate_plugin_config,
+    list_plugin_kinds, rollback_registrations, validate_plugin_config,
 };
 use futures::StreamExt;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
@@ -142,30 +140,11 @@ fn top_level_policy_controls_component_diagnostics() {
 fn reset_runtime() {
     enable_operational_logs();
     let _ = clear_plugin_configuration();
+    crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
     register_pii_redaction_component().unwrap();
-}
-
-struct WorkerInferenceGuard {
-    _registration: WorkerInferenceRegistration,
-}
-
-fn register_test_worker_inference(
-    registry: &WorkerInferenceRegistry,
-    name: &str,
-    callback: impl Fn(Json, std::time::Duration) -> Result<Json, PluginError> + Send + Sync + 'static,
-) -> WorkerInferenceGuard {
-    let registration = registry
-        .register(
-            WorkerInferenceDescriptor::new(name, PII_DETECTION_CONTRACT).unwrap(),
-            Arc::new(callback),
-        )
-        .unwrap();
-    WorkerInferenceGuard {
-        _registration: registration,
-    }
 }
 
 fn setup_isolated_thread() {
@@ -315,48 +294,6 @@ impl LlmCodec for IdentifiedRequestCodec {
     ) -> nemo_relay::error::Result<LlmRequest> {
         self.inner.encode(annotated, original)
     }
-}
-
-#[test]
-fn raw_llm_paths_remain_usable_without_a_codec() {
-    let backend = crate::builtin::CompiledBuiltinBackend::new(
-        BuiltinBackendConfig {
-            action: "regex_replace".to_string(),
-            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
-            replacement: Some("[REDACTED]".to_string()),
-            target_paths: vec!["/message".to_string()],
-            ..BuiltinBackendConfig::default()
-        },
-        None,
-    )
-    .unwrap();
-    let sanitize_request = crate::builtin::llm_sanitize_request_callback(backend.clone());
-    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
-
-    let request = sanitize_request(
-        LlmRequest {
-            headers: serde_json::Map::new(),
-            content: json!({
-                "message": "sk-request-secret",
-                "model": "sk-model-identifier"
-            }),
-        },
-        no_codec_request_context(),
-    )
-    .expect("raw request paths should not require a codec");
-    assert_eq!(request.content["message"], "[REDACTED]");
-    assert_eq!(request.content["model"], "sk-model-identifier");
-
-    let response = sanitize_response(
-        json!({
-            "message": "sk-response-secret",
-            "model": "sk-model-identifier"
-        }),
-        no_codec_context(),
-    )
-    .expect("raw response paths should not require a codec");
-    assert_eq!(response["message"], "[REDACTED]");
-    assert_eq!(response["model"], "sk-model-identifier");
 }
 
 #[test]
@@ -1321,81 +1258,6 @@ fn profile_array_executes_every_profile_in_stable_array_order() {
 }
 
 #[test]
-fn deterministic_and_local_model_profiles_compose_in_priority_order() {
-    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
-    reset_runtime();
-    setup_isolated_thread();
-
-    let worker_inference = WorkerInferenceRegistry::default();
-    let _registration =
-        register_test_worker_inference(&worker_inference, "contextual", |request, _| {
-            assert_eq!(
-                request["texts"][0]["text"], "Alice emailed [REDACTED]",
-                "the local worker must receive the deterministic profile's output"
-            );
-            Ok(json!({
-                "version": 1,
-                "detections": [{
-                    "text_id": 0,
-                    "start_utf8": 0,
-                    "end_utf8": 5,
-                    "label": "GIVEN_NAME",
-                    "score": 0.99
-                }]
-            }))
-        });
-
-    futures::executor::block_on(initialize_plugins_with_worker_inference(
-        plugin_config(json!({
-        "codec": "openai_chat",
-        "profiles": [
-            {
-                "mode": "builtin",
-                "priority": 80,
-                "builtin": {
-                    "action": "redact",
-                    "detector": "email"
-                }
-            },
-            {
-                "mode": "local_model",
-                "priority": 90,
-                "local": {
-                    "backend": "contextual",
-                    "target_paths": ["/message"]
-                }
-            }
-        ]
-        })),
-        worker_inference,
-    ))
-    .unwrap();
-
-    let events = capture_events("pii-profile-composition");
-    event(
-        EmitMarkEventParams::builder()
-            .name("composed-profile-mark")
-            .data(json!({
-                "message": "Alice emailed alice@example.com",
-                "region": "us-west-2"
-            }))
-            .build(),
-    )
-    .unwrap();
-    let captured = captured_events_snapshot(&events);
-    assert_eq!(
-        captured[0].data().unwrap(),
-        &json!({
-            "message": "[REDACTED] emailed [REDACTED]",
-            "region": "us-west-2"
-        })
-    );
-
-    deregister_subscriber("pii-profile-composition").unwrap();
-    clear_plugin_configuration().unwrap();
-}
-
-#[test]
 fn profile_array_rejects_legacy_fields_and_reports_profile_paths() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1502,13 +1364,10 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let worker_inference = WorkerInferenceRegistry::default();
-    let _one = register_test_worker_inference(&worker_inference, "one", |_, _| {
-        Ok(json!({"version": 1, "detections": []}))
-    });
-    let _two = register_test_worker_inference(&worker_inference, "two", |_, _| {
-        Ok(json!({"version": 1, "detections": []}))
-    });
+    register_local_backend_provider(Arc::new(|_, ctx| {
+        ctx.register_mark_sanitize_guardrail("shared", 100, Arc::new(|_, fields| fields))
+    }))
+    .unwrap();
 
     let plugin = PiiRedactionPlugin;
     let config = json!({
@@ -1521,15 +1380,12 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_worker_inference(
-        Some("profiles::".into()),
-        worker_inference,
-    );
+    let mut ctx = PluginRegistrationContext::with_namespace("profiles::");
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
     let registrations_debug = format!("{registrations:?}");
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/mark"));
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/mark"));
+    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/shared"));
+    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/shared"));
     rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
@@ -1540,6 +1396,12 @@ fn failed_later_profile_rolls_back_earlier_profile_registrations() {
     reset_runtime();
     setup_isolated_thread();
 
+    register_local_backend_provider(Arc::new(|_, _| {
+        Err(PluginError::RegistrationFailed(
+            "intentional profile failure".into(),
+        ))
+    }))
+    .unwrap();
     let activation = futures::executor::block_on(initialize_plugins(plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [
@@ -1835,112 +1697,6 @@ fn validate_rejects_local_section_outside_local_mode() {
 }
 
 #[test]
-fn validate_rejects_invalid_local_model_worker_settings() {
-    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
-    reset_runtime();
-
-    let cases = [
-        (
-            json!({"mode": "local_model"}),
-            "local",
-            "required when mode = 'local_model'",
-        ),
-        (
-            json!({"mode": "local_model", "local": {"backend": "  "}}),
-            "local.backend",
-            "local.backend is required",
-        ),
-        (
-            json!({
-                "mode": "local_model",
-                "local": {
-                    "backend": "x".repeat(MAX_LOCAL_MODEL_PROVIDER_VALUE_BYTES + 1)
-                }
-            }),
-            "local.backend",
-            "must not exceed",
-        ),
-        (
-            json!({
-                "mode": "local_model",
-                "local": {"backend": "worker", "allow_network": true}
-            }),
-            "local.allow_network",
-            "must not use network inference",
-        ),
-        (
-            json!({
-                "mode": "local_model",
-                "local": {"backend": "worker", "max_latency_ms": 0}
-            }),
-            "local.max_latency_ms",
-            "must be greater than zero",
-        ),
-        (
-            json!({
-                "mode": "local_model",
-                "local": {"backend": "worker", "max_latency_ms": 60001}
-            }),
-            "local.max_latency_ms",
-            "must not exceed 60000",
-        ),
-        (
-            json!({
-                "mode": "local_model",
-                "local": {"backend": "worker", "model_id": " "}
-            }),
-            "local.model_id",
-            "must be a non-empty string",
-        ),
-        (
-            json!({
-                "mode": "local_model",
-                "local": {"backend": "worker", "target_paths": ["message"]}
-            }),
-            "local.target_paths",
-            "valid JSON pointers",
-        ),
-        (
-            json!({
-                "mode": "local_model",
-                "local": {
-                    "backend": "worker",
-                    "replacement": "x".repeat(MAX_LOCAL_MODEL_REPLACEMENT_BYTES + 1)
-                }
-            }),
-            "local.replacement",
-            "must not exceed",
-        ),
-    ];
-
-    for (config, field, message) in cases {
-        let report = validate_plugin_config(&plugin_config(config));
-        assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.field.as_deref() == Some(field) && diagnostic.message.contains(message)
-        }));
-    }
-}
-
-#[test]
-fn validate_warns_when_local_model_inspects_every_string_leaf() {
-    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
-    reset_runtime();
-
-    let report = validate_plugin_config(&plugin_config(json!({
-        "mode": "local_model",
-        "codec": "openai_chat",
-        "local": {"backend": "worker"}
-    })));
-
-    assert!(!report.has_errors(), "{:?}", report.diagnostics);
-    assert!(report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.level == DiagnosticLevel::Warning
-            && diagnostic.code == "pii_redaction.local_model_all_paths"
-            && diagnostic.field.as_deref() == Some("local.target_paths")
-    }));
-}
-
-#[test]
 fn validate_rejects_builtin_mode_without_builtin_section() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -2070,127 +1826,65 @@ fn validate_rejects_unknown_builtin_detector() {
 }
 
 #[test]
-fn local_backend_worker_inference_is_invoked_for_local_model_mode() {
+fn local_backend_provider_is_invoked_for_local_model_mode() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
-    let worker_inference = WorkerInferenceRegistry::default();
-    let _registration =
-        register_test_worker_inference(&worker_inference, "test-inference", move |request, _| {
+    register_local_backend_provider(Arc::new(
+        move |config, _ctx: &mut PluginRegistrationContext| {
             called_inner.store(true, Ordering::SeqCst);
-            assert_eq!(request["version"], 1);
-            Ok(json!({"version": 1, "detections": []}))
-        });
-    setup_isolated_thread();
-    futures::executor::block_on(initialize_plugins_with_worker_inference(
-        plugin_config(json!({
-        "mode": "local_model",
-        "input": false,
-        "output": false,
-        "mark": false,
-        "tool_input": true,
-        "tool_output": false,
-        "local": {"backend": "test-inference"}
-        })),
-        worker_inference,
+            assert_eq!(config.mode, "local_model");
+            Ok(())
+        },
     ))
     .unwrap();
-    tool_call(
-        ToolCallParams::builder()
-            .name("test")
-            .args(json!({"text": "hello"}))
-            .build(),
-    )
-    .unwrap();
+
+    let plugin = PiiRedactionPlugin;
+    let mut ctx = PluginRegistrationContext::with_namespace("test::");
+    let config = json!({
+        "mode": "local_model",
+        "tool_input": true,
+    });
+    let Json::Object(config) = config else {
+        panic!("component config must be object");
+    };
+
+    futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
+
     assert!(called.load(Ordering::SeqCst));
-    clear_plugin_configuration().unwrap();
 }
 
 #[test]
-fn local_backend_reports_missing_and_failed_worker_inference_initialization() {
+fn local_backend_reports_missing_and_failed_provider_initialization() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
     let plugin = PiiRedactionPlugin;
-    let config = json!({
-        "mode": "local_model",
-        "input": false,
-        "output": false,
-        "mark": false,
-        "tool_input": true,
-        "tool_output": false,
-        "local": {"backend": "missing"}
-    });
+    let config = json!({"mode": "local_model"});
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
     let mut ctx = PluginRegistrationContext::with_namespace("missing::");
     let missing = futures::executor::block_on(plugin.register(&config, &mut ctx))
-        .expect_err("missing worker inference should fail registration");
+        .expect_err("missing local provider should fail registration");
     assert!(missing.to_string().contains("unavailable"));
 
-    let worker_inference = WorkerInferenceRegistry::default();
-    let _failed = register_test_worker_inference(&worker_inference, "failed", |_, _| {
+    register_local_backend_provider(Arc::new(|_, _| {
         Err(PluginError::RegistrationFailed(
-            "worker inference failed".into(),
+            "provider initialization failed".into(),
         ))
-    });
-    let config = json!({
-        "mode": "local_model",
-        "input": false,
-        "output": false,
-        "mark": false,
-        "tool_input": true,
-        "tool_output": false,
-        "local": {"backend": "failed"}
-    });
-    let Json::Object(config) = config else {
-        panic!("component config must be object");
-    };
-    let mut ctx =
-        PluginRegistrationContext::with_worker_inference(Some("failed::".into()), worker_inference);
-    futures::executor::block_on(plugin.register(&config, &mut ctx))
-        .expect("worker inference availability should be checked at registration");
-    let mut registrations = ctx.into_registrations();
-    rollback_registrations(&mut registrations);
-}
-
-#[test]
-fn local_backend_rejects_worker_inference_with_incompatible_contract() {
-    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
-    reset_runtime();
-
-    let worker_inference = WorkerInferenceRegistry::default();
-    let _registration = worker_inference
-        .register(
-            WorkerInferenceDescriptor::new("embedding", "acme.embedding.v1").unwrap(),
-            Arc::new(|request, _| Ok(request)),
-        )
-        .unwrap();
-    let plugin = PiiRedactionPlugin;
-    let Json::Object(config) = json!({
-        "mode": "local_model",
-        "input": false,
-        "output": false,
-        "mark": false,
-        "tool_input": true,
-        "tool_output": false,
-        "local": {"backend": "embedding"}
-    }) else {
-        panic!("component config must be object");
-    };
-    let mut ctx = PluginRegistrationContext::with_worker_inference(
-        Some("mismatch::".into()),
-        worker_inference,
+    }))
+    .unwrap();
+    let mut ctx = PluginRegistrationContext::with_namespace("failed::");
+    let failed = futures::executor::block_on(plugin.register(&config, &mut ctx))
+        .expect_err("failed local provider should fail registration");
+    assert!(
+        failed
+            .to_string()
+            .contains("provider initialization failed")
     );
-
-    let error = futures::executor::block_on(plugin.register(&config, &mut ctx))
-        .expect_err("PII must reject worker inference implementing another contract");
-
-    assert!(error.to_string().contains("acme.embedding.v1"));
-    assert!(error.to_string().contains(PII_DETECTION_CONTRACT));
 }
 
 #[test]

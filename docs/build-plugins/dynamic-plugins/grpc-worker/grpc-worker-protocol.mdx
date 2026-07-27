@@ -22,8 +22,8 @@ Workers implement the `PluginWorker` service:
 
 - `Handshake` and `Health` identify a ready worker.
 - `Validate` returns configuration diagnostics.
-- `Register` returns declarative subscriber, guardrail, intercept, and worker
-  inference registrations.
+- `Register` returns declarative subscriber, guardrail, and intercept
+  registrations.
 - `Invoke` and `InvokeStream` run registered behavior.
 - `CancelInvocation` requests cancellation, and `Shutdown` requests process
   termination.
@@ -67,19 +67,12 @@ return `WorkerError` without registrations. The supported surfaces are:
 - `LLM_SANITIZE_REQUEST_GUARDRAIL`, `LLM_SANITIZE_RESPONSE_GUARDRAIL`,
   `LLM_CONDITIONAL_EXECUTION_GUARDRAIL`, `LLM_REQUEST_INTERCEPT`,
   `LLM_EXECUTION_INTERCEPT`, and `LLM_STREAM_EXECUTION_INTERCEPT`
-- `MARK_SANITIZE_GUARDRAIL`, `SCOPE_SANITIZE_START_GUARDRAIL`, and
-  `SCOPE_SANITIZE_END_GUARDRAIL`
-- `WORKER_INFERENCE`
 
 `InvokeRequest` identifies the registration, surface, invocation, optional
 continuation, and scope context. Its payload is one of an event, tool
-invocation, LLM invocation, or component-owned worker inference request.
-`InvokeResponse` returns an empty result, JSON result, guardrail result, LLM
-request-intercept result, tool-execution result, or `WorkerError`.
-`WORKER_INFERENCE` declares a versioned contract and uses a JSON request and
-JSON result. The consuming first-party component selects that exact contract,
-owns its schema, and resolves the callback as `<plugin_id>/<local_name>`.
-`InvokeStream` emits JSON chunks or `WorkerError` chunks.
+invocation, or LLM invocation. `InvokeResponse` returns an empty result, JSON
+result, guardrail result, LLM request-intercept result, tool-execution result,
+or `WorkerError`. `InvokeStream` emits JSON chunks or `WorkerError` chunks.
 
 Every LLM sanitizer invocation includes a directional context with tagged codec
 identity: `none`, `builtin(id)`, `runtime(id)`, or `opaque`. Worker SDKs expose

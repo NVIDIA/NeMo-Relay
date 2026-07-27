@@ -534,10 +534,6 @@ pub(super) fn llm_sanitize_request_callback(
             request.content = backend.sanitize_json_preorder_dfs(request.content);
             return Some(request);
         }
-        if matches!(context.codec(), LlmCodecIdentity::None) && backend.legacy_surface.is_none() {
-            request.content = backend.sanitize_json_preorder_dfs(request.content);
-            return Some(request);
-        }
         let resolved = context.resolve_codec();
         let fallback = if resolved.is_none() {
             backend
@@ -570,9 +566,6 @@ pub(super) fn llm_sanitize_response_callback(
             return Some(trajectory.sanitize_provider_payload(payload));
         }
         if backend.target_paths.is_empty() {
-            return Some(backend.sanitize_json_preorder_dfs(payload));
-        }
-        if matches!(context.codec(), LlmCodecIdentity::None) && backend.legacy_surface.is_none() {
             return Some(backend.sanitize_json_preorder_dfs(payload));
         }
         if matches!(context.codec(), LlmCodecIdentity::None)
@@ -703,7 +696,7 @@ fn remove_sanitized_json_pointer_value(value: &mut Json, segments: &[String]) ->
     }
 }
 
-pub(super) fn render_json_pointer_path(path_segments: &[String]) -> String {
+fn render_json_pointer_path(path_segments: &[String]) -> String {
     if path_segments.is_empty() {
         return String::new();
     }
@@ -715,7 +708,7 @@ pub(super) fn render_json_pointer_path(path_segments: &[String]) -> String {
     rendered
 }
 
-pub(super) fn escape_json_pointer_segment(segment: &str) -> String {
+fn escape_json_pointer_segment(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 

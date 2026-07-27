@@ -971,9 +971,6 @@ check-python-worker-proto:
     }
     assert pb.SUBSCRIBER == 1
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
-    assert pb.WORKER_INFERENCE == 40
-    assert pb.Registration.DESCRIPTOR.fields_by_name["contract"].number == 5
-    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["worker_inference"].number == 13
     PY
 
 generate-worker-plugin-lockfile:

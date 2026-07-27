@@ -128,14 +128,14 @@ The following table compares the available PII redaction backends:
 | Area | `builtin` | `local_model` |
 | --- | --- | --- |
 | Built-in component kind and config validation | Supported | Supported |
-| Managed LLM `input` | Supported | Supported |
-| Managed LLM `output` | Supported | Supported |
-| Mark and generic scope event fields | Supported | Supported |
-| Managed `tool_input` | Supported | Supported |
-| Managed `tool_output` | Supported | Supported |
+| Managed LLM `input` | Supported | Not implemented |
+| Managed LLM `output` | Supported | Not implemented |
+| Mark and generic scope event fields | Supported | Not implemented |
+| Managed `tool_input` | Supported | Not implemented |
+| Managed `tool_output` | Supported | Not implemented |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
-| Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | `openai_chat`, `openai_responses`, `anthropic_messages` |
-| Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes with active `grpc-v1` worker inference |
+| Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
+| Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |
 
 ## Built-in Mode
 
@@ -217,8 +217,7 @@ Use the editor when you want to:
 - Set the LLM `codec`
 - Edit `builtin` action settings such as `action`, `target_paths`,
   `pattern`, `detector`, `replacement`, and masking fields
-- Edit worker-backed local-model settings such as `local.backend`,
-  `target_paths`, `target_path_patterns`, `min_score`, and `excluded_labels`
+- Edit `local.backend` for a runtime-provided future local-model backend
 
 The editor preserves unknown fields when it rewrites an existing
 `pii_redaction` component, so future or runtime-specific settings are not
@@ -315,120 +314,9 @@ When `detector` is set and you do not specify `unmasked_prefix` or
 - `gcp_api_key`: Preserves the `AIza`-style prefix and the last four characters
 - `azure_storage_account_key`: Preserves the last four characters
 
-## Local-Model Mode
-
-Use `local_model` when a manifest-backed `grpc-v1` worker should detect
-contextual PII. The worker performs inference only. The PII component selects
-fields, batches text, enforces deadlines, validates detections, applies
-confidence and label policy, replaces accepted spans, and fails closed.
-
-The worker inference name is `<plugin_id>/<registration_name>`. For example, a worker
-with plugin ID `acme.pii_worker` that registers `detector` for
-`nemo.relay.pii_detection.v1` is selected as `acme.pii_worker/detector`. Relay
-rejects registrations that declare another contract before installing the
-sanitizer.
-
-```toml
-[[components]]
-kind = "pii_redaction"
-enabled = true
-
-[components.config]
-mode = "local_model"
-codec = "openai_chat"
-
-[components.config.local]
-backend = "acme.pii_worker/detector"
-model_id = "acme-pii-v1"
-detector_profile = "default"
-min_score = 0.4
-excluded_labels = ["ORGANIZATION"]
-target_path_patterns = [
-  "/messages/*/content",
-  "/messages/*/content/*/text",
-  "/message",
-  "/message/*/text",
-]
-replacement = "[REDACTED]"
-allow_network = false
-max_latency_ms = 250
-```
-
-Worker inference is installed before built-in components initialize and is
-removed after their dependent sanitizers. `allow_network = true` is rejected:
-this lane is for same-machine inference. This is a configuration contract, not
-a process sandbox.
-
-Worker failures, timeouts, malformed responses, invalid UTF-8 spans,
-overlapping spans, and input-limit violations fail closed for the affected
-batch. If a configured codec cannot decode or safely re-encode an LLM payload,
-Relay omits that request or response payload from the emitted event. The
-default deadline is 250 ms for the complete selected payload, including every
-inference batch. Configuration above 60 seconds is rejected.
-
-Use `profiles` to run deterministic recognizers before a contextual model:
-
-```toml
-[components.config]
-codec = "openai_chat"
-
-[[components.config.profiles]]
-mode = "builtin"
-priority = 80
-
-[components.config.profiles.builtin]
-action = "redact"
-detector = "email"
-
-[[components.config.profiles]]
-mode = "local_model"
-priority = 90
-
-[components.config.profiles.local]
-backend = "nemo_relay.pii_rampart/detector"
-min_score = 0.4
-max_latency_ms = 5000
-target_path_patterns = [
-  "/messages/*/content",
-  "/messages/*/content/*/text",
-  "/message",
-  "/message/*/text",
-]
-```
-
-Keep contextual classifiers limited to normalized content paths. Sending model
-names, tool IDs, trace IDs, routing fields, or arbitrary provider metadata to
-a classifier increases false positives and exposes data outside the intended
-policy boundary.
-
-The generic local-model payload deadline defaults to 250 ms. Contextual models
-can need more time for large selected payloads. The Rampart profile above uses
-5000 ms so a request near the 64 KiB detection-request limit has practical headroom on
-typical client hardware; benchmark representative inputs on deployment
-hardware before lowering it.
-
-The optional Rampart worker is included as a manifest-backed Python source
-bundle under `crates/pii-redaction/workers/rampart`. Prefetch its pinned model
-before adding and enabling it from a source checkout:
-
-```bash
-cd crates/pii-redaction/workers/rampart
-uvx --from . nemo-relay-pii-rampart-prefetch
-nemo-relay plugins add ./relay-plugin.toml
-nemo-relay plugins enable nemo_relay.pii_rampart
-```
-
-Activation remains offline-only. The prefetch command and activation both
-verify the pinned model files before ONNX Runtime loads them.
-
 ## Path Semantics
 
-`target_paths` are exact JSON-pointer matches. `target_path_patterns` also
-accepts `*` as one complete path segment. It does not provide recursive or
-partial-segment matching. When both lists are empty, the selected backend
-inspects every string leaf and reports a configuration warning. Use explicit
-content paths for contextual local models so identifiers and provider metadata
-do not enter the classifier accidentally.
+`target_paths` are exact JSON-pointer matches.
 
 The plugin uses different payload boundaries for tools and LLMs:
 
@@ -438,8 +326,7 @@ The plugin uses different payload boundaries for tools and LLMs:
   responses use the active built-in codec for normalized projection. Prefer
   normalized Relay paths such as:
   - `/headers/authorization` for an exact request header field
-  - `/messages/*/content` for request message content
-  - `/messages/*/content/*/text` for multimodal request text
+  - `/messages/0/content` for request message content
   - `/message` for the normalized assistant response text
 - Marks and non-tool, non-LLM scopes sanitize `data`, `category_profile`, and
   `metadata` as separate JSON values. A target path is evaluated independently
@@ -519,3 +406,23 @@ For tool and LLM scope events, the PII redaction scope sanitizer leaves `data`,
 LLM sanitizer already owns that lifecycle boundary. This prevents repeated
 hashing or masking. Other scope categories use `input` for starts and `output`
 for ends.
+
+## Local Model Mode
+
+`local_model` is reserved for a future in-process local-model backend.
+
+### Current Status
+
+The current local-model status is:
+
+- The plugin contract accepts `mode = "local_model"`.
+- The `local` section supports:
+  - `backend`
+  - `model_id`
+  - `detector_profile`
+  - `allow_network`
+  - `max_latency_ms`
+- Actual behavior depends on a runtime-installed local backend provider.
+
+Without a provider, runtimes report the local backend as unavailable during
+plugin initialization.

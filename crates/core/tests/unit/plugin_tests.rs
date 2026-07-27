@@ -26,7 +26,6 @@ struct RecordingPlugin;
 struct ReplacementPlugin;
 struct RestoreFailPlugin;
 struct RestoreBreakPlugin;
-struct WorkerInferenceAwarePlugin;
 struct PartialFailPlugin;
 struct VanishingPlugin;
 struct BlockingPlugin {
@@ -56,14 +55,9 @@ static PARTIAL_FAIL_ROLLBACKS: AtomicUsize = AtomicUsize::new(0);
 static RESTORE_FAIL_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static RESTORE_BREAK_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static REPLACEMENT_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
-static WORKER_INFERENCE_VALUES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
 fn recorded_names() -> &'static Mutex<Vec<String>> {
     RECORDED_NAMES.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-fn worker_inference_values() -> &'static Mutex<Vec<String>> {
-    WORKER_INFERENCE_VALUES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn lock_runtime_owner() -> std::sync::MutexGuard<'static, ()> {
@@ -311,40 +305,6 @@ impl Plugin for RestoreBreakPlugin {
     }
 }
 
-impl Plugin for WorkerInferenceAwarePlugin {
-    fn plugin_kind(&self) -> &str {
-        "worker-inference-aware.plugin"
-    }
-
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![]
-    }
-
-    fn register<'a>(
-        &'a self,
-        _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            let inference = ctx.worker_inference("shared-inference", "test.echo.v1")?;
-            let response = inference.invoke(json!({}), std::time::Duration::from_secs(1))?;
-            let source = response
-                .get("source")
-                .and_then(Json::as_str)
-                .ok_or_else(|| {
-                    PluginError::RegistrationFailed(
-                        "worker-inference-aware.plugin received an invalid response".into(),
-                    )
-                })?;
-            worker_inference_values()
-                .lock()
-                .unwrap()
-                .push(source.to_string());
-            Ok(())
-        })
-    }
-}
-
 impl Plugin for PartialFailPlugin {
     fn plugin_kind(&self) -> &str {
         "partial.fail.plugin"
@@ -517,14 +477,12 @@ fn reset_global() {
     RESTORE_FAIL_REGISTRATIONS.store(0, Ordering::SeqCst);
     RESTORE_BREAK_REGISTRATIONS.store(0, Ordering::SeqCst);
     REPLACEMENT_REGISTRATIONS.store(0, Ordering::SeqCst);
-    worker_inference_values().lock().unwrap().clear();
     let _ = deregister_plugin("test.plugin");
     let _ = deregister_plugin("singleton.plugin");
     let _ = deregister_plugin("recording.plugin");
     let _ = deregister_plugin("replacement.plugin");
     let _ = deregister_plugin("restore.fail.plugin");
     let _ = deregister_plugin("restore.break.plugin");
-    let _ = deregister_plugin("worker-inference-aware.plugin");
     let _ = deregister_plugin("partial.fail.plugin");
     let _ = deregister_plugin("vanishing.plugin");
     let _ = deregister_plugin("blocking.plugin");
@@ -1153,60 +1111,6 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
 }
 
 #[test]
-fn test_failed_replacement_restores_previous_worker_inference_registry() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    register_plugin(Arc::new(WorkerInferenceAwarePlugin)).unwrap();
-    register_plugin(Arc::new(RestoreFailPlugin)).unwrap();
-
-    let previous_registry = WorkerInferenceRegistry::default();
-    let _previous_inference = previous_registry
-        .register(
-            WorkerInferenceDescriptor::new("shared-inference", "test.echo.v1").unwrap(),
-            Arc::new(|_, _| Ok(json!({"source": "previous"}))),
-        )
-        .unwrap();
-    let replacement_registry = WorkerInferenceRegistry::default();
-    let _replacement_inference = replacement_registry
-        .register(
-            WorkerInferenceDescriptor::new("shared-inference", "test.echo.v1").unwrap(),
-            Arc::new(|_, _| Ok(json!({"source": "replacement"}))),
-        )
-        .unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime
-        .block_on(initialize_plugins_exact_with_worker_inference(
-            PluginConfig {
-                components: vec![PluginComponentSpec::new("worker-inference-aware.plugin")],
-                ..PluginConfig::default()
-            },
-            previous_registry,
-        ))
-        .unwrap();
-
-    let error = runtime
-        .block_on(initialize_plugins_exact_with_worker_inference(
-            PluginConfig {
-                components: vec![PluginComponentSpec::new("restore.fail.plugin")],
-                ..PluginConfig::default()
-            },
-            replacement_registry,
-        ))
-        .unwrap_err();
-    assert!(error.to_string().contains("refused to initialize"));
-    assert_eq!(
-        *worker_inference_values().lock().unwrap(),
-        vec!["previous", "previous"]
-    );
-
-    reset_global();
-}
-
-#[test]
 fn test_initialize_plugins_restores_previous_configuration_after_replacement_panic() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1414,7 +1318,6 @@ fn test_checked_teardown_reports_unremoved_registrations() {
                 ))
             }),
         )],
-        WorkerInferenceRegistry::default(),
     )
     .unwrap();
 
@@ -1440,7 +1343,6 @@ fn test_legacy_clear_retains_mutation_owner_after_incomplete_teardown() {
             "stale-callback",
             Box::new(|| panic!("fixture deregistration panicked")),
         )],
-        WorkerInferenceRegistry::default(),
     )
     .unwrap();
 

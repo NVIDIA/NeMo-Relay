@@ -24,19 +24,17 @@ use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_worker_plugins, load_worker_plugins_with_worker_inference,
+    WorkerPluginLoadSpec, load_worker_plugins,
 };
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, WorkerInferenceDescriptor, WorkerInferenceRegistry,
-    clear_plugin_configuration, initialize_plugins_exact,
-    initialize_plugins_exact_with_worker_inference, list_plugin_kinds,
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    list_plugin_kinds,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use uuid::Uuid;
 
-const PII_DETECTION_CONTRACT: &str = "nemo.relay.pii_detection.v1";
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn enable_operational_logs() {
@@ -50,203 +48,6 @@ fn worker_activation_with_no_specs_is_empty() {
         .expect("empty worker activation should succeed");
     assert!(activation.is_empty());
     activation.clear();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn worker_inference_is_preinstalled_times_out_and_clears() {
-    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_worker();
-    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let activation = load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::new(),
-    }])
-    .expect("worker plugin should load");
-    let registry = activation.worker_inference_registry();
-
-    // Worker inference must be available before static consumers initialize.
-    let inference = registry
-        .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
-        .expect("worker inference should be installed");
-    assert_eq!(
-        inference
-            .invoke(
-                json!({"text": "private"}),
-                std::time::Duration::from_secs(1)
-            )
-            .expect("worker inference should return JSON"),
-        json!({
-            "version": 1,
-            "request": {"text": "private"},
-            "worker_inference": "fixture_local_model"
-        })
-    );
-    let timeout = inference
-        .invoke(
-            json!({"delay_ms": 100}),
-            std::time::Duration::from_millis(5),
-        )
-        .expect_err("worker inference should honor the caller deadline")
-        .to_string();
-    assert!(timeout.contains("timed out"), "{timeout}");
-
-    activation.clear();
-    assert!(
-        registry
-            .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
-            .is_err(),
-        "inference should be removed when the worker activation clears"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn worker_clear_fails_an_in_flight_local_model_call_without_hanging() {
-    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_worker();
-    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let activation = load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::new(),
-    }])
-    .expect("worker plugin should load");
-    let registry = activation.worker_inference_registry();
-    let inference = registry
-        .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
-        .expect("worker inference should be installed");
-    let invocation = std::thread::spawn(move || {
-        inference.invoke(
-            json!({"delay_ms": 5_000}),
-            std::time::Duration::from_secs(10),
-        )
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    activation.clear();
-
-    let error = invocation
-        .join()
-        .expect("inference invocation thread should join")
-        .expect_err("clearing the worker must fail its in-flight call")
-        .to_string();
-    assert!(
-        error.contains("invocation failed") || error.contains("cancel"),
-        "{error}"
-    );
-    assert!(
-        registry
-            .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
-            .is_err(),
-        "inference should remain deregistered after concurrent clear"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn worker_inference_rolls_back_after_later_plugin_registration_failure() {
-    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_worker();
-    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let first_inference = "fixture_local_model_first";
-    let first_inference_key = format!("fixture_worker/{first_inference}");
-    let registry = WorkerInferenceRegistry::default();
-    let first = load_worker_plugins_with_worker_inference(
-        [WorkerPluginLoadSpec {
-            plugin_id: "fixture_worker".into(),
-            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config: Map::from_iter([("worker_inference_name".into(), json!(first_inference))]),
-        }],
-        registry.clone(),
-    )
-    .expect("first worker plugin should load");
-
-    let second_inference = "fixture_local_model_rollback";
-    let second_inference_key = format!("fixture_worker/{second_inference}");
-    let second = load_worker_plugins_with_worker_inference(
-        [WorkerPluginLoadSpec {
-            plugin_id: "fixture_worker".into(),
-            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config: Map::from_iter([("worker_inference_name".into(), json!(second_inference))]),
-        }],
-        registry.clone(),
-    );
-    assert!(
-        second.is_err(),
-        "duplicate plugin kind should fail after the second inference is installed"
-    );
-    assert!(
-        registry
-            .resolve(&second_inference_key, PII_DETECTION_CONTRACT)
-            .is_err(),
-        "the second inference must be rolled back with its failed activation"
-    );
-    assert!(
-        registry
-            .resolve(&first_inference_key, PII_DETECTION_CONTRACT)
-            .is_ok(),
-        "rollback must not remove the first activation's inference"
-    );
-
-    first.clear();
-    assert!(
-        registry
-            .resolve(&first_inference_key, PII_DETECTION_CONTRACT)
-            .is_err()
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn worker_inference_rolls_back_earlier_inference_after_same_worker_conflict() {
-    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_worker();
-    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let first_inference_key = "fixture_worker/fixture_local_model_unique";
-    let conflicting_inference_key = "fixture_worker/fixture_local_model_conflict";
-    let registry = WorkerInferenceRegistry::default();
-    let _existing_registration = registry
-        .register(
-            WorkerInferenceDescriptor::new(conflicting_inference_key, PII_DETECTION_CONTRACT)
-                .unwrap(),
-            Arc::new(|request, _| Ok(json!({"existing": request}))),
-        )
-        .expect("conflicting inference fixture should register");
-
-    let activation = load_worker_plugins_with_worker_inference(
-        [WorkerPluginLoadSpec {
-            plugin_id: "fixture_worker".into(),
-            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config: Map::from_iter([(
-                "worker_inference_names".into(),
-                json!(["fixture_local_model_unique", "fixture_local_model_conflict"]),
-            )]),
-        }],
-        registry.clone(),
-    );
-
-    assert!(
-        activation.is_err(),
-        "the worker activation should fail on its second inference"
-    );
-    assert!(
-        registry
-            .resolve(first_inference_key, PII_DETECTION_CONTRACT)
-            .is_err(),
-        "an earlier inference from the failed worker must be rolled back"
-    );
-    let existing = registry
-        .resolve(conflicting_inference_key, PII_DETECTION_CONTRACT)
-        .expect("the existing conflicting inference must remain registered");
-    assert_eq!(
-        existing
-            .invoke(json!({"value": 1}), std::time::Duration::from_secs(1))
-            .expect("existing inference should remain callable"),
-        json!({"existing": {"value": 1}})
-    );
 }
 
 #[tokio::test]
@@ -1435,7 +1236,6 @@ async fn load_and_initialize_fixture(config: Map<String, Json>) -> LoadedWorker 
         config: config.clone(),
     }])
     .expect("worker plugin should load");
-    let worker_inference = activation.worker_inference_registry();
 
     let mut plugin_config = PluginConfig::default();
     plugin_config.components.push(PluginComponentSpec {
@@ -1443,7 +1243,7 @@ async fn load_and_initialize_fixture(config: Map<String, Json>) -> LoadedWorker 
         enabled: true,
         config,
     });
-    initialize_plugins_exact_with_worker_inference(plugin_config, worker_inference)
+    initialize_plugins_exact(plugin_config)
         .await
         .expect("worker plugin should initialize");
 

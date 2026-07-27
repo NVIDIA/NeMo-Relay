@@ -845,7 +845,6 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
     [str, LlmRequest, "LlmStreamNext"],
     Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
 ]
-WorkerInferenceCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
 
 
 @dataclass(slots=True)
@@ -866,7 +865,6 @@ class _Handlers:
     llm_requests: dict[str, LlmRequestCallback]
     llm_executions: dict[str, LlmExecutionCallback]
     llm_stream_executions: dict[str, LlmStreamExecutionCallback]
-    worker_inference: dict[str, WorkerInferenceCallback]
 
     @classmethod
     def empty(cls) -> _Handlers:
@@ -887,7 +885,6 @@ class _Handlers:
             llm_requests={},
             llm_executions={},
             llm_stream_executions={},
-            worker_inference={},
         )
 
 
@@ -955,28 +952,6 @@ class PluginContext:
         """
         self._push_registration(name, pb.SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
-
-    def register_worker_inference(
-        self,
-        name: str,
-        contract: str,
-        callback: WorkerInferenceCallback,
-    ) -> None:
-        """Register named worker inference for a versioned host contract.
-
-        Args:
-            name: Stable inference name selected by a consuming host component.
-            contract: Versioned request-response contract implemented by the worker.
-            callback: Function receiving and returning component-owned JSON.
-                The callback can return a value directly or through an
-                awaitable.
-
-        Ownership boundary:
-            Workers perform model inference only. The consuming host
-            component owns field selection, policy, and output application.
-        """
-        self._push_registration(name, pb.WORKER_INFERENCE, 0, False, contract=contract)
-        self._handlers.worker_inference[name] = callback
 
     def _register_event_sanitizer(
         self,
@@ -1285,15 +1260,7 @@ class PluginContext:
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(
-        self,
-        name: str,
-        surface: int,
-        priority: int,
-        break_chain: bool,
-        *,
-        contract: str = "",
-    ) -> None:
+    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
@@ -1305,7 +1272,6 @@ class PluginContext:
                 surface=surface,
                 priority=priority,
                 break_chain=break_chain,
-                contract=contract,
             )
         )
 
@@ -2094,19 +2060,6 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         ),
                     )
                 )
-            if request.surface == pb.WORKER_INFERENCE:
-                result = await _maybe_await(
-                    self._handler(
-                        self._handlers.worker_inference,
-                        request.registration_name,
-                    )(
-                        _decode_required_envelope(
-                            request.worker_inference,
-                            "worker inference request",
-                        )
-                    )
-                )
-                return _json_response(result)
             raise WorkerSdkError(f"unsupported registration surface {request.surface}")
 
     async def _invoke_llm_result(self, request: Any) -> Any:
@@ -2242,7 +2195,6 @@ def _all_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        pb.WORKER_INFERENCE,
     ]
 
 

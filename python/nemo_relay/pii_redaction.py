@@ -103,16 +103,11 @@ class BuiltinConfig:
 
 @dataclass(slots=True)
 class LocalModelConfig:
-    """Worker-backed local-model redaction settings."""
+    """Future local-model backend seam settings."""
 
     backend: str | None = None
     model_id: str | None = None
     detector_profile: str | None = None
-    target_paths: list[str] = field(default_factory=list)
-    target_path_patterns: list[str] = field(default_factory=list)
-    min_score: float | None = None
-    excluded_labels: list[str] = field(default_factory=list)
-    replacement: str | None = None
     allow_network: bool | None = None
     max_latency_ms: int | None = None
 
@@ -123,36 +118,8 @@ class LocalModelConfig:
                 "backend": self.backend,
                 "model_id": self.model_id,
                 "detector_profile": self.detector_profile,
-                "target_paths": self.target_paths or None,
-                "target_path_patterns": self.target_path_patterns or None,
-                "min_score": self.min_score,
-                "excluded_labels": self.excluded_labels or None,
-                "replacement": self.replacement,
                 "allow_network": self.allow_network,
                 "max_latency_ms": self.max_latency_ms,
-            }
-        )
-
-
-@dataclass(slots=True)
-class PiiRedactionProfile:
-    """One ordered PII redaction backend profile."""
-
-    enabled: bool = True
-    mode: Literal["builtin", "local_model"] = "builtin"
-    priority: int = 100
-    builtin: BuiltinConfig | None = None
-    local: LocalModelConfig | None = None
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this profile to the canonical JSON object shape."""
-        return _normalize_object(
-            {
-                "enabled": self.enabled,
-                "mode": self.mode,
-                "priority": self.priority,
-                "builtin": self.builtin,
-                "local": self.local,
             }
         )
 
@@ -170,22 +137,12 @@ class PiiRedactionConfig:
     mark: bool = True
     priority: int = 100
     codec: Literal["openai_chat", "openai_responses", "anthropic_messages"] | str | None = None
-    profiles: list[PiiRedactionProfile] = field(default_factory=list)
     builtin: BuiltinConfig | None = None
     local: LocalModelConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
 
     def to_dict(self) -> JsonObject:
         """Serialize this PII redaction config to the canonical JSON object shape."""
-        if self.profiles:
-            return _normalize_object(
-                {
-                    "version": self.version,
-                    "codec": self.codec,
-                    "profiles": self.profiles,
-                    "policy": self.policy,
-                }
-            )
         return _normalize_object(
             {
                 "version": self.version,
@@ -230,7 +187,7 @@ def validate_config(config: PiiRedactionConfig | JsonObject) -> ConfigReport:
             components=[ComponentSpec(config)],
         )
     )
-    return report
+    return cast(ConfigReport, report)
 
 
 __all__ = [
@@ -242,6 +199,5 @@ __all__ = [
     "LocalModelConfig",
     "PII_REDACTION_PLUGIN_KIND",
     "PiiRedactionConfig",
-    "PiiRedactionProfile",
     "validate_config",
 ]
