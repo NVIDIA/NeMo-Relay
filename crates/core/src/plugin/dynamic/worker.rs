@@ -72,9 +72,9 @@ use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, InferenceProviderDescriptor, InferenceProviderRegistration,
-    InferenceProviderRegistry, Plugin, PluginDeregistrationOutcome, PluginError,
-    PluginRegistrationContext, deregister_plugin_registration_checked, register_plugin_tracked,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginDeregistrationOutcome, PluginError,
+    PluginRegistrationContext, WorkerInferenceDescriptor, WorkerInferenceRegistration,
+    WorkerInferenceRegistry, deregister_plugin_registration_checked, register_plugin_tracked,
 };
 
 use super::{
@@ -130,8 +130,8 @@ pub struct WorkerPluginLoadSpec {
 pub struct WorkerPluginActivation {
     plugins: Vec<Arc<WorkerPluginInstance>>,
     plugin_registrations: Vec<(String, u64)>,
-    inference_providers: InferenceProviderRegistry,
-    inference_provider_registrations: Vec<InferenceProviderRegistration>,
+    worker_inference: WorkerInferenceRegistry,
+    worker_inference_registrations: Vec<WorkerInferenceRegistration>,
 }
 
 impl WorkerPluginActivation {
@@ -143,20 +143,18 @@ impl WorkerPluginActivation {
     /// Consumes the activation; deregistration runs from `Drop`.
     pub fn clear(self) {}
 
-    /// Returns the host-owned inference providers installed by this activation.
+    /// Returns the host-owned worker inference registry installed by this activation.
     #[doc(hidden)]
-    pub fn inference_providers(&self) -> InferenceProviderRegistry {
-        self.inference_providers.clone()
+    pub fn worker_inference_registry(&self) -> WorkerInferenceRegistry {
+        self.worker_inference.clone()
     }
 
     pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
         deregister_tracked_registrations_checked(&mut self.plugin_registrations, "worker")
     }
 
-    pub(crate) fn deregister_inference_providers_checked(
-        &mut self,
-    ) -> DynamicPluginTeardownOutcome {
-        deregister_inference_providers_checked(&mut self.inference_provider_registrations)
+    pub(crate) fn deregister_worker_inference_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        deregister_worker_inference_checked(&mut self.worker_inference_registrations)
     }
 
     pub(crate) fn shutdown_plugins_checked(&self) -> DynamicPluginTeardownOutcome {
@@ -170,7 +168,7 @@ impl WorkerPluginActivation {
 
 impl Drop for WorkerPluginActivation {
     fn drop(&mut self) {
-        let _ = deregister_inference_providers_checked(&mut self.inference_provider_registrations);
+        let _ = deregister_worker_inference_checked(&mut self.worker_inference_registrations);
         for (plugin_kind, registration_id) in self.plugin_registrations.iter().rev() {
             let _ = deregister_plugin_registration_checked(plugin_kind, *registration_id);
         }
@@ -185,14 +183,14 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_with_inference_providers(specs, InferenceProviderRegistry::default())
+    load_worker_plugins_with_worker_inference(specs, WorkerInferenceRegistry::default())
 }
 
-/// Loads worker plugins into an existing host inference-provider registry.
+/// Loads worker plugins into an existing host-owned worker inference registry.
 #[doc(hidden)]
-pub fn load_worker_plugins_with_inference_providers<I>(
+pub fn load_worker_plugins_with_worker_inference<I>(
     specs: I,
-    inference_providers: InferenceProviderRegistry,
+    worker_inference: WorkerInferenceRegistry,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
@@ -200,20 +198,20 @@ where
     let mut activation = WorkerPluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
-        inference_providers: inference_providers.clone(),
-        inference_provider_registrations: Vec::new(),
+        worker_inference: worker_inference.clone(),
+        worker_inference_registrations: Vec::new(),
     };
     for spec in specs {
         let instance = load_one_worker_plugin(&spec)?;
-        let inference_provider_registrations =
-            instance.install_inference_providers(&inference_providers)?;
+        let worker_inference_registrations =
+            instance.install_worker_inference(&worker_inference)?;
         let plugin_kind = instance.plugin_kind.clone();
         // Transfer ownership before the next fallible registration so Drop can
-        // unwind providers and the worker process on partial activation.
+        // unwind worker inference and the worker process on partial activation.
         activation.plugins.push(instance.clone());
         activation
-            .inference_provider_registrations
-            .extend(inference_provider_registrations);
+            .worker_inference_registrations
+            .extend(worker_inference_registrations);
         let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
@@ -1080,10 +1078,10 @@ fn clear_host_python_environment(command: &mut Command) {
 }
 
 impl WorkerPluginInstance {
-    fn install_inference_providers(
+    fn install_worker_inference(
         &self,
-        registry: &InferenceProviderRegistry,
-    ) -> crate::plugin::Result<Vec<InferenceProviderRegistration>> {
+        registry: &WorkerInferenceRegistry,
+    ) -> crate::plugin::Result<Vec<WorkerInferenceRegistration>> {
         let mut registrations = Vec::new();
         for registration in &self.registrations {
             let surface = RegistrationSurface::try_from(registration.surface).map_err(|_| {
@@ -1092,23 +1090,23 @@ impl WorkerPluginInstance {
                     self.plugin_kind, registration.surface
                 ))
             })?;
-            if surface != RegistrationSurface::InferenceProvider {
+            if surface != RegistrationSurface::WorkerInference {
                 continue;
             }
             let callback_name = registration.local_name.clone();
-            let provider_name = format!("{}/{}", self.plugin_kind, callback_name);
+            let inference_name = format!("{}/{}", self.plugin_kind, callback_name);
             let callback = self.clone_for_callback();
             let descriptor =
-                InferenceProviderDescriptor::new(provider_name, registration.contract.clone())?;
+                WorkerInferenceDescriptor::new(inference_name, registration.contract.clone())?;
             match registry.register(
                 descriptor,
                 Arc::new(move |request, timeout| {
-                    callback.invoke_inference_provider(&callback_name, request, timeout)
+                    callback.invoke_worker_inference(&callback_name, request, timeout)
                 }),
             ) {
                 Ok(registration) => registrations.push(registration),
                 Err(error) => {
-                    let _ = deregister_inference_providers_checked(&mut registrations);
+                    let _ = deregister_worker_inference_checked(&mut registrations);
                     return Err(error);
                 }
             }
@@ -1155,8 +1153,8 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::LlmStreamExecutionIntercept => {
                     self.install_llm_registration(ctx, registration, surface)?
                 }
-                RegistrationSurface::InferenceProvider => {
-                    // Providers are installed during host bootstrap so components
+                RegistrationSurface::WorkerInference => {
+                    // Worker inference is installed during host bootstrap so components
                     // can resolve their contracts before runtime callbacks register.
                 }
                 RegistrationSurface::Unspecified => {
@@ -1446,7 +1444,7 @@ struct WorkerPluginCallback {
 }
 
 impl WorkerPluginCallback {
-    fn invoke_inference_provider(
+    fn invoke_worker_inference(
         &self,
         registration_name: &str,
         value: Json,
@@ -1454,9 +1452,9 @@ impl WorkerPluginCallback {
     ) -> crate::plugin::Result<Json> {
         let request = self.base_request(
             registration_name,
-            RegistrationSurface::InferenceProvider,
+            RegistrationSurface::WorkerInference,
             None,
-            Some(invoke_request_payload::Payload::Provider(
+            Some(invoke_request_payload::Payload::WorkerInference(
                 json_envelope_infallible(JSON_SCHEMA, &value),
             )),
         );
@@ -1466,12 +1464,12 @@ impl WorkerPluginCallback {
         )
         .map_err(|error| {
             PluginError::RegistrationFailed(format!(
-                "inference provider '{registration_name}' invocation failed: {error}"
+                "worker inference '{registration_name}' invocation failed: {error}"
             ))
         })?;
         json_from_invoke_response(response).map_err(|error| {
             PluginError::RegistrationFailed(format!(
-                "inference provider '{registration_name}' returned an invalid response: {error}"
+                "worker inference '{registration_name}' returned an invalid response: {error}"
             ))
         })
     }
@@ -1488,8 +1486,8 @@ impl WorkerPluginCallback {
     }
 }
 
-fn deregister_inference_providers_checked(
-    registrations: &mut Vec<InferenceProviderRegistration>,
+fn deregister_worker_inference_checked(
+    registrations: &mut Vec<WorkerInferenceRegistration>,
 ) -> DynamicPluginTeardownOutcome {
     let mut outcome = DynamicPluginTeardownOutcome::success();
     for mut registration in std::mem::take(registrations).into_iter().rev() {
@@ -1497,17 +1495,17 @@ fn deregister_inference_providers_checked(
         match registration.deregister_checked() {
             Ok(PluginDeregistrationOutcome::Removed) => {}
             Ok(PluginDeregistrationOutcome::Missing) => outcome.record_error(
-                format!("inference provider '{name}' was not registered during teardown"),
+                format!("worker inference '{name}' was not registered during teardown"),
                 true,
             ),
             Ok(PluginDeregistrationOutcome::Replaced) => outcome.record_error(
                 format!(
-                    "inference provider '{name}' was replaced during teardown and was left registered"
+                    "worker inference '{name}' was replaced during teardown and was left registered"
                 ),
                 true,
             ),
             Err(error) => outcome.record_error(
-                format!("failed to deregister inference provider '{name}': {error}"),
+                format!("failed to deregister worker inference '{name}': {error}"),
                 false,
             ),
         }
@@ -3083,15 +3081,15 @@ fn validate_registration_plan(
             )));
         }
         let contract = registration.contract.trim();
-        if surface == RegistrationSurface::InferenceProvider && contract.is_empty() {
+        if surface == RegistrationSurface::WorkerInference && contract.is_empty() {
             return Err(PluginError::RegistrationFailed(format!(
-                "worker plugin '{plugin_id}' returned inference provider '{}' without a contract",
+                "worker plugin '{plugin_id}' returned worker inference '{}' without a contract",
                 registration.local_name
             )));
         }
-        if surface != RegistrationSurface::InferenceProvider && !contract.is_empty() {
+        if surface != RegistrationSurface::WorkerInference && !contract.is_empty() {
             return Err(PluginError::RegistrationFailed(format!(
-                "worker plugin '{plugin_id}' returned a contract for non-provider registration '{}'",
+                "worker plugin '{plugin_id}' returned a contract for non-inference registration '{}'",
                 registration.local_name
             )));
         }

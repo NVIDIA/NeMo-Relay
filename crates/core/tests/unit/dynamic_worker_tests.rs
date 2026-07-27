@@ -298,13 +298,13 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
         "fixture_worker",
         &RegisterResponse {
             registrations: vec![registration(
-                RegistrationSurface::InferenceProvider,
+                RegistrationSurface::WorkerInference,
                 "detector",
             )],
             error: None,
         },
     )
-    .expect_err("inference providers must declare a contract");
+    .expect_err("worker inference must declare a contract");
     assert!(missing_contract.to_string().contains("without a contract"));
 
     let contract_on_middleware = validate_registration_plan(
@@ -317,20 +317,20 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
             error: None,
         },
     )
-    .expect_err("middleware registrations must not declare provider contracts");
-    assert!(contract_on_middleware.to_string().contains("non-provider"));
+    .expect_err("middleware registrations must not declare inference contracts");
+    assert!(contract_on_middleware.to_string().contains("non-inference"));
 
     validate_registration_plan(
         "fixture_worker",
         &RegisterResponse {
             registrations: vec![Registration {
                 contract: "test.detector.v1".into(),
-                ..registration(RegistrationSurface::InferenceProvider, "detector")
+                ..registration(RegistrationSurface::WorkerInference, "detector")
             }],
             error: None,
         },
     )
-    .expect("versioned inference provider contract should be accepted");
+    .expect("versioned worker inference contract should be accepted");
 
     let cases = [
         (ProtoScopeType::Agent, crate::api::scope::ScopeType::Agent),

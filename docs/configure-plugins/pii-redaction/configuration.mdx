@@ -135,7 +135,7 @@ The following table compares the available PII redaction backends:
 | Managed `tool_output` | Supported | Supported |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | `openai_chat`, `openai_responses`, `anthropic_messages` |
-| Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes with an active `grpc-v1` worker provider |
+| Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes with active `grpc-v1` worker inference |
 
 ## Built-in Mode
 
@@ -322,10 +322,10 @@ contextual PII. The worker performs inference only. The PII component selects
 fields, batches text, enforces deadlines, validates detections, applies
 confidence and label policy, replaces accepted spans, and fails closed.
 
-The provider name is `<plugin_id>/<registration_name>`. For example, a worker
+The worker inference name is `<plugin_id>/<registration_name>`. For example, a worker
 with plugin ID `acme.pii_worker` that registers `detector` for
 `nemo.relay.pii_detection.v1` is selected as `acme.pii_worker/detector`. Relay
-rejects providers that declare another contract before installing the
+rejects registrations that declare another contract before installing the
 sanitizer.
 
 ```toml
@@ -354,17 +354,17 @@ allow_network = false
 max_latency_ms = 250
 ```
 
-Worker providers are installed before built-in components initialize and are
+Worker inference is installed before built-in components initialize and is
 removed after their dependent sanitizers. `allow_network = true` is rejected:
 this lane is for same-machine inference. This is a configuration contract, not
 a process sandbox.
 
-Provider failures, timeouts, malformed responses, invalid UTF-8 spans,
+Worker failures, timeouts, malformed responses, invalid UTF-8 spans,
 overlapping spans, and input-limit violations fail closed for the affected
 batch. If a configured codec cannot decode or safely re-encode an LLM payload,
 Relay omits that request or response payload from the emitted event. The
 default deadline is 250 ms for the complete selected payload, including every
-provider batch. Configuration above 60 seconds is rejected.
+inference batch. Configuration above 60 seconds is rejected.
 
 Use `profiles` to run deterministic recognizers before a contextual model:
 
@@ -403,16 +403,16 @@ policy boundary.
 
 The generic local-model payload deadline defaults to 250 ms. Contextual models
 can need more time for large selected payloads. The Rampart profile above uses
-5000 ms so a request near the 64 KiB provider limit has practical headroom on
+5000 ms so a request near the 64 KiB detection-request limit has practical headroom on
 typical client hardware; benchmark representative inputs on deployment
 hardware before lowering it.
 
-The optional Rampart provider is distributed as a manifest-backed Python source
-bundle under `crates/pii-redaction/providers/rampart`. Prefetch its pinned model
-before adding and enabling the worker:
+The optional Rampart worker is included as a manifest-backed Python source
+bundle under `crates/pii-redaction/workers/rampart`. Prefetch its pinned model
+before adding and enabling it from a source checkout:
 
 ```bash
-cd crates/pii-redaction/providers/rampart
+cd crates/pii-redaction/workers/rampart
 uvx --from . nemo-relay-pii-rampart-prefetch
 nemo-relay plugins add ./relay-plugin.toml
 nemo-relay plugins enable nemo_relay.pii_rampart

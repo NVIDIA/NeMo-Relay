@@ -68,13 +68,13 @@ identity from `WorkerPlugin::plugin_id()`; custom launchers can use
 credentials and runs until Relay requests shutdown. Do not start the worker
 directly for normal operation.
 
-### Provide local inference
+### Register worker inference
 
-Use `register_inference_provider` when a first-party Relay component owns a
+Use `register_worker_inference` when a first-party Relay component owns a
 versioned contract and needs isolated inference:
 
 ```rust
-context.register_inference_provider(
+context.register_worker_inference(
     "detector",
     "acme.pii_detection.v1",
     |request| async move {

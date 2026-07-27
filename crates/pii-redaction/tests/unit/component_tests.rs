@@ -28,11 +28,11 @@ use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
-    ConfigPolicy, DiagnosticLevel, InferenceProviderDescriptor, InferenceProviderRegistration,
-    InferenceProviderRegistry, PluginComponentSpec, PluginConfig, PluginError,
-    PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
+    ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
+    PluginRegistrationContext, UnsupportedBehavior, WorkerInferenceDescriptor,
+    WorkerInferenceRegistration, WorkerInferenceRegistry, clear_plugin_configuration,
     ensure_builtin_plugins_registered, initialize_plugins_exact as initialize_plugins,
-    initialize_plugins_with_inference_providers, list_plugin_kinds, rollback_registrations,
+    initialize_plugins_with_worker_inference, list_plugin_kinds, rollback_registrations,
     validate_plugin_config,
 };
 use futures::StreamExt;
@@ -148,22 +148,22 @@ fn reset_runtime() {
     register_pii_redaction_component().unwrap();
 }
 
-struct InferenceProviderGuard {
-    _registration: InferenceProviderRegistration,
+struct WorkerInferenceGuard {
+    _registration: WorkerInferenceRegistration,
 }
 
-fn register_test_inference_provider(
-    registry: &InferenceProviderRegistry,
+fn register_test_worker_inference(
+    registry: &WorkerInferenceRegistry,
     name: &str,
     callback: impl Fn(Json, std::time::Duration) -> Result<Json, PluginError> + Send + Sync + 'static,
-) -> InferenceProviderGuard {
+) -> WorkerInferenceGuard {
     let registration = registry
         .register(
-            InferenceProviderDescriptor::new(name, PII_DETECTION_PROVIDER_CONTRACT).unwrap(),
+            WorkerInferenceDescriptor::new(name, PII_DETECTION_CONTRACT).unwrap(),
             Arc::new(callback),
         )
         .unwrap();
-    InferenceProviderGuard {
+    WorkerInferenceGuard {
         _registration: registration,
     }
 }
@@ -1326,12 +1326,12 @@ fn deterministic_and_local_model_profiles_compose_in_priority_order() {
     reset_runtime();
     setup_isolated_thread();
 
-    let inference_providers = InferenceProviderRegistry::default();
-    let _provider =
-        register_test_inference_provider(&inference_providers, "contextual", |request, _| {
+    let worker_inference = WorkerInferenceRegistry::default();
+    let _registration =
+        register_test_worker_inference(&worker_inference, "contextual", |request, _| {
             assert_eq!(
                 request["texts"][0]["text"], "Alice emailed [REDACTED]",
-                "the local provider must receive the deterministic profile's output"
+                "the local worker must receive the deterministic profile's output"
             );
             Ok(json!({
                 "version": 1,
@@ -1345,7 +1345,7 @@ fn deterministic_and_local_model_profiles_compose_in_priority_order() {
             }))
         });
 
-    futures::executor::block_on(initialize_plugins_with_inference_providers(
+    futures::executor::block_on(initialize_plugins_with_worker_inference(
         plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [
@@ -1367,7 +1367,7 @@ fn deterministic_and_local_model_profiles_compose_in_priority_order() {
             }
         ]
         })),
-        inference_providers,
+        worker_inference,
     ))
     .unwrap();
 
@@ -1502,11 +1502,11 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let inference_providers = InferenceProviderRegistry::default();
-    let _one = register_test_inference_provider(&inference_providers, "one", |_, _| {
+    let worker_inference = WorkerInferenceRegistry::default();
+    let _one = register_test_worker_inference(&worker_inference, "one", |_, _| {
         Ok(json!({"version": 1, "detections": []}))
     });
-    let _two = register_test_inference_provider(&inference_providers, "two", |_, _| {
+    let _two = register_test_worker_inference(&worker_inference, "two", |_, _| {
         Ok(json!({"version": 1, "detections": []}))
     });
 
@@ -1521,9 +1521,9 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_inference_providers(
+    let mut ctx = PluginRegistrationContext::with_worker_inference(
         Some("profiles::".into()),
-        inference_providers,
+        worker_inference,
     );
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
@@ -1835,7 +1835,7 @@ fn validate_rejects_local_section_outside_local_mode() {
 }
 
 #[test]
-fn validate_rejects_invalid_local_model_provider_settings() {
+fn validate_rejects_invalid_local_model_worker_settings() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
@@ -2070,24 +2070,21 @@ fn validate_rejects_unknown_builtin_detector() {
 }
 
 #[test]
-fn local_backend_provider_is_invoked_for_local_model_mode() {
+fn local_backend_worker_inference_is_invoked_for_local_model_mode() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
-    let inference_providers = InferenceProviderRegistry::default();
-    let _provider = register_test_inference_provider(
-        &inference_providers,
-        "test-provider",
-        move |request, _| {
+    let worker_inference = WorkerInferenceRegistry::default();
+    let _registration =
+        register_test_worker_inference(&worker_inference, "test-inference", move |request, _| {
             called_inner.store(true, Ordering::SeqCst);
             assert_eq!(request["version"], 1);
             Ok(json!({"version": 1, "detections": []}))
-        },
-    );
+        });
     setup_isolated_thread();
-    futures::executor::block_on(initialize_plugins_with_inference_providers(
+    futures::executor::block_on(initialize_plugins_with_worker_inference(
         plugin_config(json!({
         "mode": "local_model",
         "input": false,
@@ -2095,9 +2092,9 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
         "mark": false,
         "tool_input": true,
         "tool_output": false,
-        "local": {"backend": "test-provider"}
+        "local": {"backend": "test-inference"}
         })),
-        inference_providers,
+        worker_inference,
     ))
     .unwrap();
     tool_call(
@@ -2112,7 +2109,7 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
 }
 
 #[test]
-fn local_backend_reports_missing_and_failed_provider_initialization() {
+fn local_backend_reports_missing_and_failed_worker_inference_initialization() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
@@ -2131,12 +2128,14 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
     };
     let mut ctx = PluginRegistrationContext::with_namespace("missing::");
     let missing = futures::executor::block_on(plugin.register(&config, &mut ctx))
-        .expect_err("missing local provider should fail registration");
+        .expect_err("missing worker inference should fail registration");
     assert!(missing.to_string().contains("unavailable"));
 
-    let inference_providers = InferenceProviderRegistry::default();
-    let _failed = register_test_inference_provider(&inference_providers, "failed", |_, _| {
-        Err(PluginError::RegistrationFailed("provider failed".into()))
+    let worker_inference = WorkerInferenceRegistry::default();
+    let _failed = register_test_worker_inference(&worker_inference, "failed", |_, _| {
+        Err(PluginError::RegistrationFailed(
+            "worker inference failed".into(),
+        ))
     });
     let config = json!({
         "mode": "local_model",
@@ -2150,25 +2149,23 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_inference_providers(
-        Some("failed::".into()),
-        inference_providers,
-    );
+    let mut ctx =
+        PluginRegistrationContext::with_worker_inference(Some("failed::".into()), worker_inference);
     futures::executor::block_on(plugin.register(&config, &mut ctx))
-        .expect("provider availability should be checked at registration");
+        .expect("worker inference availability should be checked at registration");
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 }
 
 #[test]
-fn local_backend_rejects_provider_with_incompatible_contract() {
+fn local_backend_rejects_worker_inference_with_incompatible_contract() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let inference_providers = InferenceProviderRegistry::default();
-    let _registration = inference_providers
+    let worker_inference = WorkerInferenceRegistry::default();
+    let _registration = worker_inference
         .register(
-            InferenceProviderDescriptor::new("embedding", "acme.embedding.v1").unwrap(),
+            WorkerInferenceDescriptor::new("embedding", "acme.embedding.v1").unwrap(),
             Arc::new(|request, _| Ok(request)),
         )
         .unwrap();
@@ -2184,16 +2181,16 @@ fn local_backend_rejects_provider_with_incompatible_contract() {
     }) else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_inference_providers(
+    let mut ctx = PluginRegistrationContext::with_worker_inference(
         Some("mismatch::".into()),
-        inference_providers,
+        worker_inference,
     );
 
     let error = futures::executor::block_on(plugin.register(&config, &mut ctx))
-        .expect_err("PII must reject providers implementing another contract");
+        .expect_err("PII must reject worker inference implementing another contract");
 
     assert!(error.to_string().contains("acme.embedding.v1"));
-    assert!(error.to_string().contains(PII_DETECTION_PROVIDER_CONTRACT));
+    assert!(error.to_string().contains(PII_DETECTION_CONTRACT));
 }
 
 #[test]

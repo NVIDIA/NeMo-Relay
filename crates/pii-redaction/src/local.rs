@@ -17,7 +17,7 @@ use nemo_relay::codec::resolve::{
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{
-    InferenceProvider, PluginError, PluginRegistrationContext, Result as PluginResult,
+    PluginError, PluginRegistrationContext, Result as PluginResult, WorkerInference,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -27,9 +27,9 @@ use super::component::{
     DEFAULT_LOCAL_MODEL_LATENCY_MS, DEFAULT_LOCAL_MODEL_MIN_SCORE, LocalBackendConfig,
     MAX_LOCAL_MODEL_EXCLUDED_LABELS, MAX_LOCAL_MODEL_LABEL_BYTES, MAX_LOCAL_MODEL_LATENCY_MS,
     MAX_LOCAL_MODEL_PROVIDER_VALUE_BYTES, MAX_LOCAL_MODEL_REPLACEMENT_BYTES,
-    MAX_LOCAL_MODEL_TARGET_PATH_BYTES, MAX_LOCAL_MODEL_TARGET_PATHS,
-    PII_DETECTION_PROVIDER_CONTRACT, PiiRedactionConfig, is_valid_json_pointer,
-    is_valid_json_pointer_pattern, profile_registration_prefix,
+    MAX_LOCAL_MODEL_TARGET_PATH_BYTES, MAX_LOCAL_MODEL_TARGET_PATHS, PII_DETECTION_CONTRACT,
+    PiiRedactionConfig, is_valid_json_pointer, is_valid_json_pointer_pattern,
+    profile_registration_prefix,
 };
 use super::overlay::BuiltinCodecName;
 
@@ -43,8 +43,8 @@ const MAX_DETECTIONS_PER_TEXT: usize = 128;
 
 #[derive(Clone)]
 struct CompiledLocalBackend {
-    provider_name: Arc<String>,
-    provider: InferenceProvider,
+    inference_name: Arc<String>,
+    inference: WorkerInference,
     model_id: Option<String>,
     detector_profile: Option<String>,
     target_paths: Arc<HashSet<Vec<String>>>,
@@ -131,11 +131,11 @@ impl CompiledLocalBackend {
         if let Some(violation) = validate_local_backend_config(&config).into_iter().next() {
             return Err(PluginError::InvalidConfig(violation.message));
         }
-        let provider_name = config
+        let inference_name = config
             .backend
             .as_deref()
             .map(str::trim)
-            .expect("validated local backend has a provider name")
+            .expect("validated local backend has a worker inference name")
             .to_string();
         let min_score = config.min_score.unwrap_or(DEFAULT_LOCAL_MODEL_MIN_SCORE);
         let replacement = config
@@ -150,16 +150,16 @@ impl CompiledLocalBackend {
             })?),
             None => None,
         };
-        let provider = ctx
-            .inference_provider(&provider_name, PII_DETECTION_PROVIDER_CONTRACT)
+        let inference = ctx
+            .worker_inference(&inference_name, PII_DETECTION_CONTRACT)
             .map_err(|error| {
                 PluginError::RegistrationFailed(format!(
-                    "PII redaction inference provider '{provider_name}' is unavailable: {error}"
+                    "PII detection worker '{inference_name}' is unavailable: {error}"
                 ))
             })?;
         Ok(Self {
-            provider_name: Arc::new(provider_name),
-            provider,
+            inference_name: Arc::new(inference_name),
+            inference,
             model_id: config.model_id.map(|value| value.trim().to_string()),
             detector_profile: config
                 .detector_profile
@@ -361,12 +361,12 @@ impl CompiledLocalBackend {
                 Err(_) => {
                     log::warn!(
                         target: "nemo_relay.plugin",
-                        event = "local_model_provider_failed",
+                        event = "local_model_inference_failed",
                         plugin_kind = "pii_redaction",
-                        provider = self.provider_name.as_str(),
+                        worker_inference = self.inference_name.as_str(),
                         batch_size = batch.len(),
-                        reason = "provider_or_response";
-                        "PII local-model provider failed closed"
+                        reason = "inference_or_response";
+                        "PII local-model inference failed closed"
                     );
                     for index in batch {
                         texts[*index].text = self.replacement.as_str().to_string();
@@ -396,10 +396,10 @@ impl CompiledLocalBackend {
                 .collect(),
         };
         let request = serde_json::to_value(request)?;
-        let response = self.provider.invoke(request, timeout)?;
+        let response = self.inference.invoke(request, timeout)?;
         let response: LocalModelResponse = serde_json::from_value(response).map_err(|error| {
             PluginError::RegistrationFailed(format!(
-                "local-model provider returned an invalid detection response: {error}"
+                "PII detection worker returned an invalid response: {error}"
             ))
         })?;
         self.apply_response(texts, batch, response)
@@ -576,7 +576,7 @@ impl CompiledLocalBackend {
             target: "nemo_relay.plugin",
             event = "local_model_codec_failed",
             plugin_kind = "pii_redaction",
-            provider = self.provider_name.as_str(),
+            worker_inference = self.inference_name.as_str(),
             direction,
             codec_kind,
             reason;
@@ -845,7 +845,7 @@ pub(super) fn validate_local_backend_config(
     if config.allow_network == Some(true) {
         push(
             "local.allow_network",
-            "worker-backed local-model providers must not use network inference".into(),
+            "worker-backed local models must not use network inference".into(),
         );
     }
     match config.max_latency_ms {

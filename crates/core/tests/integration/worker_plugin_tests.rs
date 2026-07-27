@@ -24,12 +24,12 @@ use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_worker_plugins, load_worker_plugins_with_inference_providers,
+    WorkerPluginLoadSpec, load_worker_plugins, load_worker_plugins_with_worker_inference,
 };
 use nemo_relay::plugin::{
-    InferenceProviderDescriptor, InferenceProviderRegistry, PluginComponentSpec, PluginConfig,
+    PluginComponentSpec, PluginConfig, WorkerInferenceDescriptor, WorkerInferenceRegistry,
     clear_plugin_configuration, initialize_plugins_exact,
-    initialize_plugins_exact_with_inference_providers, list_plugin_kinds,
+    initialize_plugins_exact_with_worker_inference, list_plugin_kinds,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -37,7 +37,6 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 const PII_DETECTION_CONTRACT: &str = "nemo.relay.pii_detection.v1";
-const EXAMPLE_ECHO_CONTRACT: &str = "examples.python_grpc_worker.echo.v1";
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn enable_operational_logs() {
@@ -54,7 +53,7 @@ fn worker_activation_with_no_specs_is_empty() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn worker_inference_provider_is_preinstalled_times_out_and_clears() {
+async fn worker_inference_is_preinstalled_times_out_and_clears() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
@@ -65,31 +64,31 @@ async fn worker_inference_provider_is_preinstalled_times_out_and_clears() {
         config: Map::new(),
     }])
     .expect("worker plugin should load");
-    let registry = activation.inference_providers();
+    let registry = activation.worker_inference_registry();
 
-    // Providers must be available before static consumers initialize.
-    let provider = registry
+    // Worker inference must be available before static consumers initialize.
+    let inference = registry
         .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
-        .expect("worker provider should be installed");
+        .expect("worker inference should be installed");
     assert_eq!(
-        provider
+        inference
             .invoke(
                 json!({"text": "private"}),
                 std::time::Duration::from_secs(1)
             )
-            .expect("worker provider should return JSON"),
+            .expect("worker inference should return JSON"),
         json!({
             "version": 1,
             "request": {"text": "private"},
-            "provider": "fixture_local_model"
+            "worker_inference": "fixture_local_model"
         })
     );
-    let timeout = provider
+    let timeout = inference
         .invoke(
             json!({"delay_ms": 100}),
             std::time::Duration::from_millis(5),
         )
-        .expect_err("worker provider should honor the caller deadline")
+        .expect_err("worker inference should honor the caller deadline")
         .to_string();
     assert!(timeout.contains("timed out"), "{timeout}");
 
@@ -98,7 +97,7 @@ async fn worker_inference_provider_is_preinstalled_times_out_and_clears() {
         registry
             .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
             .is_err(),
-        "provider should be removed when the worker activation clears"
+        "inference should be removed when the worker activation clears"
     );
 }
 
@@ -114,12 +113,12 @@ async fn worker_clear_fails_an_in_flight_local_model_call_without_hanging() {
         config: Map::new(),
     }])
     .expect("worker plugin should load");
-    let registry = activation.inference_providers();
-    let provider = registry
+    let registry = activation.worker_inference_registry();
+    let inference = registry
         .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
-        .expect("worker provider should be installed");
+        .expect("worker inference should be installed");
     let invocation = std::thread::spawn(move || {
-        provider.invoke(
+        inference.invoke(
             json!({"delay_ms": 5_000}),
             std::time::Duration::from_secs(10),
         )
@@ -130,7 +129,7 @@ async fn worker_clear_fails_an_in_flight_local_model_call_without_hanging() {
 
     let error = invocation
         .join()
-        .expect("provider invocation thread should join")
+        .expect("inference invocation thread should join")
         .expect_err("clearing the worker must fail its in-flight call")
         .to_string();
     assert!(
@@ -141,88 +140,88 @@ async fn worker_clear_fails_an_in_flight_local_model_call_without_hanging() {
         registry
             .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT)
             .is_err(),
-        "provider should remain deregistered after concurrent clear"
+        "inference should remain deregistered after concurrent clear"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn worker_provider_rolls_back_after_later_plugin_registration_failure() {
+async fn worker_inference_rolls_back_after_later_plugin_registration_failure() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let first_provider = "fixture_local_model_first";
-    let first_provider_key = format!("fixture_worker/{first_provider}");
-    let registry = InferenceProviderRegistry::default();
-    let first = load_worker_plugins_with_inference_providers(
+    let first_inference = "fixture_local_model_first";
+    let first_inference_key = format!("fixture_worker/{first_inference}");
+    let registry = WorkerInferenceRegistry::default();
+    let first = load_worker_plugins_with_worker_inference(
         [WorkerPluginLoadSpec {
             plugin_id: "fixture_worker".into(),
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
             environment_ref: None,
-            config: Map::from_iter([("inference_provider_name".into(), json!(first_provider))]),
+            config: Map::from_iter([("worker_inference_name".into(), json!(first_inference))]),
         }],
         registry.clone(),
     )
     .expect("first worker plugin should load");
 
-    let second_provider = "fixture_local_model_rollback";
-    let second_provider_key = format!("fixture_worker/{second_provider}");
-    let second = load_worker_plugins_with_inference_providers(
+    let second_inference = "fixture_local_model_rollback";
+    let second_inference_key = format!("fixture_worker/{second_inference}");
+    let second = load_worker_plugins_with_worker_inference(
         [WorkerPluginLoadSpec {
             plugin_id: "fixture_worker".into(),
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
             environment_ref: None,
-            config: Map::from_iter([("inference_provider_name".into(), json!(second_provider))]),
+            config: Map::from_iter([("worker_inference_name".into(), json!(second_inference))]),
         }],
         registry.clone(),
     );
     assert!(
         second.is_err(),
-        "duplicate plugin kind should fail after the second provider is installed"
+        "duplicate plugin kind should fail after the second inference is installed"
     );
     assert!(
         registry
-            .resolve(&second_provider_key, PII_DETECTION_CONTRACT)
+            .resolve(&second_inference_key, PII_DETECTION_CONTRACT)
             .is_err(),
-        "the second provider must be rolled back with its failed activation"
+        "the second inference must be rolled back with its failed activation"
     );
     assert!(
         registry
-            .resolve(&first_provider_key, PII_DETECTION_CONTRACT)
+            .resolve(&first_inference_key, PII_DETECTION_CONTRACT)
             .is_ok(),
-        "rollback must not remove the first activation's provider"
+        "rollback must not remove the first activation's inference"
     );
 
     first.clear();
     assert!(
         registry
-            .resolve(&first_provider_key, PII_DETECTION_CONTRACT)
+            .resolve(&first_inference_key, PII_DETECTION_CONTRACT)
             .is_err()
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn worker_provider_rolls_back_earlier_provider_after_same_worker_conflict() {
+async fn worker_inference_rolls_back_earlier_inference_after_same_worker_conflict() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let first_provider_key = "fixture_worker/fixture_local_model_unique";
-    let conflicting_provider_key = "fixture_worker/fixture_local_model_conflict";
-    let registry = InferenceProviderRegistry::default();
+    let first_inference_key = "fixture_worker/fixture_local_model_unique";
+    let conflicting_inference_key = "fixture_worker/fixture_local_model_conflict";
+    let registry = WorkerInferenceRegistry::default();
     let _existing_registration = registry
         .register(
-            InferenceProviderDescriptor::new(conflicting_provider_key, PII_DETECTION_CONTRACT)
+            WorkerInferenceDescriptor::new(conflicting_inference_key, PII_DETECTION_CONTRACT)
                 .unwrap(),
             Arc::new(|request, _| Ok(json!({"existing": request}))),
         )
-        .expect("conflicting provider fixture should register");
+        .expect("conflicting inference fixture should register");
 
-    let activation = load_worker_plugins_with_inference_providers(
+    let activation = load_worker_plugins_with_worker_inference(
         [WorkerPluginLoadSpec {
             plugin_id: "fixture_worker".into(),
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
             environment_ref: None,
             config: Map::from_iter([(
-                "inference_provider_names".into(),
+                "worker_inference_names".into(),
                 json!(["fixture_local_model_unique", "fixture_local_model_conflict"]),
             )]),
         }],
@@ -231,21 +230,21 @@ async fn worker_provider_rolls_back_earlier_provider_after_same_worker_conflict(
 
     assert!(
         activation.is_err(),
-        "the worker activation should fail on its second provider"
+        "the worker activation should fail on its second inference"
     );
     assert!(
         registry
-            .resolve(first_provider_key, PII_DETECTION_CONTRACT)
+            .resolve(first_inference_key, PII_DETECTION_CONTRACT)
             .is_err(),
-        "an earlier provider from the failed worker must be rolled back"
+        "an earlier inference from the failed worker must be rolled back"
     );
     let existing = registry
-        .resolve(conflicting_provider_key, PII_DETECTION_CONTRACT)
-        .expect("the existing conflicting provider must remain registered");
+        .resolve(conflicting_inference_key, PII_DETECTION_CONTRACT)
+        .expect("the existing conflicting inference must remain registered");
     assert_eq!(
         existing
             .invoke(json!({"value": 1}), std::time::Duration::from_secs(1))
-            .expect("existing provider should remain callable"),
+            .expect("existing inference should remain callable"),
         json!({"existing": {"value": 1}})
     );
 }
@@ -1297,7 +1296,6 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         config: config.clone(),
     }])
     .expect("managed Python worker should load");
-    let inference_providers = activation.inference_providers();
     let mut cleanup = PythonWorkerCleanup::new(activation);
 
     let mut plugin_config = PluginConfig::default();
@@ -1306,7 +1304,7 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         enabled: true,
         config,
     });
-    initialize_plugins_exact_with_inference_providers(plugin_config, inference_providers.clone())
+    initialize_plugins_exact(plugin_config)
         .await
         .expect("managed Python worker should initialize");
 
@@ -1325,24 +1323,6 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     assert_eq!(
         rewritten["_nemo_relay_plugin"]["tag"],
         "managed-environment"
-    );
-    let inference_provider = inference_providers
-        .resolve("examples.python_grpc_worker/echo", EXAMPLE_ECHO_CONTRACT)
-        .expect("Python worker should expose its inference provider");
-    assert_eq!(
-        inference_provider
-            .invoke(
-                json!({"version": 1, "texts": [{"id": 0, "text": "private"}]}),
-                std::time::Duration::from_secs(1),
-            )
-            .expect("Python inference provider should round-trip JSON"),
-        json!({
-            "provider": "python_grpc_worker",
-            "request": {
-                "version": 1,
-                "texts": [{"id": 0, "text": "private"}],
-            },
-        }),
     );
     flush_subscribers().expect("Python callback mark should flush");
     find_event(
@@ -1455,7 +1435,7 @@ async fn load_and_initialize_fixture(config: Map<String, Json>) -> LoadedWorker 
         config: config.clone(),
     }])
     .expect("worker plugin should load");
-    let inference_providers = activation.inference_providers();
+    let worker_inference = activation.worker_inference_registry();
 
     let mut plugin_config = PluginConfig::default();
     plugin_config.components.push(PluginComponentSpec {
@@ -1463,7 +1443,7 @@ async fn load_and_initialize_fixture(config: Map<String, Json>) -> LoadedWorker 
         enabled: true,
         config,
     });
-    initialize_plugins_exact_with_inference_providers(plugin_config, inference_providers)
+    initialize_plugins_exact_with_worker_inference(plugin_config, worker_inference)
         .await
         .expect("worker plugin should initialize");
 

@@ -19,7 +19,7 @@ use nemo_relay::plugin::dynamic::{
 };
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig, clear_plugin_configuration};
 use nemo_relay_pii_redaction::component::{
-    PII_DETECTION_PROVIDER_CONTRACT, PII_REDACTION_PLUGIN_KIND, register_pii_redaction_component,
+    PII_DETECTION_CONTRACT, PII_REDACTION_PLUGIN_KIND, register_pii_redaction_component,
 };
 use serde_json::{Map, json};
 use tempfile::TempDir;
@@ -27,7 +27,7 @@ use tempfile::TempDir;
 static WORKER_PII_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread")]
-async fn worker_provider_sanitizes_events_and_is_removed_after_host_clear() {
+async fn worker_detection_sanitizes_events_and_is_removed_after_host_clear() {
     let _guard = WORKER_PII_TEST_LOCK.lock().await;
     let _ = clear_plugin_configuration();
     register_pii_redaction_component().expect("PII component should register");
@@ -69,19 +69,16 @@ async fn worker_provider_sanitizes_events_and_is_removed_after_host_clear() {
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
             environment_ref: None,
-            config: Map::from_iter([("provider_only".into(), json!(true))]),
+            config: Map::from_iter([("worker_inference_only".into(), json!(true))]),
         }],
     )
     .await
     .expect("worker and PII component should activate together");
     assert!(!report.has_errors());
-    let inference_providers = activation.inference_providers();
+    let worker_inference = activation.worker_inference_registry();
     assert!(
-        inference_providers
-            .resolve(
-                "fixture_worker/fixture_local_model",
-                PII_DETECTION_PROVIDER_CONTRACT,
-            )
+        worker_inference
+            .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT,)
             .is_ok()
     );
 
@@ -204,18 +201,15 @@ async fn worker_provider_sanitizes_events_and_is_removed_after_host_clear() {
     deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
     activation.clear().expect("plugin host should clear");
     assert!(
-        inference_providers
-            .resolve(
-                "fixture_worker/fixture_local_model",
-                PII_DETECTION_PROVIDER_CONTRACT,
-            )
+        worker_inference
+            .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT,)
             .is_err(),
-        "worker provider should not outlive its host activation"
+        "worker inference should not outlive its host activation"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn worker_exit_during_sanitization_fails_closed_and_removes_provider() {
+async fn worker_exit_during_sanitization_fails_closed_and_removes_inference() {
     let _guard = WORKER_PII_TEST_LOCK.lock().await;
     let _ = clear_plugin_configuration();
     register_pii_redaction_component().expect("PII component should register");
@@ -252,7 +246,7 @@ async fn worker_exit_during_sanitization_fails_closed_and_removes_provider() {
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
             environment_ref: None,
             config: Map::from_iter([
-                ("provider_only".into(), json!(true)),
+                ("worker_inference_only".into(), json!(true)),
                 ("exit_in_local_model".into(), json!(true)),
             ]),
         }],
@@ -260,7 +254,7 @@ async fn worker_exit_during_sanitization_fails_closed_and_removes_provider() {
     .await
     .expect("worker and PII component should activate together");
     assert!(!report.has_errors());
-    let inference_providers = activation.inference_providers();
+    let worker_inference = activation.worker_inference_registry();
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = Arc::clone(&events);
@@ -297,13 +291,10 @@ async fn worker_exit_during_sanitization_fails_closed_and_removes_provider() {
         .to_string();
     assert!(error.contains("shutdown"), "{error}");
     assert!(
-        inference_providers
-            .resolve(
-                "fixture_worker/fixture_local_model",
-                PII_DETECTION_PROVIDER_CONTRACT,
-            )
+        worker_inference
+            .resolve("fixture_worker/fixture_local_model", PII_DETECTION_CONTRACT,)
             .is_err(),
-        "failed worker provider should not survive host teardown"
+        "failed worker inference should not survive host teardown"
     );
 }
 

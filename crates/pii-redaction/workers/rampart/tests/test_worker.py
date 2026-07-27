@@ -18,7 +18,7 @@ class FakeContext:
     def __init__(self) -> None:
         self.callback: Any = None
 
-    def register_inference_provider(self, name: str, contract: str, callback: Any) -> None:
+    def register_worker_inference(self, name: str, contract: str, callback: Any) -> None:
         assert name == "detector"
         assert contract == "nemo.relay.pii_detection.v1"
         self.callback = callback
@@ -77,7 +77,7 @@ def test_worker_validation_reports_bounded_model_readiness_error(
     assert "/sensitive" not in diagnostic.message
 
 
-def test_worker_registers_async_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_registers_async_inference(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeDetector()
     monkeypatch.setattr(worker_module.RampartDetector, "load", lambda _settings: fake)
     context = FakeContext()
@@ -117,7 +117,7 @@ def test_cancelled_callback_holds_admission_until_native_work_finishes(monkeypat
                 continue
             assert result["version"] == 1
             return
-        pytest.fail("provider admission was not released after native work completed")
+        pytest.fail("worker admission was not released after native work completed")
 
     asyncio.run(exercise())
 

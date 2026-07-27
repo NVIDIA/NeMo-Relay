@@ -12,15 +12,15 @@ use nemo_relay::codec::resolve::{
 };
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::plugin::{
-    InferenceProviderDescriptor, InferenceProviderRegistration, InferenceProviderRegistry,
-    PluginRegistrationContext,
+    PluginRegistrationContext, WorkerInferenceDescriptor, WorkerInferenceRegistration,
+    WorkerInferenceRegistry,
 };
 use serde_json::json;
 
 use super::*;
 
-struct ProviderGuard {
-    _registration: InferenceProviderRegistration,
+struct WorkerInferenceGuard {
+    _registration: WorkerInferenceRegistration,
 }
 
 struct IdentifiedRequestCodec {
@@ -45,30 +45,30 @@ impl LlmCodec for IdentifiedRequestCodec {
     }
 }
 
-fn provider_context(
+fn worker_inference_context(
     name: &'static str,
     callback: impl Fn(Json, Duration) -> PluginResult<Json> + Send + Sync + 'static,
-) -> (ProviderGuard, PluginRegistrationContext) {
-    let registry = InferenceProviderRegistry::default();
+) -> (WorkerInferenceGuard, PluginRegistrationContext) {
+    let registry = WorkerInferenceRegistry::default();
     let registration = registry
         .register(
-            InferenceProviderDescriptor::new(name, PII_DETECTION_PROVIDER_CONTRACT).unwrap(),
+            WorkerInferenceDescriptor::new(name, PII_DETECTION_CONTRACT).unwrap(),
             Arc::new(callback),
         )
         .unwrap();
     (
-        ProviderGuard {
+        WorkerInferenceGuard {
             _registration: registration,
         },
-        PluginRegistrationContext::with_inference_providers(None, registry),
+        PluginRegistrationContext::with_worker_inference(None, registry),
     )
 }
 
 fn backend(
     name: &'static str,
     callback: impl Fn(Json, Duration) -> PluginResult<Json> + Send + Sync + 'static,
-) -> (ProviderGuard, CompiledLocalBackend) {
-    let (provider, ctx) = provider_context(name, callback);
+) -> (WorkerInferenceGuard, CompiledLocalBackend) {
+    let (registration, ctx) = worker_inference_context(name, callback);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some(name.into()),
@@ -78,14 +78,14 @@ fn backend(
         &ctx,
     )
     .unwrap();
-    (provider, backend)
+    (registration, backend)
 }
 
 fn alice_detector(request: Json, _timeout: Duration) -> PluginResult<Json> {
     let mut detections = Vec::new();
     for item in request["texts"]
         .as_array()
-        .expect("provider request should contain texts")
+        .expect("detection request should contain texts")
     {
         let text_id = item["id"].as_u64().expect("text id should be an integer");
         let text = item["text"].as_str().expect("text should be a string");
@@ -104,7 +104,7 @@ fn alice_detector(request: Json, _timeout: Duration) -> PluginResult<Json> {
 
 #[test]
 fn applies_non_overlapping_utf8_byte_spans() {
-    let (_provider, backend) = backend("local-test-utf8", |_, _| {
+    let (_registration, backend) = backend("local-test-utf8", |_, _| {
         Ok(json!({
             "version": 1,
             "detections": [
@@ -134,7 +134,7 @@ fn applies_non_overlapping_utf8_byte_spans() {
 
 #[test]
 fn malformed_or_overlapping_spans_fail_closed_for_the_batch() {
-    let (_provider, backend) = backend("local-test-overlap", |_, _| {
+    let (_registration, backend) = backend("local-test-overlap", |_, _| {
         Ok(json!({
             "version": 1,
             "detections": [
@@ -163,8 +163,8 @@ fn malformed_or_overlapping_spans_fail_closed_for_the_batch() {
 }
 
 #[test]
-fn provider_errors_fail_closed_without_changing_unselected_paths() {
-    let (_provider, ctx) = provider_context("local-test-failure", |_, _| {
+fn worker_inference_errors_fail_closed_without_changing_unselected_paths() {
+    let (_registration, ctx) = worker_inference_context("local-test-failure", |_, _| {
         Err(PluginError::RegistrationFailed("boom".into()))
     });
     let backend = CompiledLocalBackend::new(
@@ -192,10 +192,10 @@ fn provider_errors_fail_closed_without_changing_unselected_paths() {
 }
 
 #[test]
-fn batches_provider_requests_and_preserves_no_detection_values() {
+fn batches_detection_requests_and_preserves_no_detection_values() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, backend) = backend("local-test-batching", move |request, _| {
+    let (_registration, backend) = backend("local-test-batching", move |request, _| {
         observed.fetch_add(1, Ordering::SeqCst);
         assert!(request["texts"].as_array().unwrap().len() <= MAX_BATCH_ITEMS);
         Ok(json!({"version": 1, "detections": []}))
@@ -215,10 +215,10 @@ fn batches_provider_requests_and_preserves_no_detection_values() {
 }
 
 #[test]
-fn batches_multiple_event_roots_into_one_provider_request() {
+fn batches_multiple_event_roots_into_one_detection_request() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, backend) = backend("local-test-multi-root", move |request, _| {
+    let (_registration, backend) = backend("local-test-multi-root", move |request, _| {
         observed.fetch_add(1, Ordering::SeqCst);
         assert_eq!(request["texts"].as_array().unwrap().len(), 3);
         Ok(json!({"version": 1, "detections": []}))
@@ -242,10 +242,10 @@ fn batches_multiple_event_roots_into_one_provider_request() {
 }
 
 #[test]
-fn event_callback_batches_all_selected_fields_into_one_provider_request() {
+fn event_callback_batches_all_selected_fields_into_one_detection_request() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, backend) = backend("local-test-event-batching", move |request, _| {
+    let (_registration, backend) = backend("local-test-event-batching", move |request, _| {
         observed.fetch_add(1, Ordering::SeqCst);
         assert_eq!(request["texts"].as_array().unwrap().len(), 3);
         Ok(json!({"version": 1, "detections": []}))
@@ -279,11 +279,12 @@ fn event_callback_batches_all_selected_fields_into_one_provider_request() {
 fn latency_budget_applies_to_the_entire_payload() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, ctx) = provider_context("local-test-total-deadline", move |_, timeout| {
-        observed.fetch_add(1, Ordering::SeqCst);
-        std::thread::sleep(timeout + Duration::from_millis(5));
-        Err(PluginError::RegistrationFailed("timed out".into()))
-    });
+    let (_registration, ctx) =
+        worker_inference_context("local-test-total-deadline", move |_, timeout| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(timeout + Duration::from_millis(5));
+            Err(PluginError::RegistrationFailed("timed out".into()))
+        });
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-total-deadline".into()),
@@ -311,10 +312,10 @@ fn latency_budget_applies_to_the_entire_payload() {
 }
 
 #[test]
-fn oversized_text_is_redacted_without_calling_the_provider() {
+fn oversized_text_is_redacted_without_calling_the_registration() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, backend) = backend("local-test-oversized", move |_, _| {
+    let (_registration, backend) = backend("local-test-oversized", move |_, _| {
         observed.fetch_add(1, Ordering::SeqCst);
         Ok(json!({"version": 1, "detections": []}))
     });
@@ -327,8 +328,8 @@ fn oversized_text_is_redacted_without_calling_the_provider() {
 }
 
 #[test]
-fn oversized_text_does_not_shift_later_provider_results() {
-    let (_provider, backend) = backend("local-test-oversized-middle", |_, _| {
+fn oversized_text_does_not_shift_later_inference_results() {
+    let (_registration, backend) = backend("local-test-oversized-middle", |_, _| {
         Ok(json!({"version": 1, "detections": []}))
     });
 
@@ -339,10 +340,10 @@ fn oversized_text_does_not_shift_later_provider_results() {
 }
 
 #[test]
-fn payload_count_limit_fails_closed_without_unbounded_provider_calls() {
+fn payload_count_limit_fails_closed_without_unbounded_inference_calls() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, backend) = backend("local-test-count-limit", move |_, _| {
+    let (_registration, backend) = backend("local-test-count-limit", move |_, _| {
         observed.fetch_add(1, Ordering::SeqCst);
         Ok(json!({"version": 1, "detections": []}))
     });
@@ -364,7 +365,7 @@ fn payload_count_limit_fails_closed_without_unbounded_provider_calls() {
 fn payload_byte_limit_fails_closed_after_the_bounded_prefix() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, backend) = backend("local-test-byte-limit", move |_, _| {
+    let (_registration, backend) = backend("local-test-byte-limit", move |_, _| {
         observed.fetch_add(1, Ordering::SeqCst);
         Ok(json!({"version": 1, "detections": []}))
     });
@@ -385,7 +386,7 @@ fn payload_byte_limit_fails_closed_after_the_bounded_prefix() {
 
 #[test]
 fn non_utf8_boundary_detection_fails_closed() {
-    let (_provider, backend) = backend("local-test-utf8-boundary", |_, _| {
+    let (_registration, backend) = backend("local-test-utf8-boundary", |_, _| {
         Ok(json!({
             "version": 1,
             "detections": [{
@@ -406,7 +407,8 @@ fn non_utf8_boundary_detection_fails_closed() {
 
 #[test]
 fn local_policy_rejects_malformed_or_unbounded_values() {
-    let (_provider, ctx) = provider_context("local-test-policy-bounds", |request, _| Ok(request));
+    let (_registration, ctx) =
+        worker_inference_context("local-test-policy-bounds", |request, _| Ok(request));
 
     for (config, expected) in [
         (
@@ -488,7 +490,7 @@ fn local_policy_accepts_root_and_escaped_json_pointers() {
 
 #[test]
 fn target_path_patterns_match_one_segment_without_widening_exact_paths() {
-    let (_provider, ctx) = provider_context("local-test-path-patterns", alice_detector);
+    let (_registration, ctx) = worker_inference_context("local-test-path-patterns", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-path-patterns".into()),
@@ -523,7 +525,7 @@ fn target_path_patterns_match_one_segment_without_widening_exact_paths() {
 
 #[test]
 fn exact_paths_match_escaped_object_keys() {
-    let (_provider, ctx) = provider_context("local-test-escaped-path", alice_detector);
+    let (_registration, ctx) = worker_inference_context("local-test-escaped-path", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-escaped-path".into()),
@@ -551,10 +553,11 @@ fn exact_paths_match_escaped_object_keys() {
 fn raw_request_paths_batch_headers_and_content_without_a_codec() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let (_provider, ctx) = provider_context("local-test-raw-request", move |request, timeout| {
-        observed.fetch_add(1, Ordering::SeqCst);
-        alice_detector(request, timeout)
-    });
+    let (_registration, ctx) =
+        worker_inference_context("local-test-raw-request", move |request, timeout| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            alice_detector(request, timeout)
+        });
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-raw-request".into()),
@@ -583,7 +586,7 @@ fn raw_request_paths_batch_headers_and_content_without_a_codec() {
 
 #[test]
 fn raw_response_paths_work_without_a_codec() {
-    let (_provider, ctx) = provider_context("local-test-raw-response", alice_detector);
+    let (_registration, ctx) = worker_inference_context("local-test-raw-response", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-raw-response".into()),
@@ -607,7 +610,8 @@ fn raw_response_paths_work_without_a_codec() {
 
 #[test]
 fn request_codec_classifies_only_normalized_content_patterns() {
-    let (_provider, ctx) = provider_context("local-test-openai-request", alice_detector);
+    let (_registration, ctx) =
+        worker_inference_context("local-test-openai-request", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-openai-request".into()),
@@ -672,7 +676,8 @@ fn request_codec_classifies_only_normalized_content_patterns() {
 
 #[test]
 fn request_uses_the_active_codec_instead_of_the_legacy_fallback() {
-    let (_provider, ctx) = provider_context("local-test-active-request-codec", alice_detector);
+    let (_registration, ctx) =
+        worker_inference_context("local-test-active-request-codec", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-active-request-codec".into()),
@@ -711,7 +716,8 @@ fn request_uses_the_active_codec_instead_of_the_legacy_fallback() {
 
 #[test]
 fn response_codec_classifies_message_content_without_touching_identity_fields() {
-    let (_provider, ctx) = provider_context("local-test-openai-response", alice_detector);
+    let (_registration, ctx) =
+        worker_inference_context("local-test-openai-response", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-openai-response".into()),
@@ -752,7 +758,8 @@ fn response_codec_classifies_message_content_without_touching_identity_fields() 
 
 #[test]
 fn request_codec_failure_omits_the_observable_body() {
-    let (_provider, ctx) = provider_context("local-test-invalid-openai-request", alice_detector);
+    let (_registration, ctx) =
+        worker_inference_context("local-test-invalid-openai-request", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-invalid-openai-request".into()),
@@ -787,7 +794,8 @@ fn request_codec_failure_omits_the_observable_body() {
 
 #[test]
 fn request_codec_ambiguous_multi_message_edit_fails_closed() {
-    let (_provider, ctx) = provider_context("local-test-ambiguous-openai-request", alice_detector);
+    let (_registration, ctx) =
+        worker_inference_context("local-test-ambiguous-openai-request", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-ambiguous-openai-request".into()),
@@ -821,7 +829,8 @@ fn request_codec_ambiguous_multi_message_edit_fails_closed() {
 
 #[test]
 fn response_codec_failure_omits_the_observable_payload() {
-    let (_provider, ctx) = provider_context("local-test-invalid-openai-response", alice_detector);
+    let (_registration, ctx) =
+        worker_inference_context("local-test-invalid-openai-response", alice_detector);
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-invalid-openai-response".into()),
@@ -850,7 +859,7 @@ fn response_codec_failure_omits_the_observable_payload() {
 
 #[test]
 fn host_policy_applies_score_threshold_and_label_exclusions() {
-    let (_provider, ctx) = provider_context("local-test-detection-policy", |_, _| {
+    let (_registration, ctx) = worker_inference_context("local-test-detection-policy", |_, _| {
         Ok(json!({
             "version": 1,
             "detections": [
@@ -898,18 +907,19 @@ fn host_policy_applies_score_threshold_and_label_exclusions() {
 
 #[test]
 fn validates_filtered_detections_before_applying_host_policy() {
-    let (_provider, ctx) = provider_context("local-test-filtered-invalid-span", |_, _| {
-        Ok(json!({
-            "version": 1,
-            "detections": [{
-                "text_id": 0,
-                "start_utf8": 0,
-                "end_utf8": 999,
-                "label": "LOW_SCORE",
-                "score": 0.1
-            }]
-        }))
-    });
+    let (_registration, ctx) =
+        worker_inference_context("local-test-filtered-invalid-span", |_, _| {
+            Ok(json!({
+                "version": 1,
+                "detections": [{
+                    "text_id": 0,
+                    "start_utf8": 0,
+                    "end_utf8": 999,
+                    "label": "LOW_SCORE",
+                    "score": 0.1
+                }]
+            }))
+        });
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-filtered-invalid-span".into()),
@@ -929,20 +939,21 @@ fn validates_filtered_detections_before_applying_host_policy() {
 
 #[test]
 fn enforces_detection_limit_for_each_text() {
-    let (_provider, ctx) = provider_context("local-test-per-text-detection-limit", |_, _| {
-        let detections = (0..=MAX_DETECTIONS_PER_TEXT)
-            .map(|index| {
-                json!({
-                    "text_id": 0,
-                    "start_utf8": index,
-                    "end_utf8": index + 1,
-                    "label": "NAME",
-                    "score": 0.9
+    let (_registration, ctx) =
+        worker_inference_context("local-test-per-text-detection-limit", |_, _| {
+            let detections = (0..=MAX_DETECTIONS_PER_TEXT)
+                .map(|index| {
+                    json!({
+                        "text_id": 0,
+                        "start_utf8": index,
+                        "end_utf8": index + 1,
+                        "label": "NAME",
+                        "score": 0.9
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({"version": 1, "detections": detections}))
-    });
+                .collect::<Vec<_>>();
+            Ok(json!({"version": 1, "detections": detections}))
+        });
     let backend = CompiledLocalBackend::new(
         LocalBackendConfig {
             backend: Some("local-test-per-text-detection-limit".into()),

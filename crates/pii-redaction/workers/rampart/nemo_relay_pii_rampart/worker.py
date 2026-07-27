@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Manifest entrypoint for the Rampart PII inference provider."""
+"""Manifest entrypoint for the Rampart PII worker."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginCon
 
 from .detector import RampartDetector, RampartSettings, resolve_verified_model_root
 
-PII_DETECTION_PROVIDER_CONTRACT = "nemo.relay.pii_detection.v1"
+PII_DETECTION_CONTRACT = "nemo.relay.pii_detection.v1"
 
 
 class _Admission:
@@ -22,7 +22,7 @@ class _Admission:
 
     def acquire(self) -> None:
         if self._active >= self._limit:
-            raise RuntimeError("Rampart provider is at its pending-request limit")
+            raise RuntimeError("Rampart worker is at its pending-request limit")
         self._active += 1
 
     def release(self) -> None:
@@ -30,7 +30,7 @@ class _Admission:
 
 
 class RampartWorker(WorkerPlugin):
-    """Expose Rampart inference through the PII component's provider contract."""
+    """Expose Rampart inference through the PII detection contract."""
 
     plugin_id = "nemo_relay.pii_rampart"
 
@@ -100,9 +100,9 @@ class RampartWorker(WorkerPlugin):
                 if not release_on_completion:
                     admission.release()
 
-        ctx.register_inference_provider(
+        ctx.register_worker_inference(
             "detector",
-            PII_DETECTION_PROVIDER_CONTRACT,
+            PII_DETECTION_CONTRACT,
             detect,
         )
 

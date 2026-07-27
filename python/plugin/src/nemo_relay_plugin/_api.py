@@ -845,7 +845,7 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
     [str, LlmRequest, "LlmStreamNext"],
     Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
 ]
-InferenceProviderCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
+WorkerInferenceCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
 
 
 @dataclass(slots=True)
@@ -866,7 +866,7 @@ class _Handlers:
     llm_requests: dict[str, LlmRequestCallback]
     llm_executions: dict[str, LlmExecutionCallback]
     llm_stream_executions: dict[str, LlmStreamExecutionCallback]
-    inference_providers: dict[str, InferenceProviderCallback]
+    worker_inference: dict[str, WorkerInferenceCallback]
 
     @classmethod
     def empty(cls) -> _Handlers:
@@ -887,7 +887,7 @@ class _Handlers:
             llm_requests={},
             llm_executions={},
             llm_stream_executions={},
-            inference_providers={},
+            worker_inference={},
         )
 
 
@@ -956,27 +956,27 @@ class PluginContext:
         self._push_registration(name, pb.SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
 
-    def register_inference_provider(
+    def register_worker_inference(
         self,
         name: str,
         contract: str,
-        callback: InferenceProviderCallback,
+        callback: WorkerInferenceCallback,
     ) -> None:
-        """Register a named inference provider for a versioned host contract.
+        """Register named worker inference for a versioned host contract.
 
         Args:
-            name: Stable provider name selected by a consuming host component.
-            contract: Versioned request-response contract implemented by the provider.
+            name: Stable inference name selected by a consuming host component.
+            contract: Versioned request-response contract implemented by the worker.
             callback: Function receiving and returning component-owned JSON.
                 The callback can return a value directly or through an
                 awaitable.
 
-        Provider boundary:
-            Providers perform model inference only. The consuming host
+        Ownership boundary:
+            Workers perform model inference only. The consuming host
             component owns field selection, policy, and output application.
         """
-        self._push_registration(name, pb.INFERENCE_PROVIDER, 0, False, contract=contract)
-        self._handlers.inference_providers[name] = callback
+        self._push_registration(name, pb.WORKER_INFERENCE, 0, False, contract=contract)
+        self._handlers.worker_inference[name] = callback
 
     def _register_event_sanitizer(
         self,
@@ -2094,15 +2094,15 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         ),
                     )
                 )
-            if request.surface == pb.INFERENCE_PROVIDER:
+            if request.surface == pb.WORKER_INFERENCE:
                 result = await _maybe_await(
                     self._handler(
-                        self._handlers.inference_providers,
+                        self._handlers.worker_inference,
                         request.registration_name,
                     )(
                         _decode_required_envelope(
-                            request.provider,
-                            "inference provider request",
+                            request.worker_inference,
+                            "worker inference request",
                         )
                     )
                 )
@@ -2242,7 +2242,7 @@ def _all_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        pb.INFERENCE_PROVIDER,
+        pb.WORKER_INFERENCE,
     ]
 
 

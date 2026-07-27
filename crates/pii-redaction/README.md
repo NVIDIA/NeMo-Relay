@@ -194,7 +194,7 @@ observability fields, decoding provider payloads, batching text, enforcing the
 deadline and failure policy, validating detections, and replacing accepted
 spans.
 
-Configure the provider by its host-qualified name:
+Configure worker inference by its host-qualified name:
 
 ```toml
 [[components]]
@@ -223,9 +223,9 @@ max_latency_ms = 250
 
 The backend name is `<plugin_id>/<registration_name>`. For example, a worker
 with plugin ID `acme.pii_worker` that calls
-`register_inference_provider("detector", "nemo.relay.pii_detection.v1", ...)`
+`register_worker_inference("detector", "nemo.relay.pii_detection.v1", ...)`
 is selected as `acme.pii_worker/detector`. Relay verifies the PII contract,
-installs worker providers before static components initialize, and removes PII
+installs worker inference before static components initialize, and removes PII
 sanitizers before stopping their worker.
 
 Use profiles to compose deterministic and contextual detection. The lower
@@ -272,11 +272,11 @@ a classifier unless that is an explicit policy choice.
 
 Relay accepts detections whose confidence is at least `min_score`, which
 defaults to `0.4`. `excluded_labels` is an exact, case-sensitive denylist for
-provider labels that should remain visible. The host applies both settings
-after validating the complete provider response; workers do not own the final
+detection labels that should remain visible. The host applies both settings
+after validating the complete worker response; workers do not own the final
 redaction policy.
 
-Provider failures, timeouts, malformed responses, invalid UTF-8 boundaries,
+Worker failures, timeouts, malformed responses, invalid UTF-8 boundaries,
 overlapping spans, and input-limit violations fail closed for the affected
 batch. If a configured codec cannot decode or safely re-encode an LLM payload,
 Relay omits that request or response payload from the emitted event; it does not
@@ -284,11 +284,11 @@ retry normalized selectors against the raw provider shape.
 `allow_network = true` is rejected; this lane is for same-machine inference.
 This setting is a configuration invariant, not a network sandbox: Relay's
 worker launcher does not currently prevent a worker process from opening
-sockets. Only install providers whose packaging and runtime behavior satisfy
+sockets. Only install workers whose packaging and runtime behavior satisfy
 that policy. The default deadline is 250 ms for the complete selected payload,
-including every provider batch. Configuration above 60 seconds is rejected.
+including every inference batch. Configuration above 60 seconds is rejected.
 
-### Provider Contract
+### PII Detection Contract
 
 The worker receives a versioned JSON request:
 
@@ -320,16 +320,16 @@ It returns detections using UTF-8 byte offsets:
 }
 ```
 
-The provider performs inference only. It must not choose Relay surfaces,
+The worker performs inference only. It must not choose Relay surfaces,
 traverse arbitrary event fields, or apply replacements itself. Rust and Python
 workers have SDK helpers for this registration. Other languages can implement
 the same `grpc-v1` protobuf contract directly; Rust, Python, and Node hosts all
 consume it through the shared core runtime.
 
-### Optional Rampart Provider
+### Optional Rampart Worker
 
 The source tree includes an optional
-[Rampart worker](./providers/rampart/README.md) that implements this provider
+[Rampart worker](./workers/rampart/README.md) that implements this detection
 contract with a pinned ONNX token-classification model. It runs in a
 Relay-managed Python worker process, keeps ONNX dependencies out of the host,
 and complements the built-in deterministic recognizers. The model is prefetched

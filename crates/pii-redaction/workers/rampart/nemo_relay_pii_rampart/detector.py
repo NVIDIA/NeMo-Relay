@@ -210,7 +210,7 @@ class RampartDetector:
         return detector
 
     def detect_request(self, request: Any) -> dict[str, Any]:
-        """Validate one provider request and return versioned UTF-8 spans."""
+        """Validate one detection request and return versioned UTF-8 spans."""
         texts, requested_model, profile = _parse_request(request)
         if requested_model is not None and requested_model != DEFAULT_MODEL_ID:
             raise ValueError(f"request model_id {requested_model!r} does not match loaded model {DEFAULT_MODEL_ID!r}")

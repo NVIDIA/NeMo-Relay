@@ -129,18 +129,18 @@ incompatible raw provider shape.
 ## Current Boundaries
 
 This plugin is intentionally scoped to a deterministic built-in backend plus a
-local worker-provider extension point.
+local worker inference extension point.
 
 In particular:
 
-- Local-model providers are optional dynamic plugins. They register a
+- Local-model workers are optional dynamic plugins. They register a
   language-neutral JSON request-response contract through the `grpc-v1`
   worker protocol.
 - The plugin does not mutate the real callback arguments or return values.
 - `target_path_patterns` supports `*` as one complete JSON-pointer path
   segment. It does not support recursive or partial-segment matching.
 - `allow_network = false` prohibits network inference by contract, but the
-  worker process is not a network sandbox. Install only trusted providers.
+  worker process is not a network sandbox. Install only trusted workers.
 
 ## Pages
 

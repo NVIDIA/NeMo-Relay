@@ -28,8 +28,8 @@ use super::local::{register_local_backend, validate_local_backend_config};
 
 /// The plugin kind reserved for the built-in privacy component.
 pub const PII_REDACTION_PLUGIN_KIND: &str = "pii_redaction";
-/// Versioned inference contract implemented by PII detection providers.
-pub const PII_DETECTION_PROVIDER_CONTRACT: &str = "nemo.relay.pii_detection.v1";
+/// Versioned inference contract implemented by PII detection workers.
+pub const PII_DETECTION_CONTRACT: &str = "nemo.relay.pii_detection.v1";
 pub(super) const DEFAULT_LOCAL_MODEL_LATENCY_MS: u64 = 250;
 pub(super) const DEFAULT_LOCAL_MODEL_MIN_SCORE: f64 = 0.4;
 pub(super) const MAX_LOCAL_MODEL_LATENCY_MS: u64 = 60_000;
@@ -271,17 +271,17 @@ impl Default for BuiltinBackendConfig {
     }
 }
 
-/// Local-backend settings for a same-machine local-model provider.
+/// Local-backend settings for same-machine worker inference.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LocalBackendConfig {
-    /// Registered local-model provider identifier.
+    /// Registered worker inference identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
-    /// Optional model identifier passed to the provider.
+    /// Optional model identifier passed to the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
-    /// Optional detector profile passed to the provider.
+    /// Optional detector profile passed to the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detector_profile: Option<String>,
     /// Exact JSON-pointer paths to inspect. Empty means every string leaf.
@@ -290,19 +290,19 @@ pub struct LocalBackendConfig {
     /// JSON-pointer patterns to inspect. A `*` segment matches one path segment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_path_patterns: Vec<String>,
-    /// Minimum provider confidence accepted for redaction.
+    /// Minimum detection confidence accepted for redaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_score: Option<f64>,
-    /// Provider labels that should not be redacted.
+    /// Detection labels that should not be redacted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded_labels: Vec<String>,
     /// Replacement applied to every accepted detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement: Option<String>,
-    /// Whether the provider may use network calls.
+    /// Whether the worker may use network calls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_network: Option<bool>,
-    /// Total provider deadline for one selected payload in milliseconds.
+    /// Total worker inference deadline for one selected payload in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_latency_ms: Option<u64>,
 }

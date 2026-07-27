@@ -70,8 +70,8 @@ pub mod shared_runtime;
 pub mod stream;
 
 #[cfg(test)]
-#[path = "../tests/unit/inference_provider_tests.rs"]
-mod inference_provider_tests;
-#[cfg(test)]
 #[path = "../tests/unit/types_tests.rs"]
 mod types_tests;
+#[cfg(test)]
+#[path = "../tests/unit/worker_inference_tests.rs"]
+mod worker_inference_tests;

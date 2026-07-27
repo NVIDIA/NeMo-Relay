@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Rampart PII Provider
+# Rampart PII Worker
 
 This optional manifest-backed Python worker runs the
 [`nationaldesignstudio/rampart`](https://huggingface.co/nationaldesignstudio/rampart)
@@ -26,7 +26,7 @@ nemo-relay plugins add ./relay-plugin.toml
 nemo-relay plugins enable nemo_relay.pii_rampart
 ```
 
-If the provider package is already installed, run
+If the worker package is already installed, run
 `nemo-relay-pii-rampart-prefetch` directly. `plugins add` creates a separate
 Relay-managed Python environment from the same source directory.
 
@@ -119,7 +119,7 @@ target_path_patterns = [
 ]
 ```
 
-`allow_network = false` means provider inference is local. It does not sandbox
+`allow_network = false` means worker inference is local. It does not sandbox
 the worker. `local_files_only` must remain `true`; activation-time model
 acquisition is not supported.
 
@@ -129,24 +129,24 @@ local-model profile for names and contextual identifiers. Keep the local-model
 profile limited to normalized content paths. Classifying every string leaf can
 produce false positives on model names, region names, UUIDs, trace IDs, and
 other machine identifiers. Relay, not the worker, applies `min_score` and
-optional `excluded_labels` policy after validating the provider response.
+optional `excluded_labels` policy after validating the worker response.
 
 ## Runtime Bounds
 
-- At most 64 texts and 64 KiB of UTF-8 text are accepted per provider request.
+- At most 64 texts and 64 KiB of UTF-8 text are accepted per detection request.
 - Each text is limited to 16 KiB.
 - Long inputs use overlapping 510-token windows, with 64 content tokens of
   overlap.
 - ONNX inference batches and total windows are bounded by worker configuration.
-- Requests above the provider bounds return an error; the PII component then
+- Requests above the worker bounds return an error; the PII component then
   fails closed for the affected batch.
-- `max_latency_ms` is one total budget for all provider batches selected from
+- `max_latency_ms` is one total budget for all inference batches selected from
   one payload.
 - CPU inference is serialized per worker process. Host deadlines cancel the
   RPC, while already-running native inference is allowed to finish before its
   admission slot is released.
 - Use a `max_latency_ms` of at least 5000 when the selected payload can approach
-  the 64 KiB provider-request limit. Smaller content-only payloads normally
+  the 64 KiB detection-request limit. Smaller content-only payloads normally
   complete much faster. Benchmark representative inputs on deployment
   hardware before lowering the deadline.
 

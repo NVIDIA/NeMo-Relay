@@ -363,7 +363,7 @@ class AllSurfacesPlugin(WorkerPlugin):
             async for chunk in stream:
                 yield _tag(chunk, "llm_stream_execution")
 
-        async def inference_provider(request: Json) -> Json:
+        async def worker_inference(request: Json) -> Json:
             return _tag(request, "local_model")
 
         ctx.register_subscriber("subscriber", subscriber)
@@ -381,10 +381,10 @@ class AllSurfacesPlugin(WorkerPlugin):
         ctx.register_llm_request_intercept("llm_request", llm_request, priority=9, break_chain=True)
         ctx.register_llm_execution_intercept("llm_execution", llm_execution, priority=10)
         ctx.register_llm_stream_execution_intercept("llm_stream_execution", llm_stream_execution, priority=11)
-        ctx.register_inference_provider(
+        ctx.register_worker_inference(
             "local_model",
             "test.echo.v1",
-            inference_provider,
+            worker_inference,
         )
 
 
@@ -419,9 +419,9 @@ def test_generated_proto_matches_worker_contract():
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
     assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
     assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
-    assert pb.INFERENCE_PROVIDER == 40
+    assert pb.WORKER_INFERENCE == 40
     assert pb.Registration.DESCRIPTOR.fields_by_name["contract"].number == 5
-    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["provider"].number == 13
+    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["worker_inference"].number == 13
     assert pb.CUSTOM == 10
 
 
@@ -480,7 +480,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
         ("llm_request", pb.LLM_REQUEST_INTERCEPT, 9, True, ""),
         ("llm_execution", pb.LLM_EXECUTION_INTERCEPT, 10, False, ""),
         ("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT, 11, False, ""),
-        ("local_model", pb.INFERENCE_PROVIDER, 0, False, "test.echo.v1"),
+        ("local_model", pb.WORKER_INFERENCE, 0, False, "test.echo.v1"),
     ]
 
 
@@ -1457,7 +1457,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert llm_execution["next_llm"]["content"]["llm_execute_gpt-test"]
 
     local_model = await service.Invoke(
-        _provider_request("local_model", {"text": "private"}),
+        _worker_inference_request("local_model", {"text": "private"}),
         AbortContext(),
     )
     assert local_model.WhichOneof("result") == "json"
@@ -1481,7 +1481,7 @@ async def test_unary_invoke_failure_paths(service: _WorkerService):
     assert "not registered" in missing_handler.error.message
 
     missing_provider = await service.Invoke(
-        _provider_request("missing", {}),
+        _worker_inference_request("missing", {}),
         AbortContext(),
     )
     assert missing_provider.WhichOneof("result") == "error"
@@ -2773,12 +2773,12 @@ def _tool_request(registration_name: str, surface: int, value: Json) -> Any:
     )
 
 
-def _provider_request(registration_name: str, value: Json) -> Any:
+def _worker_inference_request(registration_name: str, value: Json) -> Any:
     return _invoke_request(
         registration_name,
-        pb.INFERENCE_PROVIDER,
+        pb.WORKER_INFERENCE,
         continuation_id="",
-        provider=_json_envelope(JSON_SCHEMA, value),
+        worker_inference=_json_envelope(JSON_SCHEMA, value),
     )
 
 
@@ -2870,5 +2870,5 @@ def _all_expected_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        pb.INFERENCE_PROVIDER,
+        pb.WORKER_INFERENCE,
     ]

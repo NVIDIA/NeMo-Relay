@@ -64,18 +64,7 @@ class ExamplePythonWorker(WorkerPlugin):
             )
             return tagged_args
 
-        async def echo_local_model(request: Json) -> Json:
-            return {
-                "provider": "python_grpc_worker",
-                "request": request,
-            }
-
         ctx.register_tool_request_intercept("tag_tool_request", tag_tool_request)
-        ctx.register_inference_provider(
-            "echo",
-            "examples.python_grpc_worker.echo.v1",
-            echo_local_model,
-        )
 
 
 def _tag_json(value: Json, tag: str) -> Json:

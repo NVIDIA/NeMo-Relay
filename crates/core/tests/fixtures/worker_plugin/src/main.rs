@@ -59,8 +59,8 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             ctx.register_subscriber("", |_| {});
             return Ok(());
         }
-        let inference_provider_names = config
-            .get("inference_provider_names")
+        let worker_inference_names = config
+            .get("worker_inference_names")
             .and_then(Json::as_array)
             .map(|names| {
                 names
@@ -72,21 +72,21 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             .unwrap_or_else(|| {
                 vec![
                     config
-                        .get("inference_provider_name")
+                        .get("worker_inference_name")
                         .and_then(Json::as_str)
                         .unwrap_or("fixture_local_model")
                         .to_string(),
                 ]
             });
-        for provider_name in inference_provider_names {
-            let callback_provider_name = provider_name.clone();
+        for inference_name in worker_inference_names {
+            let callback_inference_name = inference_name.clone();
             let exit_in_local_model = fixture_flag(config, "exit_in_local_model");
             let contract = config
-                .get("inference_provider_contract")
+                .get("worker_inference_contract")
                 .and_then(Json::as_str)
                 .unwrap_or(DEFAULT_INFERENCE_CONTRACT);
-            ctx.register_inference_provider(&provider_name, contract, move |request| {
-                let provider_name = callback_provider_name.clone();
+            ctx.register_worker_inference(&inference_name, contract, move |request| {
+                let inference_name = callback_inference_name.clone();
                 async move {
                     if exit_in_local_model {
                         std::process::exit(45);
@@ -115,12 +115,12 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                     Ok(json!({
                         "version": 1,
                         "request": request,
-                        "provider": provider_name
+                        "worker_inference": inference_name
                     }))
                 }
             });
         }
-        if fixture_flag(config, "provider_only") {
+        if fixture_flag(config, "worker_inference_only") {
             return Ok(());
         }
 

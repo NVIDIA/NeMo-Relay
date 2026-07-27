@@ -165,9 +165,9 @@ registers a tool request intercept that updates the request JSON and emits a
 mark through `PluginContext.runtime`. The `main` entrypoint blocks until Relay
 requests shutdown.
 
-### Provide local inference
+### Register worker inference
 
-Use `register_inference_provider` when a first-party Relay component owns a
+Use `register_worker_inference` when a first-party Relay component owns a
 versioned contract and needs an isolated detector or inference implementation:
 
 ```python
@@ -178,7 +178,7 @@ async def detect(request: Json) -> Json:
     }
 
 
-ctx.register_inference_provider(
+ctx.register_worker_inference(
     "detector",
     "acme.pii_detection.v1",
     detect,

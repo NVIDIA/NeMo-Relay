@@ -6,14 +6,14 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::plugin::{InferenceProviderDescriptor, InferenceProviderRegistry};
+use crate::plugin::{WorkerInferenceDescriptor, WorkerInferenceRegistry};
 
 #[test]
-fn provider_round_trips_json_and_receives_deadline() {
-    let registry = InferenceProviderRegistry::default();
+fn inference_round_trips_json_and_receives_deadline() {
+    let registry = WorkerInferenceRegistry::default();
     let _registration = registry
         .register(
-            InferenceProviderDescriptor::new("test-provider", "test.echo.v1").unwrap(),
+            WorkerInferenceDescriptor::new("test-inference", "test.echo.v1").unwrap(),
             Arc::new(|request, timeout| {
                 assert_eq!(timeout, Duration::from_millis(25));
                 Ok(json!({"request": request}))
@@ -21,9 +21,9 @@ fn provider_round_trips_json_and_receives_deadline() {
         )
         .unwrap();
 
-    let provider = registry.resolve("test-provider", "test.echo.v1").unwrap();
+    let inference = registry.resolve("test-inference", "test.echo.v1").unwrap();
     assert_eq!(
-        provider
+        inference
             .invoke(json!({"text": "hello"}), Duration::from_millis(25))
             .unwrap(),
         json!({"request": {"text": "hello"}})
@@ -31,64 +31,63 @@ fn provider_round_trips_json_and_receives_deadline() {
 }
 
 #[test]
-fn registration_owns_provider_lifetime() {
-    let registry = InferenceProviderRegistry::default();
+fn registration_owns_inference_lifetime() {
+    let registry = WorkerInferenceRegistry::default();
     let registration = registry
         .register(
-            InferenceProviderDescriptor::new("owned-provider", "test.echo.v1").unwrap(),
+            WorkerInferenceDescriptor::new("owned-inference", "test.echo.v1").unwrap(),
             Arc::new(|request, _| Ok(request)),
         )
         .unwrap();
 
-    assert!(registry.resolve("owned-provider", "test.echo.v1").is_ok());
+    assert!(registry.resolve("owned-inference", "test.echo.v1").is_ok());
     drop(registration);
-    assert!(registry.resolve("owned-provider", "test.echo.v1").is_err());
+    assert!(registry.resolve("owned-inference", "test.echo.v1").is_err());
 }
 
 #[test]
-fn duplicate_provider_names_are_rejected() {
-    let registry = InferenceProviderRegistry::default();
+fn duplicate_inference_names_are_rejected() {
+    let registry = WorkerInferenceRegistry::default();
     let _registration = registry
         .register(
-            InferenceProviderDescriptor::new("duplicate-provider", "test.echo.v1").unwrap(),
+            WorkerInferenceDescriptor::new("duplicate-inference", "test.echo.v1").unwrap(),
             Arc::new(|request, _| Ok(request)),
         )
         .unwrap();
     let duplicate = registry
         .register(
-            InferenceProviderDescriptor::new("duplicate-provider", "test.other.v1").unwrap(),
+            WorkerInferenceDescriptor::new("duplicate-inference", "test.other.v1").unwrap(),
             Arc::new(|request, _| Ok(request)),
         )
         .err()
-        .expect("duplicate provider names must fail");
+        .expect("duplicate inference names must fail");
 
     assert!(duplicate.to_string().contains("already registered"));
 }
 
 #[test]
-fn provider_names_are_normalized_consistently() {
-    let registry = InferenceProviderRegistry::default();
+fn inference_names_are_normalized_consistently() {
+    let registry = WorkerInferenceRegistry::default();
     let _registration = registry
         .register(
-            InferenceProviderDescriptor::new("  normalized-provider  ", "  test.echo.v1  ")
-                .unwrap(),
+            WorkerInferenceDescriptor::new("  normalized-inference  ", "  test.echo.v1  ").unwrap(),
             Arc::new(|request, _| Ok(request)),
         )
         .unwrap();
 
     assert!(
         registry
-            .resolve(" normalized-provider ", " test.echo.v1 ")
+            .resolve(" normalized-inference ", " test.echo.v1 ")
             .is_ok()
     );
 }
 
 #[test]
-fn provider_contract_mismatch_is_rejected_before_invocation() {
-    let registry = InferenceProviderRegistry::default();
+fn inference_contract_mismatch_is_rejected_before_invocation() {
+    let registry = WorkerInferenceRegistry::default();
     let _registration = registry
         .register(
-            InferenceProviderDescriptor::new("detector", "test.detector.v1").unwrap(),
+            WorkerInferenceDescriptor::new("detector", "test.detector.v1").unwrap(),
             Arc::new(|request, _| Ok(request)),
         )
         .unwrap();
@@ -102,12 +101,12 @@ fn provider_contract_mismatch_is_rejected_before_invocation() {
 }
 
 #[test]
-fn registries_isolate_provider_names_between_hosts() {
-    let first = InferenceProviderRegistry::default();
-    let second = InferenceProviderRegistry::default();
+fn registries_isolate_inference_names_between_hosts() {
+    let first = WorkerInferenceRegistry::default();
+    let second = WorkerInferenceRegistry::default();
     let _first_registration = first
         .register(
-            InferenceProviderDescriptor::new("shared-name", "test.echo.v1").unwrap(),
+            WorkerInferenceDescriptor::new("shared-name", "test.echo.v1").unwrap(),
             Arc::new(|request, _| Ok(request)),
         )
         .unwrap();
