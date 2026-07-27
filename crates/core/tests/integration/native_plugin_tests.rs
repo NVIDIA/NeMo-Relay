@@ -659,7 +659,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
 }
 
 #[tokio::test]
-async fn native_v3_async_registration_resolves_tool_request_intercepts() {
+async fn native_v3_async_registration_supports_all_middleware_kinds() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest_with_plugin_id_and_symbol(
