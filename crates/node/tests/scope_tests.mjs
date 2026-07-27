@@ -385,6 +385,7 @@ describe('Subscribers', () => {
       const scope = pushScope('prop_test', ScopeType.Function, null, null);
       popScope(scope);
       await flushSubscriberCallbacks();
+      await new Promise((resolve) => setImmediate(resolve));
       assert.ok(captured, 'Expected an event');
       assert.ok(typeof captured.uuid === 'string');
       assert.ok(typeof captured.timestamp === 'string');
