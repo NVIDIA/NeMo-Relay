@@ -415,7 +415,7 @@ impl PyAtofExporter {
 /// ```
 #[pyclass(name = "OpenTelemetryConfig")]
 pub struct PyOpenTelemetryConfig {
-    #[pyo3(get, set)]
+    #[pyo3(get, set, name = "type")]
     pub(crate) otel_type: String,
     #[pyo3(get, set)]
     pub(crate) transport: String,

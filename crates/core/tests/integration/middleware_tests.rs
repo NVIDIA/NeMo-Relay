@@ -979,6 +979,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
         attribute.key.as_str() == "nemo_relay.mark.orphan"
             && attribute.value == opentelemetry::Value::Bool(true)
     }));
+    assert!(openinference_mark.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "openinference.span.kind"
+            && attribute.value.to_string() == "CHAIN"
+    }));
     for (key, value) in [
         ("nemo_relay.mark.category", "custom"),
         (

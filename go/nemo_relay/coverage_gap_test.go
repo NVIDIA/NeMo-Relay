@@ -153,8 +153,8 @@ func assertClosedExporterFails(t *testing.T) {
 
 func assertZeroSubscriberConfigs(t *testing.T) {
 	t.Helper()
-	if _, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{}); err == nil {
-		t.Fatal("expected a required endpoint error")
+	if _, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{Type: "full"}); err == nil || err.Error() != "endpoint is required" {
+		t.Fatalf("expected endpoint is required error, got %v", err)
 	}
 }
 

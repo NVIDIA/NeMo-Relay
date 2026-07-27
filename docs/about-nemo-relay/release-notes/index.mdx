@@ -85,8 +85,9 @@ configurable mark and attribute-alias controls. Refer to
 for before-and-after configuration and binding API changes.
 
 Each `opentelemetry.endpoints` entry can resolve sensitive header values from
-environment variables through `header_env`. NeMo Relay validates the variable
-and snapshots its value when the plugin activates.
+environment variables through `header_env`. Plugin activation rejects missing
+variables, blank values, and duplicate header names, then snapshots each valid
+value for the endpoint.
 Process-global `OTEL_EXPORTER_OTLP_HEADERS` and
 `OTEL_EXPORTER_OTLP_TRACES_HEADERS` now fail construction or activation because
 their values cannot be isolated between endpoints.

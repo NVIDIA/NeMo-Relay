@@ -3,6 +3,8 @@
 
 //! OpenTelemetry GenAI semantic-convention projection.
 
+#![allow(deprecated)] // Generated GenAI constants are retained for the pinned v1.42-era schema.
+
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::scope::ScopeType;
 use crate::codec::request::ApiSpecificRequest;
@@ -67,7 +69,7 @@ pub(super) fn span_kind(event: &Event) -> SpanKind {
 pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
     attributes.push(KeyValue::new(
-        "gen_ai.operation.name",
+        semconv::GEN_AI_OPERATION_NAME,
         operation_name(event),
     ));
 
@@ -113,9 +115,13 @@ fn push_embedding_response_attributes(attributes: &mut Vec<KeyValue>, event: &Ev
     }
     if let Some(value) = scalar_i64(
         event,
-        &["gen_ai.usage.input_tokens", "input_tokens", "prompt_tokens"],
+        &[
+            semconv::GEN_AI_USAGE_INPUT_TOKENS,
+            "input_tokens",
+            "prompt_tokens",
+        ],
     ) {
-        attributes.push(KeyValue::new("gen_ai.usage.input_tokens", value));
+        attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_INPUT_TOKENS, value));
     }
 }
 
@@ -177,7 +183,7 @@ fn push_agent_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
 
 fn push_model_attribute(attributes: &mut Vec<KeyValue>, event: &Event) {
     if let Some(model) = request_model(event) {
-        attributes.push(KeyValue::new("gen_ai.request.model", model));
+        attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_MODEL, model));
     }
 }
 
@@ -192,7 +198,7 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         .clone()
         .or_else(|| event.model_name().map(ToOwned::to_owned))
     {
-        attributes.push(KeyValue::new("gen_ai.request.model", model));
+        attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_MODEL, model));
     }
     if let Some(params) = request.params.as_ref() {
         if let Some(value) = params.temperature {
@@ -274,8 +280,16 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         ));
     }
     if let Some(usage) = response.usage.as_ref() {
-        if let Some(value) = usage.prompt_tokens.and_then(to_i64) {
-            attributes.push(KeyValue::new("gen_ai.usage.input_tokens", value));
+        let input_tokens = usage
+            .prompt_tokens
+            .unwrap_or_default()
+            .saturating_add(usage.cache_read_tokens.unwrap_or_default())
+            .saturating_add(usage.cache_write_tokens.unwrap_or_default());
+        if input_tokens > 0 {
+            attributes.push(KeyValue::new(
+                semconv::GEN_AI_USAGE_INPUT_TOKENS,
+                input_tokens as i64,
+            ));
         }
         if let Some(value) = usage.completion_tokens.and_then(to_i64) {
             attributes.push(KeyValue::new("gen_ai.usage.output_tokens", value));
@@ -293,7 +307,7 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
 }
 
 fn push_tool_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
-    attributes.push(KeyValue::new("gen_ai.tool.name", tool_name(event)));
+    attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_NAME, tool_name(event)));
     if let Some(value) = scalar_string(event, &["gen_ai.tool.type", "tool_type"]) {
         attributes.push(KeyValue::new("gen_ai.tool.type", value));
     }
@@ -337,7 +351,12 @@ fn request_model(event: &Event) -> Option<String> {
         .normalized_llm_request()
         .and_then(|request| request.as_ref().model.clone())
         .or_else(|| event.model_name().map(ToOwned::to_owned))
-        .or_else(|| scalar_string(event, &["gen_ai.request.model", "model", "model_name"]))
+        .or_else(|| {
+            scalar_string(
+                event,
+                &[semconv::GEN_AI_REQUEST_MODEL, "model", "model_name"],
+            )
+        })
 }
 
 fn provider_name(event: &Event) -> Option<String> {
@@ -386,7 +405,7 @@ fn agent_name(event: &Event) -> String {
 }
 
 fn tool_name(event: &Event) -> String {
-    scalar_string(event, &["gen_ai.tool.name"]).unwrap_or_else(|| event.name().to_string())
+    scalar_string(event, &[semconv::GEN_AI_TOOL_NAME]).unwrap_or_else(|| event.name().to_string())
 }
 
 fn data_source_id(event: &Event) -> Option<String> {

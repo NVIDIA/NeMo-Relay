@@ -1013,7 +1013,7 @@ class OpenTelemetryConfig:
     """
 
     transport: str
-    otel_type: Literal["full", "gen_ai", "openinference"]
+    type: Literal["full", "gen_ai", "openinference"]
     endpoint: str
     service_name: str
     service_namespace: Optional[str]

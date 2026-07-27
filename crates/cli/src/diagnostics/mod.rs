@@ -22,7 +22,7 @@ use render::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use futures_util::SinkExt;
+use futures_util::{SinkExt, future::join_all};
 use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
 use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
@@ -649,35 +649,42 @@ async fn observability_http_exporter_checks(config: &Value) -> Vec<Check> {
     else {
         return Vec::new();
     };
-    let mut checks = Vec::with_capacity(endpoints.len());
-    for (index, endpoint) in endpoints.iter().enumerate() {
-        let endpoint_type = endpoint
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let label = "OpenTelemetry endpoint";
-        let transport = endpoint
-            .get("transport")
-            .and_then(Value::as_str)
-            .unwrap_or("http_binary");
-        checks.push(match endpoint.get("endpoint").and_then(Value::as_str) {
-            Some(url) => {
-                let mut check = if transport == "grpc" {
-                    probe_tcp_named(label, url).await
-                } else {
-                    probe_http_named(label, url).await
-                };
-                check.details = format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
-                check
-            }
-            None => Check {
-                name: label,
-                status: Status::Fail,
-                details: format!("endpoints[{index}] ({endpoint_type}): endpoint is required"),
-            },
-        });
-    }
-    checks
+    join_all(
+        endpoints
+            .iter()
+            .enumerate()
+            .map(|(index, endpoint)| async move {
+                let endpoint_type = endpoint
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let label = "OpenTelemetry endpoint";
+                let transport = endpoint
+                    .get("transport")
+                    .and_then(Value::as_str)
+                    .unwrap_or("http_binary");
+                match endpoint.get("endpoint").and_then(Value::as_str) {
+                    Some(url) => {
+                        let mut check = if transport == "grpc" {
+                            probe_tcp_named(label, url).await
+                        } else {
+                            probe_http_named(label, url).await
+                        };
+                        check.details =
+                            format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
+                        check
+                    }
+                    None => Check {
+                        name: label,
+                        status: Status::Fail,
+                        details: format!(
+                            "endpoints[{index}] ({endpoint_type}): endpoint is required"
+                        ),
+                    },
+                }
+            }),
+    )
+    .await
 }
 
 fn observability_component_config(plugin_value: &Value) -> Option<&Value> {

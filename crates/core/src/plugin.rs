@@ -1294,15 +1294,14 @@ fn merge_plugin_config_value(
 }
 
 fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> bool {
-    path.len() == 1
-        || (is_observability
-            && matches!(
-                path,
-                [section, field]
-                    if (section == "atof" && field == "sinks")
-                        || (section == "opentelemetry" && field == "endpoints")
-                        || (section == "atif" && field == "storage")
-            ))
+    is_observability
+        && matches!(
+            path,
+            [section, field]
+                if (section == "atof" && field == "sinks")
+                    || (section == "opentelemetry" && field == "endpoints")
+                    || (section == "atif" && field == "storage")
+        )
 }
 
 /// Recursively merges `right` into a `left` JSON object; arrays and scalars are replaced.

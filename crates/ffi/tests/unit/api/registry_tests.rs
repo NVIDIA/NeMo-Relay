@@ -9,54 +9,73 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
     let (sender, receiver) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 4096];
-        let (header_end, content_length) = loop {
-            let read = stream.read(&mut buffer).unwrap();
-            assert!(
-                read > 0,
-                "collector connection closed before request headers"
-            );
-            request.extend_from_slice(&buffer[..read]);
-            if let Some(header_end) = request.windows(4).position(|value| value == b"\r\n\r\n") {
-                let header_end = header_end + 4;
-                let headers = String::from_utf8_lossy(&request[..header_end]);
-                let content_length = headers
-                    .lines()
-                    .find_map(|line| {
-                        line.split_once(':').and_then(|(name, value)| {
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().unwrap())
-                        })
-                    })
-                    .expect("OTLP request must include content-length");
-                break (header_end, content_length);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last_request = None;
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    let (header_end, content_length) = loop {
+                        let read = stream.read(&mut buffer).unwrap();
+                        assert!(
+                            read > 0,
+                            "collector connection closed before request headers"
+                        );
+                        request.extend_from_slice(&buffer[..read]);
+                        if let Some(header_end) =
+                            request.windows(4).position(|value| value == b"\r\n\r\n")
+                        {
+                            let header_end = header_end + 4;
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    line.split_once(':').and_then(|(name, value)| {
+                                        name.eq_ignore_ascii_case("content-length")
+                                            .then(|| value.trim().parse::<usize>().unwrap())
+                                    })
+                                })
+                                .expect("OTLP request must include content-length");
+                            break (header_end, content_length);
+                        }
+                    };
+                    while request.len() < header_end + content_length {
+                        let read = stream.read(&mut buffer).unwrap();
+                        assert!(read > 0, "collector connection closed before request body");
+                        request.extend_from_slice(&buffer[..read]);
+                    }
+                    sender
+                        .send(request[header_end..header_end + content_length].to_vec())
+                        .unwrap();
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    last_request = Some(Instant::now());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if last_request.is_some_and(|last| last.elapsed() >= Duration::from_millis(250))
+                    {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("collector accept failed: {error}"),
             }
-        };
-        while request.len() < header_end + content_length {
-            let read = stream.read(&mut buffer).unwrap();
-            assert!(read > 0, "collector connection closed before request body");
-            request.extend_from_slice(&buffer[..read]);
         }
-
-        sender
-            .send(request[header_end..header_end + content_length].to_vec())
-            .unwrap();
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
-            .unwrap();
     });
     (format!("http://{address}/v1/traces"), receiver, handle)
 }

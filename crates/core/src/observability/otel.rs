@@ -50,7 +50,7 @@ use opentelemetry_sdk::trace::{
 };
 use uuid::Uuid;
 
-const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
+pub(super) const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
 
 use opentelemetry_otlp::WithTonicConfig;
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
@@ -320,6 +320,9 @@ impl Default for OpenTelemetrySubscriberOptions {
 }
 
 struct Inner {
+    // Keep `processor` before `_runtime`: the processor owns the
+    // `SdkTracerProvider` and must be dropped before `ExporterRuntime` joins
+    // and tears down its Tokio runtime. Do not reorder these fields.
     processor: Arc<Mutex<OtelEventProcessor>>,
     subscriber: EventSubscriberFn,
     _runtime: Option<ExporterRuntime>,
@@ -873,6 +876,7 @@ impl OtelEventProcessor {
 
     fn process_start(&mut self, event: &Event) {
         self.remove_completed_span_context(event.uuid());
+        self.remove_suppressed_parent_context(event.uuid());
         let parent_context = self.parent_context(event);
         if self.otel_type == OpenTelemetryType::GenAi && !super::otel_genai::supports(event) {
             let parent_span_context = parent_context.span().span_context().clone();
@@ -1099,6 +1103,12 @@ impl OtelEventProcessor {
         self.completed_span_contexts.remove(&uuid);
         self.completed_span_order
             .retain(|completed_uuid| *completed_uuid != uuid);
+    }
+
+    fn remove_suppressed_parent_context(&mut self, uuid: Uuid) {
+        self.suppressed_parent_contexts.remove(&uuid);
+        self.suppressed_parent_order
+            .retain(|suppressed_uuid| *suppressed_uuid != uuid);
     }
 
     fn record_completed_span_context(&mut self, uuid: Uuid, span_context: SpanContext) {

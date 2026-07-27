@@ -176,7 +176,12 @@ fn build_otel_config(
     options: OpenTelemetryConfig,
 ) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
-    let endpoint = options.endpoint;
+    let endpoint = options.endpoint.trim().to_string();
+    if endpoint.is_empty() {
+        return Err(napi::Error::from_reason(
+            "endpoint must be a nonblank string",
+        ));
+    }
     let transport = parse_otel_transport(options.transport)?;
     let service_name = options
         .service_name

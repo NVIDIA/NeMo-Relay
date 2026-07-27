@@ -494,7 +494,7 @@ fn reset_global() {
 #[test]
 fn test_layer_config_overlay_wins() {
     // The overlay is the higher-precedence layer: it overrides shared component fields, deep-merges
-    // nested config objects, concatenates config lists, appends overlay-only kinds, preserves
+    // nested config objects, replaces ordinary config lists, appends overlay-only kinds, preserves
     // base-only kinds, replaces top-level scalars, and recursively merges top-level objects
     // (policy).
     let base = json!({
@@ -553,8 +553,8 @@ fn test_layer_config_overlay_wins() {
     );
     assert_eq!(
         alpha["config"]["list"],
-        json!([9, 1, 2, 3]),
-        "config lists concatenate with higher-precedence entries first"
+        json!([9]),
+        "ordinary config lists are replaced by higher-precedence entries"
     );
 
     // Base-only component is preserved.

@@ -694,7 +694,7 @@ fn direct_config_rejects_process_global_otel_headers() {
         "OTEL_EXPORTER_OTLP_HEADERS",
         "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
     ] {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
             .arg("observability::otel::tests::direct_config_rejects_process_global_otel_headers")
             .env(CHILD_MARKER, variable)
@@ -704,9 +704,14 @@ fn direct_config_rejects_process_global_otel_headers() {
             } else {
                 "OTEL_EXPORTER_OTLP_HEADERS"
             })
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("test result: ok. 1 passed"),
+            "child test filter did not execute exactly one test: {stdout}"
+        );
     }
 }
 
@@ -1380,7 +1385,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
     );
     assert_eq!(
         attributes.get("gen_ai.usage.input_tokens"),
-        Some(&"13".to_string())
+        Some(&"21".to_string())
     );
     assert_eq!(
         attributes.get("gen_ai.usage.output_tokens"),

@@ -963,6 +963,9 @@ fn register_opentelemetry(
         .iter()
         .map(|subscriber| subscriber.subscriber())
         .collect::<Vec<_>>();
+    // Retain the subscribers as long as the registered fan-out callback exists.
+    // Their tracer providers and exporter runtimes must outlive event delivery.
+    let delivery_subscribers = subscribers.clone();
     ctx.add_registration(PluginRegistration::new(
         "observability",
         ctx.qualify_name("opentelemetry.shutdown"),
@@ -970,7 +973,10 @@ fn register_opentelemetry(
     ));
     ctx.register_subscriber(
         "opentelemetry",
-        Arc::new(move |event| deliver_opentelemetry_event(&callbacks, event)),
+        Arc::new(move |event| {
+            let _keep_exporters_alive = &delivery_subscribers;
+            deliver_opentelemetry_event(&callbacks, event);
+        }),
     )?;
     Ok(())
 }
@@ -2024,7 +2030,10 @@ fn validate_opentelemetry_endpoint_fields(
     let Some(endpoints) = opentelemetry.get("endpoints").and_then(Json::as_array) else {
         return;
     };
-    for (index, endpoint) in endpoints.iter().filter_map(Json::as_object).enumerate() {
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let Some(endpoint) = endpoint.as_object() else {
+            continue;
+        };
         for field in endpoint
             .keys()
             .filter(|field| !ALLOWED.contains(&field.as_str()))

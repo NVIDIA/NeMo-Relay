@@ -3211,7 +3211,7 @@ fn completed_span_context_cache_evicts_oldest_parent_contexts() {
         provider.clone(),
         "test-scope".to_string(),
     );
-    let span_count = 4096 + 2;
+    let span_count = crate::observability::otel::COMPLETED_SPAN_CONTEXT_LIMIT + 2;
     let mut completed_uuids = Vec::with_capacity(span_count);
 
     for index in 0..span_count {
