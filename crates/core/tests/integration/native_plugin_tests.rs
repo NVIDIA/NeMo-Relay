@@ -722,6 +722,45 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     assert_eq!(llm_response["content"], "native async response");
     flush_subscribers().expect("async native LLM events should flush");
 
+    let stream_chunks = Arc::new(Mutex::new(Vec::<Json>::new()));
+    let collected_chunks = stream_chunks.clone();
+    let finalized_chunks = stream_chunks.clone();
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("async-llm-stream")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "native async stream"}),
+            })
+            .func(Arc::new(|_request| {
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                        "content": "native async stream response"
+                    }))])))
+                })
+            }))
+            .collector(Box::new(move |chunk| {
+                collected_chunks.lock().unwrap().push(chunk);
+                Ok(())
+            }))
+            .finalizer(Box::new(move || {
+                Json::Array(finalized_chunks.lock().unwrap().clone())
+            }))
+            .build(),
+    )
+    .await
+    .expect("v3 async LLM stream middleware should settle");
+    assert_eq!(
+        stream
+            .next()
+            .await
+            .expect("stream should contain a chunk")
+            .expect("stream chunk should succeed")["content"],
+        "native async stream response"
+    );
+    assert!(stream.next().await.is_none());
+    flush_subscribers().expect("async native LLM stream events should flush");
+
     let pending = tokio::spawn(async {
         tool_request_intercepts("async-pending", json!({"input": true})).await
     });

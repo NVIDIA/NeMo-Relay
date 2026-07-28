@@ -17,6 +17,216 @@ extern "C" fn free_arc_counter(user_data: *mut libc::c_void) {
     counter.fetch_add(1, Ordering::SeqCst);
 }
 
+unsafe extern "C" fn async_json_passthrough_callback(
+    user_data: *mut libc::c_void,
+    invocation_json: *const c_char,
+    completion: *const NemoRelayAsyncCompletion,
+) -> NemoRelayAsyncCallbackState {
+    let kind = unsafe { *(user_data.cast::<usize>()) };
+    let invocation: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(invocation_json) }
+            .to_str()
+            .expect("invocation must be UTF-8"),
+    )
+    .expect("invocation must be JSON");
+    let value = match kind {
+        0 => invocation["value"].clone(),
+        1 | 3 => Json::Null,
+        2 | 4 => invocation["request"].clone(),
+        5 => invocation["response"].clone(),
+        6 => json!({
+            "request": invocation["request"],
+            "annotated_request": invocation["annotated"],
+            "pending_marks": [],
+            "optimization_contributions": [],
+        }),
+        7 => invocation["fields"].clone(),
+        _ => unreachable!("test callback kind must be known"),
+    };
+    let value = CString::new(value.to_string()).expect("JSON has no NUL");
+    assert_eq!(
+        unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
+        NemoRelayStatus::Ok
+    );
+    NemoRelayAsyncCallbackState::Complete
+}
+
+fn async_callback_user_data(kind: usize) -> *mut libc::c_void {
+    Box::into_raw(Box::new(kind)).cast()
+}
+
+unsafe extern "C" fn free_async_callback_user_data(user_data: *mut libc::c_void) {
+    unsafe { drop(Box::from_raw(user_data.cast::<usize>())) };
+}
+
+unsafe extern "C" fn async_next_callback(
+    _user_data: *mut libc::c_void,
+    invocation_json: *const c_char,
+    next: *const NemoRelayAsyncNext,
+    completion: *const NemoRelayAsyncCompletion,
+) -> NemoRelayAsyncCallbackState {
+    let invocation: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(invocation_json) }
+            .to_str()
+            .expect("invocation must be UTF-8"),
+    )
+    .expect("invocation must be JSON");
+    let value = invocation
+        .get("value")
+        .or_else(|| invocation.get("request"))
+        .expect("intercept invocation must carry a value")
+        .to_string();
+    let value = CString::new(value).expect("JSON has no NUL");
+    assert_eq!(
+        unsafe { nemo_relay_async_next_invoke(next, value.as_ptr(), completion) },
+        NemoRelayStatus::Ok
+    );
+    unsafe {
+        nemo_relay_async_next_release(next);
+        nemo_relay_async_completion_release(completion);
+    }
+    NemoRelayAsyncCallbackState::Pending
+}
+
+unsafe extern "C" fn async_tool_outcome_callback(
+    _user_data: *mut libc::c_void,
+    invocation_json: *const c_char,
+    _next: *const NemoRelayAsyncNext,
+    completion: *const NemoRelayAsyncCompletion,
+) -> NemoRelayAsyncCallbackState {
+    let invocation: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(invocation_json) }
+            .to_str()
+            .expect("invocation must be UTF-8"),
+    )
+    .expect("invocation must be JSON");
+    let value =
+        CString::new(json!({"result": invocation["value"], "pending_marks": []}).to_string())
+            .expect("JSON has no NUL");
+    assert_eq!(
+        unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
+        NemoRelayStatus::Ok
+    );
+    NemoRelayAsyncCallbackState::Complete
+}
+
+#[test]
+fn async_callback_wrappers_cover_all_middleware_shapes() {
+    let tool_json = wrap_async_tool_json_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(0),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(tool_json("tool".into(), json!({"value": true}))).unwrap(),
+        json!({"value": true})
+    );
+
+    let tool_conditional = wrap_async_tool_conditional_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(1),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(tool_conditional("tool".into(), json!({}))).unwrap(),
+        None
+    );
+
+    let llm_conditional = wrap_async_llm_conditional_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(3),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(resolve(llm_conditional(make_request())).unwrap(), None);
+
+    let request_sanitizer = wrap_async_llm_sanitize_request_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(4),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(request_sanitizer(
+            make_request(),
+            nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+        ))
+        .unwrap(),
+        Some(make_request())
+    );
+
+    let response_sanitizer = wrap_async_llm_sanitize_response_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(5),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(response_sanitizer(
+            json!({"response": true}),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+        ))
+        .unwrap(),
+        Some(json!({"response": true}))
+    );
+
+    let request_intercept = wrap_async_llm_request_intercept_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(6),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(request_intercept("llm".into(), make_request(), None))
+            .unwrap()
+            .request,
+        make_request()
+    );
+
+    let event = Event::Scope(nemo_relay::api::event::ScopeEvent::new(
+        nemo_relay::api::event::BaseEvent::builder()
+            .name("async-event")
+            .build(),
+        nemo_relay::api::event::ScopeCategory::Start,
+        Vec::new(),
+        nemo_relay::api::event::EventCategory::llm(),
+        None,
+    ));
+    let fields = EventSanitizeFields::builder()
+        .data(json!({"safe": true}))
+        .build();
+    let event_sanitizer = wrap_async_event_sanitize_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(7),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(event_sanitizer(event, fields.clone())).unwrap(),
+        fields
+    );
+}
+
+#[test]
+fn async_execution_wrappers_continue_tool_and_llm_calls() {
+    let tool_intercept = wrap_async_tool_execution_intercept_fn(
+        async_tool_outcome_callback,
+        std::ptr::null_mut(),
+        None,
+    );
+    let tool_next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    assert_eq!(
+        resolve(tool_intercept("tool", json!({"ok": true}), tool_next))
+            .unwrap()
+            .result,
+        json!({"ok": true})
+    );
+
+    let llm_intercept =
+        wrap_async_llm_execution_intercept_fn(async_next_callback, std::ptr::null_mut(), None);
+    let llm_next: LlmExecutionNextFn =
+        Arc::new(|request| Box::pin(async move { Ok(json!({"model": request.content["model"]})) }));
+    assert_eq!(
+        resolve(llm_intercept("llm", make_request(), llm_next)).unwrap(),
+        json!({"model": "test-model"})
+    );
+}
+
 fn user_data_counter() -> (*mut libc::c_void, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let ptr = Box::into_raw(Box::new(counter.clone())) as *mut libc::c_void;
