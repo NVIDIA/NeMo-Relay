@@ -318,6 +318,12 @@ When `detector` is set and you do not specify `unmasked_prefix` or
 
 `target_paths` are exact JSON-pointer matches.
 
+Relay validates every configured path as RFC 6901 syntax before activating the
+component. The empty string selects the document root. Every other pointer must
+start with `/`, and `~` escapes must use `~0` for `~` or `~1` for `/`. Invalid
+pointers prevent activation instead of silently leaving the intended values
+unsanitized.
+
 The plugin uses different payload boundaries for tools and LLMs:
 
 - Tools use JSON-native payloads. Paths point into the emitted tool args or
