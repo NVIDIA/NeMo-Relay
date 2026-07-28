@@ -225,7 +225,7 @@ export interface PluginContext {
   registerToolConditionalExecutionGuardrail(
     name: string,
     priority: number,
-    callback: (name: string, args: Json) => string | null,
+    callback: (name: string, args: Json) => string | null | Promise<string | null>,
   ): void;
   /** Register an LLM sanitize-request guardrail. The callback receives `(request, context)`. */
   registerLlmSanitizeRequestGuardrail(
@@ -272,7 +272,7 @@ export interface PluginContext {
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (name: string, args: Json) => Json,
+    callback: (name: string, args: Json) => Json | Promise<Json>,
   ): void;
   /**
    * Register tool execution middleware that returns a canonical outcome.

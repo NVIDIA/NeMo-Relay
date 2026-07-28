@@ -788,7 +788,7 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
         Some(CategoryProfile::builder().subtype("llm.chunk").build()),
     ));
     let sanitized = callback(
-        chunk.clone(),
+        Arc::new(chunk.clone()),
         EventSanitizeFields {
             data: Some(json!({
                 "chunk_index": 2,
@@ -823,7 +823,7 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
         ),
     ));
     let sanitized = callback(
-        optimization.clone(),
+        Arc::new(optimization.clone()),
         EventSanitizeFields {
             data: Some(json!({
                 "producer": "neutral.router",
@@ -867,7 +867,7 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
         None,
     ));
     let sanitized = callback(
-        nested_agent,
+        Arc::new(nested_agent),
         EventSanitizeFields {
             data: Some(json!({
                 "request_id": "request-1",
@@ -962,7 +962,7 @@ async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
             None,
         ));
         let sanitized = callback(
-            event,
+            Arc::new(event),
             EventSanitizeFields {
                 data: None,
                 category_profile: None,
@@ -982,7 +982,7 @@ async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         None,
     ));
     let sanitized = callback(
-        malformed,
+        Arc::new(malformed),
         EventSanitizeFields {
             data: None,
             category_profile: None,
@@ -1012,7 +1012,7 @@ async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         Some(CategoryProfile::builder().subtype("llm.chunk").build()),
     ));
     let sanitized = callback(
-        mark.clone(),
+        Arc::new(mark.clone()),
         EventSanitizeFields {
             data: None,
             category_profile: mark.category_profile().cloned(),
@@ -1046,13 +1046,15 @@ async fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
 
     let preserve = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     assert_eq!(
-        preserve(event.clone(), fields.clone()).await.unwrap(),
+        preserve(Arc::new(event.clone()), fields.clone())
+            .await
+            .unwrap(),
         fields
     );
 
     let redact =
         crate::builtin::event_sanitize_callback(trajectory_backend(None, "redact_all_leaves"));
-    let sanitized = redact(event, fields).await.unwrap();
+    let sanitized = redact(Arc::new(event), fields).await.unwrap();
     assert_eq!(
         sanitized.data.unwrap(),
         json!({
@@ -1117,7 +1119,7 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
         None,
     ));
     let sanitized = callback(
-        event,
+        Arc::new(event),
         EventSanitizeFields {
             data: Some(json!({"already": "sanitized by the response callback"})),
             category_profile: Some(
@@ -1192,8 +1194,8 @@ async fn preserved_custom_marks_remain_eligible_for_a_later_email_profile() {
         .unwrap(),
     );
 
-    let fields = trajectory(event.clone(), fields).await.unwrap();
-    let sanitized = email(event, fields).await.unwrap();
+    let fields = trajectory(Arc::new(event.clone()), fields).await.unwrap();
+    let sanitized = email(Arc::new(event), fields).await.unwrap();
     assert_eq!(sanitized.data.as_ref().unwrap()["owner"], "[REDACTED]");
     assert_eq!(sanitized.data.as_ref().unwrap()["score"], 0.9);
     assert_eq!(
@@ -1505,7 +1507,7 @@ async fn event_sanitizer_transforms_data_category_profile_and_metadata_independe
         None,
     ));
     let sanitized = callback(
-        event,
+        Arc::new(event),
         EventSanitizeFields {
             data: Some(json!({"email": "person@example.com"})),
             category_profile: Some(
@@ -1551,7 +1553,7 @@ async fn llm_and_tool_scope_metadata_is_sanitized_without_reprocessing_typed_fie
             .subtype("person@example.com")
             .build();
         let sanitized = callback(
-            event,
+            Arc::new(event),
             EventSanitizeFields {
                 data: Some(json!({"content": "person@example.com"})),
                 category_profile: Some(original_profile.clone()),
@@ -1607,7 +1609,7 @@ async fn scope_event_sanitizer_respects_enabled_llm_and_tool_surfaces() {
                 .subtype("person@example.com")
                 .build();
             let sanitized = callback(
-                event,
+                Arc::new(event),
                 EventSanitizeFields {
                     data: Some(json!({"content": "person@example.com"})),
                     category_profile: Some(original_profile.clone()),
@@ -1643,7 +1645,7 @@ async fn event_sanitizer_discards_category_profile_when_sanitization_fails() {
         None,
     ));
     let sanitized = callback(
-        event,
+        Arc::new(event),
         EventSanitizeFields {
             data: None,
             category_profile: Some(CategoryProfile {

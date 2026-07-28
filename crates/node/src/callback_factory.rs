@@ -68,7 +68,11 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     promise(fn) {
       return function __nemo_relay_promise_wrapper(error, arg0, spread, next, resolve, reject) {
         if (error != null) {
-          reject(error);
+          let message = 'unknown error';
+          try {
+            message = String(error?.message ?? error);
+          } catch {}
+          reject(message);
           return;
         }
         Promise.resolve().then(() => (
@@ -80,6 +84,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           try {
             if (typeof error === 'string') {
               message = error;
+            } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+              message = String(error);
             } else if (error != null && typeof error.message === 'string') {
               message = error.message;
             }

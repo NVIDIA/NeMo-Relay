@@ -745,48 +745,47 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
         state.build_llm_start_event(&handle, None, None)
     };
     let queued_handle = handle.clone();
-    if let Some(event_sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) {
-        dispatch_transformed_event(
-            event,
-            Box::new(move |event| {
-                Box::pin(async move {
-                    let mut sanitized_request =
-                        NemoRelayContextState::llm_sanitize_request_snapshot_chain(
-                            request.clone(),
-                            LlmSanitizeRequestContext::default(),
-                            &entries,
-                        )
-                        .await;
-                    let request_changed = sanitized_request
-                        .as_ref()
-                        .is_some_and(|sanitized| sanitized != &request);
-                    let mut annotation = if sanitized_request.is_none() || request_changed {
-                        None
-                    } else {
-                        annotated_request
-                    };
-                    if !agent_is_fresh && let Some(sanitized_request) = sanitized_request.as_mut() {
-                        project_llm_request_to_current_user_turn(
-                            sanitized_request,
-                            &mut annotation,
-                            None,
-                        );
-                    }
-                    let input = sanitized_request
-                        .as_ref()
-                        .and_then(|request| serde_json::to_value(request).ok());
-                    let context = global_context();
-                    match context.read() {
-                        Ok(state) => state.build_llm_start_event(&queued_handle, input, annotation),
-                        Err(_) => event,
-                    }
-                })
-            }),
-            event_sanitizers,
-            &subscribers,
-            scope_stack,
-        );
-    }
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    dispatch_transformed_event(
+        event,
+        Box::new(move |event| {
+            Box::pin(async move {
+                let mut sanitized_request =
+                    NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+                        request.clone(),
+                        LlmSanitizeRequestContext::default(),
+                        &entries,
+                    )
+                    .await;
+                let request_changed = sanitized_request
+                    .as_ref()
+                    .is_some_and(|sanitized| sanitized != &request);
+                let mut annotation = if sanitized_request.is_none() || request_changed {
+                    None
+                } else {
+                    annotated_request
+                };
+                if !agent_is_fresh && let Some(sanitized_request) = sanitized_request.as_mut() {
+                    project_llm_request_to_current_user_turn(
+                        sanitized_request,
+                        &mut annotation,
+                        None,
+                    );
+                }
+                let input = sanitized_request
+                    .as_ref()
+                    .and_then(|request| serde_json::to_value(request).ok());
+                let context = global_context();
+                match context.read() {
+                    Ok(state) => state.build_llm_start_event(&queued_handle, input, annotation),
+                    Err(_) => event,
+                }
+            })
+        }),
+        event_sanitizers,
+        &subscribers,
+        scope_stack,
+    );
     Ok(handle)
 }
 
@@ -873,87 +872,84 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
                 .build(),
         )
     };
-    if let Some(event_sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) {
-        dispatch_transformed_event(
-            event,
-            Box::new(move |event| {
-                Box::pin(async move {
-                    let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
-                        response.clone(),
-                        LlmSanitizeResponseContext::for_response_codec(response_codec.clone()),
-                        &entries,
-                    )
-                    .await;
-                    let changed = sanitized
-                        .as_ref()
-                        .is_some_and(|sanitized| sanitized != &response);
-                    let data = match sanitized {
-                        Some(response)
-                            if response_was_null_without_fallback && response.is_null() =>
-                        {
-                            None
-                        }
-                        response => response,
-                    };
-                    let annotation_omitted = data.as_ref().is_none_or(Json::is_null);
-                    let (mut annotation, decode_error) = if annotation_omitted {
-                        (None, None)
-                    } else {
-                        resolve_llm_end_annotation(
-                            (!changed).then_some(annotated_response).flatten(),
-                            response_codec,
-                            data.as_ref(),
-                            &LlmCallEndBehavior {
-                                response_codec_errors_fatal: false,
-                                attach_estimated_cost: false,
-                            },
-                            &handle.name,
-                        )
-                    };
-                    if let Some(error) = decode_error {
-                        log::error!(
-                            target: "nemo_relay.runtime",
-                            event = "manual_llm_response_codec_failed";
-                            "Manual LLM response annotation failed during queued publication: {error}"
-                        );
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    dispatch_transformed_event(
+        event,
+        Box::new(move |event| {
+            Box::pin(async move {
+                let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+                    response.clone(),
+                    LlmSanitizeResponseContext::for_response_codec(response_codec.clone()),
+                    &entries,
+                )
+                .await;
+                let changed = sanitized
+                    .as_ref()
+                    .is_some_and(|sanitized| sanitized != &response);
+                let data = match sanitized {
+                    Some(response) if response_was_null_without_fallback && response.is_null() => {
+                        None
                     }
-                    let pricing = crate::codec::response::active_pricing_resolver();
-                    let summary = finalize_optimization_summary(
-                        &handle.optimization_recorder,
-                        annotation.as_mut(),
-                        handle.model_name.as_deref(),
-                        &pricing,
+                    response => response,
+                };
+                let annotation_omitted = data.as_ref().is_none_or(Json::is_null);
+                let (mut annotation, decode_error) = if annotation_omitted {
+                    (None, None)
+                } else {
+                    resolve_llm_end_annotation(
+                        (!changed).then_some(annotated_response).flatten(),
+                        response_codec,
+                        data.as_ref(),
+                        &LlmCallEndBehavior {
+                            response_codec_errors_fatal: false,
+                            attach_estimated_cost: false,
+                        },
+                        &handle.name,
+                    )
+                };
+                if let Some(error) = decode_error {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "manual_llm_response_codec_failed";
+                        "Manual LLM response annotation failed during queued publication: {error}"
                     );
-                    if !annotation_omitted
-                        && annotation.is_none()
-                        && let Some(summary) = summary
-                    {
-                        annotation = Some(AnnotatedLlmResponse {
-                            optimization_summary: Some(summary),
-                            ..AnnotatedLlmResponse::default()
-                        });
-                    }
-                    let context = global_context();
-                    let Ok(state) = context.read() else {
-                        return event;
-                    };
-                    let end_metadata = metadata_with_otel_status(metadata, "OK", None);
-                    state.build_llm_end_event(
-                        EndLlmHandleParams::builder()
-                            .handle(&handle)
-                            .data_opt(data)
-                            .metadata_opt(end_metadata)
-                            .annotated_response_opt(annotation.map(Arc::new))
-                            .timestamp_opt(timestamp)
-                            .build(),
-                    )
-                })
-            }),
-            event_sanitizers,
-            &subscribers,
-            scope_stack,
-        );
-    }
+                }
+                let pricing = crate::codec::response::active_pricing_resolver();
+                let summary = finalize_optimization_summary(
+                    &handle.optimization_recorder,
+                    annotation.as_mut(),
+                    handle.model_name.as_deref(),
+                    &pricing,
+                );
+                if !annotation_omitted
+                    && annotation.is_none()
+                    && let Some(summary) = summary
+                {
+                    annotation = Some(AnnotatedLlmResponse {
+                        optimization_summary: Some(summary),
+                        ..AnnotatedLlmResponse::default()
+                    });
+                }
+                let context = global_context();
+                let Ok(state) = context.read() else {
+                    return event;
+                };
+                let end_metadata = metadata_with_otel_status(metadata, "OK", None);
+                state.build_llm_end_event(
+                    EndLlmHandleParams::builder()
+                        .handle(&handle)
+                        .data_opt(data)
+                        .metadata_opt(end_metadata)
+                        .annotated_response_opt(annotation.map(Arc::new))
+                        .timestamp_opt(timestamp)
+                        .build(),
+                )
+            })
+        }),
+        event_sanitizers,
+        &subscribers,
+        scope_stack,
+    );
     Ok(())
 }
 

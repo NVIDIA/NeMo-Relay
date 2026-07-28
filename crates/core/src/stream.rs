@@ -344,12 +344,14 @@ impl LlmStreamWrapper {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => Some(handle.spawn(finalize)),
             Err(_) => {
-                if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    runtime.block_on(finalize);
-                }
+                std::thread::spawn(move || {
+                    if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        runtime.block_on(finalize);
+                    }
+                });
                 None
             }
         }
@@ -420,7 +422,10 @@ impl Stream for LlmStreamWrapper {
         }
 
         if this.ended {
-            return Poll::Ready(None);
+            return match this.terminal_result.take() {
+                Some(result) => Poll::Ready(Some(result)),
+                None => Poll::Ready(None),
+            };
         }
 
         // Poll the inner stream

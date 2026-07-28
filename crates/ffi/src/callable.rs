@@ -939,10 +939,10 @@ pub fn wrap_event_sanitize_fn(
     free_fn: NemoRelayFreeFn,
 ) -> EventSanitizeFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |event: Event, fields: EventSanitizeFields| {
+    Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let ud = ud.clone();
         Box::pin(async move {
-            let ffi_event = FfiEvent(event);
+            let ffi_event = FfiEvent((*event).clone());
             let fields_json =
                 json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
             let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
@@ -1070,6 +1070,10 @@ unsafe fn nemo_relay_string_free_internal(ptr: *mut c_char) {
         drop(unsafe { CString::from_raw(ptr) });
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
 
 #[cfg(test)]
 #[path = "../tests/unit/callable_tests.rs"]
