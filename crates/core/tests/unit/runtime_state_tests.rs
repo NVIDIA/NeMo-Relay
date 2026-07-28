@@ -108,7 +108,10 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("tool-conditional-panic"));
+    assert!(matches!(
+        error,
+        FlowError::Internal(ref message) if message.contains("tool-conditional-panic")
+    ));
 
     let llm_conditional: LlmConditionalFn =
         Arc::new(|_| Box::pin(async { panic!("LLM conditional panic") }));
@@ -125,7 +128,10 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("llm-conditional-panic"));
+    assert!(matches!(
+        error,
+        FlowError::Internal(ref message) if message.contains("llm-conditional-panic")
+    ));
 
     let tool_intercept: ToolInterceptFn =
         Arc::new(|_, _| Box::pin(async { panic!("tool intercept panic") }));
@@ -140,7 +146,10 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("tool-intercept-panic"));
+    assert!(matches!(
+        error,
+        FlowError::Internal(ref message) if message.contains("tool-intercept-panic")
+    ));
 
     let llm_intercept: LlmRequestInterceptFn =
         Arc::new(|_, _, _| Box::pin(async { panic!("LLM intercept panic") }));
@@ -157,5 +166,8 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("llm-intercept-panic"));
+    assert!(matches!(
+        error,
+        FlowError::Internal(ref message) if message.contains("llm-intercept-panic")
+    ));
 }
