@@ -168,6 +168,35 @@ leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with `nemo-relay plugins edit`, or use
 `nemo-relay plugins edit --project` for project configuration.
 
+### Edit Gateway Configuration
+
+Use `nemo-relay config edit` to update the user `config.toml` with structured
+controls for gateway limits, provider upstreams, and operational logging:
+
+```bash
+nemo-relay config edit
+```
+
+Use `--project` to edit the nearest `.nemo-relay/config.toml`, or `--global`
+to edit `/etc/nemo-relay/config.toml`. The editor creates a missing target only
+after you select **Save**, preserves unrelated TOML sections, and lets you
+clear a setting to restore normal configuration precedence and defaults. Global
+saves are system-readable (`0644` on Unix), so they reject authorization
+headers; store credentials in a user config or environment variables instead.
+
+Agent command setup remains under `nemo-relay config`; plugin components remain
+under `nemo-relay plugins edit`.
+
+Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml`.
+Global plugin configuration is system-readable (`0644` on Unix), so do not
+store credentials there. The editor rejects schema-declared secret values in
+global plugin configuration.
+
+The upstream authorization-header controls show only whether a value is
+configured and never print it in menus or previews. Prefer
+`NEMO_RELAY_OPENAI_AUTH_HEADER` and `NEMO_RELAY_ANTHROPIC_AUTH_HEADER` instead
+of storing credentials in `config.toml`.
+
 ### Provider Upstreams
 
 Set provider base URLs under `[upstream]` when you want Relay to forward
