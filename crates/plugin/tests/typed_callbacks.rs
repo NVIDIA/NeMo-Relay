@@ -35,10 +35,28 @@ use serde_json::{Map, json};
 
 #[test]
 fn async_abi_discriminants_reject_unknown_values() {
-    assert_eq!(
-        NemoRelayNativeAsyncMiddlewareKind::try_from(13),
-        Ok(NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd)
-    );
+    use NemoRelayNativeAsyncMiddlewareKind as Kind;
+
+    let middleware_kinds = [
+        Kind::ToolSanitizeRequest,
+        Kind::ToolSanitizeResponse,
+        Kind::ToolConditionalExecution,
+        Kind::ToolRequestIntercept,
+        Kind::ToolExecutionIntercept,
+        Kind::LlmSanitizeRequest,
+        Kind::LlmSanitizeResponse,
+        Kind::LlmConditionalExecution,
+        Kind::LlmRequestIntercept,
+        Kind::LlmExecutionIntercept,
+        Kind::LlmStreamExecutionIntercept,
+        Kind::MarkSanitize,
+        Kind::ScopeSanitizeStart,
+        Kind::ScopeSanitizeEnd,
+    ];
+    for (discriminant, kind) in middleware_kinds.into_iter().enumerate() {
+        assert_eq!(kind as u32, discriminant as u32);
+        assert_eq!(Kind::try_from(discriminant as u32), Ok(kind));
+    }
     assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(14).is_err());
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(1),
