@@ -189,6 +189,49 @@ fn mark_emission_skips_sanitizers_without_subscribers() {
 }
 
 #[test]
+fn sanitizer_panic_publishes_the_original_event() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_mark_sanitize_guardrail(
+        "panicking-mark-sanitizer",
+        10,
+        Arc::new(move |_, _| panic!("sanitizer failed")),
+    )
+    .unwrap();
+
+    let observed = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let observed_events = Arc::clone(&observed);
+    register_subscriber(
+        "panic-fallback-subscriber",
+        Arc::new(move |event| observed_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    event(
+        EmitMarkEventParams::builder()
+            .name("panic-fallback")
+            .data(json!({"original": true}))
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+
+    deregister_mark_sanitize_guardrail("panicking-mark-sanitizer").unwrap();
+    deregister_subscriber("panic-fallback-subscriber").unwrap();
+
+    let events = observed.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].name(), "panic-fallback");
+    assert_eq!(
+        events[0].sanitize_fields().data,
+        Some(json!({"original": true}))
+    );
+}
+
+#[test]
 fn dispatcher_continues_after_subscriber_panic() {
     let _lock = TEST_MUTEX.lock().unwrap();
     flush_subscribers().unwrap();
