@@ -1661,6 +1661,22 @@ value = "preserve-host-section"
     assert!(dynamic[1].get("config").is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn global_plugin_document_is_system_readable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    let document = PluginConfigDocument::read(&path).unwrap();
+    document.write_for_scope(TargetScope::Global).unwrap();
+
+    assert_eq!(
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+}
+
 #[test]
 fn dynamic_config_array_resize_preserves_toml_native_values() {
     let temp = tempfile::tempdir().unwrap();

@@ -39,7 +39,8 @@ impl From<&ConfigEditCommand> for TargetScope {
 
 pub(super) fn edit(command: ConfigEditCommand) -> Result<(), CliError> {
     ensure_tty()?;
-    let path = target_path(TargetScope::from(&command))?;
+    let scope = TargetScope::from(&command);
+    let path = target_path(scope)?;
     let mut document = ConfigDocument::read(path)?;
     let theme = ColorfulTheme::default();
 
@@ -63,7 +64,7 @@ pub(super) fn edit(command: ConfigEditCommand) -> Result<(), CliError> {
             2 => edit_logging(&theme, &mut document)?,
             3 => print_preview(&document),
             4 => {
-                document.write()?;
+                document.write(scope)?;
                 println!("  ✓ Saved {}", document.path().display());
                 return Ok(());
             }
@@ -509,9 +510,28 @@ impl ConfigDocument {
         &self.path
     }
 
-    fn write(&self) -> Result<(), CliError> {
-        crate::filesystem::atomic_write_private(&self.path, self.document.to_string().as_bytes())
-            .map_err(CliError::Config)
+    fn write(&self, scope: TargetScope) -> Result<(), CliError> {
+        let contents = self.document.to_string();
+        match scope {
+            TargetScope::Global => {
+                if self.has_auth_headers() {
+                    return Err(CliError::Config(
+                        "global config cannot include upstream authorization headers; configure credentials in a user config".into(),
+                    ));
+                }
+                crate::filesystem::atomic_write_system_readable(&self.path, contents.as_bytes())
+            }
+            TargetScope::User | TargetScope::Project => {
+                crate::filesystem::atomic_write_private(&self.path, contents.as_bytes())
+            }
+        }
+        .map_err(CliError::Config)
+    }
+
+    fn has_auth_headers(&self) -> bool {
+        ["openai_auth_header", "anthropic_auth_header"]
+            .into_iter()
+            .any(|key| self.has_key("upstream", key))
     }
 
     fn preview(&self) -> String {

@@ -180,10 +180,16 @@ nemo-relay config edit
 Use `--project` to edit the nearest `.nemo-relay/config.toml`, or `--global`
 to edit `/etc/nemo-relay/config.toml`. The editor creates a missing target only
 after you select **Save**, preserves unrelated TOML sections, and lets you
-clear a setting to restore normal configuration precedence and defaults.
+clear a setting to restore normal configuration precedence and defaults. Global
+saves are system-readable (`0644` on Unix), so they reject authorization
+headers; store credentials in a user config or environment variables instead.
 
 Agent command setup remains under `nemo-relay config`; plugin components remain
 under `nemo-relay plugins edit`.
+
+Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml`.
+Global plugin configuration is system-readable (`0644` on Unix), so do not
+store credentials there.
 
 The upstream authorization-header controls show only whether a value is
 configured and never print it in menus or previews. Prefer

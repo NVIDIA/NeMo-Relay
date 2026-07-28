@@ -11,7 +11,9 @@ pub(crate) mod temp;
 
 #[cfg(test)]
 pub(crate) use atomic::fail_next_atomic_write;
-pub(crate) use atomic::{atomic_write, atomic_write_private, atomic_write_with_permissions};
+pub(crate) use atomic::{
+    atomic_write, atomic_write_private, atomic_write_system_readable, atomic_write_with_permissions,
+};
 #[cfg(windows)]
 pub(crate) use atomic::{
     atomic_write_with_windows_dacl, open_private_windows_file, protect_private_windows_path,

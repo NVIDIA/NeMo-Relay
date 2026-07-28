@@ -181,17 +181,17 @@ fn target_selection_and_file_loading_behave_as_expected() {
 }
 
 #[test]
-fn missing_document_is_written_atomically_with_private_permissions() {
+fn documents_are_written_atomically_with_scope_appropriate_permissions() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("nested/config.toml");
     let document = ConfigDocument::read(path.clone()).unwrap();
     assert!(!path.exists());
-    document.write().unwrap();
+    document.write(TargetScope::User).unwrap();
     assert!(path.exists());
 
     let original = std::fs::read_to_string(&path).unwrap();
     crate::filesystem::fail_next_atomic_write(&path);
-    let error = document.write().unwrap_err().to_string();
+    let error = document.write(TargetScope::User).unwrap_err().to_string();
     assert!(error.contains("injected test failure"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 
@@ -202,6 +202,43 @@ fn missing_document_is_written_atomically_with_private_permissions() {
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    let global_path = directory.path().join("global/config.toml");
+    ConfigDocument::read(global_path.clone())
+        .unwrap()
+        .write(TargetScope::Global)
+        .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(global_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+}
+
+#[test]
+fn global_document_rejects_authorization_headers() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, contents) in [
+        "[upstream]\nopenai_auth_header = \"Bearer secret\"\n",
+        "upstream = { anthropic_auth_header = \"Bearer secret\" }\n",
+        "upstream.openai_auth_header = \"Bearer secret\"\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = directory.path().join(format!("config-{index}.toml"));
+        std::fs::write(&path, "original").unwrap();
+        let mut document = document(contents);
+        document.path = path.clone();
+
+        let error = document.write(TargetScope::Global).unwrap_err().to_string();
+        assert!(error.contains("global config cannot include upstream authorization headers"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
     }
 }
 
