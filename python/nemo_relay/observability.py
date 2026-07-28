@@ -217,6 +217,9 @@ class OpenTelemetryEndpointConfig:
 
     type: Literal["full", "gen_ai", "openinference"]
     endpoint: str
+    mark_projection: Literal["inherit", "event", "tool"] = "inherit"
+    mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
+    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
     transport: Literal["http_binary", "grpc"] = "http_binary"
     service_name: str = "unknown_service"
     service_namespace: str | None = None
@@ -233,6 +236,9 @@ class OpenTelemetryEndpointConfig:
             {
                 "type": self.type,
                 "endpoint": self.endpoint,
+                "mark_projection": self.mark_projection,
+                "mark_exclude_names": self.mark_exclude_names,
+                "attribute_mappings": self.attribute_mappings,
                 "transport": self.transport,
                 "service_name": self.service_name,
                 "service_namespace": self.service_namespace,

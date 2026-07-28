@@ -440,6 +440,9 @@ fn default_config_and_component_conversion_cover_public_shape() {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
+            mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
         }],
     };
 
@@ -508,6 +511,9 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
             resource_attributes: HashMap::new(),
+            mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
         },
     )
     .unwrap();
@@ -529,6 +535,9 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         headers: HashMap::new(),
         header_env: HashMap::new(),
         resource_attributes: HashMap::new(),
+        mark_projection: MarkProjection::default(),
+        mark_exclude_names: default_mark_exclude_names(),
+        attribute_mappings: Vec::new(),
     }
 }
 
@@ -679,7 +688,7 @@ fn outer_disabled_component_does_not_resolve_opentelemetry_header_env() {
 }
 
 #[test]
-fn opentelemetry_endpoint_rejects_unknown_and_removed_fields() {
+fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown_fields() {
     let report = validate_plugin_config(&plugin_config(json!({
         "policy": {"unknown_field": "error"},
         "opentelemetry": {
@@ -689,16 +698,14 @@ fn opentelemetry_endpoint_rejects_unknown_and_removed_fields() {
                 "endpoint": "http://localhost:4318/v1/traces",
                 "header_en": {"authorization": "TOKEN"},
                 "mark_projection": "tool",
+                "mark_exclude_names": ["notification"],
+                "attribute_mappings": [{"key": "nemo_relay.model_name", "alias": "model.alias"}],
                 "capture_content": true
             }]
         }
     })));
 
-    for field in [
-        "endpoints[0].header_en",
-        "endpoints[0].mark_projection",
-        "endpoints[0].capture_content",
-    ] {
+    for field in ["endpoints[0].header_en", "endpoints[0].capture_content"] {
         assert!(
             report
                 .diagnostics
@@ -712,9 +719,13 @@ fn opentelemetry_endpoint_rejects_unknown_and_removed_fields() {
         diagnostic.field.as_deref() == Some("endpoints[0].header_en")
             && diagnostic.code == "observability.unknown_field"
     }));
-    assert!(report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.field.as_deref() == Some("endpoints[0].mark_projection")
-            && diagnostic.code == "observability.legacy_opentelemetry_field"
+    assert!(!report.diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.field.as_deref(),
+            Some("endpoints[0].mark_projection")
+                | Some("endpoints[0].mark_exclude_names")
+                | Some("endpoints[0].attribute_mappings")
+        )
     }));
 }
 

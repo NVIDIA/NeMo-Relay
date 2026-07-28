@@ -431,8 +431,13 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) instrumentation_scope: String,
     #[pyo3(get, set)]
     pub(crate) timeout_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) mark_projection: String,
+    #[pyo3(get, set)]
+    pub(crate) mark_exclude_names: Vec<String>,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
+    pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
 }
 
 impl PyOpenTelemetryConfig {
@@ -484,7 +489,15 @@ impl PyOpenTelemetryConfig {
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
-        Ok(config)
+        let mark_projection =
+            serde_json::from_value(serde_json::Value::String(self.mark_projection.clone()))
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        nemo_relay::observability::validate_attribute_mappings(&self.attribute_mappings)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(config
+            .with_mark_projection(mark_projection)
+            .with_mark_exclude_names(self.mark_exclude_names.clone())
+            .with_attribute_mappings(self.attribute_mappings.clone()))
     }
 }
 
@@ -501,8 +514,11 @@ impl PyOpenTelemetryConfig {
             service_version: None,
             instrumentation_scope: "opentelemetry".to_string(),
             timeout_millis: 3_000,
+            mark_projection: "inherit".to_string(),
+            mark_exclude_names: nemo_relay::observability::default_mark_exclude_names(),
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
+            attribute_mappings: Vec::new(),
         }
     }
 
@@ -531,6 +547,30 @@ impl PyOpenTelemetryConfig {
         resource_attributes: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn attribute_mappings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.attribute_mappings).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    pub(crate) fn set_attribute_mappings(
+        &mut self,
+        attribute_mappings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.attribute_mappings =
+            serde_json::from_value(py_to_json(attribute_mappings)?).map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "attribute_mappings must be a list of mappings: {error}"
+                ))
+            })?;
+        nemo_relay::observability::validate_attribute_mappings(&self.attribute_mappings)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(())
     }
 

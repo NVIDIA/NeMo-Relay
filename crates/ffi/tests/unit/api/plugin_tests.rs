@@ -1470,6 +1470,62 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
 }
 
 #[test]
+fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = c"http://localhost:4318/v1/traces";
+        let exclusions = c"[\"custom.mark\"]";
+        let mappings = c"[{\"key\":\"nemo_relay.model_name\",\"alias\":\"model.alias\"}]";
+        let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_otel_subscriber_create_with_projection_options(
+                c"full".as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                c"tool".as_ptr(),
+                exclusions.as_ptr(),
+                mappings.as_ptr(),
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_otel_subscriber_free(subscriber);
+
+        let invalid_mappings = c"[{\"key\":\"\",\"alias\":\"model.alias\"}]";
+        let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_otel_subscriber_create_with_projection_options(
+                c"full".as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                c"inherit".as_ptr(),
+                ptr::null(),
+                invalid_mappings.as_ptr(),
+                &mut invalid_subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(invalid_subscriber.is_null());
+    }
+}
+
+#[test]
 fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

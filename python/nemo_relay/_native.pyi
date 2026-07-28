@@ -1020,6 +1020,8 @@ class OpenTelemetryConfig:
     service_version: Optional[str]
     instrumentation_scope: str
     timeout_millis: int
+    mark_projection: Literal["inherit", "event", "tool"]
+    mark_exclude_names: list[str]
 
     def __init__(
         self,
@@ -1043,6 +1045,14 @@ class OpenTelemetryConfig:
     @resource_attributes.setter
     def resource_attributes(self, value: dict[str, str]) -> None:
         """Replace additional OpenTelemetry resource attributes."""
+        ...
+    @property
+    def attribute_mappings(self) -> list[dict[str, str]]:
+        """Return configured full/OpenInference attribute aliases."""
+        ...
+    @attribute_mappings.setter
+    def attribute_mappings(self, value: list[dict[str, str]]) -> None:
+        """Replace configured full/OpenInference attribute aliases."""
         ...
     def set_header(self, key: str, value: str) -> None:
         """Set one exporter header key/value pair."""

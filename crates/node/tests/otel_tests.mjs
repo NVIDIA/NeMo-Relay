@@ -33,6 +33,9 @@ describe('OpenTelemetrySubscriber', () => {
       resourceAttributes: {
         'deployment.environment': 'test',
       },
+      markProjection: 'tool',
+      markExcludeNames: ['custom.mark'],
+      attributeMappings: [{ key: 'nemo_relay.model_name', alias: 'model.alias' }],
     });
 
     const name = uniqueId('node_otel');
@@ -74,6 +77,15 @@ describe('OpenTelemetrySubscriber', () => {
           },
         }),
       /resourceAttributes must be an object of string values/i,
+    );
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          type: 'full',
+          endpoint: 'http://localhost:4318/v1/traces',
+          attributeMappings: [{ key: '', alias: 'model.alias' }],
+        }),
+      /attribute mapping key must not be blank/i,
     );
     assert.throws(
       () => new OpenTelemetrySubscriber({ endpoint: 'http://localhost:4318' }),

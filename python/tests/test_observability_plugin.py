@@ -103,6 +103,9 @@ class TestObservabilityConfigHelpers:
         ).to_dict() == {
             "type": "gen_ai",
             "endpoint": "http://localhost:4318/v1/traces",
+            "mark_projection": "inherit",
+            "mark_exclude_names": ["llm.chunk"],
+            "attribute_mappings": [],
             "transport": "http_binary",
             "service_name": "unknown_service",
             "instrumentation_scope": "opentelemetry",

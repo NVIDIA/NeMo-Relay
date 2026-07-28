@@ -25,17 +25,20 @@ type ObservabilityOpenTelemetryConfig struct {
 
 // ObservabilityOpenTelemetryEndpointConfig configures one typed OTLP destination.
 type ObservabilityOpenTelemetryEndpointConfig struct {
-	Type                 OpenTelemetryType `json:"type"`
-	Endpoint             string            `json:"endpoint"`
-	Transport            string            `json:"transport,omitempty"`
-	Headers              map[string]string `json:"headers,omitempty"`
-	HeaderEnv            map[string]string `json:"header_env,omitempty"`
-	ResourceAttributes   map[string]string `json:"resource_attributes,omitempty"`
-	ServiceName          string            `json:"service_name,omitempty"`
-	ServiceNamespace     string            `json:"service_namespace,omitempty"`
-	ServiceVersion       string            `json:"service_version,omitempty"`
-	InstrumentationScope string            `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
+	Type                 OpenTelemetryType      `json:"type"`
+	Endpoint             string                 `json:"endpoint"`
+	MarkProjection       string                 `json:"mark_projection,omitempty"`
+	MarkExcludeNames     []string               `json:"mark_exclude_names,omitempty"`
+	AttributeMappings    []OtlpAttributeMapping `json:"attribute_mappings,omitempty"`
+	Transport            string                 `json:"transport,omitempty"`
+	Headers              map[string]string      `json:"headers,omitempty"`
+	HeaderEnv            map[string]string      `json:"header_env,omitempty"`
+	ResourceAttributes   map[string]string      `json:"resource_attributes,omitempty"`
+	ServiceName          string                 `json:"service_name,omitempty"`
+	ServiceNamespace     string                 `json:"service_namespace,omitempty"`
+	ServiceVersion       string                 `json:"service_version,omitempty"`
+	InstrumentationScope string                 `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis        uint64                 `json:"timeout_millis,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
@@ -243,6 +246,8 @@ func NewObservabilityOpenTelemetryEndpointConfig(otelType OpenTelemetryType, end
 		Type:                 otelType,
 		Endpoint:             endpoint,
 		Transport:            "http_binary",
+		MarkProjection:       "inherit",
+		MarkExcludeNames:     []string{"llm.chunk"},
 		Headers:              map[string]string{},
 		HeaderEnv:            map[string]string{},
 		ResourceAttributes:   map[string]string{},

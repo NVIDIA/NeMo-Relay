@@ -258,6 +258,7 @@ extern void nemo_relay_atof_exporter_free(void*);
 
 // OpenTelemetry subscriber
 extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -1759,6 +1760,21 @@ const (
 	AtofExporterModeOverwrite AtofExporterMode = "overwrite"
 )
 
+// MarkProjection selects how mark events are represented by full and OpenInference projections.
+type MarkProjection string
+
+const (
+	MarkProjectionInherit MarkProjection = "inherit"
+	MarkProjectionEvent   MarkProjection = "event"
+	MarkProjectionTool    MarkProjection = "tool"
+)
+
+// OtlpAttributeMapping maps a projected OpenTelemetry attribute to an alias.
+type OtlpAttributeMapping struct {
+	Key   string `json:"key"`
+	Alias string `json:"alias"`
+}
+
 // AtofExporterConfig configures one tagged ATOF sink.
 type AtofExporterConfig struct {
 	Sink AtofSinkConfigurer `json:"-"`
@@ -1967,6 +1983,9 @@ type OpenTelemetryConfig struct {
 	ServiceVersion       string
 	InstrumentationScope string
 	Timeout              time.Duration
+	MarkProjection       MarkProjection
+	MarkExcludeNames     []string
+	AttributeMappings    []OtlpAttributeMapping
 }
 
 // NewOpenTelemetryConfig returns a typed config for the required endpoint.
@@ -1980,6 +1999,9 @@ func NewOpenTelemetryConfig(otelType OpenTelemetryType, endpoint string) OpenTel
 		ServiceName:          "unknown_service",
 		InstrumentationScope: "opentelemetry",
 		Timeout:              3 * time.Second,
+		MarkProjection:       MarkProjectionInherit,
+		MarkExcludeNames:     []string{"llm.chunk"},
+		AttributeMappings:    []OtlpAttributeMapping{},
 	}
 }
 
@@ -2013,6 +2035,15 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	}
 	if config.ResourceAttributes == nil {
 		config.ResourceAttributes = map[string]string{}
+	}
+	if config.MarkProjection == "" {
+		config.MarkProjection = MarkProjectionInherit
+	}
+	if config.MarkExcludeNames == nil {
+		config.MarkExcludeNames = []string{"llm.chunk"}
+	}
+	if config.AttributeMappings == nil {
+		config.AttributeMappings = []OtlpAttributeMapping{}
 	}
 
 	cTransport := C.CString(string(config.Transport))
@@ -2057,9 +2088,23 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 
 	cInstrumentationScope := C.CString(config.InstrumentationScope)
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
+	cMarkProjection := C.CString(string(config.MarkProjection))
+	defer C.free(unsafe.Pointer(cMarkProjection))
+	markExcludeNamesJSON, err := jsonMarshal(config.MarkExcludeNames)
+	if err != nil {
+		return nil, err
+	}
+	cMarkExcludeNamesJSON := C.CString(string(markExcludeNamesJSON))
+	defer C.free(unsafe.Pointer(cMarkExcludeNamesJSON))
+	attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
+	if err != nil {
+		return nil, err
+	}
+	cAttributeMappingsJSON := C.CString(string(attributeMappingsJSON))
+	defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create(
+	status := C.nemo_relay_otel_subscriber_create_with_projection_options(
 		cType,
 		cTransport,
 		cEndpoint,
@@ -2070,6 +2115,9 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cServiceVersion,
 		cInstrumentationScope,
 		C.uint64_t(config.Timeout/time.Millisecond),
+		cMarkProjection,
+		cMarkExcludeNamesJSON,
+		cAttributeMappingsJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {

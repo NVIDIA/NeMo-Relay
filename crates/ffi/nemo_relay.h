@@ -1460,6 +1460,31 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *otel_type,
                                                   struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates one typed OpenTelemetry exporter subscriber with projection controls.
+ *
+ * The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
+ * `attribute_mappings: [{"key":"…","alias":"…"}]` shapes. Pass null for either
+ * array to use its default. `mark_projection` is `inherit`, `event`, or `tool`.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const char *otel_type,
+                                                                          const char *transport,
+                                                                          const char *endpoint,
+                                                                          const char *headers_json,
+                                                                          const char *resource_attributes_json,
+                                                                          const char *service_name,
+                                                                          const char *service_namespace,
+                                                                          const char *service_version,
+                                                                          const char *instrumentation_scope,
+                                                                          uint64_t timeout_millis,
+                                                                          const char *mark_projection,
+                                                                          const char *mark_exclude_names_json,
+                                                                          const char *attribute_mappings_json,
+                                                                          struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Registers the OpenTelemetry subscriber as an event subscriber.
  *
  * # Safety

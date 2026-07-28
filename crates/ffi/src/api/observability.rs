@@ -591,6 +591,54 @@ fn parse_transport(ptr: *const c_char) -> Result<String, NemoRelayStatus> {
     parse_string_or_default(ptr, "http_binary")
 }
 
+fn parse_mark_projection(
+    ptr: *const c_char,
+) -> Result<nemo_relay::observability::MarkProjection, NemoRelayStatus> {
+    let value = parse_string_or_default(ptr, "inherit")?;
+    serde_json::from_value(serde_json::Value::String(value)).map_err(|error| {
+        set_last_error(&error.to_string());
+        NemoRelayStatus::InvalidArg
+    })
+}
+
+fn parse_mark_exclude_names(ptr: *const c_char) -> Result<Vec<String>, NemoRelayStatus> {
+    if ptr.is_null() {
+        return Ok(nemo_relay::observability::default_mark_exclude_names());
+    }
+    let Some(value) = c_str_to_json(ptr) else {
+        return Err(NemoRelayStatus::InvalidJson);
+    };
+    serde_json::from_value(value).map_err(|error| {
+        set_last_error(&format!(
+            "mark_exclude_names must be an array of strings: {error}"
+        ));
+        NemoRelayStatus::InvalidArg
+    })
+}
+
+fn parse_attribute_mappings(
+    ptr: *const c_char,
+) -> Result<Vec<nemo_relay::observability::OtlpAttributeMapping>, NemoRelayStatus> {
+    if ptr.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(value) = c_str_to_json(ptr) else {
+        return Err(NemoRelayStatus::InvalidJson);
+    };
+    let mappings: Vec<nemo_relay::observability::OtlpAttributeMapping> =
+        serde_json::from_value(value).map_err(|error| {
+            set_last_error(&format!(
+                "attribute_mappings must be an array of mappings: {error}"
+            ));
+            NemoRelayStatus::InvalidArg
+        })?;
+    nemo_relay::observability::validate_attribute_mappings(&mappings).map_err(|error| {
+        set_last_error(&error.to_string());
+        NemoRelayStatus::InvalidArg
+    })?;
+    Ok(mappings)
+}
+
 fn otel_config_for_transport(
     transport: &str,
     otel_type: nemo_relay::observability::OpenTelemetryType,
@@ -746,6 +794,72 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
         Ok(config) => config,
         Err(status) => return status,
     };
+    let subscriber = match create_otel_subscriber(config) {
+        Ok(subscriber) => subscriber,
+        Err(status) => return status,
+    };
+    unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
+    NemoRelayStatus::Ok
+}
+
+/// Creates one typed OpenTelemetry exporter subscriber with projection controls.
+///
+/// The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
+/// `attribute_mappings: [{"key":"…","alias":"…"}]` shapes. Pass null for either
+/// array to use its default. `mark_projection` is `inherit`, `event`, or `tool`.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options(
+    otel_type: *const c_char,
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
+    attribute_mappings_json: *const c_char,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if let Err(status) = required_out_ptr(out) {
+        return status;
+    }
+    let config = match build_ffi_otel_config(
+        otel_type,
+        transport,
+        endpoint,
+        headers_json,
+        resource_attributes_json,
+        service_name,
+        service_namespace,
+        service_version,
+        instrumentation_scope,
+        timeout_millis,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    let config = config
+        .with_mark_projection(match parse_mark_projection(mark_projection) {
+            Ok(value) => value,
+            Err(status) => return status,
+        })
+        .with_mark_exclude_names(match parse_mark_exclude_names(mark_exclude_names_json) {
+            Ok(value) => value,
+            Err(status) => return status,
+        })
+        .with_attribute_mappings(match parse_attribute_mappings(attribute_mappings_json) {
+            Ok(value) => value,
+            Err(status) => return status,
+        });
     let subscriber = match create_otel_subscriber(config) {
         Ok(subscriber) => subscriber,
         Err(status) => return status,

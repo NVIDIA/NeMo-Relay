@@ -37,8 +37,9 @@ authorization = "OTEL_AUTHORIZATION"
 ```
 
 The endpoint emits the existing OpenInference scope, tool, LLM, and mark
-projection with its fixed default behavior. Mark and attribute-alias controls
-are not configurable.
+projection. It supports the `mark_projection`, `mark_exclude_names`, and
+`attribute_mappings` controls on the typed endpoint, retaining the legacy
+behavior.
 
 Set `OTEL_AUTHORIZATION` to the complete authorization header value before
 activation. NeMo Relay snapshots the value when the plugin

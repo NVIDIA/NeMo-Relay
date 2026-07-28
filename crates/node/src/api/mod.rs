@@ -172,6 +172,26 @@ fn parse_otel_transport(
     }
 }
 
+fn parse_mark_projection(
+    value: Option<String>,
+) -> napi::Result<nemo_relay::observability::MarkProjection> {
+    serde_json::from_value(Json::String(value.unwrap_or_else(|| "inherit".to_string())))
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+fn parse_attribute_mappings(
+    value: Option<Json>,
+) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+    let mappings = match value {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|error| napi::Error::from_reason(format!("attributeMappings: {error}")))?,
+        None => Vec::new(),
+    };
+    nemo_relay::observability::validate_attribute_mappings(&mappings)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    Ok(mappings)
+}
+
 fn build_otel_config(
     options: OpenTelemetryConfig,
 ) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
@@ -209,6 +229,14 @@ fn build_otel_config(
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
+    config = config
+        .with_mark_projection(parse_mark_projection(options.mark_projection)?)
+        .with_mark_exclude_names(
+            options
+                .mark_exclude_names
+                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+        )
+        .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
     Ok(config)
 }
 
@@ -4098,6 +4126,13 @@ pub struct OpenTelemetryConfig {
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
+    /// Mark projection for full and OpenInference exporters. Defaults to `"inherit"`.
+    #[napi(ts_type = "\"inherit\" | \"event\" | \"tool\"")]
+    pub mark_projection: Option<String>,
+    /// Mark names excluded from full and OpenInference projections.
+    pub mark_exclude_names: Option<Vec<String>>,
+    /// Attribute aliases for full and OpenInference projections.
+    pub attribute_mappings: Option<Json>,
 }
 
 /// OpenTelemetry-backed event subscriber.

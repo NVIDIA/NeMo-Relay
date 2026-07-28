@@ -181,9 +181,11 @@ Version 3 replaces them with typed endpoints:
 - Convert the old `openinference` section to an `openinference` endpoint.
 - Add a `gen_ai` endpoint for the standardized GenAI projection.
 
-Remove `mark_projection`, `mark_exclude_names`, `attribute_mappings`,
-`semantic_selector`, and `capture_content`. Their behavior is fixed by the
-selected projection. Version-2 OTLP shapes are rejected under version 3.
+Move `mark_projection`, `mark_exclude_names`, and `attribute_mappings` into
+each `full` or `openinference` endpoint; their legacy behavior is preserved.
+The `gen_ai` projection ignores those controls. `semantic_selector` and
+`capture_content` are unsupported. Version-2 OTLP shapes are rejected under
+version 3.
 
 The version change also makes `type` and `endpoint` required for every
 OpenTelemetry endpoint. The default `service_name` changes from `nemo-relay`

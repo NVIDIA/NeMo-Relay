@@ -21,15 +21,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[cfg(test)]
-use super::validate_attribute_mappings;
 use super::{
     MarkProjection, OpenTelemetryType, OtlpAttributeMapping, apply_attribute_mappings,
     attribute_mapping_aliases, attribute_mapping_inputs, default_mark_exclude_names,
     effective_mark_projection, estimate_cost_for_response_or_model,
     estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
     push_serialized_top_level_attributes, push_session_identity_attributes,
-    push_top_level_json_attributes, relay_span_id, relay_trace_id,
+    push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
@@ -134,7 +132,6 @@ pub enum OpenTelemetryError {
     #[error("OpenTelemetry tracer provider error: {0}")]
     Provider(String),
     /// Attribute mapping configuration was invalid.
-    #[cfg(test)]
     #[error("invalid attribute mappings: {0}")]
     InvalidAttributeMappings(String),
     /// Registration errors from the core runtime.
@@ -219,8 +216,7 @@ impl OpenTelemetryConfig {
     }
 
     /// Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
-    #[cfg(test)]
-    pub(crate) fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = endpoint.into();
         self
     }
@@ -281,6 +277,42 @@ impl OpenTelemetryConfig {
         self.instrumentation_scope = scope.into();
         self
     }
+
+    /// Selects how point-in-time marks are represented in exported traces.
+    pub fn with_mark_projection(mut self, mark_projection: MarkProjection) -> Self {
+        self.mark_projection = mark_projection;
+        self
+    }
+
+    /// Excludes named marks from tool projection.
+    pub fn with_mark_exclude_names<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.mark_exclude_names = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Adds a projected OpenTelemetry attribute alias.
+    pub fn with_attribute_mapping(
+        mut self,
+        key: impl Into<String>,
+        alias: impl Into<String>,
+    ) -> Self {
+        self.attribute_mappings
+            .push(OtlpAttributeMapping::new(key, alias));
+        self
+    }
+
+    /// Replaces projected OpenTelemetry attribute aliases.
+    pub fn with_attribute_mappings<I>(mut self, mappings: I) -> Self
+    where
+        I: IntoIterator<Item = OtlpAttributeMapping>,
+    {
+        self.attribute_mappings = mappings.into_iter().collect();
+        self
+    }
 }
 
 #[cfg(test)]
@@ -298,17 +330,15 @@ pub struct OpenTelemetrySubscriber {
 
 /// Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
 #[derive(Debug, Clone)]
-#[cfg(test)]
-pub(crate) struct OpenTelemetrySubscriberOptions {
+pub struct OpenTelemetrySubscriberOptions {
     /// How mark events are projected into the trace.
-    pub(crate) mark_projection: MarkProjection,
+    pub mark_projection: MarkProjection,
     /// Mark names excluded from tool projection.
-    pub(crate) mark_exclude_names: Vec<String>,
+    pub mark_exclude_names: Vec<String>,
     /// Typed OTLP attributes copied to alias keys.
-    pub(crate) attribute_mappings: Vec<OtlpAttributeMapping>,
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
 }
 
-#[cfg(test)]
 impl Default for OpenTelemetrySubscriberOptions {
     fn default() -> Self {
         Self {
@@ -350,6 +380,8 @@ impl OpenTelemetrySubscriber {
                 "endpoint must be a nonblank string".to_string(),
             ));
         }
+        validate_attribute_mappings(&config.attribute_mappings)
+            .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
         let (provider, runtime) = build_owned_tracer_provider(config.clone())?;
@@ -395,8 +427,7 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Builds a subscriber from a tracer provider with typed attribute copies.
-    #[cfg(test)]
-    pub(crate) fn from_tracer_provider_with_attribute_mappings<I>(
+    pub fn from_tracer_provider_with_attribute_mappings<I>(
         provider: SdkTracerProvider,
         instrumentation_scope: impl Into<String>,
         attribute_mappings: I,
@@ -416,8 +447,7 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Builds a subscriber from a tracer provider with composable projection options.
-    #[cfg(test)]
-    pub(crate) fn from_tracer_provider_with_options(
+    pub fn from_tracer_provider_with_options(
         provider: SdkTracerProvider,
         instrumentation_scope: impl Into<String>,
         options: OpenTelemetrySubscriberOptions,
@@ -435,8 +465,8 @@ impl OpenTelemetrySubscriber {
         ))
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_tracer_provider_with_type_and_options(
+    /// Builds a typed subscriber from a tracer provider with projection options.
+    pub fn from_tracer_provider_with_type_and_options(
         provider: SdkTracerProvider,
         instrumentation_scope: impl Into<String>,
         otel_type: OpenTelemetryType,
@@ -918,7 +948,11 @@ impl OtelEventProcessor {
         if self.otel_type != OpenTelemetryType::GenAi && is_trace_root {
             push_session_identity_attributes(&mut attributes, event);
         }
-        let projected_attributes = attribute_mapping_inputs(&attributes, &self.attribute_mappings);
+        let projected_attributes = if self.otel_type == OpenTelemetryType::GenAi {
+            Vec::new()
+        } else {
+            attribute_mapping_inputs(&attributes, &self.attribute_mappings)
+        };
         span.set_attributes(attributes);
         let span_context = local_parent_span_context(span.span_context());
         self.active_spans.insert(
@@ -956,7 +990,7 @@ impl OtelEventProcessor {
         {
             super::openinference::push_model_name(&mut attributes, model_name);
         }
-        if !self.attribute_mappings.is_empty() {
+        if self.otel_type != OpenTelemetryType::GenAi && !self.attribute_mappings.is_empty() {
             let mut projected_attributes = active_span.projected_attributes;
             projected_attributes.extend(attributes.iter().cloned());
             attributes.extend(attribute_mapping_aliases(

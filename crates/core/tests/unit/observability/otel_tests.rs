@@ -590,6 +590,9 @@ fn config_defaults_and_builder_overrides_are_applied() {
             .with_service_namespace("agents")
             .with_service_version("1.2.3")
             .with_instrumentation_scope("demo-scope")
+            .with_mark_projection(MarkProjection::Tool)
+            .with_mark_exclude_names(["notification"])
+            .with_attribute_mapping("nemo_relay.model_name", "model.alias")
             .with_timeout(Duration::from_millis(1250));
 
     assert_eq!(config.transport, OtlpTransport::HttpBinary);
@@ -606,8 +609,9 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(config.service_namespace.as_deref(), Some("agents"));
     assert_eq!(config.service_version.as_deref(), Some("1.2.3"));
     assert_eq!(config.instrumentation_scope, "demo-scope");
-    assert_eq!(config.mark_projection, MarkProjection::Inherit);
-    assert_eq!(config.mark_exclude_names, vec!["llm.chunk"]);
+    assert_eq!(config.mark_projection, MarkProjection::Tool);
+    assert_eq!(config.mark_exclude_names, vec!["notification"]);
+    assert_eq!(config.attribute_mappings.len(), 1);
     assert_eq!(config.timeout, Duration::from_millis(1250));
 
     let defaults = OpenTelemetryConfig::default();

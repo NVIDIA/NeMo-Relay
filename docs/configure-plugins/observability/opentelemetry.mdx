@@ -82,6 +82,9 @@ work or delivery to the other exporters.
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |
+| `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 
 Use `header_env` for secrets so configuration files contain only environment
 variable names. Each variable contains the complete header value. NeMo Relay
@@ -98,9 +101,10 @@ Process-global `OTEL_EXPORTER_OTLP_HEADERS` and
 isolated between endpoints. Put non-secret values in each endpoint's `headers`
 map and secret variable references in `header_env`.
 
-Projection behavior is fixed. The configuration does not expose
-`mark_projection`, `mark_exclude_names`, `attribute_mappings`,
-`semantic_selector`, or `capture_content`.
+`full` and `openinference` endpoints retain the legacy mark and attribute-alias
+controls shown above. `gen_ai` is standards-only: it ignores those controls and
+does not emit Relay-private attributes. `semantic_selector` and
+`capture_content` are unsupported.
 
 ## GenAI Projection
 

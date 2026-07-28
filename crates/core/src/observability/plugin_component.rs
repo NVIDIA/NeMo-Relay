@@ -44,7 +44,6 @@ use crate::config_editor::{
     EditorTaggedUnionSpec, EditorVariantSpec,
 };
 use crate::error::FlowError;
-use crate::observability::OpenTelemetryType;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofEndpointFieldNamePolicy, AtofEndpointTransport, AtofExporter,
@@ -53,6 +52,9 @@ use crate::observability::atof::{
 };
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySubscriber, OtlpTransport,
+};
+use crate::observability::{
+    MarkProjection, OpenTelemetryType, OtlpAttributeMapping, default_mark_exclude_names,
 };
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
@@ -163,6 +165,16 @@ pub struct OpenTelemetryEndpointConfig {
     pub otel_type: OpenTelemetryType,
     /// Required OTLP endpoint.
     pub endpoint: String,
+    /// Representation used for point-in-time marks.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
+    pub mark_projection: MarkProjection,
+    /// Mark names excluded from tool projection.
+    #[serde(default = "default_mark_exclude_names")]
+    pub mark_exclude_names: Vec<String>,
+    /// Projected attributes copied to aliases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -495,6 +507,14 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 ),
                 otel_editor_field("endpoint", EditorFieldKind::String, &[], false),
                 otel_editor_field(
+                    "mark_projection",
+                    EditorFieldKind::Enum,
+                    &["inherit", "event", "tool"],
+                    false,
+                ),
+                otel_editor_field("mark_exclude_names", EditorFieldKind::Json, &[], false),
+                otel_editor_field("attribute_mappings", EditorFieldKind::List, &[], false),
+                otel_editor_field(
                     "transport",
                     EditorFieldKind::Enum,
                     &["http_binary", "grpc"],
@@ -708,6 +728,13 @@ fn otlp_transport_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["http_binary", "grpc"], Some("http_binary"))
+}
+
+#[cfg(feature = "schema")]
+fn mark_projection_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["inherit", "event", "tool"], Some("inherit"))
 }
 
 #[cfg(feature = "schema")]
@@ -1799,7 +1826,10 @@ fn build_otel_config(
         .with_transport(transport)
         .with_service_name(section.service_name)
         .with_timeout(Duration::from_millis(section.timeout_millis))
-        .with_instrumentation_scope(section.instrumentation_scope);
+        .with_instrumentation_scope(section.instrumentation_scope)
+        .with_mark_projection(section.mark_projection)
+        .with_mark_exclude_names(section.mark_exclude_names)
+        .with_attribute_mappings(section.attribute_mappings);
     if let Some(namespace) = section.service_namespace {
         config = config.with_service_namespace(namespace);
     }
@@ -2010,6 +2040,9 @@ fn validate_opentelemetry_endpoint_fields(
     const ALLOWED: &[&str] = &[
         "type",
         "endpoint",
+        "mark_projection",
+        "mark_exclude_names",
+        "attribute_mappings",
         "transport",
         "headers",
         "header_env",
@@ -2020,13 +2053,7 @@ fn validate_opentelemetry_endpoint_fields(
         "instrumentation_scope",
         "timeout_millis",
     ];
-    const REMOVED: &[&str] = &[
-        "mark_projection",
-        "mark_exclude_names",
-        "attribute_mappings",
-        "semantic_selector",
-        "capture_content",
-    ];
+    const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
     let Some(endpoints) = opentelemetry.get("endpoints").and_then(Json::as_array) else {
         return;
     };

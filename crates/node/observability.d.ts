@@ -69,6 +69,9 @@ export interface AtifConfig {
 export interface OpenTelemetryEndpointConfig {
   type: 'full' | 'gen_ai' | 'openinference';
   endpoint: string;
+  mark_projection?: 'inherit' | 'event' | 'tool';
+  mark_exclude_names?: string[];
+  attribute_mappings?: Array<{ key: string; alias: string }>;
   transport?: 'http_binary' | 'grpc';
   headers?: Record<string, string>;
   header_env?: Record<string, string>;

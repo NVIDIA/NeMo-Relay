@@ -49,6 +49,40 @@ func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
 	if config.ResourceAttributes == nil || len(config.ResourceAttributes) != 0 {
 		t.Fatalf("expected empty resource attributes map, got %#v", config.ResourceAttributes)
 	}
+	if config.MarkProjection != MarkProjectionInherit {
+		t.Fatalf("expected default mark projection inherit, got %q", config.MarkProjection)
+	}
+	if len(config.MarkExcludeNames) != 1 || config.MarkExcludeNames[0] != "llm.chunk" {
+		t.Fatalf("expected default mark exclusion, got %#v", config.MarkExcludeNames)
+	}
+	if config.AttributeMappings == nil || len(config.AttributeMappings) != 0 {
+		t.Fatalf("expected empty attribute mappings, got %#v", config.AttributeMappings)
+	}
+}
+
+func TestOpenTelemetrySubscriberAcceptsProjectionControls(t *testing.T) {
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config.MarkProjection = MarkProjectionTool
+	config.MarkExcludeNames = []string{"custom.mark"}
+	config.AttributeMappings = []OtlpAttributeMapping{{
+		Key:   "nemo_relay.model_name",
+		Alias: "model.alias",
+	}}
+
+	subscriber, err := NewOpenTelemetrySubscriber(config)
+	if err != nil {
+		t.Fatalf("NewOpenTelemetrySubscriber with projection controls failed: %v", err)
+	}
+	defer subscriber.Close()
+}
+
+func TestOpenTelemetrySubscriberRejectsInvalidAttributeMappings(t *testing.T) {
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config.AttributeMappings = []OtlpAttributeMapping{{Key: "", Alias: "model.alias"}}
+
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected invalid attribute mapping error")
+	}
 }
 
 func TestOpenTelemetrySubscriberLifecycle(t *testing.T) {

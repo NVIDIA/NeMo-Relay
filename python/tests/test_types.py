@@ -574,6 +574,9 @@ class TestOpenTelemetryTypes:
         assert config.timeout_millis == 3000
         assert config.headers == {}
         assert config.resource_attributes == {}
+        assert config.mark_projection == "inherit"
+        assert config.mark_exclude_names == ["llm.chunk"]
+        assert config.attribute_mappings == []
 
         config.service_name = "py-agent"
         config.service_namespace = "agents"
@@ -582,9 +585,15 @@ class TestOpenTelemetryTypes:
         config.timeout_millis = 1250
         config.set_header("authorization", "Bearer token")
         config.set_resource_attribute("deployment.environment", "test")
+        config.mark_projection = "tool"
+        config.mark_exclude_names = ["custom.mark"]
+        config.attribute_mappings = [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
+        assert config.mark_projection == "tool"
+        assert config.mark_exclude_names == ["custom.mark"]
+        assert config.attribute_mappings == [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
         assert "OpenTelemetryConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
@@ -595,6 +604,9 @@ class TestOpenTelemetryTypes:
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
+
+        with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
+            config.attribute_mappings = cast(list[dict[str, str]], [{"key": "", "alias": "x"}])
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")

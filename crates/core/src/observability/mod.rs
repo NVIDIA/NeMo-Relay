@@ -12,17 +12,16 @@ use serde::{Deserialize, Serialize};
 /// additional attribute to emit with the same typed value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct OtlpAttributeMapping {
+pub struct OtlpAttributeMapping {
     /// Fully-qualified projected attribute to copy.
-    pub(crate) key: String,
+    pub key: String,
     /// Additional attribute name receiving the copied value.
-    pub(crate) alias: String,
+    pub alias: String,
 }
 
 impl OtlpAttributeMapping {
     /// Creates an attribute mapping.
-    #[cfg(test)]
-    pub(crate) fn new(key: impl Into<String>, alias: impl Into<String>) -> Self {
+    pub fn new(key: impl Into<String>, alias: impl Into<String>) -> Self {
         Self {
             key: key.into(),
             alias: alias.into(),
@@ -54,7 +53,7 @@ pub mod plugin_component;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum MarkProjection {
+pub enum MarkProjection {
     /// Use each exporter’s native handling for marks.
     #[default]
     Inherit,
@@ -83,7 +82,8 @@ pub enum OpenTelemetryType {
 
 /// Default mark names excluded from tool projection because they are emitted
 /// at high volume and are better represented as exporter-native events.
-pub(crate) fn default_mark_exclude_names() -> Vec<String> {
+/// Return the default mark names excluded from OpenTelemetry projections.
+pub fn default_mark_exclude_names() -> Vec<String> {
     vec!["llm.chunk".to_string()]
 }
 
@@ -241,8 +241,7 @@ fn push_optimization_pricing_provenance(
 }
 
 /// Validates OTLP attribute mappings shared by exporter configuration surfaces.
-#[cfg(test)]
-pub(crate) fn validate_attribute_mappings(
+pub fn validate_attribute_mappings(
     mappings: &[OtlpAttributeMapping],
 ) -> std::result::Result<(), String> {
     let mut aliases = std::collections::HashSet::new();

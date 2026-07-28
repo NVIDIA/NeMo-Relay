@@ -79,8 +79,9 @@ For the new callback contract and codec operations, refer to
 
 Observability configuration version 3 is a breaking change. It removes the
 standalone `openinference` section and standalone OpenInference subscriber APIs,
-requires a type and endpoint for every OpenTelemetry exporter, and removes
-configurable mark and attribute-alias controls. Refer to
+and requires a type and endpoint for every OpenTelemetry exporter. Legacy mark
+and attribute-alias controls remain available on typed `full` and
+`openinference` endpoints. Refer to
 [Migration Guides](/reference/migration-guides#observability-configuration-version-3)
 for before-and-after configuration and binding API changes.
 
