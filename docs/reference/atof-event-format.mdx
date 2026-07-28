@@ -111,7 +111,7 @@ Every event carries the envelope fields below. The first six (`kind`, `atof_vers
   Unique identifier for this event or span. The start and end events for a `scope` share a `uuid`.
 </ParamField>
 
-<ParamField path="parent_uuid" type="UUID string | null">
+<ParamField path="parent_uuid" type="UUID string | null" required={true}>
   UUID of the containing scope when this event was emitted. Null only for root scope events and `mark` events without parents.
 </ParamField>
 
@@ -186,7 +186,7 @@ Emitted at scope lifecycle transitions. A single scope span produces two `scope`
   Identifier shared by the start and end events for the same scope span.
 </ParamField>
 
-<ParamField path="parent_uuid" type="UUID string | null">
+<ParamField path="parent_uuid" type="UUID string | null" required={true}>
   Parent identifier from §2. Null on the root scope and identical on both events in a pair.
 </ParamField>
 
@@ -238,7 +238,7 @@ Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A 
   Unique identifier from §2.
 </ParamField>
 
-<ParamField path="parent_uuid" type="UUID string | null">
+<ParamField path="parent_uuid" type="UUID string | null" required={true}>
   Parent identifier from §2.
 </ParamField>
 
