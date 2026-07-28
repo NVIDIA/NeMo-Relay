@@ -67,11 +67,11 @@ describe('callback error helpers', () => {
     }
   });
 
-  it('closed tool sanitize callbacks preserve the original payload and record the queue failure', () => {
+  it('closed tool sanitize callbacks preserve the original payload and record the queue failure', async () => {
     const args = {
       value: 1,
     };
-    const result = __testClosedToolCallback(
+    const result = await __testClosedToolCallback(
       () => ({
         ok: true,
       }),

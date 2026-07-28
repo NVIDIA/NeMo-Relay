@@ -14,24 +14,27 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
-    NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSanitizeCb,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
-    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
-    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeLlmCodecKind,
+    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
+    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
+    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
+    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
+    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
@@ -374,7 +377,14 @@ fn load_one_native_plugin(
                     library_path.display()
                 ))
             })?;
-        let status = entry(native_host_api(), &mut plugin);
+        let mut status = entry(native_host_api(), &mut plugin);
+        // SDKs compiled against ABI v2 correctly reject a v3 table. Retry
+        // their entry point with the frozen v2 prefix instead of making a
+        // runtime upgrade a breaking change for installed native plugins.
+        if status == NemoRelayStatus::InvalidArg {
+            drop_native_plugin_descriptor(&mut plugin);
+            status = entry(native_host_api_legacy(), &mut plugin);
+        }
         if status != NemoRelayStatus::Ok {
             drop_native_plugin_descriptor(&mut plugin);
             return Err(PluginError::RegistrationFailed(format!(
@@ -784,10 +794,19 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV3> = OnceLock::new();
+    &HOST_API.get_or_init(build_native_host_api_v3).v1 as *const NemoRelayNativeHostApiV1
+}
+
+fn native_host_api_legacy() -> *const NemoRelayNativeHostApiV1 {
     static HOST_API: OnceLock<NemoRelayNativeHostApiV1> = OnceLock::new();
+    HOST_API.get_or_init(build_native_host_api_legacy) as *const _
+}
+
+fn build_native_host_api_legacy() -> NemoRelayNativeHostApiV1 {
     static RELAY_VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
-    HOST_API.get_or_init(|| NemoRelayNativeHostApiV1 {
-        abi_version: NEMO_RELAY_NATIVE_ABI_VERSION,
+    NemoRelayNativeHostApiV1 {
+        abi_version: NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
         struct_size: std::mem::size_of::<NemoRelayNativeHostApiV1>(),
         relay_version: RELAY_VERSION.as_ptr().cast(),
         string_new: native_string_new,
@@ -841,7 +860,23 @@ fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
             native_plugin_context_register_scope_sanitize_start_guardrail,
         plugin_context_register_scope_sanitize_end_guardrail:
             native_plugin_context_register_scope_sanitize_end_guardrail,
-    }) as *const _
+    }
+}
+
+fn build_native_host_api_v3() -> NemoRelayNativeHostApiV3 {
+    let mut v1 = build_native_host_api_legacy();
+    v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV3>();
+    NemoRelayNativeHostApiV3 {
+        v1,
+        async_completion_resolve_json: native_async_completion_resolve_json,
+        async_completion_reject: native_async_completion_reject,
+        async_completion_is_cancelled: native_async_completion_is_cancelled,
+        async_completion_release: native_async_completion_release,
+        async_next_invoke: native_async_next_invoke,
+        async_next_release: native_async_next_release,
+        plugin_context_register_async_middleware: native_plugin_context_register_async_middleware,
+    }
 }
 
 fn read_native_string(value: *const NemoRelayNativeString) -> crate::plugin::Result<String> {
@@ -1305,6 +1340,680 @@ fn make_user_data(
     })
 }
 
+/// One-shot state retained by a v3 native async callback.
+struct NativeAsyncCompletion {
+    sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>,
+    cancelled: AtomicBool,
+    // A pending native callback can continue running after its completion
+    // wakes the awaiting task. Keep the callback's dynamic-library instance
+    // alive until native code explicitly releases this handle.
+    _callback_user_data: Option<Arc<NativeCallbackUserData>>,
+}
+
+struct NativeAsyncWait {
+    completion: Arc<NativeAsyncCompletion>,
+    receiver: tokio::sync::oneshot::Receiver<FlowResult<Json>>,
+}
+
+impl Drop for NativeAsyncWait {
+    fn drop(&mut self) {
+        self.completion.cancelled.store(true, Ordering::Release);
+    }
+}
+
+enum NativeAsyncNextInner {
+    Tool(ToolExecutionNextFn),
+    Llm(LlmExecutionNextFn),
+    LlmStream(LlmStreamExecutionNextFn),
+}
+
+struct NativeAsyncNext {
+    inner: NativeAsyncNextInner,
+    runtime: tokio::runtime::Handle,
+    // The native callback owns this handle independently of its completion.
+    // Retaining the library here prevents an unload while it still uses `next`.
+    _callback_user_data: Option<Arc<NativeCallbackUserData>>,
+}
+
+async fn invoke_native_async_callback(
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: Arc<NativeCallbackUserData>,
+    invocation: Json,
+    next: Option<NativeAsyncNextInner>,
+) -> FlowResult<Json> {
+    let runtime = if next.is_some() {
+        Some(tokio::runtime::Handle::try_current().map_err(|error| {
+            FlowError::Internal(format!(
+                "native async intercept requires a Tokio runtime: {error}"
+            ))
+        })?)
+    } else {
+        None
+    };
+    let invocation = native_string_from_json(&invocation)
+        .ok_or_else(|| FlowError::Internal("failed to allocate native async invocation".into()))?
+        as usize;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        _callback_user_data: Some(user_data.clone()),
+    });
+    let completion_ref = Arc::into_raw(completion.clone()) as usize;
+    let next_ref = match (next, runtime) {
+        (Some(inner), Some(runtime)) => Some(Arc::into_raw(Arc::new(NativeAsyncNext {
+            inner,
+            runtime,
+            _callback_user_data: Some(user_data.clone()),
+        })) as usize),
+        (None, None) => None,
+        _ => unreachable!("runtime is present exactly for native async intercepts"),
+    };
+    let state = match catch_unwind(AssertUnwindSafe(|| unsafe {
+        cb(
+            user_data.ptr,
+            invocation as *const NemoRelayNativeString,
+            next_ref
+                .map(|next| next as *const NemoRelayNativeAsyncNext)
+                .unwrap_or(ptr::null()),
+            completion_ref as *const NemoRelayNativeAsyncCompletion,
+        )
+    })) {
+        Ok(state) => state,
+        Err(_) => {
+            unsafe {
+                drop(Arc::from_raw(
+                    completion_ref as *const NativeAsyncCompletion,
+                ));
+                if let Some(next_ref) = next_ref {
+                    drop(Arc::from_raw(next_ref as *const NativeAsyncNext));
+                }
+                native_string_free(invocation as *mut NemoRelayNativeString);
+            }
+            return Err(FlowError::Internal("native async callback panicked".into()));
+        }
+    };
+    unsafe { native_string_free(invocation as *mut NemoRelayNativeString) };
+    if state == NemoRelayNativeAsyncCallbackState::Complete {
+        unsafe {
+            drop(Arc::from_raw(
+                completion_ref as *const NativeAsyncCompletion,
+            ));
+            if let Some(next_ref) = next_ref {
+                drop(Arc::from_raw(next_ref as *const NativeAsyncNext));
+            }
+        }
+        if completion
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+        {
+            return Err(FlowError::Internal(
+                "native async callback returned Complete without settling".into(),
+            ));
+        }
+    }
+    let mut wait = NativeAsyncWait {
+        completion,
+        receiver,
+    };
+    (&mut wait.receiver)
+        .await
+        .map_err(|_| FlowError::Internal("native async callback dropped without settling".into()))?
+}
+
+unsafe extern "C" fn native_async_completion_resolve_json(
+    completion: *const NemoRelayNativeAsyncCompletion,
+    value_json: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let Some(completion) = (unsafe { (completion as *const NativeAsyncCompletion).as_ref() })
+    else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if completion.cancelled.load(Ordering::Acquire) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let value = match parse_json_arg(value_json, "native async completion result") {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let Some(sender) = completion
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    let _ = sender.send(Ok(value));
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn native_async_completion_reject(
+    completion: *const NemoRelayNativeAsyncCompletion,
+    message: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let Some(completion) = (unsafe { (completion as *const NativeAsyncCompletion).as_ref() })
+    else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if completion.cancelled.load(Ordering::Acquire) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let message = if message.is_null() {
+        "native async callback rejected".to_string()
+    } else {
+        match read_native_string(message) {
+            Ok(message) => message,
+            Err(error) => {
+                set_native_last_error(error.to_string());
+                return NemoRelayStatus::InvalidArg;
+            }
+        }
+    };
+    let Some(sender) = completion
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    let _ = sender.send(Err(FlowError::Internal(message)));
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn native_async_completion_is_cancelled(
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> bool {
+    unsafe { (completion as *const NativeAsyncCompletion).as_ref() }
+        .is_none_or(|completion| completion.cancelled.load(Ordering::Acquire))
+}
+
+unsafe extern "C" fn native_async_completion_release(
+    completion: *const NemoRelayNativeAsyncCompletion,
+) {
+    if !completion.is_null() {
+        unsafe { drop(Arc::from_raw(completion as *const NativeAsyncCompletion)) };
+    }
+}
+
+unsafe extern "C" fn native_async_next_release(next: *const NemoRelayNativeAsyncNext) {
+    if !next.is_null() {
+        unsafe { drop(Arc::from_raw(next as *const NativeAsyncNext)) };
+    }
+}
+
+/// Invokes the runtime continuation without blocking the calling native thread.
+unsafe extern "C" fn native_async_next_invoke(
+    next: *const NemoRelayNativeAsyncNext,
+    invocation_json: *const NemoRelayNativeString,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> NemoRelayStatus {
+    let Some(next) = (unsafe { (next as *const NativeAsyncNext).as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if completion.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let invocation = match parse_json_arg(invocation_json, "native async next invocation") {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    unsafe { Arc::increment_strong_count(completion as *const NativeAsyncCompletion) };
+    let completion = unsafe { Arc::from_raw(completion as *const NativeAsyncCompletion) };
+    let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> = match &next.inner {
+        NativeAsyncNextInner::Tool(next) => {
+            let next = next.clone();
+            Box::pin(async move {
+                serde_json::to_value(ToolExecutionInterceptOutcome::new(next(invocation).await?))
+                    .map_err(|error| {
+                        FlowError::Internal(format!(
+                            "failed to serialize native async tool outcome: {error}"
+                        ))
+                    })
+            })
+        }
+        NativeAsyncNextInner::Llm(next) => {
+            let request = match serde_json::from_value(invocation) {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = completion
+                        .sender
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                        .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
+                    return NemoRelayStatus::InvalidArg;
+                }
+            };
+            let next = next.clone();
+            Box::pin(async move { next(request).await })
+        }
+        NativeAsyncNextInner::LlmStream(next) => {
+            let request = match serde_json::from_value(invocation) {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = completion
+                        .sender
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                        .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
+                    return NemoRelayStatus::InvalidArg;
+                }
+            };
+            let next = next.clone();
+            Box::pin(async move {
+                let mut stream = next(request).await?;
+                let mut chunks = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    chunks.push(chunk?);
+                }
+                Ok(Json::Array(chunks))
+            })
+        }
+    };
+    next.runtime.spawn(async move {
+        let result = future.await;
+        if let Some(sender) = completion
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let _ = sender.send(result);
+        }
+    });
+    NemoRelayStatus::Ok
+}
+
+fn wrap_native_async_tool_json(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ToolSanitizeFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |name, value| {
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            let value = invoke_native_async_callback(
+                cb,
+                user_data,
+                serde_json::json!({"name": name, "value": value}),
+                None,
+            )
+            .await?;
+            Ok(value)
+        })
+    })
+}
+
+fn wrap_native_async_tool_conditional(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ToolConditionalFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |name, value| {
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            match invoke_native_async_callback(
+                cb,
+                user_data,
+                serde_json::json!({"name": name, "value": value}),
+                None,
+            )
+            .await?
+            {
+                Json::Null => Ok(None),
+                Json::String(reason) => Ok(Some(reason)),
+                other => Err(FlowError::Internal(format!(
+                    "native async tool conditional callback returned {other}; expected string or null"
+                ))),
+            }
+        })
+    })
+}
+
+fn wrap_native_async_llm_conditional(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> LlmConditionalFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |request| {
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            match invoke_native_async_callback(
+                cb,
+                user_data,
+                serde_json::json!({"request": request}),
+                None,
+            )
+            .await?
+            {
+                Json::Null => Ok(None),
+                Json::String(reason) => Ok(Some(reason)),
+                other => Err(FlowError::Internal(format!(
+                    "native async LLM conditional callback returned {other}; expected string or null"
+                ))),
+            }
+        })
+    })
+}
+
+fn wrap_native_async_llm_sanitize_request(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> LlmSanitizeRequestFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |request, context| {
+        let user_data = user_data.clone();
+        let codec = format!("{:?}", context.codec());
+        Box::pin(async move {
+            let value = invoke_native_async_callback(
+                cb,
+                user_data,
+                serde_json::json!({"request": request, "context": {"codec": codec}}),
+                None,
+            )
+            .await?;
+            if value.is_null() {
+                Ok(None)
+            } else {
+                serde_json::from_value(value)
+                    .map(Some)
+                    .map_err(|error| FlowError::Internal(error.to_string()))
+            }
+        })
+    })
+}
+
+fn wrap_native_async_llm_sanitize_response(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> LlmSanitizeResponseFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |response, context| {
+        let user_data = user_data.clone();
+        let codec = format!("{:?}", context.codec());
+        Box::pin(async move {
+            let value = invoke_native_async_callback(
+                cb,
+                user_data,
+                serde_json::json!({"response": response, "context": {"codec": codec}}),
+                None,
+            )
+            .await?;
+            Ok((!value.is_null()).then_some(value))
+        })
+    })
+}
+
+fn wrap_native_async_llm_request_intercept(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> LlmRequestInterceptFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |name, request, annotated| {
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            serde_json::from_value(
+                invoke_native_async_callback(
+                    cb,
+                    user_data,
+                    serde_json::json!({
+                        "name": name,
+                        "request": request,
+                        "annotated": annotated,
+                    }),
+                    None,
+                )
+                .await?,
+            )
+            .map_err(|error| {
+                FlowError::Internal(format!(
+                    "invalid native async LLM intercept outcome: {error}"
+                ))
+            })
+        })
+    })
+}
+
+fn wrap_native_async_event_sanitize(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> EventSanitizeFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |event, fields| {
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            serde_json::from_value(
+                invoke_native_async_callback(
+                    cb,
+                    user_data,
+                    serde_json::json!({"event": event, "fields": fields}),
+                    None,
+                )
+                .await?,
+            )
+            .map_err(|error| {
+                FlowError::Internal(format!("invalid native async event fields: {error}"))
+            })
+        })
+    })
+}
+
+fn wrap_native_async_tool_execution(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ToolExecutionFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |name, args, next| {
+        let user_data = user_data.clone();
+        let invocation = serde_json::json!({"name": name, "value": args});
+        Box::pin(async move {
+            serde_json::from_value(
+                invoke_native_async_callback(
+                    cb,
+                    user_data,
+                    invocation,
+                    Some(NativeAsyncNextInner::Tool(next)),
+                )
+                .await?,
+            )
+            .map_err(|error| {
+                FlowError::Internal(format!("invalid native async tool outcome: {error}"))
+            })
+        })
+    })
+}
+
+fn wrap_native_async_llm_execution(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> LlmExecutionFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |name, request, next| {
+        let user_data = user_data.clone();
+        Box::pin(invoke_native_async_callback(
+            cb,
+            user_data,
+            serde_json::json!({"name": name, "request": request}),
+            Some(NativeAsyncNextInner::Llm(next)),
+        ))
+    })
+}
+
+fn wrap_native_async_llm_stream_execution(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> LlmStreamExecutionFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |name, request, next| {
+        let user_data = user_data.clone();
+        let name = name.to_owned();
+        Box::pin(async move {
+            let value = invoke_native_async_callback(
+                cb,
+                user_data,
+                serde_json::json!({"name": name, "request": request}),
+                Some(NativeAsyncNextInner::LlmStream(next)),
+            )
+            .await?;
+            let chunks = value.as_array().cloned().ok_or_else(|| {
+                FlowError::Internal(
+                    "native async LLM stream intercept must resolve to an array".into(),
+                )
+            })?;
+            Ok(LlmJsonStream::new(tokio_stream::iter(
+                chunks.into_iter().map(Ok),
+            )))
+        })
+    })
+}
+
+unsafe extern "C" fn native_plugin_context_register_async_middleware(
+    ctx: *mut NemoRelayNativePluginContext,
+    kind: NemoRelayNativeAsyncMiddlewareKind,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    break_chain: bool,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let host_ctx = match host_ctx_mut(ctx) {
+        Ok(ctx) => ctx,
+        Err(status) => return status,
+    };
+    let instance = host_ctx.instance.clone();
+    let name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let context = unsafe { &mut *host_ctx.ctx };
+    let registration = match kind {
+        NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest => context
+            .register_tool_sanitize_request_guardrail(
+                &name,
+                priority,
+                wrap_native_async_tool_json(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeResponse => context
+            .register_tool_sanitize_response_guardrail(
+                &name,
+                priority,
+                wrap_native_async_tool_json(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::ToolConditionalExecution => context
+            .register_tool_conditional_execution_guardrail(
+                &name,
+                priority,
+                wrap_native_async_tool_conditional(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept => context
+            .register_tool_request_intercept(
+                &name,
+                priority,
+                break_chain,
+                wrap_native_async_tool_json(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept => context
+            .register_tool_execution_intercept(
+                &name,
+                priority,
+                wrap_native_async_tool_execution(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest => context
+            .register_llm_sanitize_request_guardrail(
+                &name,
+                priority,
+                wrap_native_async_llm_sanitize_request(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeResponse => context
+            .register_llm_sanitize_response_guardrail(
+                &name,
+                priority,
+                wrap_native_async_llm_sanitize_response(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::LlmConditionalExecution => context
+            .register_llm_conditional_execution_guardrail(
+                &name,
+                priority,
+                wrap_native_async_llm_conditional(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept => {
+            if let Err(error) = validate_annotated_request_consumer_compatibility(
+                &instance.relay_compat,
+                &instance.plugin_kind,
+            ) {
+                return status_from_plugin_error(error);
+            }
+            context.register_llm_request_intercept(
+                &name,
+                priority,
+                break_chain,
+                wrap_native_async_llm_request_intercept(instance, cb, user_data, free_fn),
+            )
+        }
+        NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept => context
+            .register_llm_execution_intercept(
+                &name,
+                priority,
+                wrap_native_async_llm_execution(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept => context
+            .register_llm_stream_execution_intercept(
+                &name,
+                priority,
+                wrap_native_async_llm_stream_execution(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::MarkSanitize => context
+            .register_mark_sanitize_guardrail(
+                &name,
+                priority,
+                wrap_native_async_event_sanitize(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart => context
+            .register_scope_sanitize_start_guardrail(
+                &name,
+                priority,
+                wrap_native_async_event_sanitize(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd => context
+            .register_scope_sanitize_end_guardrail(
+                &name,
+                priority,
+                wrap_native_async_event_sanitize(instance, cb, user_data, free_fn),
+            ),
+    };
+    match registration {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(error),
+    }
+}
+
 fn host_ctx_mut<'a>(
     ctx: *mut NemoRelayNativePluginContext,
 ) -> Result<&'a mut NativeHostPluginContext, NemoRelayStatus> {
@@ -1740,7 +2449,8 @@ fn wrap_event_sanitize_fn(
 ) -> EventSanitizeFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |event, fields| {
-        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or_default()
+        let user_data = user_data.clone();
+        Box::pin(async move { call_event_sanitize_callback(cb, user_data.ptr, &event, &fields) })
     })
 }
 
@@ -1795,7 +2505,8 @@ fn wrap_tool_json_fn(
 ) -> ToolSanitizeFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, payload| {
-        call_tool_json_callback(cb, user_data.ptr, name, &payload).unwrap_or(Json::Null)
+        let user_data = user_data.clone();
+        Box::pin(async move { call_tool_json_callback(cb, user_data.ptr, &name, &payload) })
     })
 }
 
@@ -1806,7 +2517,10 @@ fn wrap_tool_intercept_fn(
     free_fn: NemoRelayNativeFreeFn,
 ) -> ToolInterceptFn {
     let user_data = make_user_data(instance, user_data, free_fn);
-    Arc::new(move |name, payload| call_tool_json_callback(cb, user_data.ptr, name, &payload))
+    Arc::new(move |name, payload| {
+        let user_data = user_data.clone();
+        Box::pin(async move { call_tool_json_callback(cb, user_data.ptr, &name, &payload) })
+    })
 }
 
 fn call_tool_json_callback(
@@ -1846,32 +2560,35 @@ fn wrap_tool_conditional_fn(
 ) -> ToolConditionalFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, args| {
-        clear_native_last_error();
-        let name_string = native_string_from_str(name)
-            .ok_or_else(|| FlowError::Internal("failed to allocate native name".into()))?;
-        let args_string = native_string_from_json(args)
-            .ok_or_else(|| FlowError::Internal("failed to allocate native args".into()))?;
-        let mut out = ptr::null_mut();
-        let status = unsafe { cb(user_data.ptr, name_string, args_string, &mut out) };
-        unsafe {
-            native_string_free(name_string);
-            native_string_free(args_string);
-        }
-        if status != NemoRelayStatus::Ok {
-            if !out.is_null() {
-                unsafe { native_string_free(out) };
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            clear_native_last_error();
+            let name_string = native_string_from_str(&name)
+                .ok_or_else(|| FlowError::Internal("failed to allocate native name".into()))?;
+            let args_string = native_string_from_json(&args)
+                .ok_or_else(|| FlowError::Internal("failed to allocate native args".into()))?;
+            let mut out = ptr::null_mut();
+            let status = unsafe { cb(user_data.ptr, name_string, args_string, &mut out) };
+            unsafe {
+                native_string_free(name_string);
+                native_string_free(args_string);
             }
-            return Err(flow_error_from_status(
-                status,
-                "native tool conditional failed",
-            ));
-        }
-        if out.is_null() {
-            Ok(None)
-        } else {
-            let reason = take_native_string(out)?;
-            Ok(Some(reason))
-        }
+            if status != NemoRelayStatus::Ok {
+                if !out.is_null() {
+                    unsafe { native_string_free(out) };
+                }
+                return Err(flow_error_from_status(
+                    status,
+                    "native tool conditional failed",
+                ));
+            }
+            if out.is_null() {
+                Ok(None)
+            } else {
+                let reason = take_native_string(out)?;
+                Ok(Some(reason))
+            }
+        })
     })
 }
 
@@ -1961,9 +2678,10 @@ fn wrap_llm_sanitize_request_fn(
 ) -> LlmSanitizeRequestFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |request, context| {
-        call_llm_sanitize_request_callback(cb, user_data.ptr, &request, context)
-            .ok()
-            .flatten()
+        let user_data = user_data.clone();
+        Box::pin(
+            async move { call_llm_sanitize_request_callback(cb, user_data.ptr, &request, context) },
+        )
     })
 }
 
@@ -1975,9 +2693,10 @@ fn wrap_llm_sanitize_response_fn(
 ) -> LlmSanitizeResponseFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |payload, context| {
-        call_llm_sanitize_response_callback(cb, user_data.ptr, &payload, context)
-            .ok()
-            .flatten()
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            call_llm_sanitize_response_callback(cb, user_data.ptr, &payload, context)
+        })
     })
 }
 
@@ -2118,30 +2837,34 @@ fn wrap_llm_conditional_fn(
 ) -> LlmConditionalFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |request| {
-        clear_native_last_error();
-        let request_json = serde_json::to_value(request).map_err(|err| {
-            FlowError::Internal(format!("failed to serialize LLM request: {err}"))
-        })?;
-        let request_string = native_string_from_json(&request_json)
-            .ok_or_else(|| FlowError::Internal("failed to allocate native LLM request".into()))?;
-        let mut out = ptr::null_mut();
-        let status = unsafe { cb(user_data.ptr, request_string, &mut out) };
-        unsafe { native_string_free(request_string) };
-        if status != NemoRelayStatus::Ok {
-            if !out.is_null() {
-                unsafe { native_string_free(out) };
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            clear_native_last_error();
+            let request_json = serde_json::to_value(request).map_err(|err| {
+                FlowError::Internal(format!("failed to serialize LLM request: {err}"))
+            })?;
+            let request_string = native_string_from_json(&request_json).ok_or_else(|| {
+                FlowError::Internal("failed to allocate native LLM request".into())
+            })?;
+            let mut out = ptr::null_mut();
+            let status = unsafe { cb(user_data.ptr, request_string, &mut out) };
+            unsafe { native_string_free(request_string) };
+            if status != NemoRelayStatus::Ok {
+                if !out.is_null() {
+                    unsafe { native_string_free(out) };
+                }
+                return Err(flow_error_from_status(
+                    status,
+                    "native LLM conditional failed",
+                ));
             }
-            return Err(flow_error_from_status(
-                status,
-                "native LLM conditional failed",
-            ));
-        }
-        if out.is_null() {
-            Ok(None)
-        } else {
-            let reason = take_native_string(out)?;
-            Ok(Some(reason))
-        }
+            if out.is_null() {
+                Ok(None)
+            } else {
+                let reason = take_native_string(out)?;
+                Ok(Some(reason))
+            }
+        })
     })
 }
 
@@ -2153,58 +2876,62 @@ fn wrap_llm_request_intercept_fn(
 ) -> LlmRequestInterceptFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, request, annotated| {
-        clear_native_last_error();
-        let name_string = native_string_from_str(name)
-            .ok_or_else(|| FlowError::Internal("failed to allocate native name".into()))?;
-        let request_json = serde_json::to_value(&request).map_err(|err| {
-            FlowError::Internal(format!("failed to serialize LLM request: {err}"))
-        })?;
-        let request_string = native_string_from_json(&request_json)
-            .ok_or_else(|| FlowError::Internal("failed to allocate native LLM request".into()))?;
-        let annotated_string = match &annotated {
-            Some(annotated) => {
-                let value = serde_json::to_value(annotated).map_err(|err| {
-                    FlowError::Internal(format!("failed to serialize annotated request: {err}"))
-                })?;
-                native_string_from_json(&value).ok_or_else(|| {
-                    FlowError::Internal("failed to allocate annotated request".into())
-                })?
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            clear_native_last_error();
+            let name_string = native_string_from_str(&name)
+                .ok_or_else(|| FlowError::Internal("failed to allocate native name".into()))?;
+            let request_json = serde_json::to_value(&request).map_err(|err| {
+                FlowError::Internal(format!("failed to serialize LLM request: {err}"))
+            })?;
+            let request_string = native_string_from_json(&request_json).ok_or_else(|| {
+                FlowError::Internal("failed to allocate native LLM request".into())
+            })?;
+            let annotated_string = match &annotated {
+                Some(annotated) => {
+                    let value = serde_json::to_value(annotated).map_err(|err| {
+                        FlowError::Internal(format!("failed to serialize annotated request: {err}"))
+                    })?;
+                    native_string_from_json(&value).ok_or_else(|| {
+                        FlowError::Internal("failed to allocate annotated request".into())
+                    })?
+                }
+                None => ptr::null_mut(),
+            };
+            let mut out_outcome = ptr::null_mut();
+            let status = unsafe {
+                cb(
+                    user_data.ptr,
+                    name_string,
+                    request_string,
+                    annotated_string,
+                    &mut out_outcome,
+                )
+            };
+            unsafe {
+                native_string_free(name_string);
+                native_string_free(request_string);
+                native_string_free(annotated_string);
             }
-            None => ptr::null_mut(),
-        };
-        let mut out_outcome = ptr::null_mut();
-        let status = unsafe {
-            cb(
-                user_data.ptr,
-                name_string,
-                request_string,
-                annotated_string,
-                &mut out_outcome,
-            )
-        };
-        unsafe {
-            native_string_free(name_string);
-            native_string_free(request_string);
-            native_string_free(annotated_string);
-        }
-        if status != NemoRelayStatus::Ok {
+            if status != NemoRelayStatus::Ok {
+                unsafe {
+                    native_string_free(out_outcome);
+                }
+                return Err(flow_error_from_status(
+                    status,
+                    "native LLM request intercept failed",
+                ));
+            }
+            let outcome_json = json_from_native_string(
+                out_outcome,
+                "native LLM request intercept returned null outcome",
+            );
             unsafe {
                 native_string_free(out_outcome);
             }
-            return Err(flow_error_from_status(
-                status,
-                "native LLM request intercept failed",
-            ));
-        }
-        let outcome_json = json_from_native_string(
-            out_outcome,
-            "native LLM request intercept returned null outcome",
-        );
-        unsafe {
-            native_string_free(out_outcome);
-        }
-        serde_json::from_value::<LlmRequestInterceptOutcome>(outcome_json?).map_err(|err| {
-            FlowError::Internal(format!("invalid LLM request intercept outcome JSON: {err}"))
+            serde_json::from_value::<LlmRequestInterceptOutcome>(outcome_json?).map_err(|err| {
+                FlowError::Internal(format!("invalid LLM request intercept outcome JSON: {err}"))
+            })
         })
     })
 }

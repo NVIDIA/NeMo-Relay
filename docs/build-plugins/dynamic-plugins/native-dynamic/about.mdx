@@ -1,6 +1,6 @@
 ---
 title: "Native Dynamic Plugins (Rust)"
-description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v2."
+description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v3."
 position: 10
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -116,10 +116,12 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
-## Native ABI v2
+## Native ABI v3
 
-The host passes a `NemoRelayNativeHostApiV1` table to the entry symbol. The
-plugin returns a `NemoRelayNativePluginV1` descriptor:
+The entry symbol receives a `*const NemoRelayNativeHostApiV1` pointer. It
+points at the v1 prefix of a v3 `NemoRelayNativeHostApiV3` table; check
+`abi_version` and `struct_size` before casting. The plugin returns a
+`NemoRelayNativePluginV1` descriptor:
 
 ```rust
 extern "C" fn nemo_relay_register_plugin(
@@ -127,6 +129,35 @@ extern "C" fn nemo_relay_register_plugin(
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus
 ```
+
+The v3 host table retains the frozen legacy prefix and appends a
+completion-based asynchronous middleware extension. An entry that rejects the
+v3 table with `InvalidArg` is retried with the legacy table. Rust plugins using the
+typed `NativePlugin` APIs continue to work unchanged. Raw ABI plugins can use
+`PluginContext::register_async_middleware_raw` when a callback must complete
+later. The callback receives a JSON invocation, an optional continuation for
+execution intercepts, and a one-shot completion handle.
+
+Return `Complete` after resolving or rejecting the completion before the
+callback returns. Return `Pending` only when retaining the completion; settle
+it exactly once, call `async_completion_release`, and release an async `next`
+handle after use. The host marks a completion cancelled when the awaiting
+runtime work is dropped; late and duplicate settlement is rejected safely.
+
+Event sanitizers registered through this extension still run on Relay's serial
+publication dispatcher. Scope and mark emission remain synchronous and their
+sanitized events are delivered later in emission order.
+
+The v3 completion and continuation ABI settles one JSON value. Consequently,
+an async native LLM stream execution intercept currently receives and returns
+the complete JSON array of chunks: Relay buffers the provider stream before
+replaying it to the caller. It is not an incremental streaming transport and
+does not provide per-chunk backpressure. Use a synchronous native stream
+intercept or a worker plugin when first-token latency is required.
+
+Legacy v1/v2 middleware callbacks are synchronous and run on the runtime's
+execution path. They must not block on I/O; use the v3 completion-based API for
+long-running work.
 
 Text and JSON data cross this boundary as host-owned
 `NemoRelayNativeString` handles. ABI structs also carry scalars, opaque

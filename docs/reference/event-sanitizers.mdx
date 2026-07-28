@@ -49,22 +49,25 @@ semantic category, attributes, semantic input and output meaning, or schemas.
 
 Registries run in priority order. Lower priorities run first, and each
 callback receives the fields returned by the callback before it. Invalid
-binding callback results fail open and preserve the current fields. In Node.js,
+binding callback results fail open and preserve the current fields. The same
+rule applies to tool and LLM request/response sanitizer errors: Relay preserves
+the last valid observability payload without changing provider execution. In Node.js,
 a synchronous sanitizer callback that throws also fails open; Relay records the
 error for `getLastCallbackError()`.
 
-## Publication Semantics
+## Async Delivery and Ordering
 
-Scope and mark emission APIs remain synchronous. They snapshot the event,
-visible sanitizer chain, and subscribers, then enqueue that snapshot for
-sanitization and publication on a serial background dispatcher. Subscribers
-and exporters therefore receive the sanitized event after the emission call
-returns.
+Event sanitizer callbacks may be asynchronous: use an `async def` callback in
+Python, return a Promise in Node.js, or return a future in Rust. Scope and mark
+emission remains synchronous. Relay snapshots the event, sanitizers, and
+subscribers and queues them on one serial publication dispatcher; that
+dispatcher awaits sanitizers before delivering the event to subscribers and
+exporters.
 
-The dispatcher processes snapshots in FIFO order, preserving scope start/end
-and mark ordering. Closing a scope or deregistering middleware after emission
-does not alter an already-snapshotted publication chain. Use the binding's
-subscriber flush API when a test or shutdown path must wait for queued delivery.
+This preserves FIFO start/end/mark delivery without making `push_scope`,
+`pop_scope`, or `event` awaitable. A scope-local sanitizer removed after an
+event is emitted still applies to its queued snapshot. An asynchronous
+sanitizer rejection fails open and preserves the last valid event fields.
 
 ## Registration Lifetimes
 
@@ -187,17 +190,23 @@ activation fails.
 
 ## Experimental C and Go Bindings
 
-The source-first C API uses `NemoRelayEventSanitizeCb`. It provides global,
-scope-local, and plugin-context registration functions for all three surfaces.
-Global names start with `nemo_relay_register_`, and scope-local names start
-with `nemo_relay_scope_register_`.
+The source-first C API retains `NemoRelayEventSanitizeCb` and adds parallel
+completion-based async registration APIs. An async callback returns `Complete`
+or `Pending` and settles its one-shot completion handle with resolve or reject;
+there is no implicit timeout. A callback that returns `Pending` must settle the
+handle exactly once, or serial event publication remains blocked. Relay cancels
+the handle when the invocation is abandoned; late or duplicate settlement after
+cancellation is rejected safely. After resolving or rejecting a retained
+completion, call `nemo_relay_async_completion_release` to release the
+callback-owned reference. Global names start with `nemo_relay_register_`, and
+scope-local names start with `nemo_relay_scope_register_`.
 
-The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, global
-`Register*SanitizeGuardrail` helpers, scope-local
-`ScopeRegister*SanitizeGuardrail` helpers, and the same methods on
-`PluginContext`. The `guardrails` package provides shorter aliases. Because a
-returned `EventSanitizeFields` replaces all three fields, copy the supplied
-value and modify only the fields that should change.
+The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, and
+`AsyncMiddlewareFunc` variants for global and scope-local event sanitizers.
+Async Go callbacks receive a `context.Context`; Relay cancels it when the
+invocation is abandoned. Because a returned `EventSanitizeFields` replaces all
+three fields, copy the supplied value and modify only the fields that should
+change.
 
 ## Related Topics
 

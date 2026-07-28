@@ -79,11 +79,9 @@ use crate::convert::{
     get_last_callback_error as get_recorded_callback_error, opt_json, parse_timestamp_micros,
     record_callback_error, to_napi_err,
 };
+use crate::promise_call::PromiseAwareFn;
 use crate::stream::LlmStream;
-use crate::types::{
-    EventSanitizeFields, LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle,
-    event_sanitize_fields_from_json,
-};
+use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
 
 #[napi::module_init]
 fn init() {
@@ -756,7 +754,9 @@ fn build_plugin_context(
             core_registry_api::register_tool_sanitize_request_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_tool_fn(middleware_tool_callback_tsfn(ctx.env, &callback)?),
+                callable::wrap_js_tool_sanitize_promise_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -800,7 +800,9 @@ fn build_plugin_context(
             core_registry_api::register_tool_sanitize_response_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_tool_fn(middleware_tool_callback_tsfn(ctx.env, &callback)?),
+                callable::wrap_js_tool_sanitize_promise_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -840,9 +842,9 @@ fn build_plugin_context(
             core_registry_api::register_tool_conditional_execution_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_tool_conditional_fn(middleware_tool_callback_tsfn(
+                callable::wrap_js_tool_conditional_promise_fn(Arc::new(PromiseAwareFn::new(
                     ctx.env, &callback,
-                )?),
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -888,9 +890,9 @@ fn build_plugin_context(
             core_registry_api::register_llm_sanitize_request_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_sanitize_request_fn(
-                    middleware_llm_sanitize_request_callback_tsfn(ctx.env, &callback)?,
-                ),
+                callable::wrap_js_llm_sanitize_request_promise_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -934,9 +936,9 @@ fn build_plugin_context(
             core_registry_api::register_llm_sanitize_response_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_sanitize_response_fn(
-                    middleware_llm_sanitize_response_callback_tsfn(ctx.env, &callback)?,
-                ),
+                callable::wrap_js_llm_sanitize_response_promise_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -976,9 +978,9 @@ fn build_plugin_context(
             core_registry_api::register_llm_conditional_execution_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_conditional_fn(middleware_json_callback_tsfn(
+                callable::wrap_js_llm_conditional_promise_fn(Arc::new(PromiseAwareFn::new(
                     ctx.env, &callback,
-                )?),
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -1018,12 +1020,13 @@ fn build_plugin_context(
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
             let callback = ctx.get::<JsFunction>(3)?;
-            let tsfn = middleware_json_callback_tsfn(ctx.env, &callback)?;
             core_registry_api::register_llm_request_intercept(
                 &name,
                 priority,
                 break_chain,
-                callable::wrap_js_llm_request_intercept_fn(tsfn),
+                callable::wrap_js_llm_request_intercept_promise_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -1147,12 +1150,13 @@ fn build_plugin_context(
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
             let callback = ctx.get::<JsFunction>(3)?;
-            let callback = middleware_tool_callback_tsfn(ctx.env, &callback)?;
             core_registry_api::register_tool_request_intercept(
                 &name,
                 priority,
                 break_chain,
-                callable::wrap_js_tool_request_intercept_fn(callback),
+                callable::wrap_js_tool_request_intercept_promise_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -1384,40 +1388,6 @@ impl PersistentJsFunction {
         unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
     }
 
-    fn call_event_sanitize(&self, event: Json, fields: EventSanitizeFields) -> napi::Result<Json> {
-        let mut value = ptr::null_mut();
-        // SAFETY: `self.reference` is a live N-API reference created in
-        // `self.env`, and `value` is writable storage for the borrowed
-        // function value.
-        let status =
-            unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
-        if status != napi::sys::Status::napi_ok {
-            return Err(napi::Error::from_reason(
-                "failed to borrow event sanitizer function",
-            ));
-        }
-        // SAFETY: `value` was resolved from this struct's function reference,
-        // so it is a live function value in `self.env` for this call.
-        let func = unsafe { JsFunction::from_raw_unchecked(self.env, value) };
-        // SAFETY: `Json::to_napi_value` created this event value in `self.env`,
-        // so wrapping it as `JsUnknown` is valid for the immediate callback.
-        let event = unsafe {
-            JsUnknown::from_raw_unchecked(self.env, Json::to_napi_value(self.env, event)?)
-        };
-        // SAFETY: `EventSanitizeFields::to_napi_value` created this fields
-        // value in `self.env`, so wrapping it as `JsUnknown` is valid for the
-        // immediate callback.
-        let fields = unsafe {
-            JsUnknown::from_raw_unchecked(
-                self.env,
-                EventSanitizeFields::to_napi_value(self.env, fields)?,
-            )
-        };
-        let returned = func.call(None, &[event, fields])?;
-        // SAFETY: `returned` is the live result of invoking `func` in this environment.
-        unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
-    }
-
     fn call_json(&self, argument: Json) -> napi::Result<Json> {
         let mut value = ptr::null_mut();
         // SAFETY: `self.reference` is a live N-API reference created in
@@ -1442,89 +1412,9 @@ impl PersistentJsFunction {
     }
 }
 
-fn core_event_fields(
-    fields: EventSanitizeFields,
-) -> Option<nemo_relay::api::event::EventSanitizeFields> {
-    Some(nemo_relay::api::event::EventSanitizeFields {
-        data: fields.data,
-        category_profile: fields
-            .category_profile
-            .map(serde_json::from_value)
-            .transpose()
-            .ok()?,
-        metadata: fields.metadata,
-    })
-}
-
-fn js_event_fields(fields: &nemo_relay::api::event::EventSanitizeFields) -> EventSanitizeFields {
-    EventSanitizeFields {
-        data: fields.data.clone(),
-        category_profile: fields
-            .category_profile
-            .as_ref()
-            .and_then(|value| serde_json::to_value(value).ok()),
-        metadata: fields.metadata.clone(),
-    }
-}
-
 fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let direct = Arc::new(PersistentJsFunction::new(env, &callback)?);
-    let register_thread = std::thread::current().id();
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(Json, Json)>| {
-            Ok(vec![ctx.value.0, ctx.value.1])
-        },
-    )?;
-    tsfn.unref(env)?;
-    let background = callable::wrap_js_event_sanitize_fn(tsfn);
-    Ok(Arc::new(move |event, fields| {
-        if std::thread::current().id() == register_thread {
-            let event_json = match event.try_to_json_value() {
-                Ok(event_json) => event_json,
-                Err(error) => {
-                    record_callback_error(format!(
-                        "nemo_relay: failed to serialize JS event sanitizer context: {error}"
-                    ));
-                    return nemo_relay::api::event::EventSanitizeFields::default();
-                }
-            };
-            let sanitized = (|| -> FlowResult<_> {
-                let value = direct
-                    .call_event_sanitize(event_json, js_event_fields(&fields))
-                    .map_err(|error| {
-                        FlowError::Internal(format!(
-                            "nemo_relay: JS event sanitizer callback failed: {error}"
-                        ))
-                    })?;
-                let value = callable::unwrap_middleware_result(
-                    value,
-                    "nemo_relay: JS event sanitizer callback failed",
-                )?;
-                let fields = event_sanitize_fields_from_json(value).map_err(|error| {
-                    FlowError::Internal(format!(
-                        "nemo_relay: JS event sanitizer callback failed: invalid JS event sanitizer result: {error}"
-                    ))
-                })?;
-                core_event_fields(fields).ok_or_else(|| {
-                    FlowError::Internal(
-                        "nemo_relay: JS event sanitizer callback failed: invalid JS event sanitizer result"
-                            .to_string(),
-                    )
-                })
-            })();
-            match sanitized {
-                Ok(sanitized) => sanitized,
-                Err(error) => {
-                    record_callback_error(error.to_string());
-                    nemo_relay::api::event::EventSanitizeFields::default()
-                }
-            }
-        } else {
-            background(event, fields)
-        }
-    }))
+    let callback = Arc::new(crate::promise_call::PromiseAwareFn::new(env, func)?);
+    Ok(callable::wrap_js_event_sanitize_promise_fn(callback))
 }
 
 type NodeLlmCodec = (
@@ -1857,15 +1747,22 @@ pub fn clear_last_callback_error() {
 
 /// Internal test helper: invoke a closed JS tool callback wrapper and return the fallback value.
 #[napi(js_name = "__testClosedToolCallback")]
-pub fn test_closed_tool_callback(
+pub async fn test_closed_tool_callback(
     callback: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
     name: String,
     args: Json,
-) -> Json {
+) -> Result<Json> {
     clear_recorded_callback_error();
     let _ = callback.clone().abort();
     let wrapped = callable::wrap_js_tool_fn(callback);
-    wrapped(&name, args)
+    let fallback = args.clone();
+    match wrapped(name, args).await {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            record_callback_error(error.to_string());
+            Ok(fallback)
+        }
+    }
 }
 
 /// Internal test helper: model a closed JS LLM request sanitizer.
@@ -2767,8 +2664,10 @@ macro_rules! napi_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         /// Register an event sanitize guardrail.
         ///
-        /// The callback must be synchronous. Callback, serialization, conversion, or
-        /// invalid-result failures clear the event fields and record the error for
+        /// The callback may return fields directly or in a Promise. Scope and mark
+        /// calls queue the event and return synchronously; publication resumes after
+        /// the Promise settles. Callback, serialization, conversion, or invalid-result
+        /// failures preserve the original event fields and record the error for
         /// `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
@@ -2776,7 +2675,7 @@ macro_rules! napi_event_guardrail_api {
             name: String,
             priority: i32,
             #[napi(
-                ts_arg_type = "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields"
+                ts_arg_type = "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>"
             )]
             guardrail: JsFunction,
         ) -> Result<()> {
@@ -2822,8 +2721,13 @@ macro_rules! napi_guardrail_tool_api {
             priority: i32,
             guardrail: JsFunction,
         ) -> Result<()> {
-            let callback = middleware_tool_callback_tsfn(&env, &guardrail)?;
-            $core_register(&name, priority, $wrapper(callback)).map_err(to_napi_err)
+            let callback = Arc::new(PromiseAwareFn::new(&env, &guardrail)?);
+            $core_register(
+                &name,
+                priority,
+                callable::wrap_js_tool_sanitize_promise_fn(callback),
+            )
+            .map_err(to_napi_err)
         }
 
         $(#[doc = $dereg_doc])*
@@ -2878,13 +2782,20 @@ pub fn register_tool_conditional_execution_guardrail(
     env: Env,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(toolName: string, args: Json) => string | null | Promise<string | null>"
+    )]
     guardrail: JsFunction,
 ) -> Result<()> {
-    let callback = middleware_tool_callback_tsfn(&env, &guardrail)?;
+    let callback = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &guardrail).map_err(|error| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+        })?,
+    );
     core_registry_api::register_tool_conditional_execution_guardrail(
         &name,
         priority,
-        callable::wrap_js_tool_conditional_fn(callback),
+        callable::wrap_js_tool_conditional_promise_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -2914,8 +2825,18 @@ macro_rules! napi_intercept_tool_api {
             break_chain: bool,
             callable: JsFunction,
         ) -> Result<()> {
-            let callback = middleware_tool_callback_tsfn(&env, &callable)?;
-            $core_register(&name, priority, break_chain, $wrapper(callback)).map_err(to_napi_err)
+            let callback = std::sync::Arc::new(
+                crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|error| {
+                    napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+                })?,
+            );
+            $core_register(
+                &name,
+                priority,
+                break_chain,
+                callable::wrap_js_tool_request_intercept_promise_fn(callback),
+            )
+            .map_err(to_napi_err)
         }
 
         $(#[doc = $dereg_doc])*
@@ -3003,15 +2924,16 @@ pub fn register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null"
+        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
-    let callback = middleware_llm_sanitize_request_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_llm_sanitize_request_guardrail(
         &name,
         priority,
-        callable::wrap_js_llm_sanitize_request_fn(callback),
+        callable::wrap_js_llm_sanitize_request_promise_fn(Arc::new(PromiseAwareFn::new(
+            &env, &guardrail,
+        )?)),
     )
     .map_err(to_napi_err)
 }
@@ -3036,15 +2958,16 @@ pub fn register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null"
+        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
-    let callback = middleware_llm_sanitize_response_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_llm_sanitize_response_guardrail(
         &name,
         priority,
-        callable::wrap_js_llm_sanitize_response_fn(callback),
+        callable::wrap_js_llm_sanitize_response_promise_fn(Arc::new(PromiseAwareFn::new(
+            &env, &guardrail,
+        )?)),
     )
     .map_err(to_napi_err)
 }
@@ -3067,13 +2990,18 @@ pub fn register_llm_conditional_execution_guardrail(
     env: Env,
     name: String,
     priority: i32,
+    #[napi(ts_arg_type = "(request: Json) => string | null | Promise<string | null>")]
     guardrail: JsFunction,
 ) -> Result<()> {
-    let callback = middleware_json_callback_tsfn(&env, &guardrail)?;
+    let callback = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &guardrail).map_err(|error| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+        })?,
+    );
     core_registry_api::register_llm_conditional_execution_guardrail(
         &name,
         priority,
-        callable::wrap_js_llm_conditional_fn(callback),
+        callable::wrap_js_llm_conditional_promise_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -3103,16 +3031,20 @@ pub fn register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
-    let callback = middleware_json_callback_tsfn(&env, &callable)?;
+    let callback = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|error| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+        })?,
+    );
     core_registry_api::register_llm_request_intercept(
         &name,
         priority,
         break_chain,
-        callable::wrap_js_llm_request_intercept_fn(callback),
+        callable::wrap_js_llm_request_intercept_promise_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -3245,7 +3177,7 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// still run.
 ///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
-/// Promise does not block the Node event loop while event sanitizers settle.
+/// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
 ///
 /// The Promise rejects if the blocking task fails or the core subscriber flush returns an error.
 /// Callers should handle errors when awaiting it.
@@ -3265,8 +3197,10 @@ macro_rules! napi_scope_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         /// Register a scope-local event sanitize guardrail.
         ///
-        /// The callback must be synchronous. Callback, serialization, conversion, or
-        /// invalid-result failures clear the event fields and record the error for
+        /// The callback may return fields directly or in a Promise. Scope and mark
+        /// calls queue the event and return synchronously; publication resumes after
+        /// the Promise settles. Callback, serialization, conversion, or invalid-result
+        /// failures preserve the original event fields and record the error for
         /// `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
@@ -3275,7 +3209,7 @@ macro_rules! napi_scope_event_guardrail_api {
             name: String,
             priority: i32,
             #[napi(
-                ts_arg_type = "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields"
+                ts_arg_type = "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>"
             )]
             guardrail: JsFunction,
         ) -> Result<()> {
@@ -3333,8 +3267,14 @@ macro_rules! napi_scope_guardrail_tool_api {
         ) -> Result<()> {
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
                 .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-            let callback = middleware_tool_callback_tsfn(&env, &guardrail)?;
-            $core_register(&uuid, &name, priority, $wrapper(callback)).map_err(to_napi_err)
+            let callback = Arc::new(PromiseAwareFn::new(&env, &guardrail)?);
+            $core_register(
+                &uuid,
+                &name,
+                priority,
+                callable::wrap_js_tool_sanitize_promise_fn(callback),
+            )
+            .map_err(to_napi_err)
         }
 
         $(#[doc = $dereg_doc])*
@@ -3402,7 +3342,11 @@ pub fn scope_register_tool_conditional_execution_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_tool_conditional_fn(middleware_tool_callback_tsfn(&env, &guardrail)?),
+        callable::wrap_js_tool_conditional_promise_fn(std::sync::Arc::new(
+            crate::promise_call::PromiseAwareFn::new(&env, &guardrail).map_err(|error| {
+                napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+            })?,
+        )),
     )
     .map_err(to_napi_err)
 }
@@ -3441,9 +3385,19 @@ macro_rules! napi_scope_intercept_tool_api {
         ) -> Result<()> {
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
                 .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-            let callback = middleware_tool_callback_tsfn(&env, &callable)?;
-            $core_register(&uuid, &name, priority, break_chain, $wrapper(callback))
-                .map_err(to_napi_err)
+            let callback = std::sync::Arc::new(
+                crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|error| {
+                    napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+                })?,
+            );
+            $core_register(
+                &uuid,
+                &name,
+                priority,
+                break_chain,
+                callable::wrap_js_tool_request_intercept_promise_fn(callback),
+            )
+            .map_err(to_napi_err)
         }
 
         $(#[doc = $dereg_doc])*
@@ -3546,7 +3500,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null"
+        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -3556,9 +3510,9 @@ pub fn scope_register_llm_sanitize_request_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_sanitize_request_fn(middleware_llm_sanitize_request_callback_tsfn(
+        callable::wrap_js_llm_sanitize_request_promise_fn(Arc::new(PromiseAwareFn::new(
             &env, &guardrail,
-        )?),
+        )?)),
     )
     .map_err(to_napi_err)
 }
@@ -3590,7 +3544,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null"
+        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -3600,9 +3554,9 @@ pub fn scope_register_llm_sanitize_response_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_sanitize_response_fn(middleware_llm_sanitize_response_callback_tsfn(
+        callable::wrap_js_llm_sanitize_response_promise_fn(Arc::new(PromiseAwareFn::new(
             &env, &guardrail,
-        )?),
+        )?)),
     )
     .map_err(to_napi_err)
 }
@@ -3640,7 +3594,11 @@ pub fn scope_register_llm_conditional_execution_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_conditional_fn(middleware_json_callback_tsfn(&env, &guardrail)?),
+        callable::wrap_js_llm_conditional_promise_fn(std::sync::Arc::new(
+            crate::promise_call::PromiseAwareFn::new(&env, &guardrail).map_err(|error| {
+                napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+            })?,
+        )),
     )
     .map_err(to_napi_err)
 }
@@ -3677,19 +3635,23 @@ pub fn scope_register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    let callback = middleware_json_callback_tsfn(&env, &callable)?;
+    let callback = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|error| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {error}"))
+        })?,
+    );
     core_registry_api::scope_register_llm_request_intercept(
         &uuid,
         &name,
         priority,
         break_chain,
-        callable::wrap_js_llm_request_intercept_fn(callback),
+        callable::wrap_js_llm_request_intercept_promise_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -3865,7 +3827,9 @@ pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsO
         async move {
             TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core_tool_api::tool_request_intercepts(&name, args).map_err(to_napi_err)
+                    core_tool_api::tool_request_intercepts(&name, args)
+                        .await
+                        .map_err(to_napi_err)
                 })
                 .await
         },
@@ -3882,7 +3846,9 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
         async move {
             TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core_tool_api::tool_conditional_execution(&name, &args).map_err(to_napi_err)
+                    core_tool_api::tool_conditional_execution(&name, &args)
+                        .await
+                        .map_err(to_napi_err)
                 })
                 .await
         },
@@ -3905,6 +3871,7 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
             TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
                     core_llm_api::llm_request_intercepts(&name, llm_request)
+                        .await
                         .map(|r| {
                             serde_json::json!({
                                 "request": r.request,
@@ -3933,7 +3900,9 @@ pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
         async move {
             TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core_llm_api::llm_conditional_execution(&llm_request).map_err(to_napi_err)
+                    core_llm_api::llm_conditional_execution(&llm_request)
+                        .await
+                        .map_err(to_napi_err)
                 })
                 .await
         },

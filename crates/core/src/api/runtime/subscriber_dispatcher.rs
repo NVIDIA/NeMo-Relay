@@ -9,6 +9,12 @@ use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
 use crate::error::Result;
+use std::future::Future;
+use std::pin::Pin;
+
+pub(crate) type EventTransformFn = Box<
+    dyn FnOnce(Event) -> Pin<Box<dyn Future<Output = Event> + Send + 'static>> + Send + 'static,
+>;
 
 mod native {
     use std::cell::Cell;
@@ -27,6 +33,7 @@ mod native {
     enum DispatcherMessage {
         Deliver {
             event: Box<Event>,
+            transform: Option<EventTransformFn>,
             sanitizers: Vec<Guardrail<EventSanitizeFn>>,
             subscribers: Vec<EventSubscriberFn>,
             scope_stack: ScopeStackHandle,
@@ -34,11 +41,17 @@ mod native {
         Flush {
             done: Sender<()>,
         },
+        Barrier {
+            done: Receiver<()>,
+        },
     }
 
     static DISPATCHER: OnceLock<std::result::Result<Sender<DispatcherMessage>, String>> =
         OnceLock::new();
+    static SANITIZER_RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
+        OnceLock::new();
     static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+    static SANITIZER_RUNTIME_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
@@ -50,6 +63,7 @@ mod native {
         }
         let message = DispatcherMessage::Deliver {
             event: Box::new(event.clone()),
+            transform: None,
             sanitizers: Vec::new(),
             subscribers: subscribers.to_vec(),
             scope_stack: current_scope_stack(),
@@ -92,31 +106,41 @@ mod native {
         }
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
+            transform: None,
             sanitizers,
             subscribers: subscribers.to_vec(),
             scope_stack,
         };
-        match dispatcher_sender() {
-            Ok(sender) if sender.send(message).is_ok() => true,
-            Ok(_) => {
-                log::warn!(
-                    target: "nemo_relay.runtime",
-                    event = "subscriber_event_dropped",
-                    reason = "dispatcher_disconnected";
-                    "Subscriber event was dropped because the dispatcher stopped"
-                );
-                false
-            }
-            Err(error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "subscriber_dispatcher_failed";
-                    "Subscriber dispatcher failed to start: {error}"
-                );
-                false
-            }
-            Err(_) => false,
-        }
+        send_dispatch_message(message)
+    }
+
+    pub(super) fn dispatch_transformed_event(
+        event: Event,
+        transform: EventTransformFn,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> bool {
+        let message = DispatcherMessage::Deliver {
+            event: Box::new(event),
+            transform: Some(transform),
+            sanitizers,
+            subscribers: subscribers.to_vec(),
+            scope_stack,
+        };
+        send_dispatch_message(message)
+    }
+
+    /// Insert a FIFO barrier for work that will enqueue a publication from an
+    /// async task. A later flush waits for the task to signal completion, then
+    /// drains the event it queued before acknowledging the flush.
+    pub(super) fn register_async_publication() -> Option<Sender<()>> {
+        let sender = dispatcher_sender().ok()?;
+        let (done_tx, done_rx) = mpsc::channel();
+        sender
+            .send(DispatcherMessage::Barrier { done: done_rx })
+            .ok()
+            .map(|_| done_tx)
     }
 
     pub(super) fn flush_subscribers() -> Result<()> {
@@ -143,6 +167,30 @@ mod native {
 
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
         DISPATCHER.get_or_init(start_dispatcher).clone()
+    }
+
+    fn send_dispatch_message(message: DispatcherMessage) -> bool {
+        match dispatcher_sender() {
+            Ok(sender) if sender.send(message).is_ok() => true,
+            Ok(_) => {
+                log::warn!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_event_dropped",
+                    reason = "dispatcher_disconnected";
+                    "Subscriber event was dropped because the dispatcher stopped"
+                );
+                false
+            }
+            Err(error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_dispatcher_failed";
+                    "Subscriber dispatcher failed to start: {error}"
+                );
+                false
+            }
+            Err(_) => false,
+        }
     }
 
     fn start_dispatcher() -> std::result::Result<Sender<DispatcherMessage>, String> {
@@ -172,6 +220,9 @@ mod native {
                         let _ = pending.send(());
                     }
                 }
+                DispatcherMessage::Barrier { done } => {
+                    let _ = done.recv();
+                }
                 message => handle_message(message),
             }
         }
@@ -182,6 +233,9 @@ mod native {
         while let Ok(message) = rx.try_recv() {
             match message {
                 DispatcherMessage::Flush { done } => pending_flushes.push(done),
+                DispatcherMessage::Barrier { done } => {
+                    let _ = done.recv();
+                }
                 message => handle_message(message),
             }
         }
@@ -192,18 +246,23 @@ mod native {
         match message {
             DispatcherMessage::Deliver {
                 event,
+                transform,
                 sanitizers,
                 subscribers,
                 scope_stack,
-            } => deliver_event(event, sanitizers, subscribers, scope_stack),
+            } => deliver_event(event, transform, sanitizers, subscribers, scope_stack),
             DispatcherMessage::Flush { done } => {
                 let _ = done.send(());
+            }
+            DispatcherMessage::Barrier { done } => {
+                let _ = done.recv();
             }
         }
     }
 
     fn deliver_event(
         event: Box<Event>,
+        transform: Option<EventTransformFn>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         subscribers: Vec<EventSubscriberFn>,
         scope_stack: ScopeStackHandle,
@@ -211,7 +270,11 @@ mod native {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         IN_DISPATCHER.with(|flag| flag.set(true));
-        let event = NemoRelayContextState::event_sanitize_snapshot_chain(*event, &sanitizers);
+        let Some(event) = sanitize_event_snapshot(*event, transform, sanitizers) else {
+            IN_DISPATCHER.with(|flag| flag.set(false));
+            restore_thread_scope_stack(previous_scope_stack);
+            return;
+        };
         for subscriber in subscribers {
             if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
                 log::error!(
@@ -223,6 +286,75 @@ mod native {
         }
         IN_DISPATCHER.with(|flag| flag.set(false));
         restore_thread_scope_stack(previous_scope_stack);
+    }
+
+    /// Apply a transform and sanitizers on the dispatcher thread. A transform
+    /// failure drops the event because it may be responsible for inserting the
+    /// sanitized payload. A sanitizer failure retains the transformed snapshot
+    /// and continues publication (fail open).
+    fn sanitize_event_snapshot(
+        event: Event,
+        transform: Option<EventTransformFn>,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    ) -> Option<Event> {
+        let runtime = match SANITIZER_RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                if !SANITIZER_RUNTIME_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_sanitizer_runtime_failed";
+                        "Event sanitizer runtime failed; dropping events: {error}"
+                    );
+                }
+                return None;
+            }
+        };
+        let transformed = match catch_unwind(AssertUnwindSafe(|| {
+            runtime.block_on(async move {
+                match transform {
+                    Some(transform) => transform(event).await,
+                    None => event,
+                }
+            })
+        })) {
+            Ok(event) => event,
+            Err(_) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_transform_panicked";
+                    "Event transform panicked; dropping the event"
+                );
+                return None;
+            }
+        };
+        if sanitizers.is_empty() {
+            return Some(transformed);
+        }
+        let original = transformed.clone();
+        Some(
+            match catch_unwind(AssertUnwindSafe(|| {
+                runtime.block_on(NemoRelayContextState::event_sanitize_snapshot_chain(
+                    transformed,
+                    &sanitizers,
+                ))
+            })) {
+                Ok(event) => event,
+                Err(_) => {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_sanitizer_panicked";
+                        "Event sanitizer panicked; publishing the transformed event snapshot"
+                    );
+                    original
+                }
+            },
+        )
     }
 }
 
@@ -240,6 +372,26 @@ pub(crate) fn dispatch_sanitized_event(
     scope_stack: ScopeStackHandle,
 ) -> bool {
     native::dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
+}
+
+/// Queue a snapshot for a middleware-specific asynchronous transformation,
+/// followed by event sanitization and subscriber delivery.
+pub(crate) fn dispatch_transformed_event(
+    event: Event,
+    transform: EventTransformFn,
+    sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> bool {
+    native::dispatch_transformed_event(event, transform, sanitizers, subscribers, scope_stack)
+}
+
+/// Register a FIFO barrier for async work that will queue a subscriber event.
+///
+/// Dropping the returned sender releases the barrier, so error paths cannot
+/// leave the dispatcher blocked.
+pub(crate) fn register_async_publication() -> Option<std::sync::mpsc::Sender<()>> {
+    native::register_async_publication()
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.

@@ -582,6 +582,10 @@ impl SessionManager {
                 .map_err(CliError::from)
             })
             .await?;
+        // Manual lifecycle events publish on the serial dispatcher. This
+        // test-only seam returns after the matching end event is observable so
+        // a subsequent synthetic provider call cannot overtake it.
+        nemo_relay::api::subscriber::flush_subscribers().map_err(CliError::from)?;
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
             session.record_completed_llm_response(response_for_hints, owner_subagent_id);
@@ -784,9 +788,9 @@ impl Session {
                     NormalizedEvent::SubagentStarted(event) => self.start_subagent(event).await,
                     NormalizedEvent::SubagentEnded(event) => self.end_subagent(event).await,
                     NormalizedEvent::LlmHint(event) => self.add_llm_hint(event),
-                    NormalizedEvent::LlmStarted(event) => self.start_hook_llm(event),
-                    NormalizedEvent::LlmEnded(event) => self.end_hook_llm(event),
-                    NormalizedEvent::ToolStarted(event) => self.start_tool(event),
+                    NormalizedEvent::LlmStarted(event) => self.start_hook_llm(event).await,
+                    NormalizedEvent::LlmEnded(event) => self.end_hook_llm(event).await,
+                    NormalizedEvent::ToolStarted(event) => self.start_tool(event).await,
                     NormalizedEvent::ToolEnded(event) => self.end_tool(event).await,
                     NormalizedEvent::PromptSubmitted(event) => self.start_turn(event).await,
                     NormalizedEvent::Compaction(event) => self.mark("compaction", event),
@@ -1142,8 +1146,8 @@ impl Session {
         if self.turn_scope.is_none() {
             return Ok(Vec::new());
         }
-        self.close_active_llms(reason)?;
-        self.close_active_tools(reason)?;
+        self.close_active_llms(reason).await?;
+        self.close_active_tools(reason).await?;
         let closed_subagents = self.close_active_subagents(reason).await?;
         let output = self.last_turn_llm_output.take().unwrap_or(output);
         self.clear_correlation_state();
@@ -1182,7 +1186,7 @@ impl Session {
     }
 
     // Ends all active hook-observed LLM calls before closing their containing scopes.
-    fn close_active_llms(&mut self, reason: &str) -> Result<(), CliError> {
+    async fn close_active_llms(&mut self, reason: &str) -> Result<(), CliError> {
         let active_llms: Vec<_> = self.llms.drain().map(|(_, handle)| handle).collect();
         for handle in active_llms {
             llm_call_end(
@@ -1198,7 +1202,7 @@ impl Session {
 
     // Ends all active tool calls with a synthetic close result before ending their containing scopes.
     // Draining first avoids holding mutable map state while the runtime emits lifecycle events.
-    fn close_active_tools(&mut self, reason: &str) -> Result<(), CliError> {
+    async fn close_active_tools(&mut self, reason: &str) -> Result<(), CliError> {
         let active_tools: Vec<_> = self
             .tools
             .drain()
@@ -1428,7 +1432,7 @@ impl Session {
     // ignored so repeated pre hooks do not create parallel handles for one provider call. Aliased
     // child-session LLMs carry their subagent owner in metadata and are resolved by
     // `hook_llm_owner`.
-    fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
+    async fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
         self.ensure_turn_started(event.metadata.clone())?;
         if self.llms.contains_key(&event.api_call_id) {
             return Ok(());
@@ -1454,7 +1458,7 @@ impl Session {
     // Ends a hook-observed LLM call, synthesizing a start if only the post hook arrives. The same
     // alias metadata recovery used by `start_hook_llm` keeps post-only aliased child LLMs under the
     // subagent instead of falling back to the root agent.
-    fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
+    async fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
         self.ensure_turn_started(event.metadata.clone())?;
         let (parent, metadata) = self.hook_llm_owner(event.metadata);
         let handle = match self.llms.remove(&event.api_call_id) {
@@ -1511,7 +1515,7 @@ impl Session {
     // Starts a tool call under an explicit subagent when available, otherwise under the turn
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
-    fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
+    async fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
         self.ensure_turn_started(event.metadata.clone())?;
         if self.tools.contains_key(&event.tool_call_id) {
             return Ok(());
@@ -1529,7 +1533,7 @@ impl Session {
         let active_tool_arguments = arguments.clone();
         let active_tool_name = event.tool_name.clone();
         let active_tool_owner_subagent_id = owner.subagent_id.clone();
-        tool_conditional_execution(event.tool_name.as_str(), &arguments)?;
+        tool_conditional_execution(event.tool_name.as_str(), &arguments).await?;
         let metadata = tool_correlation_metadata(
             self.event_identity_metadata(event.metadata),
             owner.status,

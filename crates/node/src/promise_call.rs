@@ -53,6 +53,7 @@ enum PrimaryArg {
 
 struct CallArgs {
     arg0: PrimaryArg,
+    spread: bool,
     next: Option<NextFn>,
     completion: CallCompletion,
 }
@@ -73,19 +74,6 @@ impl CallCompletion {
         if let Some(sender) = self.sender.lock().unwrap().take() {
             let _ = sender.send(value);
         }
-    }
-}
-
-fn rejection_message(
-    string_result: napi::Result<String>,
-    object_message_result: Option<napi::Result<String>>,
-) -> String {
-    if let Ok(value) = string_result {
-        value
-    } else if let Some(message_result) = object_message_result {
-        message_result.unwrap_or_else(|_| "unknown error".to_string())
-    } else {
-        "unknown error".to_string()
     }
 }
 
@@ -168,12 +156,12 @@ fn build_completion_unknowns(
     })?;
 
     let reject = env.create_function_from_closure("__nemo_relay_reject", move |ctx| {
-        let message = rejection_message(
-            ctx.get::<String>(0),
-            ctx.get::<napi::JsObject>(0)
-                .ok()
-                .map(|value| value.get_named_property::<String>("message")),
-        );
+        // Do not invoke arbitrary `error.message` getters here. A throwing
+        // getter used to escape this callback and abort the N-API call rather
+        // than settling the middleware future as a rejection.
+        let message = ctx
+            .get::<String>(0)
+            .unwrap_or_else(|_| "unknown error".to_string());
         completion.send(Err(FlowError::Internal(message)));
         ctx.env.get_undefined()
     })?;
@@ -208,7 +196,13 @@ impl PromiseAwareFn {
                     PrimaryArg::Build(build) => build(&ctx.env)?,
                 };
 
-                let args = vec![arg0, next, resolve, reject];
+                let spread = unsafe {
+                    JsUnknown::from_raw_unchecked(
+                        ctx.env.raw(),
+                        ctx.env.get_boolean(ctx.value.spread)?.raw(),
+                    )
+                };
+                let args = vec![arg0, spread, next, resolve, reject];
                 Ok(args)
             })?;
 
@@ -222,7 +216,17 @@ impl PromiseAwareFn {
 
     /// Call the JS function with the given args and await the result.
     pub async fn call(&self, args: Json) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(args), None).await
+        self.call_inner(PrimaryArg::Json(args), false, None).await
+    }
+
+    /// Call a JavaScript callback with several JSON arguments.
+    ///
+    /// This retains the normal callback shape for middleware such as tool
+    /// guardrails, whose public contract is `(name, payload)` rather than a
+    /// single envelope object.
+    pub async fn call_spread(&self, args: Vec<Json>) -> FlowResult<Json> {
+        self.call_inner(PrimaryArg::Json(Json::Array(args)), true, None)
+            .await
     }
 
     /// Call the JS function with a builder-constructed first argument and await
@@ -232,13 +236,20 @@ impl PromiseAwareFn {
     /// cannot cross the threadsafe-function boundary as plain JSON, such as a
     /// `#[napi]` class instance.
     pub async fn call_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Build(build_arg0), None).await
+        self.call_inner(PrimaryArg::Build(build_arg0), false, None)
+            .await
+    }
+
+    /// Call a JavaScript callback with builder-constructed spread arguments.
+    pub async fn call_spread_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
+        self.call_inner(PrimaryArg::Build(build_arg0), true, None)
+            .await
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
     /// resolves to a JSON result.
     pub async fn call_with_json_next(&self, args: Json, next: JsonNextFn) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(args), Some(NextFn::Json(next)))
+        self.call_inner(PrimaryArg::Json(args), false, Some(NextFn::Json(next)))
             .await
     }
 
@@ -249,7 +260,7 @@ impl PromiseAwareFn {
         args: Json,
         next: JsonStreamNextFn,
     ) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(args), Some(NextFn::Stream(next)))
+        self.call_inner(PrimaryArg::Json(args), false, Some(NextFn::Stream(next)))
             .await
     }
 
@@ -260,7 +271,12 @@ impl PromiseAwareFn {
         }
     }
 
-    async fn call_inner(&self, arg0: PrimaryArg, next: Option<NextFn>) -> FlowResult<Json> {
+    async fn call_inner(
+        &self,
+        arg0: PrimaryArg,
+        spread: bool,
+        next: Option<NextFn>,
+    ) -> FlowResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let tsfn = self
             .tsfn
@@ -272,6 +288,7 @@ impl PromiseAwareFn {
         let status = tsfn.call(
             Ok(CallArgs {
                 arg0,
+                spread,
                 next,
                 completion: CallCompletion::new(sender),
             }),
