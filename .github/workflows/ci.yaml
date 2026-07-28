@@ -283,6 +283,13 @@ jobs:
           merge-multiple: true
           path: release-assets/
 
+      - name: Download Python API wheel artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: release-assets/
+
       - name: Generate distribution checksums
         run: |
           set -euo pipefail
@@ -302,10 +309,12 @@ jobs:
 
             cli_binaries=(nemo-relay-cli-*)
             cli_wheels=(nemo_relay_cli_bin-*.whl)
+            python_api_wheels=(nemo_relay-*.whl)
             cli_npm=(nemo-relay-bin-npm-*.tgz)
             node_npm=(nemo-relay-node-npm-*.tgz)
             expect_count 5 "CLI binary" "${cli_binaries[@]}"
             expect_count 5 "CLI wheel" "${cli_wheels[@]}"
+            expect_count 5 "Python API wheel" "${python_api_wheels[@]}"
             expect_count 6 "CLI npm" "${cli_npm[@]}"
             expect_count 6 "Node npm" "${node_npm[@]}"
 

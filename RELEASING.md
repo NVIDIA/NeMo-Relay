@@ -33,7 +33,7 @@ The release pipeline publishes these package surfaces from a tag push:
 | crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-switchyard`, `nemo-relay-ffi`, `nemo-relay-cli` |
 | PyPI | `nemo-relay`, `nemo-relay-plugin`, `nemo-relay-cli-bin` |
 | npm | `nemo-relay-node` and its five platform packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and its five platform packages |
-| GitHub Releases | CLI binaries, CLI wheels, CLI and Node npm tarballs, and checksums |
+| GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, CLI and Node npm tarballs, and checksums |
 | Fern | The documentation site |
 
 Go remains source-first. There is no separate Go package-manager publication
@@ -262,10 +262,11 @@ The release pipeline then:
    - The Rust CLI matrix packages each prebuilt binary as a
      `nemo-relay-cli-bin` wheel and npm platform package, and creates the npm
      launcher package once.
-   - The distribution release-asset job uploads the CLI binaries, CLI wheels,
-     CLI npm packages, and split Node npm packages. `SHA256SUMS` covers every
-     attached distribution artifact, and raw CLI binaries also receive
-     individual `.sha256` files for installer compatibility.
+   - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
+     API wheels, CLI wheels, CLI npm packages, and split Node npm packages.
+     `SHA256SUMS` covers every attached distribution artifact, and raw CLI
+     binaries also receive individual `.sha256` files for installer
+     compatibility.
      GitHub-facing npm artifacts use
      `nemo-relay-bin-npm[-<os>-<cpu>]-<version>.tgz` for the CLI and
      `nemo-relay-node-npm[-<os>-<cpu>]-<version>.tgz` for Node.js; their
