@@ -6,11 +6,16 @@
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use nemo_relay::api::event::Event;
+use nemo_relay::api::registry::{
+    deregister_mark_sanitize_guardrail, register_mark_sanitize_guardrail,
+};
 use nemo_relay::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
 use nemo_relay::api::scope::{EmitMarkEventParams, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use serde_json::json;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -94,6 +99,66 @@ fn dispatcher_preserves_event_order() {
     deregister_subscriber("ordered-subscriber").unwrap();
 
     assert_eq!(observed.lock().unwrap().as_slice(), ["one", "two"]);
+}
+
+#[test]
+fn mark_emission_snapshots_sanitizers_and_returns_before_they_finish() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let (sanitizer_started_tx, sanitizer_started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    register_mark_sanitize_guardrail(
+        "blocking-mark-sanitizer",
+        10,
+        Arc::new(move |_, mut fields| {
+            sanitizer_started_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            fields.data = Some(json!({"sanitized": true}));
+            fields
+        }),
+    )
+    .unwrap();
+
+    let observed = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let observed_events = Arc::clone(&observed);
+    register_subscriber(
+        "sanitized-mark-subscriber",
+        Arc::new(move |event| observed_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let (returned_tx, returned_rx) = mpsc::channel();
+    let event_thread = std::thread::spawn(move || {
+        emit_mark("queued-sanitizer");
+        returned_tx.send(()).unwrap();
+    });
+
+    sanitizer_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("sanitizer should start on the dispatcher thread");
+    returned_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("mark emission should return while its sanitizer is blocked");
+
+    // Removing the global registration cannot affect the already-snapshotted
+    // publication chain.
+    deregister_mark_sanitize_guardrail("blocking-mark-sanitizer").unwrap();
+    release_tx.send(()).unwrap();
+    event_thread.join().unwrap();
+    flush_subscribers().unwrap();
+
+    let events = observed.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].sanitize_fields().data,
+        Some(json!({"sanitized": true}))
+    );
+    drop(events);
+    deregister_subscriber("sanitized-mark-subscriber").unwrap();
 }
 
 #[test]
