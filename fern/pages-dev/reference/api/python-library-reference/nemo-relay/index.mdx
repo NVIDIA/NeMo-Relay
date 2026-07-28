@@ -53,6 +53,38 @@ def create_scope_stack() -> ScopeStack
 
 Create a new isolated scope stack.
 
+### `capture_propagation_context`
+
+```python
+def capture_propagation_context() -> PropagationContext
+```
+
+Capture the current Relay causal parent for application-managed transport.
+
+### `capture_propagation_context_with_root`
+
+```python
+def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext
+```
+
+Capture the current parent with an optional stable application session root.
+
+### `create_scope_stack_from_propagation`
+
+```python
+def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack
+```
+
+Create an isolated stack seeded from a received propagation context.
+
+### `use_scope_stack`
+
+```python
+def use_scope_stack(stack: ScopeStack)
+```
+
+Temporarily install `stack` in the current Python context.
+
 ### `set_thread_scope_stack`
 
 ```python
@@ -105,6 +137,7 @@ Install a scope stack into the current thread's native runtime context.
 - `OpenTelemetryConfig`
 - `OpenTelemetrySubscriber`
 - `PendingMarkSpec`
+- `PropagationContext`
 - `ScopeAttributes`
 - `ScopeEvent`
 - `ScopeHandle`

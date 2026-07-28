@@ -37,12 +37,16 @@ Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime sta
 - `pub use callbacks::ToolInterceptFn;`
 - `pub use callbacks::ToolSanitizeFn;`
 - `pub use global::global_context;`
+- `pub use scope_stack::PropagationContext;`
 - `pub use scope_stack::ScopeStack;`
 - `pub use scope_stack::ScopeStackHandle;`
 - `pub use scope_stack::TASK_SCOPE_STACK;`
 - `pub use scope_stack::ThreadScopeStackBinding;`
+- `pub use scope_stack::capture_propagation_context;`
+- `pub use scope_stack::capture_propagation_context_with_root;`
 - `pub use scope_stack::capture_thread_scope_stack;`
 - `pub use scope_stack::create_scope_stack;`
+- `pub use scope_stack::create_scope_stack_from_propagation;`
 - `pub use scope_stack::current_scope_stack;`
 - `pub use scope_stack::propagate_scope_to_thread;`
 - `pub use scope_stack::restore_thread_scope_stack;`
@@ -52,6 +56,7 @@ Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime sta
 - `pub use scope_stack::task_scope_push;`
 - `pub use scope_stack::task_scope_remove;`
 - `pub use scope_stack::task_scope_top;`
+- `pub use scope_stack::with_active_event_uuid;`
 - `pub use scope_stack::with_scope_stack;`
 - `pub use state::NemoRelayContextState;`
 - `pub use subscriber_dispatcher::flush_subscribers;`

@@ -14,6 +14,18 @@ Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs.
 
 ## Interfaces
 
+### `PropagationContext`
+
+Transport-neutral Relay causal context for application-managed transport.
+
+```ts
+export interface PropagationContext {
+  version: number
+  rootUuid?: string
+  parentUuid: string
+}
+```
+
 ### `AtofExporterConfig`
 
 One tagged sink configuration for `AtofExporter`.
@@ -542,6 +554,56 @@ Creates a new isolated scope stack.
 
 ```ts
 export declare function createScopeStack(): ScopeStack
+```
+
+### `capturePropagationContext`
+
+Capture the current Relay causal parent for application-managed transport.
+
+```ts
+export declare function capturePropagationContext(): PropagationContext
+```
+
+### `capturePropagationContextWithRoot`
+
+Capture the current parent with an optional stable application session root.
+
+```ts
+export declare function capturePropagationContextWithRoot(rootUuid?: string | undefined | null): PropagationContext
+```
+
+### `propagationContextToJson`
+
+Serialize a Relay causal context to the JSON wire format.
+
+```ts
+export declare function propagationContextToJson(context: PropagationContext): string
+```
+
+### `propagationContextFromJson`
+
+Deserialize and validate a Relay causal context from the JSON wire format.
+
+```ts
+export declare function propagationContextFromJson(value: string): PropagationContext
+```
+
+### `createScopeStackFromPropagation`
+
+Create an isolated scope stack seeded from a received propagation context.
+
+```ts
+export declare function createScopeStackFromPropagation(context: PropagationContext): ScopeStack
+```
+
+### `withScopeStack`
+
+Run a synchronous callback with an isolated scope stack installed.
+
+The stack is restored before this function returns. Asynchronous callbacks must not rely on this installation after their first `await`.
+
+```ts
+export declare function withScopeStack(stack: ScopeStack, callback: (...args: any[]) => any): unknown
 ```
 
 ### `currentScopeStack`
