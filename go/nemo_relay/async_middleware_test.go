@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func asyncMiddlewareNoop(context.Context, json.RawMessage) (any, error) {
@@ -267,5 +268,46 @@ func TestAsyncToolMiddlewarePropagatesCallbackAndNextErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "tool implementation failed") {
 			t.Fatalf("next error = %v, want implementation failure", err)
 		}
+	})
+}
+
+func TestAsyncNextObservesOuterCancellationWithDetachedContext(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		const name = "go-async-detached-next"
+		nextStarted := make(chan struct{})
+		releaseNext := make(chan struct{})
+		if err := RegisterToolExecutionInterceptAsync(name, 0,
+			func(_ context.Context, invocation json.RawMessage, next AsyncNext) (any, error) {
+				go func() {
+					_, _ = next(context.Background(), invocation)
+				}()
+				<-nextStarted
+				return nil, errors.New("intercept returned early")
+			},
+		); err != nil {
+			t.Fatalf("register execution intercept: %v", err)
+		}
+		t.Cleanup(func() { _ = DeregisterToolExecutionIntercept(name) })
+
+		result := make(chan error, 1)
+		go func() {
+			_, err := ToolCallExecute(name, json.RawMessage(`{}`), func(args json.RawMessage) (json.RawMessage, error) {
+				close(nextStarted)
+				<-releaseNext
+				return args, nil
+			})
+			result <- err
+		}()
+
+		select {
+		case err := <-result:
+			if err == nil || !strings.Contains(err.Error(), "intercept returned early") {
+				t.Fatalf("execution error = %v, want intercept failure", err)
+			}
+		case <-time.After(time.Second):
+			close(releaseNext)
+			t.Fatal("detached next context prevented intercept cleanup")
+		}
+		close(releaseNext)
 	})
 }
