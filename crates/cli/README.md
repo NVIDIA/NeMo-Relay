@@ -104,6 +104,13 @@ After setup, inspect local readiness:
 nemo-relay doctor
 ```
 
+To troubleshoot a specific configuration file, pass it explicitly. Doctor reports a missing or
+invalid file in its configuration checks instead of stopping before diagnostics:
+
+```bash
+nemo-relay --config /path/to/config.toml doctor
+```
+
 Run a supported agent through the gateway:
 
 ```bash

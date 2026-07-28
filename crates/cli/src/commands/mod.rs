@@ -80,8 +80,24 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
                 _ => cli.server.config.as_deref(),
             }
         };
-        let config = cli.logging.resolve(explicit_config, user_only)?;
+        let mut logging_fallback_error = None;
+        let config = match cli.logging.resolve(explicit_config, user_only) {
+            Ok(config) => config,
+            Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
+                logging_fallback_error = Some(error);
+                nemo_relay::logging::LoggingConfig::default()
+            }
+            Err(error) => return Err(error),
+        };
         let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
+        if let Some(error) = logging_fallback_error {
+            log::warn!(
+                target: "nemo_relay.cli",
+                event = "doctor_logging_fallback",
+                error_kind = error.log_kind();
+                "Doctor fell back to default logging after resolution failure"
+            );
+        }
         Some(runtime)
     } else {
         None
@@ -147,7 +163,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Config(command) => configure::execute(command).await,
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
-        Command::Doctor(command) => diagnostics::execute(command).await,
+        Command::Doctor(command) => diagnostics::execute(command, server).await,
         Command::Agents(command) => runtime_diagnostics::run_agents(command.json).await,
         Command::Completions(command) => completions::execute(command),
     }
@@ -195,7 +211,7 @@ async fn run_default(
         .await?;
         Ok(ExitCode::SUCCESS)
     } else if runtime_configuration::any_config_file_exists() {
-        runtime_diagnostics::run_doctor(None, false).await
+        runtime_diagnostics::run_doctor(None, false, &runtime_args).await
     } else {
         configure::run(None).await?;
         Ok(ExitCode::SUCCESS)

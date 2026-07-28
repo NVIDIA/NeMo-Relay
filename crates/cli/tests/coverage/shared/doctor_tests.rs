@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::configuration::ResolvedDynamicPluginConfig;
+use crate::server::GatewayOverrides;
 use crate::test_support::{EnvScope, accept_bounded, read_headers};
 
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
@@ -55,6 +56,7 @@ fn empty_report() -> DoctorReport {
             shell: Some("zsh".into()),
         },
         configuration: ConfigurationInfo {
+            explicit_config: false,
             workspace: ConfigLayer {
                 path: PathBuf::from("/x/.nemo-relay/config.toml"),
                 status: Status::Info,
@@ -565,6 +567,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
     let configuration = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &GatewayOverrides::default(),
         Check {
             name: "Resolution",
             status: Status::Warn,
@@ -839,6 +842,7 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
     let info = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &GatewayOverrides::default(),
         Check {
             name: "Resolution",
             status: Status::Pass,
