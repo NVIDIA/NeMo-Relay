@@ -640,11 +640,10 @@ impl NemoRelayContextState {
         mut event: Event,
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
-        let event_context = Arc::new(event.clone());
         for entry in entries {
             let fields = event.sanitize_fields();
             let callback = Arc::clone(&entry.payload);
-            let context = Arc::clone(&event_context);
+            let context = Arc::new(event.clone());
             match AssertUnwindSafe(async move { callback(context, fields).await })
                 .catch_unwind()
                 .await
