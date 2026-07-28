@@ -227,6 +227,36 @@ fn async_execution_wrappers_continue_tool_and_llm_calls() {
     );
 }
 
+#[test]
+fn async_stream_execution_wrapper_collects_the_continued_stream() {
+    let intercept = wrap_async_llm_stream_execution_intercept_fn(
+        async_next_callback,
+        std::ptr::null_mut(),
+        None,
+    );
+    let next: LlmStreamExecutionNextFn = Arc::new(|request| {
+        Box::pin(async move {
+            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                tokio_stream::iter(vec![
+                    Ok(json!({"model": request.content["model"], "chunk": 1})),
+                    Ok(json!({"chunk": 2})),
+                ]),
+            ))
+        })
+    });
+
+    let mut stream = resolve(intercept("llm", make_request(), next)).unwrap();
+    assert_eq!(
+        resolve(async { stream.next().await.unwrap().unwrap() }),
+        json!({"model": "test-model", "chunk": 1})
+    );
+    assert_eq!(
+        resolve(async { stream.next().await.unwrap().unwrap() }),
+        json!({"chunk": 2})
+    );
+    assert!(resolve(async { stream.next().await }).is_none());
+}
+
 fn user_data_counter() -> (*mut libc::c_void, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let ptr = Box::into_raw(Box::new(counter.clone())) as *mut libc::c_void;
