@@ -71,7 +71,13 @@ fn validate_async_registration_parity(crate_dir: &str) {
         .filter_map(parse_async_prototype)
         .collect::<Vec<_>>();
     declared.sort_by(|left, right| left.name.cmp(right.name));
-    declared.dedup_by(|left, right| left.name == right.name);
+    for duplicates in declared.windows(2) {
+        assert_ne!(
+            duplicates[0].name, duplicates[1].name,
+            "ASYNC_REGISTRATIONS contains duplicate declaration for {}",
+            duplicates[0].name
+        );
+    }
     let declared_names = declared
         .iter()
         .map(|prototype| prototype.name.to_owned())
