@@ -143,6 +143,18 @@ pub type NemoRelayAsyncNextResultCb = unsafe extern "C" fn(
     error_message: *const c_char,
 );
 
+struct SendUserData(*mut libc::c_void);
+
+// SAFETY: NemoRelayAsyncNextResultCb requires callers to keep user_data valid
+// and safe to access until the asynchronously invoked callback runs.
+unsafe impl Send for SendUserData {}
+
+impl SendUserData {
+    fn as_ptr(&self) -> *mut libc::c_void {
+        self.0
+    }
+}
+
 struct CompletionWait {
     completion: Arc<NemoRelayAsyncCompletion>,
     receiver: tokio::sync::oneshot::Receiver<Result<Json>>,
@@ -349,17 +361,17 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke_callback(
             Box::pin(async move { collect_async_stream_for_completion(next(request).await?).await })
         }
     };
-    let user_data = user_data as usize;
+    let user_data = SendUserData(user_data);
     next.runtime.spawn(async move {
         match future.await {
             Ok(value) => {
                 let value = json_to_c_string(&value);
-                unsafe { callback(user_data as *mut libc::c_void, value, ptr::null()) };
+                unsafe { callback(user_data.as_ptr(), value, ptr::null()) };
                 unsafe { nemo_relay_string_free_internal(value) };
             }
             Err(error) => {
                 let error = CString::new(error.to_string()).unwrap_or_default();
-                unsafe { callback(user_data as *mut libc::c_void, ptr::null(), error.as_ptr()) };
+                unsafe { callback(user_data.as_ptr(), ptr::null(), error.as_ptr()) };
             }
         }
     });
