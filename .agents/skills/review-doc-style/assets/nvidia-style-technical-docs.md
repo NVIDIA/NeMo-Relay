@@ -127,6 +127,9 @@ Flag accessibility issues that affect docs readers:
 - Long paragraphs or sentences that make scanning difficult.
 - Instructions that rely only on color, position, or visual appearance.
 - Low contrast when the change includes rendered images or custom HTML.
+- Images, diagrams, or other visual content sized so small that labels or
+  important details are illegible at representative page widths.
+- Wide visual content that is clipped or otherwise not fully reachable.
 
 ## UI References
 
