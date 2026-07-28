@@ -44,7 +44,7 @@ func TestValidateAdaptiveConfigAndOwnedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
-	defer runtime.Shutdown()
+	defer func() { _ = runtime.Shutdown() }()
 	if err := runtime.Register(); err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}

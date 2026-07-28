@@ -50,9 +50,11 @@ fn validate_async_registration_parity(crate_dir: &str) {
         "src/api/tool_registry.rs",
     ];
 
+    println!("cargo:rerun-if-changed=cbindgen.toml");
+    println!("cargo:rerun-if-changed=src");
+
     let mut expected = Vec::new();
     for source in REGISTRATION_SOURCES {
-        println!("cargo:rerun-if-changed={source}");
         let source_path = format!("{crate_dir}/{source}");
         let contents = std::fs::read_to_string(&source_path)
             .unwrap_or_else(|error| panic!("read {source_path}: {error}"));

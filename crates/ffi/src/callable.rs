@@ -76,9 +76,10 @@ pub struct NemoRelayAsyncCompletion {
 /// Generic completion-based middleware callback.
 ///
 /// `invocation_json` is borrowed for the duration of the call. The completion
-/// has one callback-owned reference. A callback returning `Complete` need not
-/// release it; a callback returning `Pending` must eventually settle and call
-/// `nemo_relay_async_completion_release`.
+/// has one callback-owned reference. A callback returning `Complete` must not
+/// release it because the runtime does so; a callback returning `Pending` must
+/// eventually settle and call `nemo_relay_async_completion_release` exactly
+/// once.
 pub type NemoRelayAsyncJsonCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     invocation_json: *const c_char,
@@ -128,6 +129,11 @@ async fn collect_async_stream_for_completion(mut stream: LlmJsonStream) -> Resul
 }
 
 /// Completion-based execution-intercept callback.
+///
+/// A callback returning `Complete` must not release either `completion` or
+/// `next` because the runtime does so. A callback returning `Pending` must
+/// eventually settle and release its callback-owned `completion` and `next`
+/// references exactly once.
 pub type NemoRelayAsyncInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     invocation_json: *const c_char,

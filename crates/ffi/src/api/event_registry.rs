@@ -53,6 +53,8 @@ unsafe fn register_global_async(
     surface: Surface,
 ) -> NemoRelayStatus {
     clear_last_error();
+    // The wrapper assumes ownership before validation so every return path
+    // invokes free_fn exactly once.
     let callback = wrap_async_event_sanitize_fn(cb, user_data, free_fn);
     let name = match c_str_to_string(name) {
         Ok(name) => name,
@@ -176,6 +178,8 @@ unsafe fn register_scope_async(
     surface: Surface,
 ) -> NemoRelayStatus {
     clear_last_error();
+    // The wrapper assumes ownership before validation so every return path
+    // invokes free_fn exactly once.
     let callback = wrap_async_event_sanitize_fn(cb, user_data, free_fn);
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(uuid) => uuid,

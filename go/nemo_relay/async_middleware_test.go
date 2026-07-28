@@ -271,6 +271,47 @@ func TestAsyncToolMiddlewarePropagatesCallbackAndNextErrors(t *testing.T) {
 	})
 }
 
+func TestAsyncMiddlewarePanicsBecomeInvocationErrors(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		const conditionalName = "go-async-tool-conditional-panic"
+		if err := RegisterToolConditionalExecutionGuardrailAsync(conditionalName, 0,
+			func(context.Context, json.RawMessage) (any, error) {
+				panic("conditional callback panicked")
+			},
+		); err != nil {
+			t.Fatalf("register conditional: %v", err)
+		}
+		t.Cleanup(func() { _ = DeregisterToolConditionalExecutionGuardrail(conditionalName) })
+
+		_, err := ToolCallExecute(conditionalName, json.RawMessage(`{}`), func(json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "conditional callback panicked") {
+			t.Fatalf("conditional error = %v, want recovered panic", err)
+		}
+		if err := DeregisterToolConditionalExecutionGuardrail(conditionalName); err != nil {
+			t.Fatalf("deregister conditional: %v", err)
+		}
+
+		const executionName = "go-async-tool-execution-panic"
+		if err := RegisterToolExecutionInterceptAsync(executionName, 0,
+			func(context.Context, json.RawMessage, AsyncNext) (any, error) {
+				panic("execution intercept panicked")
+			},
+		); err != nil {
+			t.Fatalf("register execution intercept: %v", err)
+		}
+		t.Cleanup(func() { _ = DeregisterToolExecutionIntercept(executionName) })
+
+		_, err = ToolCallExecute(executionName, json.RawMessage(`{}`), func(json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "execution intercept panicked") {
+			t.Fatalf("execution error = %v, want recovered panic", err)
+		}
+	})
+}
+
 func TestAsyncNextObservesOuterCancellationWithDetachedContext(t *testing.T) {
 	runTestWithScopeStack(t, func(t *testing.T) {
 		const name = "go-async-detached-next"
