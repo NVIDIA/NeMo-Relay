@@ -13,6 +13,16 @@ unsafe extern "C" fn complete_without_settling(
     NemoRelayAsyncCallbackState::Complete
 }
 
+unsafe extern "C" fn retain_pending_completion(
+    user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    completion: *const NemoRelayAsyncCompletion,
+) -> NemoRelayAsyncCallbackState {
+    let slot = unsafe { &*user_data.cast::<std::sync::atomic::AtomicUsize>() };
+    slot.store(completion as usize, Ordering::Release);
+    NemoRelayAsyncCallbackState::Pending
+}
+
 unsafe extern "C" fn send_next_result(
     user_data: *mut libc::c_void,
     value_json: *const c_char,
@@ -99,14 +109,39 @@ fn async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlements() {
     );
     unsafe { nemo_relay_async_completion_release(completion_ref) };
 
-    let (sender, _receiver) = tokio::sync::oneshot::channel();
-    let completion = Arc::new(NemoRelayAsyncCompletion {
-        sender: std::sync::Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(true),
+    let retained_completion = std::sync::atomic::AtomicUsize::new(0);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let mut invocation = Box::pin(invoke_async_json(
+            retain_pending_completion,
+            Arc::new(UserData {
+                ptr: (&retained_completion as *const std::sync::atomic::AtomicUsize)
+                    .cast_mut()
+                    .cast(),
+                free_fn: None,
+            }),
+            serde_json::json!({}),
+        ));
+        tokio::select! {
+            biased;
+            result = &mut invocation => panic!("pending callback unexpectedly settled: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        drop(invocation);
     });
-    let completion_ref = Arc::into_raw(Arc::clone(&completion));
+    let completion_ref =
+        retained_completion.load(Ordering::Acquire) as *const NemoRelayAsyncCompletion;
+    assert!(!completion_ref.is_null());
     assert!(unsafe { nemo_relay_async_completion_is_cancelled(completion_ref) });
     assert!(unsafe { nemo_relay_async_completion_is_cancelled(std::ptr::null()) });
+    let value = CString::new(r#"{"late":true}"#).unwrap();
+    assert_eq!(
+        unsafe { nemo_relay_async_completion_resolve_json(completion_ref, value.as_ptr()) },
+        NemoRelayStatus::InvalidArg
+    );
     assert_eq!(
         unsafe { nemo_relay_async_completion_reject(completion_ref, std::ptr::null()) },
         NemoRelayStatus::InvalidArg

@@ -952,7 +952,8 @@ pub fn wrap_async_llm_execution_intercept_fn(
 /// The completion ABI resolves one JSON value, so a stream intercept must
 /// resolve to an array of chunks. Relay replays that array as a stream after
 /// completion; incremental chunk delivery is not available through this ABI.
-/// Relay rejects more than 4096 chunks or 16 MiB of serialized chunk data.
+/// When the callback invokes `next`, Relay rejects more than 4096 chunks or
+/// 16 MiB of serialized chunk data while collecting that continuation.
 pub fn wrap_async_llm_stream_execution_intercept_fn(
     cb: NemoRelayAsyncInterceptCb,
     user_data: *mut libc::c_void,
