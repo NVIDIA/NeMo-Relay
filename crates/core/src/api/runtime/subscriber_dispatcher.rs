@@ -211,18 +211,22 @@ mod native {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         IN_DISPATCHER.with(|flag| flag.set(true));
-        let original = (*event).clone();
-        let event = catch_unwind(AssertUnwindSafe(|| {
-            NemoRelayContextState::event_sanitize_snapshot_chain(*event, &sanitizers)
-        }))
-        .unwrap_or_else(|_| {
-            log::error!(
-                target: "nemo_relay.runtime",
-                event = "event_sanitizer_panicked";
-                "Event sanitizer panicked; publishing the original event snapshot"
-            );
-            original
-        });
+        let event = if sanitizers.is_empty() {
+            *event
+        } else {
+            let original = (*event).clone();
+            catch_unwind(AssertUnwindSafe(|| {
+                NemoRelayContextState::event_sanitize_snapshot_chain(*event, &sanitizers)
+            }))
+            .unwrap_or_else(|_| {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_panicked";
+                    "Event sanitizer panicked; publishing the original event snapshot"
+                );
+                original
+            })
+        };
         for subscriber in subscribers {
             if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
                 log::error!(
