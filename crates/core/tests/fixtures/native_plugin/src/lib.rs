@@ -678,9 +678,18 @@ unsafe extern "C" fn raw_async_passthrough_callback(
     let result = unsafe { raw_host_string_value(&host.v1, invocation_json) }
         .and_then(|value| serde_json::from_str::<Json>(&value).ok())
         .and_then(|invocation| {
-            ["value", "request", "response", "fields"]
-                .into_iter()
-                .find_map(|key| invocation.get(key).cloned())
+            invocation.get("annotated").map(|annotated| {
+                json!({
+                    "request": invocation["request"],
+                    "annotated_request": annotated,
+                    "pending_marks": [],
+                    "optimization_contributions": [],
+                })
+            }).or_else(|| {
+                ["value", "request", "response", "fields"]
+                    .into_iter()
+                    .find_map(|key| invocation.get(key).cloned())
+            })
         })
         .and_then(|value| serde_json::to_string(&value).ok());
     let Some(result) = result else {
@@ -793,13 +802,12 @@ unsafe extern "C" fn raw_async_tool_execution_callback(
     let value = unsafe { raw_host_string_value(&host.v1, invocation_json) }
         .and_then(|json| serde_json::from_str::<Json>(&json).ok())
         .and_then(|mut invocation| {
-            invocation
-                .get_mut("value")
-                .and_then(Json::as_object_mut)
-                .map(|value| {
-                    value.insert("native_async_execution".into(), json!(true));
-                    Json::Object(value.clone())
-                })
+            if let Some(value) = invocation.get_mut("value").and_then(Json::as_object_mut) {
+                value.insert("native_async_execution".into(), json!(true));
+                Some(Json::Object(value.clone()))
+            } else {
+                invocation.get("request").cloned()
+            }
         })
         .and_then(|value| serde_json::to_string(&value).ok());
     let Some(value) = value else {

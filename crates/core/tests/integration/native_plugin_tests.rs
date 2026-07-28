@@ -705,6 +705,23 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     .expect("v3 async execution intercept should continue with next");
     assert_eq!(executed["native_async_execution"], true);
 
+    let llm_response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("async-llm")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "native async"}),
+            })
+            .func(Arc::new(|_request| {
+                Box::pin(async move { Ok(json!({"content": "native async response"})) })
+            }))
+            .build(),
+    )
+    .await
+    .expect("v3 async LLM middleware should settle");
+    assert_eq!(llm_response["content"], "native async response");
+    flush_subscribers().expect("async native LLM events should flush");
+
     let pending = tokio::spawn(async {
         tool_request_intercepts("async-pending", json!({"input": true})).await
     });
