@@ -3782,6 +3782,73 @@ async fn gateway_relays_non_2xx_upstream_verbatim_and_never_caches_it() {
 }
 
 #[tokio::test]
+async fn gateway_relays_2xx_non_json_upstream_verbatim_and_never_caches_it() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const UPSTREAM_BODY: &str = "provider returned malformed JSON";
+    let (upstream, upstream_calls) =
+        spawn_mock_upstream(StatusCode::OK, "text/plain", UPSTREAM_BODY).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+        "temperature": 0.0
+    });
+    for _ in 0..2 {
+        let response = client
+            .post(format!("{url}/v1/chat/completions"))
+            .json(&request_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the upstream success status must be relayed"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain"),
+            "the upstream content type must be relayed"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-upstream-marker")
+                .and_then(|value| value.to_str().ok()),
+            Some("mock"),
+            "upstream headers must be relayed"
+        );
+        assert_eq!(
+            response.text().await.unwrap(),
+            UPSTREAM_BODY,
+            "the non-JSON upstream body must be relayed verbatim"
+        );
+    }
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "an unparseable upstream response must never be cached"
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+#[tokio::test]
 async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_body() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();

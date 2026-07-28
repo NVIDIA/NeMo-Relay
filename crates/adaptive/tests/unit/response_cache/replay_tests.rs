@@ -78,6 +78,45 @@ fn replay_chunks_roundtrip_through_the_codecs() {
     }
 }
 
+#[test]
+fn responses_replay_sequence_numbers_are_contiguous() {
+    let aggregate = json!({
+        "id": "r1",
+        "object": "response",
+        "status": "completed",
+        "model": "m",
+        "output": [
+            {"type": "message", "role": "assistant", "content": []},
+            {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"}
+        ]
+    });
+
+    let chunks = synthesize_responses_chunks(&aggregate);
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| chunk["type"].as_str().expect("event type"))
+            .collect::<Vec<_>>(),
+        [
+            "response.created",
+            "response.output_item.done",
+            "response.output_item.done",
+            "response.completed"
+        ]
+    );
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| {
+                chunk["sequence_number"]
+                    .as_u64()
+                    .expect("every Responses event needs a sequence_number")
+            })
+            .collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+}
+
 /// A chat replay must carry tool calls in the streaming delta shape a client
 /// can accumulate (full arguments in one fragment is spec-valid).
 #[test]

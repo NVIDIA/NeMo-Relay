@@ -335,7 +335,7 @@ fn validate_adaptive_plugin_config_with_policy(
             let backend_kind = backend_json
                 .get("kind")
                 .and_then(Json::as_str)
-                .unwrap_or_default();
+                .unwrap_or("in_memory");
             if let Some(backend_config_json) = backend_json.get("config").and_then(Json::as_object)
             {
                 validate_response_cache_backend_config_fields(

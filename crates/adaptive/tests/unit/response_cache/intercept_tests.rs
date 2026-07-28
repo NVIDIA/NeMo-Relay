@@ -16,8 +16,10 @@ async fn cache_commit_does_not_delay_stream_completion() {
     let (cancel, _) = watch::channel(false);
     let (_, closed) = watch::channel(None::<FlowResult<()>>);
     let (release, wait) = oneshot::channel();
+    let (commit_done, committed) = oneshot::channel();
     let commit: CacheCommit = Box::pin(async move {
         let _ = wait.await;
+        let _ = commit_done.send(());
     });
     assert!(tx.send(TeeMessage::Commit(commit)).await.is_ok());
 
@@ -33,5 +35,11 @@ async fn cache_commit_does_not_delay_stream_completion() {
             .expect("cache write must not delay stream completion")
             .is_none()
     );
-    let _ = release.send(());
+    release
+        .send(())
+        .expect("detached cache commit must still be waiting");
+    tokio::time::timeout(Duration::from_secs(1), committed)
+        .await
+        .expect("detached cache commit must resume after release")
+        .expect("detached cache commit must run to completion");
 }

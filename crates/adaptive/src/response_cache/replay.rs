@@ -252,14 +252,17 @@ fn synthesize_responses_chunks(aggregate: &Json) -> Vec<Json> {
         }
     }
     created.insert("status".to_string(), json!("in_progress"));
-    let mut chunks = vec![json!({"type": "response.created", "response": created})];
+    let mut chunks =
+        vec![json!({"type": "response.created", "sequence_number": 0, "response": created})];
     if let Some(items) = aggregate.get("output").and_then(Json::as_array) {
         for (index, item) in items.iter().enumerate() {
             chunks.push(json!({"type": "response.output_item.done",
+                "sequence_number": chunks.len(),
                 "output_index": index, "item": item.clone()}));
         }
     }
-    chunks.push(json!({"type": "response.completed", "response": aggregate.clone()}));
+    chunks.push(json!({"type": "response.completed",
+        "sequence_number": chunks.len(), "response": aggregate.clone()}));
     chunks
 }
 

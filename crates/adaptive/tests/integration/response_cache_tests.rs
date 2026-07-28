@@ -288,6 +288,7 @@ async fn stateful_responses_calls_bypass_the_cache() {
         content: json!({
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "stateful"}],
+            "temperature": 0.0,
             "store": true
         }),
     };
@@ -822,7 +823,7 @@ async fn streaming_unrecognized_shape_without_a_codec_runs_live() {
     let provider = counting_stream_provider(Arc::clone(&calls), openai_chat_stream_chunks());
     let unrecognized = || LlmRequest {
         headers: serde_json::Map::new(),
-        content: json!({"model": "mystery", "prompt": "hi"}),
+        content: json!({"model": "mystery", "prompt": "hi", "temperature": 0.0}),
     };
 
     stream_call(&provider, unrecognized()).await;

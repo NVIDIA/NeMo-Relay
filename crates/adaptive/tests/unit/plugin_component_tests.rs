@@ -245,6 +245,31 @@ fn validate_backend_config_fields_only_flags_known_backend_extras() {
 }
 
 #[test]
+fn response_cache_backend_validation_uses_the_default_backend_kind() {
+    let config = json!({
+        "version": 1,
+        "response_cache": {
+            "backend": {
+                "config": {
+                    "max_byte": 1024
+                }
+            }
+        },
+        "policy": {
+            "unknown_field": "warn"
+        }
+    });
+
+    let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "adaptive.unknown_field"
+            && diagnostic.component.as_deref() == Some("response_cache.backend.in_memory")
+            && diagnostic.field.as_deref() == Some("max_byte")
+            && diagnostic.level == DiagnosticLevel::Warning
+    }));
+}
+
+#[test]
 fn adaptive_to_plugin_error_maps_all_non_redis_variants() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::InvalidConfig("bad".into())),

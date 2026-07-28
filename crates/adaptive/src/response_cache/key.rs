@@ -145,7 +145,9 @@ fn contains_unrepresentable_int(value: &Json) -> bool {
             } else if let Some(signed) = number.as_i64() {
                 signed.unsigned_abs() > MAX_EXACT
             } else {
-                false
+                number
+                    .as_f64()
+                    .is_some_and(|value| value.abs() > MAX_EXACT as f64)
             }
         }
         Json::Array(items) => items.iter().any(contains_unrepresentable_int),

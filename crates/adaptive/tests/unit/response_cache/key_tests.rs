@@ -295,6 +295,47 @@ fn unrepresentable_integers_bypass_the_cache() {
 }
 
 #[test]
+fn integers_beyond_u64_bypass_after_parsing_as_f64() {
+    let parse = |record_id: &str| {
+        request(
+            serde_json::from_str(&format!(
+                r#"{{
+                    "model": "claude-sonnet-4",
+                    "max_tokens": 64,
+                    "messages": [
+                        {{"role": "user", "content": "look up the record"}},
+                        {{"role": "assistant", "content": [
+                            {{"type": "tool_use", "id": "toolu_1", "name": "lookup",
+                              "input": {{"record_id": {record_id}}}}}
+                        ]}}
+                    ]
+                }}"#
+            ))
+            .expect("request JSON must parse"),
+        )
+    };
+    let first = parse("18446744073709551616");
+    let second = parse("18446744073709551617");
+    assert_eq!(
+        first
+            .content
+            .pointer("/messages/1/content/0/input/record_id"),
+        second
+            .content
+            .pointer("/messages/1/content/0/input/record_id"),
+        "serde_json rounds these distinct integer literals to the same f64"
+    );
+
+    let config = cache_all_config();
+    for request in [&first, &second] {
+        assert_eq!(
+            build_cache_key("anthropic", request, &config),
+            KeyOutcome::Bypass("unrepresentable_number")
+        );
+    }
+}
+
+#[test]
 fn stateful_responses_calls_bypass() {
     let config = cache_all_config();
     let with_store = request(json!({"model": "m", "messages": [], "store": true}));

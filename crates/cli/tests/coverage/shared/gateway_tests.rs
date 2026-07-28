@@ -1029,18 +1029,9 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
             allow_environment_provider_auth: false,
         },
     };
-    let upstream_info = Arc::new(Mutex::new(None));
+    let captured_upstream = Arc::new(Mutex::new(None));
     let upstream_error = Arc::new(Mutex::new(None));
-    let upstream_failed = Arc::new(Mutex::new(false));
-    let response_bytes = Arc::new(Mutex::new(None));
-    let func = build_buffered_func(
-        state,
-        &prepared,
-        upstream_info,
-        upstream_error.clone(),
-        upstream_failed,
-        response_bytes,
-    );
+    let func = build_buffered_func(state, &prepared, captured_upstream, upstream_error.clone());
     let error = func(LlmRequest {
         headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
         content: json!({}),
@@ -1087,18 +1078,9 @@ async fn retry_aware_buffered_invalid_json_stays_structured() {
             allow_environment_provider_auth: false,
         },
     };
-    let upstream_info = Arc::new(Mutex::new(None));
+    let captured_upstream = Arc::new(Mutex::new(None));
     let upstream_error = Arc::new(Mutex::new(None));
-    let upstream_failed = Arc::new(Mutex::new(false));
-    let response_bytes = Arc::new(Mutex::new(None));
-    let func = build_buffered_func(
-        state,
-        &prepared,
-        upstream_info,
-        upstream_error.clone(),
-        upstream_failed,
-        response_bytes,
-    );
+    let func = build_buffered_func(state, &prepared, captured_upstream, upstream_error.clone());
     let error = func(LlmRequest {
         headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
         content: json!({}),
