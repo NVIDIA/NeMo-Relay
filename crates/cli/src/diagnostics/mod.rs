@@ -142,6 +142,7 @@ fn collect_configuration(
     dynamic_plugins: &[crate::configuration::ResolvedDynamicPluginConfig],
     plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
+    let explicit_config = gateway_overrides.config.is_some();
     let workspace_path = cwd
         .map(|p| p.join(".nemo-relay").join("config.toml"))
         .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
@@ -152,11 +153,26 @@ fn collect_configuration(
         .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
     let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
+    let workspace = gateway_overrides
+        .config
+        .as_deref()
+        .map_or_else(|| layer_status(&workspace_path), layer_status);
+    let global = if explicit_config {
+        ignored_layer_status(&global_path)
+    } else {
+        layer_status(&global_path)
+    };
+    let system = if explicit_config {
+        ignored_layer_status(&system_path)
+    } else {
+        layer_status(&system_path)
+    };
 
     ConfigurationInfo {
-        workspace: layer_status(&workspace_path),
-        global: layer_status(&global_path),
-        system: layer_status(&system_path),
+        explicit_config,
+        workspace,
+        global,
+        system,
         plugin_configs: diagnostic_plugin_config_paths(
             gateway_overrides.config.as_ref(),
             gateway_overrides.plugin_config_path.as_ref(),
@@ -293,6 +309,15 @@ fn layer_status(path: &Path) -> ConfigLayer {
             active: false,
             details: format!("unreadable: {err}"),
         },
+    }
+}
+
+fn ignored_layer_status(path: &Path) -> ConfigLayer {
+    ConfigLayer {
+        path: path.to_path_buf(),
+        status: Status::Info,
+        active: false,
+        details: "not selected because --config scopes configuration".into(),
     }
 }
 

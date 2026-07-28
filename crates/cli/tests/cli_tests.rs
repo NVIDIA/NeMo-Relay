@@ -3195,6 +3195,61 @@ fn cli_doctor_json_reports_a_missing_explicit_config() {
 }
 
 #[test]
+fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("explicit/config.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream\n").unwrap();
+    std::fs::write(&config, "[upstream]\n").unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "explicit config should ignore invalid workspace config: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["configuration"]["workspace"]["path"],
+        config.display().to_string()
+    );
+    assert_eq!(report["configuration"]["workspace"]["status"], "pass");
+    assert_eq!(report["configuration"]["workspace"]["active"], true);
+    assert_eq!(report["configuration"]["global"]["status"], "info");
+    assert_eq!(report["configuration"]["global"]["active"], false);
+    assert!(
+        report["configuration"]["global"]["details"]
+            .as_str()
+            .unwrap()
+            .contains("--config scopes configuration")
+    );
+
+    let human_output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor"])
+        .output()
+        .unwrap();
+    assert!(human_output.status.success());
+    let stdout = String::from_utf8_lossy(&human_output.stdout);
+    assert!(stdout.contains("Explicit"));
+    assert!(stdout.contains(config.to_str().unwrap()));
+    assert!(stdout.contains("not selected because --config scopes configuration"));
+}
+
+#[test]
 fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");

@@ -80,14 +80,24 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
                 _ => cli.server.config.as_deref(),
             }
         };
+        let mut logging_fallback_error = None;
         let config = match cli.logging.resolve(explicit_config, user_only) {
             Ok(config) => config,
-            Err(_) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
+            Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
+                logging_fallback_error = Some(error);
                 nemo_relay::logging::LoggingConfig::default()
             }
             Err(error) => return Err(error),
         };
         let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
+        if let Some(error) = logging_fallback_error {
+            log::warn!(
+                target: "nemo_relay.cli",
+                event = "doctor_logging_fallback",
+                error_kind = error.log_kind();
+                "Doctor fell back to default logging after resolution failure"
+            );
+        }
         Some(runtime)
     } else {
         None
