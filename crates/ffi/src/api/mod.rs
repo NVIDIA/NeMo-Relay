@@ -20,17 +20,18 @@ use crate::callable::{
     NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb,
     NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb, NemoRelayPluginRegisterCb,
     NemoRelayPluginValidateCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
-    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_async_event_sanitize_fn,
-    wrap_async_llm_conditional_fn, wrap_async_llm_execution_intercept_fn,
-    wrap_async_llm_request_intercept_fn, wrap_async_llm_sanitize_request_fn,
-    wrap_async_llm_sanitize_response_fn, wrap_async_llm_stream_execution_intercept_fn,
-    wrap_async_tool_conditional_fn, wrap_async_tool_execution_intercept_fn,
-    wrap_async_tool_json_fn, wrap_codec_fn, wrap_collector_fn, wrap_event_sanitize_fn,
-    wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn, wrap_llm_exec_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
-    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_fn, wrap_tool_exec_intercept_fn,
-    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayToolExecFrameCb, NemoRelayToolExecFrameInterceptCb, NemoRelayToolExecInterceptCb,
+    NemoRelayToolSanitizeCb, wrap_async_event_sanitize_fn, wrap_async_llm_conditional_fn,
+    wrap_async_llm_execution_intercept_fn, wrap_async_llm_request_intercept_fn,
+    wrap_async_llm_sanitize_request_fn, wrap_async_llm_sanitize_response_fn,
+    wrap_async_llm_stream_execution_intercept_fn, wrap_async_tool_conditional_fn,
+    wrap_async_tool_execution_intercept_fn, wrap_async_tool_json_fn, wrap_codec_fn,
+    wrap_collector_fn, wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn,
+    wrap_llm_conditional_fn, wrap_llm_exec_fn, wrap_llm_exec_intercept_fn,
+    wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn,
+    wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
+    wrap_tool_exec_fn, wrap_tool_exec_frame_fn, wrap_tool_exec_frame_intercept_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::convert::{
     c_str_to_json, c_str_to_opt_json, c_str_to_string, json_to_c_string, nemo_relay_string_free,
@@ -51,7 +52,9 @@ use libc::c_char;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionFrameNextFn, ToolExecutionNextFn,
+};
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack, current_scope_stack,
     restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack,

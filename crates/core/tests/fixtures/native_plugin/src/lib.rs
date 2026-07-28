@@ -11,7 +11,7 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
     NemoRelayNativeString, NemoRelayStatus,
     NemoRelayNativeToolNextFn, NativePlugin, PendingMarkSpec, PluginContext, PluginRuntime,
-    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
+    ScopeCategory, ScopeType, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 
@@ -87,7 +87,8 @@ impl NativePlugin for FixtureNativePlugin {
         })?;
         ctx.register_tool_execution_intercept("fixture_tool_execution", 0, {
             let runtime = runtime.clone();
-            move |_name, args, next| {
+            move |name, args, next| {
+                let preserve_result = name == "native-fixture-tool-frame";
                 let args = mark_json(args, "native_plugin_tool_execution_request");
                 let result = if args
                     .get("use_isolated_next")
@@ -111,7 +112,11 @@ impl NativePlugin for FixtureNativePlugin {
                 } else {
                     next.call(args)?
                 };
-                let result = mark_json(result, "native_plugin_tool_execution");
+                let result = if preserve_result {
+                    result
+                } else {
+                    mark_json(result, "native_plugin_tool_execution")
+                };
                 Ok(
                     ToolExecutionInterceptOutcome::new(result).with_pending_mark(
                         PendingMarkSpec::builder()
@@ -128,6 +133,28 @@ impl NativePlugin for FixtureNativePlugin {
                 )
             }
         })?;
+        ctx.register_tool_execution_frame_intercept(
+            "fixture_tool_execution_frame",
+            -1,
+            |name, args, next| {
+                let mark_name = if name == "native-fixture-tool-frame" {
+                    "fixture.native.tool_execution_frame.mark"
+                } else {
+                    "fixture.native.tool_execution_frame.raw.mark"
+                };
+                let mut frame = next.call(mark_json(
+                    args,
+                    "native_plugin_tool_execution_frame_request",
+                ))?;
+                frame.result = mark_json(frame.result, "native_plugin_tool_execution_frame");
+                let mut annotation = frame.annotation.take().unwrap_or_else(|| json!({}));
+                annotation["native_plugin_tool_execution_frame"] = json!(true);
+                frame.annotation = Some(annotation);
+                Ok(ToolExecutionFrameOutcome::new(frame).with_pending_mark(
+                    PendingMarkSpec::builder().name(mark_name).build(),
+                ))
+            },
+        )?;
 
         ctx.register_llm_sanitize_request_guardrail(
             "fixture_llm_sanitize_request",

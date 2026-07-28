@@ -443,11 +443,36 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
                                               void *next_ctx);
 
 /**
+ * Runtime-provided annotation-aware continuation.
+ *
+ * The returned JSON serializes a `ToolExecutionFrame`.
+ */
+typedef char *(*NemoRelayToolExecFrameNextFn)(const char *args_json, void *next_ctx);
+
+/**
+ * Annotation-aware tool execution intercept callback.
+ *
+ * `next_fn` returns a serialized `ToolExecutionFrame`; this callback must
+ * return a serialized `ToolExecutionFrameOutcome`.
+ */
+typedef char *(*NemoRelayToolExecFrameInterceptCb)(void *user_data,
+                                                   const char *args_json,
+                                                   NemoRelayToolExecFrameNextFn next_fn,
+                                                   void *next_ctx);
+
+/**
  * Callback for tool execution (default callable). Receives arguments as JSON,
  * returns result as JSON. The returned string must be allocated with `malloc`
  * or equivalent.
  */
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
+
+/**
+ * Annotation-aware tool execution callback.
+ *
+ * The returned JSON must serialize a `ToolExecutionFrame`.
+ */
+typedef char *(*NemoRelayToolExecFrameCb)(void *user_data, const char *args_json);
 
 /**
  * Result callback used by channel/future-style async `next` wrappers.
@@ -1943,6 +1968,21 @@ NemoRelayStatus nemo_relay_plugin_context_register_tool_execution_intercept(stru
                                                                             NemoRelayFreeFn free_fn);
 
 /**
+ * Register an annotation-aware tool execution intercept into the plugin
+ * registration context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid
+ * for the duration of the plugin registration lifetime.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_tool_execution_frame_intercept(struct FfiPluginContext *ctx,
+                                                                                  const char *name,
+                                                                                  int32_t priority,
+                                                                                  NemoRelayToolExecFrameInterceptCb cb,
+                                                                                  void *user_data,
+                                                                                  NemoRelayFreeFn free_fn);
+
+/**
  * Retrieve the current scope handle from the thread-local scope stack.
  *
  * # Parameters
@@ -2114,6 +2154,20 @@ NemoRelayStatus nemo_relay_scope_register_tool_execution_intercept(const char *s
                                                                    NemoRelayToolExecInterceptCb exec_cb,
                                                                    void *exec_user_data,
                                                                    NemoRelayFreeFn exec_free);
+
+/**
+ * Register a scope-local annotation-aware tool execution intercept in the
+ * existing tool execution chain.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
+ */
+NemoRelayStatus nemo_relay_scope_register_tool_execution_frame_intercept(const char *scope_uuid,
+                                                                         const char *name,
+                                                                         int32_t priority,
+                                                                         NemoRelayToolExecFrameInterceptCb exec_cb,
+                                                                         void *exec_user_data,
+                                                                         NemoRelayFreeFn exec_free);
 
 /**
  * Deregister a scope-local tool execution intercept by name.
@@ -2536,6 +2590,23 @@ NemoRelayStatus nemo_relay_tool_call_end(const struct FfiToolHandle *handle,
                                          const int64_t *timestamp_unix_micros);
 
 /**
+ * End a manual tool call with a serialized `ToolExecutionFrame`.
+ *
+ * The frame's raw result follows the existing response-sanitization path. Its
+ * optional producer annotation is carried in the emitted tool category
+ * profile.
+ *
+ * # Safety
+ * `handle` and `frame_json` must be valid, non-null pointers. Optional pointer
+ * arguments follow [`nemo_relay_tool_call_end`].
+ */
+NemoRelayStatus nemo_relay_tool_call_end_frame(const struct FfiToolHandle *handle,
+                                               const char *frame_json,
+                                               const char *data_json,
+                                               const char *metadata_json,
+                                               const int64_t *timestamp_unix_micros);
+
+/**
  * Execute a tool call end-to-end: run conditional-execution guardrails (on raw
  * args), then request intercepts, sanitize-request guardrails, execution
  * intercepts, the callback, and sanitize-response
@@ -2569,6 +2640,27 @@ NemoRelayStatus nemo_relay_tool_call_execute(const char *name,
                                              const char *data_json,
                                              const char *metadata_json,
                                              char **out);
+
+/**
+ * Execute a tool call with an annotation-aware producer callback.
+ *
+ * The callback and output use serialized `ToolExecutionFrame` values. This
+ * function participates in the same execution-intercept chain as
+ * [`nemo_relay_tool_call_execute`].
+ *
+ * # Safety
+ * `name`, `args_json`, and `out` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_tool_call_execute_frame(const char *name,
+                                                   const char *args_json,
+                                                   NemoRelayToolExecFrameCb func,
+                                                   void *func_user_data,
+                                                   NemoRelayFreeFn func_free,
+                                                   const struct FfiScopeHandle *parent,
+                                                   uint32_t attributes,
+                                                   const char *data_json,
+                                                   const char *metadata_json,
+                                                   char **out);
 
 /**
  * Register a tool conditional execution guardrail. The callback decides whether
@@ -2623,6 +2715,22 @@ NemoRelayStatus nemo_relay_register_tool_execution_intercept(const char *name,
                                                              NemoRelayToolExecInterceptCb exec_cb,
                                                              void *exec_user_data,
                                                              NemoRelayFreeFn exec_free);
+
+/**
+ * Register an annotation-aware tool execution intercept in the existing chain.
+ *
+ * The callback receives a continuation that returns serialized
+ * `ToolExecutionFrame` JSON and must return serialized
+ * `ToolExecutionFrameOutcome` JSON.
+ *
+ * # Safety
+ * `name` must be a valid C string. Callback pointers must be valid.
+ */
+NemoRelayStatus nemo_relay_register_tool_execution_frame_intercept(const char *name,
+                                                                   int32_t priority,
+                                                                   NemoRelayToolExecFrameInterceptCb exec_cb,
+                                                                   void *exec_user_data,
+                                                                   NemoRelayFreeFn exec_free);
 
 /**
  * Deregister a tool execution intercept by name.

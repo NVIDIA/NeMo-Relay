@@ -23,6 +23,7 @@ service RelayHostRuntime {
   rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
   rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
   rpc ToolNext(ToolNextRequest) returns (JsonResult);
+  rpc ToolFrameNext(ToolFrameNextRequest) returns (JsonResult);
   rpc LlmNext(LlmNextRequest) returns (JsonResult);
   rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
   rpc DecodeLlmCodecRequest(LlmCodecDecodeRequest) returns (JsonResult);
@@ -43,6 +44,7 @@ enum RegistrationSurface {
   TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
   TOOL_REQUEST_INTERCEPT = 13;
   TOOL_EXECUTION_INTERCEPT = 14;
+  TOOL_EXECUTION_FRAME_INTERCEPT = 15;
   LLM_SANITIZE_REQUEST_GUARDRAIL = 20;
   LLM_SANITIZE_RESPONSE_GUARDRAIL = 21;
   LLM_CONDITIONAL_EXECUTION_GUARDRAIL = 22;
@@ -203,6 +205,7 @@ message InvokeResponse {
     LlmRequestInterceptResult llm_request = 4;
     WorkerError error = 5;
     ToolExecutionInterceptResult tool_execution = 6;
+    ToolExecutionFrameInterceptResult tool_execution_frame = 7;
   }
 }
 
@@ -222,6 +225,10 @@ message LlmRequestInterceptResult {
 }
 
 message ToolExecutionInterceptResult {
+  JsonEnvelope outcome = 1;
+}
+
+message ToolExecutionFrameInterceptResult {
   JsonEnvelope outcome = 1;
 }
 
@@ -316,6 +323,13 @@ message DropScopeStackRequest {
 }
 
 message ToolNextRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string continuation_id = 3;
+  JsonEnvelope value = 4;
+}
+
+message ToolFrameNextRequest {
   string activation_id = 1;
   string auth_token = 2;
   string continuation_id = 3;

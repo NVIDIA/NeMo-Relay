@@ -10,7 +10,9 @@ use nemo_relay_types::api::event::{
     llm_attributes_to_strings,
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay_types::api::tool::{
+    ToolExecutionFrame, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Map, json};
@@ -224,6 +226,90 @@ fn tool_execution_intercept_outcome_converts_from_json() {
     let result = json!({"value": 42});
     let outcome: ToolExecutionInterceptOutcome = result.clone().into();
     assert_eq!(outcome, ToolExecutionInterceptOutcome::new(result));
+}
+
+#[test]
+fn tool_execution_frame_round_trips_opaque_annotation() {
+    let annotation = json!({
+        "producer_status": "failed",
+        "representation": {
+            "media_type": "application/json",
+            "data_schema": "example.tool.failure@7"
+        },
+        "tool_call_id": "call-42",
+        "producer_detail": {
+            "retryable": true
+        }
+    });
+    let outcome = ToolExecutionFrameOutcome::new(ToolExecutionFrame::annotated(
+        json!({"error": "timeout"}),
+        annotation.clone(),
+    ))
+    .with_pending_mark(PendingMarkSpec::builder().name("tool.failed").build());
+
+    let encoded = serde_json::to_value(&outcome).expect("frame outcome should serialize");
+    assert_eq!(encoded["frame"]["result"]["error"], "timeout");
+    assert_eq!(encoded["frame"]["annotation"]["producer_status"], "failed");
+    assert_eq!(
+        encoded["frame"]["annotation"]["representation"]["data_schema"],
+        "example.tool.failure@7"
+    );
+    assert_eq!(
+        encoded["frame"]["annotation"]["producer_detail"]["retryable"],
+        true
+    );
+
+    let decoded: ToolExecutionFrameOutcome =
+        serde_json::from_value(encoded).expect("frame outcome should deserialize");
+    assert_eq!(decoded, outcome);
+}
+
+#[test]
+fn tool_execution_frame_requires_raw_result_and_defaults_to_no_annotation() {
+    let frame: ToolExecutionFrame = serde_json::from_value(json!({
+        "result": ["plain", "json"]
+    }))
+    .expect("annotation should be optional");
+    assert_eq!(frame.result, json!(["plain", "json"]));
+    assert!(frame.annotation.is_none());
+
+    assert!(
+        serde_json::from_value::<ToolExecutionFrame>(json!({
+            "annotation": {
+                "version": 1,
+                "status": "succeeded"
+            }
+        }))
+        .is_err(),
+        "raw result remains required"
+    );
+}
+
+#[test]
+fn tool_execution_frame_normalizes_null_annotation_to_absence() {
+    let decoded: ToolExecutionFrame = serde_json::from_value(json!({
+        "result": {"ok": true},
+        "annotation": null
+    }))
+    .expect("null annotation should decode as absence");
+    assert!(decoded.annotation.is_none());
+
+    let constructed = ToolExecutionFrame::annotated(json!({"ok": true}), json!(null));
+    assert!(constructed.annotation.is_none());
+    assert_eq!(
+        serde_json::to_value(&constructed).unwrap(),
+        json!({"result": {"ok": true}})
+    );
+
+    let direct = ToolExecutionFrame {
+        result: json!({"ok": true}),
+        annotation: Some(json!(null)),
+    };
+    assert_eq!(
+        serde_json::to_value(&direct).unwrap(),
+        json!({"result": {"ok": true}})
+    );
+    assert!(direct.normalized().annotation.is_none());
 }
 
 #[test]

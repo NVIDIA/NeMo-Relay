@@ -25,16 +25,18 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
-    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeLlmCodecKind,
-    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
-    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
-    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV3ToolFrames,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolExecutionFrameCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
@@ -48,8 +50,8 @@ use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn,
     LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
     LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionFrameFn,
+    ToolExecutionFrameNextFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -60,7 +62,7 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
@@ -794,8 +796,8 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
-    static HOST_API: OnceLock<NemoRelayNativeHostApiV3> = OnceLock::new();
-    &HOST_API.get_or_init(build_native_host_api_v3).v1 as *const NemoRelayNativeHostApiV1
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV3ToolFrames> = OnceLock::new();
+    &HOST_API.get_or_init(build_native_host_api_v3).v3.v1 as *const NemoRelayNativeHostApiV1
 }
 
 fn native_host_api_legacy() -> *const NemoRelayNativeHostApiV1 {
@@ -863,19 +865,24 @@ fn build_native_host_api_legacy() -> NemoRelayNativeHostApiV1 {
     }
 }
 
-fn build_native_host_api_v3() -> NemoRelayNativeHostApiV3 {
+fn build_native_host_api_v3() -> NemoRelayNativeHostApiV3ToolFrames {
     let mut v1 = build_native_host_api_legacy();
     v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
-    v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV3>();
-    NemoRelayNativeHostApiV3 {
-        v1,
-        async_completion_resolve_json: native_async_completion_resolve_json,
-        async_completion_reject: native_async_completion_reject,
-        async_completion_is_cancelled: native_async_completion_is_cancelled,
-        async_completion_release: native_async_completion_release,
-        async_next_invoke: native_async_next_invoke,
-        async_next_release: native_async_next_release,
-        plugin_context_register_async_middleware: native_plugin_context_register_async_middleware,
+    v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV3ToolFrames>();
+    NemoRelayNativeHostApiV3ToolFrames {
+        v3: NemoRelayNativeHostApiV3 {
+            v1,
+            async_completion_resolve_json: native_async_completion_resolve_json,
+            async_completion_reject: native_async_completion_reject,
+            async_completion_is_cancelled: native_async_completion_is_cancelled,
+            async_completion_release: native_async_completion_release,
+            async_next_invoke: native_async_next_invoke,
+            async_next_release: native_async_next_release,
+            plugin_context_register_async_middleware:
+                native_plugin_context_register_async_middleware,
+        },
+        plugin_context_register_tool_execution_frame_intercept:
+            native_plugin_context_register_tool_execution_frame_intercept,
     }
 }
 
@@ -2235,6 +2242,35 @@ unsafe extern "C" fn native_plugin_context_register_tool_execution_intercept(
     }
 }
 
+unsafe extern "C" fn native_plugin_context_register_tool_execution_frame_intercept(
+    ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeToolExecutionFrameCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let host_ctx = match host_ctx_mut(ctx) {
+        Ok(ctx) => ctx,
+        Err(status) => return status,
+    };
+    let instance = host_ctx.instance.clone();
+    let ctx = unsafe { &mut *host_ctx.ctx };
+    let name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match ctx.register_tool_execution_frame_intercept(
+        &name,
+        priority,
+        wrap_tool_execution_frame_fn(instance, cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(err) => status_from_plugin_error(err),
+    }
+}
+
 unsafe extern "C" fn native_plugin_context_register_llm_sanitize_request_guardrail(
     ctx: *mut NemoRelayNativePluginContext,
     name: *const NemoRelayNativeString,
@@ -2706,6 +2742,92 @@ unsafe extern "C" fn native_tool_next(
         Ok(Err(err)) => status_from_flow_error(err),
         Err(_) => {
             set_native_last_error("native tool next panicked");
+            NemoRelayStatus::Internal
+        }
+    }
+}
+
+fn wrap_tool_execution_frame_fn(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeToolExecutionFrameCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ToolExecutionFrameFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |name, args, next| {
+        let name = name.to_owned();
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            clear_native_last_error();
+            let name_string = native_string_from_str(&name)
+                .ok_or_else(|| FlowError::Internal("failed to allocate native name".into()))?;
+            let args_string = native_string_from_json(&args)
+                .ok_or_else(|| FlowError::Internal("failed to allocate native args".into()))?;
+            let next_ctx = Box::into_raw(Box::new(next)) as *mut c_void;
+            let mut out_outcome = ptr::null_mut();
+            let status = unsafe {
+                cb(
+                    user_data.ptr,
+                    name_string,
+                    args_string,
+                    native_tool_frame_next,
+                    next_ctx,
+                    &mut out_outcome,
+                )
+            };
+            unsafe {
+                drop(Box::from_raw(next_ctx as *mut ToolExecutionFrameNextFn));
+                native_string_free(name_string);
+                native_string_free(args_string);
+            }
+            if status != NemoRelayStatus::Ok {
+                if !out_outcome.is_null() {
+                    unsafe { native_string_free(out_outcome) };
+                }
+                return Err(flow_error_from_status(
+                    status,
+                    "native tool execution frame failed",
+                ));
+            }
+            let outcome_json = take_json_from_native_string(
+                out_outcome,
+                "native tool execution frame returned null outcome",
+            )?;
+            serde_json::from_value::<ToolExecutionFrameOutcome>(outcome_json).map_err(|err| {
+                FlowError::Internal(format!(
+                    "invalid native tool execution frame outcome JSON: {err}"
+                ))
+            })
+        })
+    })
+}
+
+unsafe extern "C" fn native_tool_frame_next(
+    args_json: *const NemoRelayNativeString,
+    next_ctx: *mut c_void,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if next_ctx.is_null() || out_json.is_null() {
+        set_native_last_error("native tool frame next received null pointer");
+        return NemoRelayStatus::NullPointer;
+    }
+    let args = match parse_json_arg(args_json, "native tool frame next args") {
+        Ok(args) => args,
+        Err(status) => return status,
+    };
+    let next = unsafe { (*(next_ctx as *const ToolExecutionFrameNextFn)).clone() };
+    let result = spawn_with_current_scope(move || native_runtime().block_on(next(args))).join();
+    match result {
+        Ok(Ok(frame)) => match serde_json::to_value(frame) {
+            Ok(frame) => write_native_json(&frame, out_json),
+            Err(err) => {
+                set_native_last_error(format!("failed to serialize native tool frame: {err}"));
+                NemoRelayStatus::Internal
+            }
+        },
+        Ok(Err(err)) => status_from_flow_error(err),
+        Err(_) => {
+            set_native_last_error("native tool frame next panicked");
             NemoRelayStatus::Internal
         }
     }

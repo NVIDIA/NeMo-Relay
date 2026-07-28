@@ -29,6 +29,7 @@ from nemo_relay import (
     LlmExecutionIntercept,
     LlmRequestIntercept,
     LlmStreamExecutionIntercept,
+    ToolExecutionFrameIntercept,
     ToolExecutionIntercept,
     ToolRequestIntercept,
 )
@@ -55,6 +56,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     register_llm_stream_execution_intercept as _native_register_llm_stream_execution,
+)
+from nemo_relay._native import (
+    register_tool_execution_frame_intercept as _native_register_tool_execution_frame,
 )
 from nemo_relay._native import (
     register_tool_execution_intercept as _native_register_tool_execution,
@@ -141,7 +145,7 @@ def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept
 
 
 def deregister_tool_execution(name: str) -> bool:
-    """Remove a previously registered tool execution intercept.
+    """Remove a previously registered tool execution intercept of either form.
 
     Args:
         name: Intercept name previously passed to
@@ -155,6 +159,11 @@ def deregister_tool_execution(name: str) -> bool:
         the execution chain they already resolved.
     """
     return _native_deregister_tool_execution(name)
+
+
+def register_tool_execution_frame(name: str, priority: int, fn: ToolExecutionFrameIntercept) -> None:
+    """Register annotation-aware middleware in the existing execution chain."""
+    return _native_register_tool_execution_frame(name, priority, fn)
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +312,7 @@ def deregister_llm_stream_execution(name: str) -> bool:
 __all__ = [
     "ToolRequestIntercept",
     "ToolExecutionIntercept",
+    "ToolExecutionFrameIntercept",
     "LlmRequestIntercept",
     "LlmExecutionIntercept",
     "LlmStreamExecutionIntercept",
@@ -310,6 +320,7 @@ __all__ = [
     "deregister_tool_request",
     "register_tool_execution",
     "deregister_tool_execution",
+    "register_tool_execution_frame",
     "register_llm_request",
     "deregister_llm_request",
     "register_llm_execution",

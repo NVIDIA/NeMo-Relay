@@ -144,6 +144,158 @@ func TestToolCallExecuteBasic(t *testing.T) {
 	}
 }
 
+func TestToolCallExecuteFramePreservesOpaqueAnnotationThroughMixedChain(t *testing.T) {
+	const (
+		frameName  = "go_frame_outer"
+		legacyName = "go_frame_legacy"
+	)
+	_ = DeregisterToolExecutionIntercept(frameName)
+	_ = DeregisterToolExecutionIntercept(legacyName)
+
+	err := RegisterToolExecutionFrameIntercept(
+		frameName,
+		1,
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionFrame, error)) (ToolExecutionFrameOutcome, error) {
+			frame, err := next(args)
+			if err != nil {
+				return ToolExecutionFrameOutcome{}, err
+			}
+			var result map[string]interface{}
+			if err := json.Unmarshal(frame.Result, &result); err != nil {
+				return ToolExecutionFrameOutcome{}, err
+			}
+			var annotation map[string]interface{}
+			if err := json.Unmarshal(frame.Annotation, &annotation); err != nil {
+				return ToolExecutionFrameOutcome{}, err
+			}
+			result["frame_seen"] = true
+			annotation["observed_by"] = frameName
+			frame.Result, _ = json.Marshal(result)
+			frame.Annotation, _ = json.Marshal(annotation)
+			return ToolExecutionFrameOutcome{Frame: frame}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("RegisterToolExecutionFrameIntercept failed: %v", err)
+	}
+	defer DeregisterToolExecutionIntercept(frameName)
+
+	err = RegisterToolExecutionIntercept(
+		legacyName,
+		2,
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			result, err := next(args)
+			return ToolExecutionInterceptOutcome{Result: result}, err
+		},
+	)
+	if err != nil {
+		t.Fatalf(registerFailed, err)
+	}
+	defer DeregisterToolExecutionIntercept(legacyName)
+
+	events := []Event{}
+	var mu sync.Mutex
+	const subscriberName = "go_frame_subscriber"
+	_ = DeregisterSubscriber(subscriberName)
+	if err := RegisterSubscriber(subscriberName, func(event Event) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}); err != nil {
+		t.Fatalf(registerFailed, err)
+	}
+	defer DeregisterSubscriber(subscriberName)
+
+	frame, err := ToolCallExecuteFrame(
+		"go_frame_tool",
+		json.RawMessage(`{"value":3}`),
+		func(args json.RawMessage) (ToolExecutionFrame, error) {
+			return ToolExecutionFrame{
+				Result:     json.RawMessage(`{"value":6}`),
+				Annotation: json.RawMessage(`{"producer":"go","status":"failed"}`),
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("ToolCallExecuteFrame failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(frame.Result, &result); err != nil {
+		t.Fatalf("unmarshal frame result: %v", err)
+	}
+	if result["frame_seen"] != true {
+		t.Fatalf("expected frame middleware mutation, got %v", result)
+	}
+	var annotation map[string]interface{}
+	if err := json.Unmarshal(frame.Annotation, &annotation); err != nil {
+		t.Fatalf("unmarshal frame annotation: %v", err)
+	}
+	if annotation["producer"] != "go" || annotation["observed_by"] != frameName {
+		t.Fatalf("unexpected annotation: %v", annotation)
+	}
+
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(toolFlushSubscribersFailed, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, event := range events {
+		if event.Name() != "go_frame_tool" || event.Kind() != "scope" || event.ScopeCategory() != "end" {
+			continue
+		}
+		var profile map[string]interface{}
+		if err := json.Unmarshal(event.CategoryProfile(), &profile); err != nil {
+			t.Fatalf("unmarshal category profile: %v", err)
+		}
+		if profileAnnotation, ok := profile["tool_result_annotation"].(map[string]interface{}); ok &&
+			profileAnnotation["producer"] == "go" {
+			return
+		}
+	}
+	t.Fatal("tool end event did not carry the opaque result annotation")
+}
+
+func TestToolExecutionFrameContinuationExpiresWithCallback(t *testing.T) {
+	const interceptName = "go_frame_retained_next"
+	_ = DeregisterToolExecutionIntercept(interceptName)
+
+	var retainedNext func(json.RawMessage) (ToolExecutionFrame, error)
+	err := RegisterToolExecutionFrameIntercept(
+		interceptName,
+		1,
+		func(_ json.RawMessage, next func(json.RawMessage) (ToolExecutionFrame, error)) (ToolExecutionFrameOutcome, error) {
+			retainedNext = next
+			return ToolExecutionFrameOutcome{
+				Frame: ToolExecutionFrame{Result: json.RawMessage(`{"short_circuit":true}`)},
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("RegisterToolExecutionFrameIntercept failed: %v", err)
+	}
+	defer DeregisterToolExecutionIntercept(interceptName)
+
+	_, err = ToolCallExecuteFrame(
+		"go_frame_retained_next_tool",
+		json.RawMessage(`{}`),
+		func(args json.RawMessage) (ToolExecutionFrame, error) {
+			return ToolExecutionFrame{Result: args}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("ToolCallExecuteFrame failed: %v", err)
+	}
+	if retainedNext == nil {
+		t.Fatal("frame intercept did not retain the continuation")
+	}
+
+	_, err = retainedNext(json.RawMessage(`{}`))
+	if !errors.Is(err, ErrToolExecutionContinuationExpired) {
+		t.Fatalf("retained frame continuation returned %v", err)
+	}
+}
+
 func TestToolCallExecuteWithAttributes(t *testing.T) {
 	fn := func(args json.RawMessage) (json.RawMessage, error) {
 		return args, nil

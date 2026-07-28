@@ -29,7 +29,8 @@ use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolConditionalFn, ToolExecutionFrameFn, ToolExecutionFrameNextFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
@@ -40,7 +41,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{
+    ToolExecutionFrame, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -48,7 +51,8 @@ use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
-    PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyToolExecutionInterceptOutcome,
+    PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyToolExecutionFrame,
+    PyToolExecutionFrameOutcome, PyToolExecutionInterceptOutcome,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -546,6 +550,71 @@ pub fn wrap_py_tool_exec_fn(
     })
 }
 
+/// Wrap a Python callable `(Json) -> ToolExecutionFrame`.
+///
+/// Supports both synchronous and asynchronous Python callables.
+pub fn wrap_py_tool_exec_frame_fn(
+    py_fn: Py<PyAny>,
+) -> Box<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<ToolExecutionFrame>> + Send>>
+        + Send
+        + Sync,
+> {
+    let py_fn = Arc::new(py_fn);
+    Box::new(move |args: Json| {
+        let py_fn = py_fn.clone();
+        Box::pin(async move {
+            let outcome: FlowResult<
+                Result<
+                    ToolExecutionFrame,
+                    Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>,
+                >,
+            > = Python::attach(|py| {
+                let py_args =
+                    json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                let result = py_fn
+                    .call1(py, (py_args,))
+                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                let bound = result.bind(py);
+                if bound.getattr("__await__").is_ok() {
+                    let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
+                    Ok(Err(Box::pin(future)
+                        as Pin<
+                            Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
+                        >))
+                } else {
+                    let frame = result.extract::<PyToolExecutionFrame>(py).map_err(|e| {
+                        FlowError::Internal(format!(
+                            "tool frame callback must return ToolExecutionFrame: {e}"
+                        ))
+                    })?;
+                    Ok(Ok(frame.inner))
+                }
+            });
+
+            match outcome? {
+                Ok(frame) => Ok(frame),
+                Err(future) => {
+                    let py_result = future
+                        .await
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
+                    Python::attach(|py| {
+                        py_result
+                            .extract::<PyToolExecutionFrame>(py)
+                            .map(|value| value.inner)
+                            .map_err(|e| {
+                                FlowError::Internal(format!(
+                                    "tool frame callback must return ToolExecutionFrame: {e}"
+                                ))
+                            })
+                    })
+                }
+            }
+        })
+    })
+}
+
 /// Python-callable wrapper for the Rust `ToolExecutionNextFn`.
 ///
 /// The Python intercept calls `await next(args)` to invoke the next layer
@@ -571,6 +640,31 @@ impl PyToolNextFn {
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Python::attach(|py| json_to_py(py, &result))
+        })
+    }
+}
+
+/// Python-callable wrapper for the annotation-aware tool continuation.
+#[pyclass]
+struct PyToolFrameNextFn {
+    inner: ToolExecutionFrameNextFn,
+}
+
+#[pymethods]
+impl PyToolFrameNextFn {
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        args: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let next = self.inner.clone();
+        let json_args = py_to_json(args)?;
+        let future = next(json_args);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let frame = future
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(PyToolExecutionFrame { inner: frame })
         })
     }
 }
@@ -706,6 +800,82 @@ pub fn wrap_py_tool_exec_intercept_fn(
             }
         })
     })
+}
+
+/// Wrap an annotation-aware Python tool execution intercept.
+///
+/// The Python callback receives ``(name, args, next)`` and must return
+/// ``ToolExecutionFrameOutcome`` synchronously or asynchronously.
+pub fn wrap_py_tool_exec_frame_intercept_fn(py_fn: Py<PyAny>) -> ToolExecutionFrameFn {
+    let py_fn = Arc::new(py_fn);
+    Arc::new(
+        move |name: &str, args: Json, next: ToolExecutionFrameNextFn| {
+            let py_fn = py_fn.clone();
+            let name = name.to_string();
+            Box::pin(async move {
+                let outcome: FlowResult<
+                    Result<
+                        ToolExecutionFrameOutcome,
+                        Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>,
+                    >,
+                > = Python::attach(|py| {
+                    let py_args = json_to_py(py, &args)
+                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                    let py_next = PyToolFrameNextFn { inner: next };
+                    let result = py_fn
+                        .call1(
+                            py,
+                            (
+                                &name,
+                                py_args,
+                                py_next
+                                    .into_pyobject(py)
+                                    .map_err(|e| FlowError::Internal(e.to_string()))?
+                                    .into_any(),
+                            ),
+                        )
+                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+
+                    let bound = result.bind(py);
+                    if bound.getattr("__await__").is_ok() {
+                        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
+                            .map_err(|e| FlowError::Internal(e.to_string()))?;
+                        Ok(Err(Box::pin(future)
+                            as Pin<
+                                Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
+                            >))
+                    } else {
+                        let outcome =
+                            result.extract::<PyToolExecutionFrameOutcome>(py).map_err(|e| {
+                                FlowError::Internal(format!(
+                                    "tool frame intercept must return ToolExecutionFrameOutcome: {e}"
+                                ))
+                            })?;
+                        Ok(Ok(outcome.inner))
+                    }
+                });
+
+                match outcome? {
+                    Ok(outcome) => Ok(outcome),
+                    Err(future) => {
+                        let py_result = future
+                            .await
+                            .map_err(|e| FlowError::Internal(e.to_string()))?;
+                        Python::attach(|py| {
+                            py_result
+                                .extract::<PyToolExecutionFrameOutcome>(py)
+                                .map(|value| value.inner)
+                                .map_err(|e| {
+                                    FlowError::Internal(format!(
+                                        "tool frame intercept must return ToolExecutionFrameOutcome: {e}"
+                                    ))
+                                })
+                        })
+                    }
+                }
+            })
+        },
+    )
 }
 
 /// Wrap a Python callable `(name, LlmRequest, next) -> dict` for LLM execution intercepts.

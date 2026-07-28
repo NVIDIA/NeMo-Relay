@@ -16,8 +16,10 @@ use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
     Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonStream, LlmNext,
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSanitizeCb,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeAsyncCompletion,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV3ToolFrames,
     NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
     NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
     NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
@@ -26,9 +28,10 @@ use nemo_relay_plugin::{
     NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
     NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
     NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolNext,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolExecutionFrameCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+    ToolFrameNext, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -104,6 +107,22 @@ struct RegisteredToolExecution {
     cb: NemoRelayNativeToolExecutionCb,
     user_data: usize,
     free_fn: NemoRelayNativeFreeFn,
+}
+
+struct RegisteredToolExecutionFrame {
+    name: String,
+    priority: i32,
+    cb: NemoRelayNativeToolExecutionFrameCb,
+    user_data: usize,
+    free_fn: NemoRelayNativeFreeFn,
+}
+
+impl RegisteredToolExecutionFrame {
+    unsafe fn free(self) {
+        if let Some(free_fn) = self.free_fn {
+            unsafe { free_fn(self.user_data as *mut c_void) };
+        }
+    }
 }
 
 impl RegisteredToolExecution {
@@ -233,6 +252,7 @@ impl_captured_registration!(
     RegisteredToolJson,
     RegisteredToolConditional,
     RegisteredToolExecution,
+    RegisteredToolExecutionFrame,
     RegisteredLlmRequest,
     RegisteredLlmJson,
     RegisteredLlmConditional,
@@ -290,6 +310,8 @@ static EVENT_SANITIZE_REGISTRATION: Mutex<Option<RegisteredEventSanitize>> = Mut
 static TOOL_JSON_REGISTRATION: Mutex<Option<RegisteredToolJson>> = Mutex::new(None);
 static TOOL_CONDITIONAL_REGISTRATION: Mutex<Option<RegisteredToolConditional>> = Mutex::new(None);
 static TOOL_EXECUTION_REGISTRATION: Mutex<Option<RegisteredToolExecution>> = Mutex::new(None);
+static TOOL_EXECUTION_FRAME_REGISTRATION: Mutex<Option<RegisteredToolExecutionFrame>> =
+    Mutex::new(None);
 static LLM_REQUEST_REGISTRATION: Mutex<Option<RegisteredLlmRequest>> = Mutex::new(None);
 static LLM_JSON_REGISTRATION: Mutex<Option<RegisteredLlmJson>> = Mutex::new(None);
 static LLM_CONDITIONAL_REGISTRATION: Mutex<Option<RegisteredLlmConditional>> = Mutex::new(None);
@@ -321,6 +343,16 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 320);
         assert_eq!(
+            offset_of!(
+                NemoRelayNativeHostApiV3ToolFrames,
+                plugin_context_register_tool_execution_frame_intercept
+            ),
+            376,
+            "the frame registration hook must remain appended after the original ABI-v3 prefix"
+        );
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 376);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3ToolFrames>(), 384);
+        assert_eq!(
             host_api_offsets(),
             [
                 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
@@ -340,6 +372,16 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 160);
+        assert_eq!(
+            offset_of!(
+                NemoRelayNativeHostApiV3ToolFrames,
+                plugin_context_register_tool_execution_frame_intercept
+            ),
+            188,
+            "the frame registration hook must remain appended after the original ABI-v3 prefix"
+        );
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 188);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3ToolFrames>(), 192);
         assert_eq!(
             host_api_offsets(),
             [
@@ -680,6 +722,35 @@ unsafe extern "C" fn capture_tool_execution(
         replace_registration(
             &TOOL_EXECUTION_REGISTRATION,
             RegisteredToolExecution {
+                name,
+                priority,
+                cb,
+                user_data: user_data as usize,
+                free_fn,
+            },
+        );
+    }
+    status
+}
+
+unsafe extern "C" fn capture_tool_execution_frame(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeToolExecutionFrameCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    let status = *REGISTRATION_STATUS.lock().unwrap();
+    if status == NemoRelayStatus::Ok {
+        let host = test_host();
+        let name = match required_host_string(&host, name) {
+            Ok(name) => name,
+            Err(status) => return status,
+        };
+        replace_registration(
+            &TOOL_EXECUTION_FRAME_REGISTRATION,
+            RegisteredToolExecutionFrame {
                 name,
                 priority,
                 cb,
@@ -1229,6 +1300,73 @@ fn test_host() -> NemoRelayNativeHostApiV1 {
     }
 }
 
+unsafe extern "C" fn unavailable_async_completion_resolve_json(
+    _completion: *const NemoRelayNativeAsyncCompletion,
+    _value_json: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn unavailable_async_completion_reject(
+    _completion: *const NemoRelayNativeAsyncCompletion,
+    _message: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn unavailable_async_completion_is_cancelled(
+    _completion: *const NemoRelayNativeAsyncCompletion,
+) -> bool {
+    true
+}
+
+unsafe extern "C" fn unavailable_async_completion_release(
+    _completion: *const NemoRelayNativeAsyncCompletion,
+) {
+}
+
+unsafe extern "C" fn unavailable_async_next_invoke(
+    _next: *const NemoRelayNativeAsyncNext,
+    _invocation_json: *const NemoRelayNativeString,
+    _completion: *const NemoRelayNativeAsyncCompletion,
+) -> NemoRelayStatus {
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn unavailable_async_next_release(_next: *const NemoRelayNativeAsyncNext) {}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn unavailable_async_middleware_registration(
+    _ctx: *mut NemoRelayNativePluginContext,
+    _kind: NemoRelayNativeAsyncMiddlewareKind,
+    _name: *const NemoRelayNativeString,
+    _priority: i32,
+    _break_chain: bool,
+    _cb: NemoRelayNativeAsyncMiddlewareCb,
+    _user_data: *mut c_void,
+    _free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    NemoRelayStatus::InvalidArg
+}
+
+fn test_host_v3() -> NemoRelayNativeHostApiV3ToolFrames {
+    let mut v1 = test_host();
+    v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV3ToolFrames>();
+    NemoRelayNativeHostApiV3ToolFrames {
+        v3: NemoRelayNativeHostApiV3 {
+            v1,
+            async_completion_resolve_json: unavailable_async_completion_resolve_json,
+            async_completion_reject: unavailable_async_completion_reject,
+            async_completion_is_cancelled: unavailable_async_completion_is_cancelled,
+            async_completion_release: unavailable_async_completion_release,
+            async_next_invoke: unavailable_async_next_invoke,
+            async_next_release: unavailable_async_next_release,
+            plugin_context_register_async_middleware: unavailable_async_middleware_registration,
+        },
+        plugin_context_register_tool_execution_frame_intercept: capture_tool_execution_frame,
+    }
+}
+
 fn begin_test() -> MutexGuard<'static, ()> {
     let guard = TEST_LOCK
         .lock()
@@ -1243,6 +1381,7 @@ fn reset_state() {
     clear_registration(&TOOL_JSON_REGISTRATION);
     clear_registration(&TOOL_CONDITIONAL_REGISTRATION);
     clear_registration(&TOOL_EXECUTION_REGISTRATION);
+    clear_registration(&TOOL_EXECUTION_FRAME_REGISTRATION);
     clear_registration(&LLM_REQUEST_REGISTRATION);
     clear_registration(&LLM_JSON_REGISTRATION);
     clear_registration(&LLM_CONDITIONAL_REGISTRATION);
@@ -1469,6 +1608,14 @@ fn take_tool_execution_registration() -> RegisteredToolExecution {
         .unwrap()
         .take()
         .expect("tool execution callback should be registered")
+}
+
+fn take_tool_execution_frame_registration() -> RegisteredToolExecutionFrame {
+    TOOL_EXECUTION_FRAME_REGISTRATION
+        .lock()
+        .unwrap()
+        .take()
+        .expect("tool execution frame callback should be registered")
 }
 
 fn take_llm_request_registration() -> RegisteredLlmRequest {
@@ -3670,6 +3817,26 @@ unsafe extern "C" fn fake_tool_next(
     write_json(&state.host, &args, out_json)
 }
 
+unsafe extern "C" fn fake_tool_frame_next(
+    args_json: *const NemoRelayNativeString,
+    next_ctx: *mut c_void,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let state = unsafe { &*(next_ctx as *const NextState) };
+    state.called.fetch_add(1, Ordering::SeqCst);
+    let mut args: Json =
+        serde_json::from_str(&read_host_string(&state.host, args_json).unwrap()).unwrap();
+    args["next_called"] = json!(true);
+    write_json(
+        &state.host,
+        &json!({
+            "result": args,
+            "annotation": {"producer": "host"}
+        }),
+        out_json,
+    )
+}
+
 unsafe extern "C" fn failing_tool_next(
     _args_json: *const NemoRelayNativeString,
     next_ctx: *mut c_void,
@@ -4000,6 +4167,60 @@ fn typed_tool_execution_registration_calls_next() {
         outcome["pending_marks"][0]["metadata"]["source"],
         "typed-test"
     );
+    unsafe {
+        (host.string_free)(name);
+        (host.string_free)(args);
+        drop(Box::from_raw(next_state));
+        registration.free();
+    }
+}
+
+#[test]
+fn typed_tool_execution_frame_registration_round_trips_opaque_annotation() {
+    let _guard = begin_test();
+    let host_v3 = test_host_v3();
+    let host = &host_v3.v3.v1;
+    let called = Arc::new(AtomicUsize::new(0));
+    let mut ctx = test_context(host);
+    ctx.register_tool_execution_frame_intercept(
+        "tool-frame",
+        17,
+        |_name, args, next: ToolFrameNext<'_>| {
+            let mut frame = next.call(args)?;
+            frame.annotation.as_mut().unwrap()["plugin"] = json!(true);
+            Ok(ToolExecutionFrameOutcome::new(frame)
+                .with_pending_mark(PendingMarkSpec::builder().name("plugin.tool.frame").build()))
+        },
+    )
+    .unwrap();
+
+    let registration = take_tool_execution_frame_registration();
+    assert_eq!(registration.name, "tool-frame");
+    assert_eq!(registration.priority, 17);
+    let next_state = Box::into_raw(Box::new(NextState {
+        host: *host,
+        called: called.clone(),
+    }));
+    let name = host_string(host, "tool-frame");
+    let args = json_host_string(host, json!({ "input": true }));
+    let mut out = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            name,
+            args,
+            fake_tool_frame_next,
+            next_state.cast(),
+            &mut out,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    assert_eq!(called.load(Ordering::SeqCst), 1);
+    let outcome = read_json_and_free(host, out);
+    assert_eq!(outcome["frame"]["result"]["next_called"], true);
+    assert_eq!(outcome["frame"]["annotation"]["producer"], "host");
+    assert_eq!(outcome["frame"]["annotation"]["plugin"], true);
+    assert_eq!(outcome["pending_marks"][0]["name"], "plugin.tool.frame");
     unsafe {
         (host.string_free)(name);
         (host.string_free)(args);

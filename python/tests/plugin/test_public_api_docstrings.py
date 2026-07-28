@@ -29,6 +29,7 @@ _TYPE_ALIASES = {
     "ToolConditionalCallback",
     "ToolRequestCallback",
     "ToolExecutionCallback",
+    "ToolExecutionFrameCallback",
     "LlmSanitizeRequestCallback",
     "LlmSanitizeResponseCallback",
     "LlmConditionalCallback",

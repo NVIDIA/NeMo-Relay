@@ -37,7 +37,10 @@ pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
-pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
+pub use nemo_relay_types::api::tool::{
+    TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA, TOOL_EXECUTION_FRAME_SCHEMA, ToolExecutionFrame,
+    ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
     LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationPayload,
@@ -56,8 +59,9 @@ use nemo_relay_worker_proto::v1::{
     LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
     LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck, WorkerError,
+    ShutdownRequest, StreamChunk, ToolExecutionFrameInterceptResult, ToolExecutionInterceptResult,
+    ToolFrameNextRequest, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
+    WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use tokio::net::TcpListener;
@@ -136,6 +140,9 @@ type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Sen
 type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
 type ToolExecutionFn = Arc<
     dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
+>;
+type ToolExecutionFrameFn = Arc<
+    dyn Fn(&str, Json, ToolFrameNext) -> BoxFutureResult<ToolExecutionFrameOutcome> + Send + Sync,
 >;
 type LlmSanitizeRequestFn = Arc<
     dyn Fn(LlmRequest, LlmSanitizeRequestContext) -> BoxFutureResult<Option<LlmRequest>>
@@ -283,6 +290,7 @@ struct WorkerHandlers {
     tool_conditionals: HashMap<String, ToolConditionalFn>,
     tool_requests: HashMap<String, ToolRequestFn>,
     tool_executions: HashMap<String, ToolExecutionFn>,
+    tool_execution_frames: HashMap<String, ToolExecutionFrameFn>,
     llm_sanitize_requests: HashMap<String, LlmSanitizeRequestFn>,
     llm_sanitize_responses: HashMap<String, LlmSanitizeResponseFn>,
     llm_conditionals: HashMap<String, LlmConditionalFn>,
@@ -517,6 +525,32 @@ impl PluginContext {
             false,
         );
         self.handlers.tool_executions.insert(
+            name.into(),
+            Arc::new(move |tool, value, next| Box::pin(callback(tool, value, next))),
+        );
+    }
+
+    /// Registers an annotation-aware tool execution intercept.
+    ///
+    /// Calling [`ToolFrameNext::call`] continues the same execution-intercept
+    /// chain and returns the raw harness-owned result together with its optional
+    /// opaque annotation. Relay does not interpret the annotation schema.
+    pub fn register_tool_execution_frame_intercept<F, Fut>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) where
+        F: Fn(&str, Json, ToolFrameNext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ToolExecutionFrameOutcome>> + Send + 'static,
+    {
+        self.push_registration(
+            name,
+            RegistrationSurface::ToolExecutionFrameIntercept,
+            priority,
+            false,
+        );
+        self.handlers.tool_execution_frames.insert(
             name.into(),
             Arc::new(move |tool, value, next| Box::pin(callback(tool, value, next))),
         );
@@ -928,6 +962,34 @@ impl ToolNext {
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
         json_result_to_sdk(response)
+    }
+}
+
+/// Continuation handle for annotation-aware tool execution intercepts.
+///
+/// The host invalidates this capability when the worker callback invocation
+/// finishes; retained handles fail instead of invoking the chain later.
+#[derive(Clone)]
+pub struct ToolFrameNext {
+    runtime: PluginRuntime,
+    continuation_id: String,
+}
+
+impl ToolFrameNext {
+    /// Calls the remaining mixed tool execution chain.
+    pub async fn call(&self, value: Json) -> Result<ToolExecutionFrame> {
+        let mut client = self.runtime.host_client().await?;
+        let response = client
+            .tool_frame_next(Request::new(ToolFrameNextRequest {
+                activation_id: self.runtime.activation_id.clone(),
+                auth_token: self.runtime.auth_token.clone(),
+                continuation_id: self.continuation_id.clone(),
+                value: Some(json_envelope(JSON_SCHEMA, &value)?),
+            }))
+            .await
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .into_inner();
+        decode_typed_json_result(response, TOOL_EXECUTION_FRAME_SCHEMA)
     }
 }
 
@@ -1651,7 +1713,8 @@ impl WorkerService {
             | RegistrationSurface::ToolSanitizeResponseGuardrail
             | RegistrationSurface::ToolConditionalExecutionGuardrail
             | RegistrationSurface::ToolRequestIntercept
-            | RegistrationSurface::ToolExecutionIntercept => {
+            | RegistrationSurface::ToolExecutionIntercept
+            | RegistrationSurface::ToolExecutionFrameIntercept => {
                 self.invoke_tool_response(request, &scope, surface).await
             }
             RegistrationSurface::LlmSanitizeRequestGuardrail
@@ -1719,6 +1782,10 @@ impl WorkerService {
             RegistrationSurface::ToolExecutionIntercept => {
                 self.invoke_tool_execution_response(request, scope).await
             }
+            RegistrationSurface::ToolExecutionFrameIntercept => {
+                self.invoke_tool_execution_frame_response(request, scope)
+                    .await
+            }
             _ => unreachable!("tool surface was pre-filtered"),
         }
     }
@@ -1784,6 +1851,21 @@ impl WorkerService {
         };
         let future = with_thread_scope(scope, || handler(&payload.tool_name, payload.value, next));
         tool_execution_response(future.await?)
+    }
+
+    async fn invoke_tool_execution_frame_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = tool_payload(request.payload)?;
+        let handler = self.tool_execution_frame(&request.registration_name)?;
+        let next = ToolFrameNext {
+            runtime: self.runtime.clone(),
+            continuation_id: request.continuation_id,
+        };
+        let future = with_thread_scope(scope, || handler(&payload.tool_name, payload.value, next));
+        tool_execution_frame_response(future.await?)
     }
 
     async fn invoke_llm_response(
@@ -1990,6 +2072,20 @@ impl WorkerService {
             .cloned()
             .ok_or_else(|| {
                 WorkerSdkError::InvalidInput(format!("tool execution '{name}' not registered"))
+            })
+    }
+
+    fn tool_execution_frame(&self, name: &str) -> Result<ToolExecutionFrameFn> {
+        self.handlers
+            .lock()
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
+            .tool_execution_frames
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!(
+                    "tool execution frame '{name}' not registered"
+                ))
             })
     }
 
@@ -2253,6 +2349,21 @@ fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<Inv
     })
 }
 
+fn tool_execution_frame_response(outcome: ToolExecutionFrameOutcome) -> Result<InvokeResponse> {
+    Ok(InvokeResponse {
+        result: Some(
+            nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecutionFrame(
+                ToolExecutionFrameInterceptResult {
+                    outcome: Some(json_envelope(
+                        TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA,
+                        &outcome,
+                    )?),
+                },
+            ),
+        ),
+    })
+}
+
 fn stream_chunk_to_json(chunk: StreamChunk) -> Result<Json> {
     match chunk.item {
         Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(value)) => {
@@ -2486,6 +2597,7 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
         RegistrationSurface::ToolConditionalExecutionGuardrail,
         RegistrationSurface::ToolRequestIntercept,
         RegistrationSurface::ToolExecutionIntercept,
+        RegistrationSurface::ToolExecutionFrameIntercept,
         RegistrationSurface::LlmSanitizeRequestGuardrail,
         RegistrationSurface::LlmSanitizeResponseGuardrail,
         RegistrationSurface::LlmConditionalExecutionGuardrail,

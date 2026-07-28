@@ -13,8 +13,11 @@ const {
   popScope,
   toolCall,
   toolCallEnd,
+  toolCallEndFrame,
   toolCallExecute,
   toolCallExecuteAsync,
+  toolCallExecuteFrame,
+  toolCallExecuteFrameAsync,
   toolRequestIntercepts,
   toolConditionalExecution,
   registerToolSanitizeRequestGuardrail,
@@ -26,6 +29,7 @@ const {
   registerToolRequestIntercept,
   deregisterToolRequestIntercept,
   registerToolExecutionIntercept,
+  registerToolExecutionFrameIntercept,
   deregisterToolExecutionIntercept,
   clearLastCallbackError,
   getLastCallbackError,
@@ -229,6 +233,137 @@ describe('Tool execute', () => {
     assert.deepEqual(result, {
       result: 11,
     });
+  });
+
+  it('frame execute preserves opaque annotation through the mixed chain', async () => {
+    const events = [];
+    registerSubscriber('node_frame_subscriber', (event) => events.push(event));
+    registerToolExecutionFrameIntercept('node_frame_outer', 1, async (args, next) => {
+      const frame = await next(args);
+      assert.deepEqual(frame.annotation, {
+        producer: 'node',
+        status: 'failed',
+      });
+      return {
+        frame: {
+          result: {
+            ...frame.result,
+            frameSeen: true,
+          },
+          annotation: {
+            ...frame.annotation,
+            observedBy: 'node_frame_outer',
+          },
+        },
+      };
+    });
+    registerToolExecutionIntercept('node_frame_legacy', 2, async (args, next) => ({
+      result: await next(args),
+    }));
+    try {
+      const frame = await toolCallExecuteFrameAsync(
+        'node_frame_tool',
+        {
+          value: 3,
+        },
+        async (args) => ({
+          result: {
+            value: args.value * 2,
+          },
+          annotation: {
+            producer: 'node',
+            status: 'failed',
+          },
+        }),
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(frame, {
+        result: {
+          value: 6,
+          frameSeen: true,
+        },
+        annotation: {
+          producer: 'node',
+          status: 'failed',
+          observedBy: 'node_frame_outer',
+        },
+      });
+
+      await waitForSubscriberCallbacks(() =>
+        events.some(
+          (event) => event.name === 'node_frame_tool' && event.kind === 'scope' && event.scope_category === 'end',
+        ),
+      );
+      const end = events.find(
+        (event) => event.name === 'node_frame_tool' && event.kind === 'scope' && event.scope_category === 'end',
+      );
+      assert.deepEqual(end.category_profile.tool_result_annotation, frame.annotation);
+    } finally {
+      assert.equal(deregisterToolExecutionIntercept('node_frame_outer'), true);
+      assert.equal(deregisterToolExecutionIntercept('node_frame_legacy'), true);
+      deregisterSubscriber('node_frame_subscriber');
+    }
+  });
+
+  it('manual and synchronous frame APIs marshal the same frame shape', async () => {
+    const events = [];
+    registerSubscriber('node_manual_frame_subscriber', (event) => events.push(event));
+    try {
+      const handle = toolCall('node_manual_frame_tool', {}, null, null, null, null);
+      toolCallEndFrame(
+        handle,
+        {
+          result: {
+            manual: true,
+          },
+          annotation: {
+            producer: 'node-manual',
+          },
+        },
+        null,
+        null,
+        null,
+      );
+      const frame = await toolCallExecuteFrame(
+        'node_sync_frame_tool',
+        {},
+        () => ({
+          result: {
+            sync: true,
+          },
+          annotation: {
+            producer: 'node-sync',
+          },
+        }),
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(frame.annotation, {
+        producer: 'node-sync',
+      });
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some(
+            (event) =>
+              event.name === 'node_manual_frame_tool' && event.kind === 'scope' && event.scope_category === 'end',
+          ) &&
+          events.some(
+            (event) =>
+              event.name === 'node_sync_frame_tool' && event.kind === 'scope' && event.scope_category === 'end',
+          ),
+      );
+      const manualEnd = events.find(
+        (event) => event.name === 'node_manual_frame_tool' && event.kind === 'scope' && event.scope_category === 'end',
+      );
+      assert.equal(manualEnd.category_profile.tool_result_annotation.producer, 'node-manual');
+    } finally {
+      deregisterSubscriber('node_manual_frame_subscriber');
+    }
   });
 
   it('treats implicit undefined tool results as null', async () => {

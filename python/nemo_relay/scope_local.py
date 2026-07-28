@@ -98,6 +98,9 @@ from nemo_relay._native import (
     scope_register_tool_conditional_execution_guardrail as _register_tool_conditional_execution,
 )
 from nemo_relay._native import (
+    scope_register_tool_execution_frame_intercept as _register_tool_execution_frame,
+)
+from nemo_relay._native import (
     scope_register_tool_execution_intercept as _register_tool_execution,
 )
 from nemo_relay._native import (
@@ -343,8 +346,8 @@ def deregister_tool_execution(scope_handle, name):
 
     Args:
         scope_handle: Scope handle that owns the registration.
-        name: Intercept name previously passed to
-            ``register_tool_execution()``.
+        name: Intercept name previously passed to ``register_tool_execution()``
+            or ``register_tool_execution_frame()``.
 
     Returns:
         bool: ``True`` if an intercept was removed, otherwise ``False``.
@@ -354,6 +357,11 @@ def deregister_tool_execution(scope_handle, name):
         scope. Popping the scope would also remove it automatically.
     """
     return _deregister_tool_execution(scope_handle.uuid, name)
+
+
+def register_tool_execution_frame(scope_handle, name, priority, fn):
+    """Register annotation-aware scope-local middleware in the existing chain."""
+    return _register_tool_execution_frame(scope_handle.uuid, name, priority, fn)
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +687,7 @@ __all__ = [
     "deregister_tool_request",
     "register_tool_execution",
     "deregister_tool_execution",
+    "register_tool_execution_frame",
     # LLM guardrails
     "register_llm_sanitize_request",
     "deregister_llm_sanitize_request",

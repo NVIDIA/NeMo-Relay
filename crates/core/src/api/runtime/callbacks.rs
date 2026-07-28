@@ -17,7 +17,9 @@ use tokio_stream::Stream;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{
+    ToolExecutionFrame, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
@@ -122,8 +124,9 @@ pub type ToolExecutionNextFn =
 /// - Third argument: Continuation for the remaining execution chain.
 ///
 /// # Returns
-/// A future resolving to the canonical tool execution outcome, containing the
-/// tool result and any pending lifecycle marks produced by this intercept.
+/// A future resolving to Relay's execution outcome wrapper, containing the
+/// harness-owned tool result and any pending lifecycle marks produced by this
+/// intercept.
 ///
 /// # Errors
 /// The future resolves to an error when the intercept or remaining execution
@@ -138,12 +141,60 @@ pub type ToolExecutionFn = Arc<
         + Sync,
 >;
 
-/// Internal continuation carrying both a tool result and accumulated marks.
-pub(crate) type ToolExecutionOutcomeNextFn = Arc<
-    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionInterceptOutcome>> + Send>>
+/// Annotation-aware continuation invoked by tool execution frame intercepts.
+///
+/// The continuation exposes the raw downstream result together with its
+/// optional opaque annotation. Relay retains downstream pending marks
+/// internally, matching [`ToolExecutionNextFn`].
+pub type ToolExecutionFrameNextFn = Arc<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionFrame>> + Send>> + Send + Sync,
+>;
+
+/// Annotation-aware tool execution intercept.
+///
+/// This callback participates in the same priority-ordered chain as
+/// [`ToolExecutionFn`], but its continuation and outcome carry a
+/// [`ToolExecutionFrame`].
+pub type ToolExecutionFrameFn = Arc<
+    dyn Fn(
+            &str,
+            Json,
+            ToolExecutionFrameNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolExecutionFrameOutcome>> + Send>>
         + Send
         + Sync,
 >;
+
+/// Internal continuation carrying a tool frame and accumulated marks.
+pub(crate) type ToolExecutionFrameOutcomeNextFn = Arc<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionFrameOutcome>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// One registry payload for legacy and annotation-aware tool intercepts.
+///
+/// Keeping both callback forms in this enum preserves a single namespace and
+/// priority order rather than creating a second middleware chain.
+#[derive(Clone)]
+pub(crate) enum ToolExecutionCallable {
+    /// Existing raw-JSON execution intercept.
+    Legacy(ToolExecutionFn),
+    /// Annotation-aware frame execution intercept.
+    Frame(ToolExecutionFrameFn),
+}
+
+impl From<ToolExecutionFn> for ToolExecutionCallable {
+    fn from(value: ToolExecutionFn) -> Self {
+        Self::Legacy(value)
+    }
+}
+
+impl From<ToolExecutionFrameFn> for ToolExecutionCallable {
+    fn from(value: ToolExecutionFrameFn) -> Self {
+        Self::Frame(value)
+    }
+}
 
 /// Relay's built-in LLM codec identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

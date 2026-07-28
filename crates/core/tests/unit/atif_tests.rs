@@ -10,7 +10,7 @@ use crate::api::event::{
 };
 use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
-use crate::api::tool::ToolAttributes;
+use crate::api::tool::{TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes};
 use crate::codec::anthropic::AnthropicMessagesCodec;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::openai_chat::OpenAIChatCodec;
@@ -685,6 +685,39 @@ fn test_exporter_moves_structured_tool_close_result_to_observation_extra() {
     let exported = serde_json::to_value(&trajectory).unwrap();
     let content = exported["steps"][0]["observation"]["results"][0].get("content");
     assert!(content.is_none());
+}
+
+#[test]
+fn test_exporter_preserves_opaque_tool_result_annotation_in_observation_extra() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let annotation = json!({
+        "status": "failed",
+        "nested": {"code": 17},
+        "items": [true, null, "opaque"],
+    });
+    let mut end = event_builder(tool_uuid, EventType::End)
+        .name("terminal")
+        .scope_type(ScopeType::Tool)
+        .output(json!({"raw": "result"}))
+        .tool_call_id("call_123")
+        .build();
+    end.category_profile_mut().unwrap().extra.insert(
+        TOOL_RESULT_ANNOTATION_PROFILE_KEY.to_string(),
+        annotation.clone(),
+    );
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert_eq!(
+        result.extra.as_ref().unwrap()["tool_result_annotation"],
+        annotation
+    );
 }
 
 #[test]

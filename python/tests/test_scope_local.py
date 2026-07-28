@@ -20,6 +20,8 @@ from nemo_relay import (
     MarkEvent,
     ScopeEvent,
     ScopeType,
+    ToolExecutionFrame,
+    ToolExecutionFrameOutcome,
     ToolExecutionInterceptOutcome,
     guardrails,
     llm,
@@ -527,6 +529,46 @@ class TestScopeLocalExecutionIntercept:
         # Intercept receives x=5, adds 1 -> x=6, returns value=12
         assert result["value"] == 12
         assert result["intercepted"] is True
+
+    async def test_frame_intercept_uses_shared_scope_registry_and_deregistration(self):
+        async def frame_intercept(name, args, next_fn):
+            frame = await next_fn(args)
+            annotation = frame.annotation
+            assert isinstance(annotation, dict)
+            annotation["scope"] = name
+            frame.annotation = annotation
+            return ToolExecutionFrameOutcome(frame)
+
+        with scope.scope("frame_exec_scope", ScopeType.Agent) as handle:
+            scope_local.register_tool_execution_frame(
+                handle,
+                "sl_frame_exec",
+                1,
+                frame_intercept,
+            )
+            frame = await tools.execute_frame(
+                "scope_frame_tool",
+                {},
+                lambda _args: ToolExecutionFrame(
+                    {"scope": True},
+                    {"producer": "python"},
+                ),
+            )
+            assert frame.annotation == {
+                "producer": "python",
+                "scope": "scope_frame_tool",
+            }
+            assert scope_local.deregister_tool_execution(handle, "sl_frame_exec")
+
+            unwrapped = await tools.execute_frame(
+                "scope_frame_after_deregister",
+                {},
+                lambda _args: ToolExecutionFrame(
+                    {"scope": True},
+                    {"producer": "python"},
+                ),
+            )
+            assert unwrapped.annotation == {"producer": "python"}
 
 
 # ---------------------------------------------------------------------------

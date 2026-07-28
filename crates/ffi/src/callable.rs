@@ -28,15 +28,17 @@ use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn,
     LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
     LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionFrameFn,
+    ToolExecutionFrameNextFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{
+    ToolExecutionFrame, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
@@ -483,10 +485,22 @@ pub type NemoRelayToolConditionalCb = unsafe extern "C" fn(
 pub type NemoRelayToolExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, args_json: *const c_char) -> *mut c_char;
 
+/// Annotation-aware tool execution callback.
+///
+/// The returned JSON must serialize a `ToolExecutionFrame`.
+pub type NemoRelayToolExecFrameCb =
+    unsafe extern "C" fn(user_data: *mut libc::c_void, args_json: *const c_char) -> *mut c_char;
+
 /// Runtime-provided "next" callback for tool execution middleware chain.
 /// Call this from an intercept to invoke the next layer (or original function).
 /// `next_ctx` is an opaque pointer managed by the runtime.
 pub type NemoRelayToolExecNextFn =
+    unsafe extern "C" fn(args_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
+
+/// Runtime-provided annotation-aware continuation.
+///
+/// The returned JSON serializes a `ToolExecutionFrame`.
+pub type NemoRelayToolExecFrameNextFn =
     unsafe extern "C" fn(args_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
 /// Callback for tool execution intercepts. Receives arguments as JSON plus
@@ -504,6 +518,17 @@ pub type NemoRelayToolExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     args_json: *const c_char,
     next_fn: NemoRelayToolExecNextFn,
+    next_ctx: *mut libc::c_void,
+) -> *mut c_char;
+
+/// Annotation-aware tool execution intercept callback.
+///
+/// `next_fn` returns a serialized `ToolExecutionFrame`; this callback must
+/// return a serialized `ToolExecutionFrameOutcome`.
+pub type NemoRelayToolExecFrameInterceptCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    args_json: *const c_char,
+    next_fn: NemoRelayToolExecFrameNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
@@ -1062,6 +1087,31 @@ pub fn wrap_tool_exec_fn(
     })
 }
 
+/// Wrap a C annotation-aware tool execution callback into an async Rust closure.
+pub fn wrap_tool_exec_frame_fn(
+    cb: NemoRelayToolExecFrameCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> Box<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionFrame>> + Send>> + Send + Sync,
+> {
+    let ud = make_user_data(user_data, free_fn);
+    Box::new(move |args: Json| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            let c_args = json_to_c_string(&args);
+            let result_ptr = unsafe { cb(ud.ptr, c_args) };
+            unsafe { nemo_relay_string_free_internal(c_args) };
+            let frame_json =
+                json_result_from_ptr(result_ptr, "tool execution frame callback failed")?;
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            serde_json::from_value::<ToolExecutionFrame>(frame_json).map_err(|error| {
+                FlowError::Internal(format!("invalid tool execution frame JSON: {error}"))
+            })
+        })
+    })
+}
+
 /// Wrap a C tool execution intercept callback into a [`ToolExecutionFn`].
 ///
 /// The wrapper packages the Rust `ToolExecutionNextFn` into a C-callable
@@ -1121,6 +1171,69 @@ pub fn wrap_tool_exec_intercept_fn(
             })
         })
     })
+}
+
+/// Wrap a C annotation-aware tool execution intercept into a [`ToolExecutionFrameFn`].
+pub fn wrap_tool_exec_frame_intercept_fn(
+    cb: NemoRelayToolExecFrameInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> ToolExecutionFrameFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(
+        move |_name: &str, args: Json, next: ToolExecutionFrameNextFn| {
+            let ud = ud.clone();
+            Box::pin(async move {
+                let next_box = Box::new(next);
+                let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
+
+                unsafe extern "C" fn tool_frame_next_trampoline(
+                    args_json: *const c_char,
+                    next_ctx: *mut libc::c_void,
+                ) -> *mut c_char {
+                    let next_arc = unsafe { &*(next_ctx as *const ToolExecutionFrameNextFn) };
+                    let next = next_arc.clone();
+                    let args = if args_json.is_null() {
+                        Json::Null
+                    } else {
+                        let value = unsafe { CStr::from_ptr(args_json) }.to_string_lossy();
+                        serde_json::from_str(&value).unwrap_or(Json::Null)
+                    };
+                    let handle = tokio::runtime::Handle::current();
+                    let result = tokio::task::block_in_place(|| handle.block_on(next(args)));
+                    match result {
+                        Ok(frame) => match serde_json::to_value(frame) {
+                            Ok(value) => json_to_c_string(&value),
+                            Err(error) => {
+                                set_last_error(&error.to_string());
+                                std::ptr::null_mut()
+                            }
+                        },
+                        Err(error) => {
+                            set_last_error(&error.to_string());
+                            std::ptr::null_mut()
+                        }
+                    }
+                }
+
+                let c_args = json_to_c_string(&args);
+                let result_ptr =
+                    unsafe { cb(ud.ptr, c_args, tool_frame_next_trampoline, next_ctx) };
+                unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionFrameNextFn)) };
+                unsafe { nemo_relay_string_free_internal(c_args) };
+                let outcome_json = json_result_from_ptr(
+                    result_ptr,
+                    "tool execution frame intercept callback failed",
+                )?;
+                unsafe { nemo_relay_string_free_internal(result_ptr) };
+                serde_json::from_value::<ToolExecutionFrameOutcome>(outcome_json).map_err(|error| {
+                    FlowError::Internal(format!(
+                        "invalid tool execution frame outcome JSON: {error}"
+                    ))
+                })
+            })
+        },
+    )
 }
 
 /// Wrap a C LLM execution intercept callback into an `Arc<dyn Fn(LlmRequest, LlmExecutionNextFn) -> ...>`.

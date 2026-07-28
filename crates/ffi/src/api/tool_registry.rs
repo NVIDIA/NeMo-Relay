@@ -3,11 +3,11 @@
 
 use super::{
     NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayFreeFn, NemoRelayStatus,
-    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, c_char,
-    c_str_to_string, clear_last_error, core_registry_api, status_from_error,
-    wrap_async_tool_conditional_fn, wrap_async_tool_execution_intercept_fn,
-    wrap_async_tool_json_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
-    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayToolConditionalCb, NemoRelayToolExecFrameInterceptCb, NemoRelayToolExecInterceptCb,
+    NemoRelayToolSanitizeCb, c_char, c_str_to_string, clear_last_error, core_registry_api,
+    status_from_error, wrap_async_tool_conditional_fn, wrap_async_tool_execution_intercept_fn,
+    wrap_async_tool_json_fn, wrap_tool_conditional_fn, wrap_tool_exec_frame_intercept_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 
 global_async_registration!(
@@ -303,6 +303,34 @@ pub unsafe extern "C" fn nemo_relay_register_tool_execution_intercept(
     match core_registry_api::register_tool_execution_intercept(&name, priority, exec) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
+    }
+}
+
+/// Register an annotation-aware tool execution intercept in the existing chain.
+///
+/// The callback receives a continuation that returns serialized
+/// `ToolExecutionFrame` JSON and must return serialized
+/// `ToolExecutionFrameOutcome` JSON.
+///
+/// # Safety
+/// `name` must be a valid C string. Callback pointers must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_tool_execution_frame_intercept(
+    name: *const c_char,
+    priority: i32,
+    exec_cb: NemoRelayToolExecFrameInterceptCb,
+    exec_user_data: *mut libc::c_void,
+    exec_free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let exec = wrap_tool_exec_frame_intercept_fn(exec_cb, exec_user_data, exec_free);
+    match core_registry_api::register_tool_execution_frame_intercept(&name, priority, exec) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
     }
 }
 

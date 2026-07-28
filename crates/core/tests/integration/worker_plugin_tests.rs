@@ -18,7 +18,10 @@ use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
+use nemo_relay::api::tool::{
+    ToolCallExecuteFrameParams, ToolCallExecuteParams, ToolExecutionFrame, tool_call_execute,
+    tool_call_execute_frame, tool_request_intercepts,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
@@ -151,7 +154,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     .expect("test subscriber should register");
 
     let stack = create_scope_stack();
-    let (outer_uuid, rewritten, tool_result) = TASK_SCOPE_STACK
+    let (outer_uuid, rewritten, tool_result, tool_frame) = TASK_SCOPE_STACK
         .scope(stack, async {
             let outer = push_scope(
                 PushScopeParams::builder()
@@ -175,17 +178,51 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
             )
             .await
             .expect("worker tool middleware should run");
+            let tool_frame = tool_call_execute_frame(
+                ToolCallExecuteFrameParams::builder()
+                    .name("worker-fixture-tool-frame")
+                    .args(json!({ "input": "execute-frame" }))
+                    .func(Arc::new(|args| {
+                        Box::pin(async move {
+                            Ok(ToolExecutionFrame::annotated(
+                                json!({ "tool_frame_callback": true, "args": args }),
+                                json!({ "producer_annotation": true }),
+                            ))
+                        })
+                    }))
+                    .build(),
+            )
+            .await
+            .expect("worker frame-aware tool middleware should run");
             pop_scope(PopScopeParams::builder().handle_uuid(&outer.uuid).build())
                 .expect("outer scope should pop");
-            (outer_uuid, rewritten, tool_result)
+            (outer_uuid, rewritten, tool_result, tool_frame)
         })
         .await;
 
     assert_eq!(rewritten["worker_plugin"], true);
     assert_eq!(tool_result["tool_callback"], true);
     assert_eq!(tool_result["worker_plugin_tool_execution"], true);
+    assert_eq!(tool_result["worker_plugin_tool_execution_frame"], true);
     assert_eq!(
         tool_result["args"]["worker_plugin_tool_execution_request"],
+        true
+    );
+    assert_eq!(tool_frame.result["tool_frame_callback"], true);
+    assert_eq!(
+        tool_frame.result["worker_plugin_tool_execution_frame"],
+        true
+    );
+    assert_eq!(
+        tool_frame.result["args"]["worker_plugin_tool_execution_frame_request"],
+        true
+    );
+    assert_eq!(
+        tool_frame.annotation.as_ref().unwrap()["producer_annotation"],
+        true
+    );
+    assert_eq!(
+        tool_frame.annotation.as_ref().unwrap()["worker_plugin_tool_execution_frame"],
         true
     );
 
@@ -277,6 +314,17 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     assert_eq!(tool_mark.parent_uuid(), Some(tool_start.uuid()));
     assert!(tool_mark.timestamp() > tool_end.timestamp());
     assert_eq!(tool_mark.metadata().unwrap()["worker_plugin_mark"], true);
+    let tool_frame_mark = find_event(
+        &captured_events,
+        "fixture.worker.tool_execution_frame.mark",
+        None,
+    );
+    let tool_frame_start = find_event(
+        &captured_events,
+        "worker-fixture-tool-frame",
+        Some(ScopeCategory::Start),
+    );
+    assert_eq!(tool_frame_mark.parent_uuid(), Some(tool_frame_start.uuid()));
 
     let llm_execute_response = llm_call_execute(
         LlmCallExecuteParams::builder()

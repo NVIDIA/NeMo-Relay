@@ -25,8 +25,8 @@ use super::{
     attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
     merge_usage, model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_session_identity_attributes, push_top_level_json_attributes, relay_span_id,
-    relay_trace_id, validate_attribute_mappings,
+    push_session_identity_attributes, push_tool_result_annotation_attribute,
+    push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
@@ -950,6 +950,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     }
     push_top_level_json_attributes(&mut attributes, "openinference.metadata", event.metadata());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
+    push_tool_result_annotation_attribute(&mut attributes, event);
     if let Some((output, mime_type)) = openinference_output_value(event) {
         attributes.push(KeyValue::new(oi::output::VALUE, output));
         attributes.push(KeyValue::new(oi::output::MIME_TYPE, mime_type));

@@ -560,10 +560,13 @@ fn observation_content_value(value: &Json) -> Option<Json> {
 
 fn observation_extra(event: &Event, output: &Json) -> Json {
     let mut extra = event_extra(event);
-    if let Some(tool_result) = observation_tool_result_extra(output)
-        && let Json::Object(extra_object) = &mut extra
-    {
-        extra_object.insert("tool_result".to_string(), tool_result);
+    if let Json::Object(extra_object) = &mut extra {
+        if let Some(tool_result) = observation_tool_result_extra(output) {
+            extra_object.insert("tool_result".to_string(), tool_result);
+        }
+        if let Some(annotation) = super::tool_result_annotation(event) {
+            extra_object.insert("tool_result_annotation".to_string(), annotation.clone());
+        }
     }
     extra
 }

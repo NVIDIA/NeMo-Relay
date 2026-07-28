@@ -25,8 +25,9 @@ use nemo_relay::api::registry::{
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
     register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
     register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept, register_tool_request_intercept,
-    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    register_tool_execution_frame_intercept, register_tool_execution_intercept,
+    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+    register_tool_sanitize_response_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::error::Result as FlowResult;
@@ -43,7 +44,8 @@ use crate::py_callable::{
     wrap_py_llm_exec_intercept_fn, wrap_py_llm_request_intercept_fn,
     wrap_py_llm_sanitize_request_fn, wrap_py_llm_sanitize_response_fn,
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn,
-    wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
+    wrap_py_tool_exec_frame_intercept_fn, wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn,
+    wrap_py_tool_request_intercept_fn,
 };
 
 #[cfg(test)]
@@ -554,6 +556,27 @@ impl PyPluginContext {
             },
             deregister_tool_execution_intercept,
             "tool execution intercept",
+        )
+    }
+
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_tool_execution_frame_intercept(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_tool_execution_frame_intercept(
+                    qualified_name,
+                    priority,
+                    wrap_py_tool_exec_frame_intercept_fn(callback),
+                )
+            },
+            deregister_tool_execution_intercept,
+            "tool execution frame intercept",
         )
     }
 

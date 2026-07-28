@@ -32,6 +32,7 @@ const {
   popScope,
   event,
   toolCallExecute,
+  toolCallExecuteFrameAsync,
   llmCallExecute,
   llmStreamCallExecute,
   scopeRegisterToolSanitizeRequestGuardrail,
@@ -43,6 +44,7 @@ const {
   scopeRegisterToolRequestIntercept,
   scopeDeregisterToolRequestIntercept,
   scopeRegisterToolExecutionIntercept,
+  scopeRegisterToolExecutionFrameIntercept,
   scopeDeregisterToolExecutionIntercept,
   scopeRegisterLlmSanitizeRequestGuardrail,
   scopeDeregisterLlmSanitizeRequestGuardrail,
@@ -777,6 +779,68 @@ describe('Priority merge of global and scope-local middleware', () => {
     scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_merge_local_exec');
     popScope(scope);
     lib.deregisterToolExecutionIntercept('sl_merge_global_exec');
+  });
+
+  it('scope-local frame intercept uses the shared registry and deregistration', async () => {
+    const scope = pushScope('sl_frame_exec_scope', ScopeType.Agent, null, null);
+    scopeRegisterToolExecutionFrameIntercept(scope.uuid, 'sl_frame_exec', 10, async (args, next) => {
+      const frame = await next(args);
+      return {
+        frame: {
+          result: frame.result,
+          annotation: {
+            ...frame.annotation,
+            scope: 'node',
+          },
+        },
+      };
+    });
+    try {
+      const frame = await toolCallExecuteFrameAsync(
+        'sl_frame_tool',
+        {},
+        async () => ({
+          result: {
+            ok: true,
+          },
+          annotation: {
+            producer: 'node',
+          },
+        }),
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(frame.annotation, {
+        producer: 'node',
+        scope: 'node',
+      });
+      assert.equal(scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_frame_exec'), true);
+
+      const unwrapped = await toolCallExecuteFrameAsync(
+        'sl_frame_after_deregister',
+        {},
+        async () => ({
+          result: {
+            ok: true,
+          },
+          annotation: {
+            producer: 'node',
+          },
+        }),
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(unwrapped.annotation, {
+        producer: 'node',
+      });
+    } finally {
+      scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_frame_exec');
+      popScope(scope);
+    }
   });
 
   it('global and scope-local llm request intercepts both run with priority ordering', async () => {

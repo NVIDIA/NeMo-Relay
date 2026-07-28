@@ -208,6 +208,8 @@ LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
 ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@2"
 LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.LlmRequestInterceptOutcome@2"
 TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.ToolExecutionInterceptOutcome@1"
+TOOL_EXECUTION_FRAME_SCHEMA = "nemo.relay.ToolExecutionFrame@1"
+TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA = "nemo.relay.ToolExecutionFrameOutcome@1"
 PLUGIN_DIAGNOSTICS_SCHEMA = "nemo.relay.PluginDiagnostics@1"
 _OBJECT_SCHEMAS = frozenset(
     {
@@ -216,6 +218,8 @@ _OBJECT_SCHEMAS = frozenset(
         ANNOTATED_LLM_REQUEST_SCHEMA,
         LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
         TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
+        TOOL_EXECUTION_FRAME_SCHEMA,
+        TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA,
     }
 )
 _UNREGISTERED = object()
@@ -653,13 +657,13 @@ class LlmRequestInterceptOutcome:
 
 @dataclass(slots=True)
 class ToolExecutionInterceptOutcome:
-    """Canonical result returned by a Python worker tool execution intercept."""
+    """Relay wrapper returned by a Python worker tool execution intercept."""
 
     result: Json
     pending_marks: list[PendingMarkSpec] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Json]:
-        """Convert this outcome to the canonical worker-envelope payload."""
+        """Convert this outcome to the worker-envelope payload."""
         marks = []
         for mark in self.pending_marks:
             if not isinstance(mark, PendingMarkSpec):
@@ -669,6 +673,53 @@ class ToolExecutionInterceptOutcome:
             marks.append(mark.to_json())
         return {
             "result": self.result,
+            "pending_marks": marks,
+        }
+
+
+@dataclass(slots=True)
+class ToolExecutionFrame:
+    """Raw tool result plus optional metadata that remains opaque to Relay."""
+
+    result: Json
+    annotation: Json | None = None
+
+    @classmethod
+    def from_json(cls, value: Json) -> "ToolExecutionFrame":
+        """Decode the Relay frame envelope without interpreting its annotation."""
+        if not isinstance(value, Mapping) or "result" not in value:
+            raise WorkerSdkError("tool execution frame must be an object containing result")
+        return cls(
+            result=value["result"],
+            annotation=value.get("annotation"),
+        )
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this frame to its Relay JSON-envelope payload."""
+        value: dict[str, Json] = {"result": self.result}
+        if self.annotation is not None:
+            value["annotation"] = self.annotation
+        return value
+
+
+@dataclass(slots=True)
+class ToolExecutionFrameOutcome:
+    """Result returned by a Python worker frame-aware tool intercept."""
+
+    frame: ToolExecutionFrame
+    pending_marks: list[PendingMarkSpec] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this outcome to the canonical worker-envelope payload."""
+        if not isinstance(self.frame, ToolExecutionFrame):
+            raise WorkerSdkError("tool execution frame outcome frame must be ToolExecutionFrame")
+        marks = []
+        for mark in self.pending_marks:
+            if not isinstance(mark, PendingMarkSpec):
+                raise WorkerSdkError("tool execution frame outcome pending_marks must contain PendingMarkSpec values")
+            marks.append(mark.to_json())
+        return {
+            "frame": self.frame.to_json(),
             "pending_marks": marks,
         }
 
@@ -829,6 +880,10 @@ ToolExecutionCallback: TypeAlias = Callable[
     [str, Json, "ToolNext"],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
+ToolExecutionFrameCallback: TypeAlias = Callable[
+    [str, Json, "ToolFrameNext"],
+    ToolExecutionFrameOutcome | Awaitable[ToolExecutionFrameOutcome],
+]
 LlmSanitizeRequestCallback: TypeAlias = Callable[
     [LlmRequest, LlmSanitizeRequestContext], LlmRequest | None | Awaitable[LlmRequest | None]
 ]
@@ -859,6 +914,7 @@ class _Handlers:
     tool_conditionals: dict[str, ToolConditionalCallback]
     tool_requests: dict[str, ToolRequestCallback]
     tool_executions: dict[str, ToolExecutionCallback]
+    tool_execution_frames: dict[str, ToolExecutionFrameCallback]
     llm_sanitize_requests: dict[str, LlmSanitizeRequestCallback]
     llm_sanitize_responses: dict[str, LlmSanitizeResponseCallback]
     llm_conditionals: dict[str, LlmConditionalCallback]
@@ -879,6 +935,7 @@ class _Handlers:
             tool_conditionals={},
             tool_requests={},
             tool_executions={},
+            tool_execution_frames={},
             llm_sanitize_requests={},
             llm_sanitize_responses={},
             llm_conditionals={},
@@ -1130,6 +1187,21 @@ class PluginContext:
         """
         self._push_registration(name, pb.TOOL_EXECUTION_INTERCEPT, priority, False)
         self._handlers.tool_executions[name] = callback
+
+    def register_tool_execution_frame_intercept(
+        self,
+        name: str,
+        callback: ToolExecutionFrameCallback,
+        *,
+        priority: int = 0,
+    ) -> None:
+        """Register middleware that carries an opaque annotation with the tool result.
+
+        The callback participates in the same host registry and priority order
+        as legacy tool execution intercepts.
+        """
+        self._push_registration(name, pb.TOOL_EXECUTION_FRAME_INTERCEPT, priority, False)
+        self._handlers.tool_execution_frames[name] = callback
 
     def register_llm_sanitize_request_guardrail(
         self,
@@ -1630,6 +1702,46 @@ class ToolNext:
         return _json_result_to_value(response)
 
 
+class ToolFrameNext:
+    """Continue the remaining tool chain and receive its result frame.
+
+    The SDK creates this handle for one frame-aware execution-intercept
+    invocation. The Relay host invalidates it when that invocation finishes.
+
+    Args:
+        runtime: Runtime used to call the Relay host.
+        continuation_id: Opaque host-issued continuation identifier.
+    """
+
+    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+        self._runtime = runtime
+        self._continuation_id = continuation_id
+
+    async def call(self, value: Json) -> ToolExecutionFrame:
+        """Call the remaining chain with replacement arguments.
+
+        Args:
+            value: JSON arguments passed to the next intercept or real tool.
+
+        Returns:
+            Raw downstream result plus its optional opaque annotation.
+
+        Raises:
+            WorkerSdkError: The continuation is invalid, complete, cancelled,
+                or fails in the host.
+            TypeError: ``value`` is not JSON-serializable.
+        """
+        response = await self._runtime._host_stub.ToolFrameNext(
+            pb.ToolFrameNextRequest(
+                activation_id=self._runtime._activation_id,
+                auth_token=self._runtime._auth_token,
+                continuation_id=self._continuation_id,
+                value=_json_envelope(JSON_SCHEMA, value),
+            )
+        )
+        return ToolExecutionFrame.from_json(_json_result_to_value(response, TOOL_EXECUTION_FRAME_SCHEMA))
+
+
 class LlmNext:
     """Continue the remaining unary LLM execution chain.
 
@@ -2060,6 +2172,27 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         ),
                     )
                 )
+            if request.surface == pb.TOOL_EXECUTION_FRAME_INTERCEPT:
+                result = await _maybe_await(
+                    self._handler(
+                        self._handlers.tool_execution_frames,
+                        request.registration_name,
+                    )(
+                        request.tool.tool_name,
+                        _decode_required_envelope(request.tool.value, "tool value"),
+                        ToolFrameNext(self._runtime, request.continuation_id),
+                    )
+                )
+                if not isinstance(result, ToolExecutionFrameOutcome):
+                    raise WorkerSdkError("tool execution frame intercept must return ToolExecutionFrameOutcome")
+                return pb.InvokeResponse(
+                    tool_execution_frame=pb.ToolExecutionFrameInterceptResult(
+                        outcome=_json_envelope(
+                            TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA,
+                            result.to_json(),
+                        ),
+                    )
+                )
             raise WorkerSdkError(f"unsupported registration surface {request.surface}")
 
     async def _invoke_llm_result(self, request: Any) -> Any:
@@ -2189,6 +2322,7 @@ def _all_surfaces() -> list[int]:
         pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,
         pb.TOOL_REQUEST_INTERCEPT,
         pb.TOOL_EXECUTION_INTERCEPT,
+        pb.TOOL_EXECUTION_FRAME_INTERCEPT,
         pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
         pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
         pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,

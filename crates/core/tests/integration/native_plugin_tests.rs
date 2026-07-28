@@ -22,7 +22,10 @@ use nemo_relay::api::scope::{
     pop_scope, push_scope,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
+use nemo_relay::api::tool::{
+    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolCallExecuteFrameParams, ToolCallExecuteParams,
+    ToolExecutionFrame, tool_call_execute, tool_call_execute_frame, tool_request_intercepts,
+};
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, NativePluginLoadSpec, PluginHostActivation,
@@ -228,7 +231,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     cleanup.mark_subscriber_registered("native_plugin_fixture_events");
 
     let stack = create_scope_stack();
-    let (outer_uuid, rewritten, tool_result) = TASK_SCOPE_STACK
+    let (outer_uuid, rewritten, tool_result, tool_frame) = TASK_SCOPE_STACK
         .scope(stack, async {
             let outer = push_scope(
                 PushScopeParams::builder()
@@ -252,20 +255,54 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             )
             .await
             .expect("native tool middleware should run");
+            let tool_frame = tool_call_execute_frame(
+                ToolCallExecuteFrameParams::builder()
+                    .name("native-fixture-tool-frame")
+                    .args(json!({ "input": "execute-frame" }))
+                    .func(Arc::new(|args| {
+                        Box::pin(async move {
+                            Ok(ToolExecutionFrame::annotated(
+                                json!({ "tool_frame_callback": true, "args": args }),
+                                json!({ "producer_annotation": true }),
+                            ))
+                        })
+                    }))
+                    .build(),
+            )
+            .await
+            .expect("native frame-aware tool middleware should run");
             pop_scope(PopScopeParams::builder().handle_uuid(&outer.uuid).build())
                 .expect("outer scope should pop");
-            (outer_uuid, rewritten, tool_result)
+            (outer_uuid, rewritten, tool_result, tool_frame)
         })
         .await;
     assert_eq!(rewritten["input"], "value");
     assert_eq!(rewritten["native_plugin"], true);
     assert_eq!(tool_result["tool_callback"], true);
     assert_eq!(tool_result["native_plugin_tool_execution"], true);
+    assert_eq!(tool_result["native_plugin_tool_execution_frame"], true);
     assert_eq!(
         tool_result["args"]["native_plugin_tool_execution_request"],
         true
     );
     assert!(tool_result.get("pending_marks").is_none());
+    assert_eq!(tool_frame.result["tool_frame_callback"], true);
+    assert_eq!(
+        tool_frame.result["native_plugin_tool_execution_frame"],
+        true
+    );
+    assert_eq!(
+        tool_frame.result["args"]["native_plugin_tool_execution_frame_request"],
+        true
+    );
+    assert_eq!(
+        tool_frame.annotation.as_ref().unwrap()["producer_annotation"],
+        true
+    );
+    assert_eq!(
+        tool_frame.annotation.as_ref().unwrap()["native_plugin_tool_execution_frame"],
+        true
+    );
 
     flush_subscribers().expect("native fixture events should flush");
     let first_events = events.lock().unwrap().clone();
@@ -370,6 +407,26 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         .position(|event| event.name() == "fixture.native.tool_execution.mark")
         .unwrap();
     assert!(tool_end_index < tool_mark_index);
+    let tool_frame_start = find_event(
+        &first_events,
+        "native-fixture-tool-frame",
+        Some(ScopeCategory::Start),
+    );
+    let tool_frame_end = find_event(
+        &first_events,
+        "native-fixture-tool-frame",
+        Some(ScopeCategory::End),
+    );
+    assert_eq!(
+        tool_frame_end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY]["producer_annotation"],
+        true
+    );
+    let tool_frame_mark = find_event(
+        &first_events,
+        "fixture.native.tool_execution_frame.mark",
+        None,
+    );
+    assert_eq!(tool_frame_mark.parent_uuid(), Some(tool_frame_start.uuid()));
 
     events.lock().unwrap().clear();
     let isolated_next_stack = create_scope_stack();

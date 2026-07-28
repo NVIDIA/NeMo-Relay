@@ -6,7 +6,7 @@ use nemo_relay_worker::{
 };
 use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolExecutionInterceptOutcome,
-    ToolNext, WorkerPlugin, WorkerSdkError, serve_plugin,
+    ToolExecutionFrameOutcome, ToolFrameNext, ToolNext, WorkerPlugin, WorkerSdkError, serve_plugin,
 };
 use serde_json::json;
 
@@ -177,19 +177,50 @@ fn register_fixture_tool_hooks(
     ctx.register_tool_execution_intercept(
         "fixture_tool_execution",
         0,
-        |_name, args, next: ToolNext| async move {
+        |name, args, next: ToolNext| {
+            let preserve_result = name == "worker-fixture-tool-frame";
+            async move {
             let result = next
                 .call(mark_json(args, "worker_plugin_tool_execution_request"))
                 .await?;
-            Ok(ToolExecutionInterceptOutcome::new(mark_json(
-                result,
-                "worker_plugin_tool_execution",
-            ))
+            let result = if preserve_result {
+                result
+            } else {
+                mark_json(result, "worker_plugin_tool_execution")
+            };
+            Ok(ToolExecutionInterceptOutcome::new(result)
             .with_pending_mark(
                 PendingMarkSpec::builder()
                     .name("fixture.worker.tool_execution.mark")
                     .build(),
             ))
+            }
+        },
+    );
+    ctx.register_tool_execution_frame_intercept(
+        "fixture_tool_execution_frame",
+        -1,
+        |name, args, next: ToolFrameNext| {
+            let mark_name = if name == "worker-fixture-tool-frame" {
+                "fixture.worker.tool_execution_frame.mark"
+            } else {
+                "fixture.worker.tool_execution_frame.raw.mark"
+            };
+            async move {
+                let mut frame = next
+                    .call(mark_json(
+                        args,
+                        "worker_plugin_tool_execution_frame_request",
+                    ))
+                    .await?;
+                frame.result = mark_json(frame.result, "worker_plugin_tool_execution_frame");
+                let mut annotation = frame.annotation.take().unwrap_or_else(|| json!({}));
+                annotation["worker_plugin_tool_execution_frame"] = json!(true);
+                frame.annotation = Some(annotation);
+                Ok(ToolExecutionFrameOutcome::new(frame).with_pending_mark(
+                    PendingMarkSpec::builder().name(mark_name).build(),
+                ))
+            }
         },
     );
 }
