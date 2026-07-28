@@ -641,10 +641,11 @@ impl NemoRelayContextState {
         mut event: Event,
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
+        let context = Arc::new(event.clone());
         for entry in entries {
             let fields = event.sanitize_fields();
             let callback = Arc::clone(&entry.payload);
-            let context = Arc::new(event.clone());
+            let context = Arc::clone(&context);
             match AssertUnwindSafe(async move { callback(context, fields).await })
                 .catch_unwind()
                 .await
@@ -1083,8 +1084,8 @@ impl NemoRelayContextState {
                             target: "nemo_relay.runtime",
                             event = "llm_request_sanitizer_failed",
                             sanitizer = entry.name.as_str(),
-                            preserved_value = "unsanitized_request";
-                            "LLM request sanitizer failed; preserving the last valid unsanitized request: {error}"
+                            preserved_value = "last_valid_request";
+                            "LLM request sanitizer failed; preserving the last valid request: {error}"
                         );
                         value = Some(current);
                     }
@@ -1153,8 +1154,8 @@ impl NemoRelayContextState {
                             target: "nemo_relay.runtime",
                             event = "llm_response_sanitizer_failed",
                             sanitizer = entry.name.as_str(),
-                            preserved_value = "unsanitized_response";
-                            "LLM response sanitizer failed; preserving the last valid unsanitized response: {error}"
+                            preserved_value = "last_valid_response";
+                            "LLM response sanitizer failed; preserving the last valid response: {error}"
                         );
                         value = Some(current);
                     }

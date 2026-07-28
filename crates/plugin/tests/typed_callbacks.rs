@@ -18,17 +18,17 @@ use nemo_relay_plugin::{
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
     NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
-    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
-    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolNext,
+    NemoRelayNativeHostApiV3, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
+    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
+    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -328,6 +328,12 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
                 280, 288, 296, 304, 312,
             ]
         );
+        assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 376);
+        assert_eq!(
+            host_api_v3_offsets(),
+            [0, 320, 328, 336, 344, 352, 360, 368]
+        );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
         assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
@@ -348,6 +354,12 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
                 152, 156,
             ]
         );
+        assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 188);
+        assert_eq!(
+            host_api_v3_offsets(),
+            [0, 160, 164, 168, 172, 176, 180, 184]
+        );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
         assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
@@ -355,6 +367,22 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
         assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
         assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
     }
+}
+
+fn host_api_v3_offsets() -> [usize; 8] {
+    [
+        offset_of!(NemoRelayNativeHostApiV3, v1),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_resolve_json),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_reject),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_is_cancelled),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_release),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_invoke),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_release),
+        offset_of!(
+            NemoRelayNativeHostApiV3,
+            plugin_context_register_async_middleware
+        ),
+    ]
 }
 
 fn host_api_offsets() -> [usize; 40] {
