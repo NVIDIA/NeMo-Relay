@@ -298,6 +298,152 @@ fn test_usage_cached_tokens_mapped_to_cache_read() {
 }
 
 #[test]
+fn test_cohere_v2_chat_result() {
+    // Shape per the OCI `CohereChatResponseV2` schema (apiFormat COHEREV2):
+    // a single assistant message with typed content parts and nested-function
+    // tool calls. Not yet accepted by the live service in us-chicago-1
+    // (probed 2026-07-28: HTTP 400), so this fixture mirrors the spec.
+    let response = json!({
+        "modelId": "cohere.command-a-03-2025",
+        "modelVersion": "2.0",
+        "chatResponse": {
+            "apiFormat": "COHEREV2",
+            "id": "resp-v2-123",
+            "message": {
+                "role": "ASSISTANT",
+                "content": [
+                    {"type": "THINKING", "thinking": "I should call the tool."},
+                    {"type": "TEXT", "text": "Checking the weather."}
+                ],
+                "toolCalls": [{
+                    "id": "call-v2-1",
+                    "type": "FUNCTION",
+                    "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}
+                }]
+            },
+            "finishReason": "TOOL_CALL",
+            "usage": {"promptTokens": 20, "completionTokens": 15, "totalTokens": 35}
+        }
+    });
+    let annotated = OCIGenAIChatCodec.decode_response(&response).unwrap();
+
+    assert_eq!(annotated.id.as_deref(), Some("resp-v2-123"));
+    assert_eq!(annotated.model.as_deref(), Some("cohere.command-a-03-2025"));
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+
+    let Some(MessageContent::Parts(parts)) = &annotated.message else {
+        panic!("expected typed parts, got {:?}", annotated.message);
+    };
+    assert_eq!(parts.len(), 2);
+    assert!(
+        matches!(&parts[0], ContentPart::ProviderNative { kind, .. } if kind == "THINKING"),
+        "THINKING content should be preserved as a provider-native part"
+    );
+    assert!(matches!(&parts[1], ContentPart::Text { text, .. } if text == "Checking the weather."));
+
+    let tool_calls = annotated.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "call-v2-1");
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "Paris"}));
+
+    let usage = annotated.usage.as_ref().unwrap();
+    assert_eq!(usage.total_tokens, Some(35));
+    assert_eq!(
+        annotated.api_specific,
+        Some(ApiSpecificResponse::OCIGenAI {
+            api_format: Some("COHEREV2".into()),
+            model_version: Some("2.0".into()),
+        })
+    );
+}
+
+#[test]
+fn test_cohere_v2_text_only_flattens() {
+    let response = json!({
+        "chatResponse": {
+            "apiFormat": "COHEREV2",
+            "id": "resp-v2-456",
+            "message": {
+                "role": "ASSISTANT",
+                "content": [{"type": "TEXT", "text": "Sunny and 72."}]
+            },
+            "finishReason": "COMPLETE"
+        }
+    });
+    let annotated = OCIGenAIChatCodec.decode_response(&response).unwrap();
+
+    assert_eq!(annotated.id.as_deref(), Some("resp-v2-456"));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Sunny and 72.".into()))
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+}
+
+#[test]
+fn test_unmodeled_response_fields_preserved_in_extra() {
+    // GENERIC: timeCreated and serviceTier are not normalized but must
+    // survive; envelope-level unknown fields likewise.
+    let generic = json!({
+        "modelId": DEDICATED_ENDPOINT,
+        "modelVersion": "1.0",
+        "futureEnvelopeField": {"nested": true},
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "timeCreated": "2026-07-27T17:27:25.871Z",
+            "serviceTier": "default",
+            "choices": [{
+                "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "hi"}]},
+                "finishReason": "stop"
+            }],
+            "usage": {"totalTokens": 9}
+        }
+    });
+    let annotated = OCIGenAIChatCodec.decode_response(&generic).unwrap();
+
+    assert_eq!(
+        annotated.extra.get("timeCreated"),
+        Some(&json!("2026-07-27T17:27:25.871Z"))
+    );
+    assert_eq!(annotated.extra.get("serviceTier"), Some(&json!("default")));
+    assert_eq!(
+        annotated.extra.get("futureEnvelopeField"),
+        Some(&json!({"nested": true}))
+    );
+    // Modeled fields stay normalized-only.
+    for modeled in [
+        "apiFormat",
+        "choices",
+        "usage",
+        "chatResponse",
+        "modelId",
+        "modelVersion",
+    ] {
+        assert!(
+            !annotated.extra.contains_key(modeled),
+            "{modeled} should not be duplicated into extra"
+        );
+    }
+
+    // COHERE: chatHistory is not normalized and must survive.
+    let cohere = json!({
+        "modelId": "cohere.command-r-08-2024",
+        "chatResponse": {
+            "apiFormat": "COHERE",
+            "text": "hi",
+            "chatHistory": [{"role": "USER", "message": "hello"}],
+            "finishReason": "COMPLETE"
+        }
+    });
+    let annotated = OCIGenAIChatCodec.decode_response(&cohere).unwrap();
+    assert_eq!(
+        annotated.extra.get("chatHistory"),
+        Some(&json!([{"role": "USER", "message": "hello"}]))
+    );
+}
+
+#[test]
 fn test_finish_reason_mapping() {
     for (raw, expected) in [
         ("stop", FinishReason::Complete),
@@ -307,6 +453,9 @@ fn test_finish_reason_mapping() {
         ("MAX_TOKENS", FinishReason::Length),
         // Live Gemini-on-OCI responses use the lowercase spelling.
         ("max_tokens", FinishReason::Length),
+        // COHEREV2 reasons per the OCI CohereChatResponseV2 schema.
+        ("TOOL_CALL", FinishReason::ToolUse),
+        ("STOP_SEQUENCE", FinishReason::Complete),
         ("weird", FinishReason::Unknown("weird".into())),
     ] {
         let response = json!({
