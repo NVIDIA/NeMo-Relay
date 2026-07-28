@@ -7,9 +7,10 @@
 
 #![allow(clippy::await_holding_lock)]
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+
+mod test_support;
+use test_support::ready;
 
 use futures::StreamExt;
 use serde_json::json;
@@ -52,10 +53,6 @@ use nemo_relay::json::Json;
 // ---------------------------------------------------------------------------
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
-
-fn ready<T: Send + 'static>(value: T) -> Pin<Box<dyn Future<Output = Result<T>> + Send>> {
-    Box::pin(async move { Ok(value) })
-}
 
 struct ResetPricingResolverGuard;
 

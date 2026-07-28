@@ -20,7 +20,9 @@ use crate::api::optimization::{
 use crate::api::runtime::LlmCodecIdentity;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
-use crate::api::runtime::subscriber_dispatcher::dispatch_transformed_event;
+use crate::api::runtime::subscriber_dispatcher::{
+    dispatch_sanitized_event, dispatch_transformed_event,
+};
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
@@ -544,6 +546,30 @@ pub(crate) async fn emit_optimization_marks(handle: &LlmHandle, subscribers: &[E
     .await;
 }
 
+/// Queue optimization marks from a synchronous lifecycle API.
+///
+/// The public manual lifecycle APIs must not await middleware. Capture each
+/// event's sanitizer chain now and enqueue the immutable snapshots ahead of
+/// the corresponding end event, preserving publication order.
+fn enqueue_optimization_marks(handle: &LlmHandle, subscribers: &[EventSubscriberFn]) {
+    let contributions = handle.optimization_recorder.unemitted_with_timestamps();
+    if contributions.is_empty() || ensure_runtime_owner().is_err() {
+        return;
+    }
+    let scope_stack = handle.captured_scope_stack().clone();
+    for (contribution, recorded_at) in contributions {
+        let event = optimization_mark_event(handle, &contribution, recorded_at);
+        let Some(sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) else {
+            break;
+        };
+        if dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack.clone()) {
+            handle.optimization_recorder.mark_emitted(1);
+        } else {
+            break;
+        }
+    }
+}
+
 async fn emit_optimization_marks_with_async<F, Fut>(
     handle: &LlmHandle,
     subscribers: &[EventSubscriberFn],
@@ -831,6 +857,7 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
     let annotated_response = params.annotated_response;
     let response_codec = params.response_codec;
     handle.optimization_recorder.close_for_finalization(None);
+    enqueue_optimization_marks(&handle, &subscribers);
     let event = {
         let context = global_context();
         let state = context

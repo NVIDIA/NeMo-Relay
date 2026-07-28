@@ -14,6 +14,9 @@
 pub(crate) static TEST_GLOBAL_CONTEXT_MUTEX: tokio::sync::Mutex<()> =
     tokio::sync::Mutex::const_new(());
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub mod acg;
 pub mod acg_component;
 pub mod acg_learner;

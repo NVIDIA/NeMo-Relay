@@ -10,10 +10,11 @@
 
 #![allow(clippy::await_holding_lock)]
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+
+mod test_support;
+use test_support::{ready, ready_result};
 
 use futures::StreamExt;
 use nemo_relay::api::event::{
@@ -81,18 +82,6 @@ use serde_json::json;
 
 // All tests share the global context, so we serialize them.
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
-
-fn ready<T: Send + 'static>(
-    value: T,
-) -> Pin<Box<dyn Future<Output = nemo_relay::error::Result<T>> + Send>> {
-    Box::pin(async move { Ok(value) })
-}
-
-fn ready_result<T: Send + 'static>(
-    value: nemo_relay::error::Result<T>,
-) -> Pin<Box<dyn Future<Output = nemo_relay::error::Result<T>> + Send>> {
-    Box::pin(async move { value })
-}
 
 fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCategory) -> bool {
     event.scope_type() == Some(scope_type) && event.scope_category() == Some(scope_category)

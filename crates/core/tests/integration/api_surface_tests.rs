@@ -7,11 +7,8 @@
 
 use std::sync::{Arc, Mutex};
 
-fn ready<T: Send + 'static>(
-    value: T,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = nemo_relay::error::Result<T>> + Send>> {
-    Box::pin(async move { Ok(value) })
-}
+mod test_support;
+use test_support::ready;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::StreamExt;
@@ -71,6 +68,7 @@ use nemo_relay::api::tool::{
     tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
     tool_request_intercepts,
 };
+use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::error::{FlowError, Result};
 use nemo_relay::json::Json;
 use serde_json::{Map, json};
@@ -707,6 +705,56 @@ fn test_manual_lifecycle_timestamp_overrides() {
         ]
     );
     deregister_subscriber("timestamp-api-events").unwrap();
+}
+
+#[test]
+fn test_manual_llm_end_queues_optimization_marks_before_end_event() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("manual-optimization-events");
+    let request = make_llm_request(json!({"messages": []}));
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("manual-optimized-llm")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new(
+                "test.manual",
+                "test_manual_kind",
+            ))
+    );
+
+    llm_call_end(
+        nemo_relay::api::llm::LlmCallEndParams::builder()
+            .handle(&handle)
+            .response(json!({"ok": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let names = captured_events_snapshot(&events)
+        .into_iter()
+        .filter(|event| {
+            event.name() == "manual-optimized-llm" || event.name() == "nemo_relay.llm.optimization"
+        })
+        .map(|event| event.name().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            "manual-optimized-llm",
+            "nemo_relay.llm.optimization",
+            "manual-optimized-llm",
+        ]
+    );
+    deregister_subscriber("manual-optimization-events").unwrap();
 }
 
 #[test]

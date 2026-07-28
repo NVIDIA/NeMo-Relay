@@ -51,6 +51,7 @@ mod native {
     static SANITIZER_RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
         OnceLock::new();
     static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+    static SANITIZER_RUNTIME_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
@@ -301,11 +302,13 @@ mod native {
         }) {
             Ok(runtime) => runtime,
             Err(error) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "event_sanitizer_runtime_failed";
-                    "Event sanitizer runtime failed; dropping the event: {error}"
-                );
+                if !SANITIZER_RUNTIME_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_sanitizer_runtime_failed";
+                        "Event sanitizer runtime failed; dropping events: {error}"
+                    );
+                }
                 return None;
             }
         };

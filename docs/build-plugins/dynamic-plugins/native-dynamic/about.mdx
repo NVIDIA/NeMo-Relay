@@ -148,6 +148,13 @@ Event sanitizers registered through this extension still run on Relay's serial
 publication dispatcher. Scope and mark emission remain synchronous and their
 sanitized events are delivered later in emission order.
 
+The v3 completion and continuation ABI settles one JSON value. Consequently,
+an async native LLM stream execution intercept currently receives and returns
+the complete JSON array of chunks: Relay buffers the provider stream before
+replaying it to the caller. It is not an incremental streaming transport and
+does not provide per-chunk backpressure. Use a synchronous native stream
+intercept or a worker plugin when first-token latency is required.
+
 Legacy v1/v2 middleware callbacks are synchronous and run on the runtime's
 execution path. They must not block on I/O; use the v3 completion-based API for
 long-running work.
