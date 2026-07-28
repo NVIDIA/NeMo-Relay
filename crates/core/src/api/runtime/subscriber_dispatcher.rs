@@ -52,9 +52,27 @@ mod native {
         OnceLock::new();
     static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
     static SANITIZER_RUNTIME_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+    static DISPATCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
+    }
+
+    struct DispatchGuard;
+
+    impl DispatchGuard {
+        fn enter() -> Self {
+            debug_assert!(!DISPATCH_IN_PROGRESS.swap(true, Ordering::AcqRel));
+            IN_DISPATCHER.with(|flag| flag.set(true));
+            Self
+        }
+    }
+
+    impl Drop for DispatchGuard {
+        fn drop(&mut self) {
+            IN_DISPATCHER.with(|flag| flag.set(false));
+            DISPATCH_IN_PROGRESS.store(false, Ordering::Release);
+        }
     }
 
     fn sanitizer_runtime() -> std::result::Result<&'static tokio::runtime::Runtime, String> {
@@ -184,6 +202,13 @@ mod native {
         Ok(())
     }
 
+    pub(super) fn flush_subscribers_from_binding() -> Result<()> {
+        if DISPATCH_IN_PROGRESS.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        flush_subscribers()
+    }
+
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
         DISPATCHER.get_or_init(start_dispatcher).clone()
     }
@@ -288,9 +313,8 @@ mod native {
     ) {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
-        IN_DISPATCHER.with(|flag| flag.set(true));
+        let _dispatch_guard = DispatchGuard::enter();
         let Some(event) = sanitize_event_snapshot(*event, transform, sanitizers) else {
-            IN_DISPATCHER.with(|flag| flag.set(false));
             restore_thread_scope_stack(previous_scope_stack);
             return;
         };
@@ -303,7 +327,6 @@ mod native {
                 );
             }
         }
-        IN_DISPATCHER.with(|flag| flag.set(false));
         restore_thread_scope_stack(previous_scope_stack);
     }
 
@@ -416,4 +439,14 @@ pub(crate) fn register_async_publication() -> Option<std::sync::mpsc::Sender<()>
 /// Wait for all queued subscriber callbacks submitted before this call.
 pub fn flush_subscribers() -> Result<()> {
     native::flush_subscribers()
+}
+
+/// Wait for queued subscriber callbacks without creating a binding callback cycle.
+///
+/// Language callbacks may resume on a different thread from the dispatcher. In that case the
+/// thread-local reentrancy guard is insufficient, so bindings return early whenever an event is
+/// actively being dispatched.
+#[doc(hidden)]
+pub fn flush_subscribers_from_binding() -> Result<()> {
+    native::flush_subscribers_from_binding()
 }

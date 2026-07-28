@@ -3172,9 +3172,9 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Return a Promise that resolves when native subscriber callbacks queued
 /// before this call finish.
 ///
-/// Call this function outside native subscriber callbacks. A re-entrant call returns without
-/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
-/// still run.
+/// If publication is currently executing, this Promise resolves without waiting. This prevents
+/// subscriber and asynchronous event-sanitizer callbacks from creating a cycle with the serial
+/// dispatcher.
 ///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
 /// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
@@ -3183,7 +3183,7 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Callers should handle errors when awaiting it.
 #[napi]
 pub async fn flush_subscribers() -> Result<()> {
-    tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
+    tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers_from_binding)
         .await
         .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
         .map_err(to_napi_err)

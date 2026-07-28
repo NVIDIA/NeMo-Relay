@@ -1524,12 +1524,12 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
 
 /// Wait for subscriber callbacks queued before this call to finish.
 ///
-/// Call this function outside native subscriber callbacks. A re-entrant call returns without
-/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
-/// still run.
+/// If publication is currently executing, this function returns without waiting. This prevents
+/// subscriber and asynchronous event-sanitizer callbacks from creating a cycle with the serial
+/// dispatcher.
 #[pyfunction]
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
-    py.detach(core_subscriber_api::flush_subscribers)
+    py.detach(core_subscriber_api::flush_subscribers_from_binding)
         .map_err(to_py_err)
 }
 

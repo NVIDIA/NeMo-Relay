@@ -129,6 +129,25 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(events.at(-1).data, { sanitized: true });
   });
 
+  it('does not deadlock when an async sanitizer flushes subscribers', async () => {
+    const events = capture('node-event-sanitize-reentrant-flush-sub');
+    let flushReturned = false;
+    lib.registerMarkSanitizeGuardrail('node-event-reentrant-flush', 0, async (_event, fields) => {
+      await lib.flushSubscribers();
+      flushReturned = true;
+      return fields;
+    });
+    try {
+      lib.event('reentrant-flush-checkpoint', null, { raw: true });
+      await lib.flushSubscribers();
+      await waitFor(events, 1);
+    } finally {
+      lib.deregisterMarkSanitizeGuardrail('node-event-reentrant-flush');
+      lib.deregisterSubscriber('node-event-sanitize-reentrant-flush-sub');
+    }
+    assert.equal(flushReturned, true);
+  });
+
   it('fails open and records invalid sanitizer results', async () => {
     const events = capture('node-event-sanitize-invalid-sub');
     const invalidResults = {
