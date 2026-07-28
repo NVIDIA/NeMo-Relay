@@ -3246,6 +3246,9 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 ///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
 /// Promise does not block the Node event loop while event sanitizers settle.
+///
+/// The Promise rejects if the blocking task fails or the core subscriber flush returns an error.
+/// Callers should handle errors when awaiting it.
 #[napi]
 pub async fn flush_subscribers() -> Result<()> {
     tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
