@@ -114,6 +114,7 @@ import (
 var (
 	closureRegistryMu sync.Mutex
 	closureRegistry   = make(map[uintptr]interface{})
+	closureTokens     = make(map[uintptr]uintptr)
 	closureNextID     atomic.Uint64
 	closureTokenAlloc = func() unsafe.Pointer {
 		return C.malloc(C.size_t(unsafe.Sizeof(uintptr(0))))
@@ -131,10 +132,6 @@ func setLastErrorMessage(msg string) {
 // suitable for passing as void* user_data to C callbacks.
 func registerClosure(fn interface{}) unsafe.Pointer {
 	id := uintptr(closureNextID.Add(1))
-	closureRegistryMu.Lock()
-	closureRegistry[id] = fn
-	closureRegistryMu.Unlock()
-
 	// Allocate the callback token in C-owned memory so we don't pass a Go
 	// pointer through C and can release it explicitly on deregistration.
 	p := (*uintptr)(closureTokenAlloc())
@@ -142,27 +139,39 @@ func registerClosure(fn interface{}) unsafe.Pointer {
 		panic("nemo_relay: failed to allocate callback token")
 	}
 	*p = id
-	return unsafe.Pointer(p)
-}
-
-func closureID(userData unsafe.Pointer) uintptr {
-	return *(*uintptr)(userData)
+	token := unsafe.Pointer(p)
+	closureRegistryMu.Lock()
+	closureRegistry[id] = fn
+	closureTokens[uintptr(token)] = id
+	closureRegistryMu.Unlock()
+	return token
 }
 
 func lookupClosure(userData unsafe.Pointer) interface{} {
-	id := closureID(userData)
 	closureRegistryMu.Lock()
+	id := closureTokens[uintptr(userData)]
 	fn := closureRegistry[id]
 	closureRegistryMu.Unlock()
 	return fn
 }
 
-func unregisterClosure(userData unsafe.Pointer) {
-	id := closureID(userData)
+func closureID(userData unsafe.Pointer) uintptr {
 	closureRegistryMu.Lock()
+	defer closureRegistryMu.Unlock()
+	return closureTokens[uintptr(userData)]
+}
+
+func unregisterClosure(userData unsafe.Pointer) {
+	closureRegistryMu.Lock()
+	id, registered := closureTokens[uintptr(userData)]
+	if registered {
+		delete(closureTokens, uintptr(userData))
+	}
 	delete(closureRegistry, id)
 	closureRegistryMu.Unlock()
-	C.free(userData)
+	if registered {
+		C.free(userData)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -191,28 +200,57 @@ type AsyncExecutionInterceptFunc func(ctx context.Context, invocation json.RawMe
 
 const asyncCallbackPending = C.uint32_t(1)
 
+const asyncCancellationPollInterval = 10 * time.Millisecond
+
+type completionCancellationWatch struct {
+	completion *C.NemoRelayAsyncCompletion
+	cancel     context.CancelFunc
+}
+
+var (
+	completionCancellationMu      sync.Mutex
+	completionCancellationWatches = make(map[uint64]completionCancellationWatch)
+	completionCancellationNextID  atomic.Uint64
+	completionCancellationOnce    sync.Once
+)
+
+func startCompletionCancellationMonitor() {
+	completionCancellationOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(asyncCancellationPollInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				completionCancellationMu.Lock()
+				for id, watch := range completionCancellationWatches {
+					if bool(C.nemo_relay_async_completion_is_cancelled(watch.completion)) {
+						delete(completionCancellationWatches, id)
+						watch.cancel()
+					}
+				}
+				completionCancellationMu.Unlock()
+			}
+		}()
+	})
+}
+
 func contextForCompletion(completion *C.NemoRelayAsyncCompletion) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	startCompletionCancellationMonitor()
+	id := completionCancellationNextID.Add(1)
+	completionCancellationMu.Lock()
+	completionCancellationWatches[id] = completionCancellationWatch{
+		completion: completion,
+		cancel:     cancel,
+	}
+	completionCancellationMu.Unlock()
 	var doneOnce sync.Once
-	go func() {
-		ticker := time.NewTicker(10 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				if bool(C.nemo_relay_async_completion_is_cancelled(completion)) {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
 	return ctx, func() {
-		doneOnce.Do(func() { close(done) })
-		cancel()
+		doneOnce.Do(func() {
+			completionCancellationMu.Lock()
+			delete(completionCancellationWatches, id)
+			completionCancellationMu.Unlock()
+			cancel()
+		})
 	}
 }
 
@@ -684,6 +722,7 @@ type asyncNextResult struct {
 func goAsyncNextResultTrampoline(userData unsafe.Pointer, valueJSON *C.char, errorMessage *C.char) {
 	ch, ok := lookupClosure(userData).(chan asyncNextResult)
 	if !ok {
+		unregisterClosure(userData)
 		return
 	}
 	defer unregisterClosure(userData)
@@ -719,6 +758,8 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 		var nextMu sync.RWMutex
 		nextOpen := true
 		defer func() {
+			// Unblock in-flight next calls before waiting for their read locks.
+			cancel()
 			nextMu.Lock()
 			nextOpen = false
 			nextMu.Unlock()
@@ -732,6 +773,7 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 			}
 			ch := make(chan asyncNextResult, 1)
 			token := registerClosure(ch)
+			defer unregisterClosure(token)
 			cPayload := C.CString(string(payload))
 			status := C.nemo_relay_async_next_invoke_callback(
 				next, cPayload,
@@ -739,7 +781,6 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 			)
 			C.free(unsafe.Pointer(cPayload))
 			if err := checkStatus(status); err != nil {
-				unregisterClosure(token)
 				return nil, err
 			}
 			select {

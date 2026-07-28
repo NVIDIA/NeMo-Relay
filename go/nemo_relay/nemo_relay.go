@@ -1241,21 +1241,18 @@ func registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, k
 }
 
 func registerAsyncEventSanitizer(name string, priority int32, fn AsyncMiddlewareFunc, kind int) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	callback := C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline)
-	free := C.NemoRelayFreeFn(C.goFreeTrampoline)
-	var status C.int32_t
-	switch kind {
-	case 0:
-		status = C.nemo_relay_register_mark_sanitize_guardrail_async(cName, C.int32_t(priority), callback, id, free)
-	case 1:
-		status = C.nemo_relay_register_scope_sanitize_start_guardrail_async(cName, C.int32_t(priority), callback, id, free)
-	default:
-		status = C.nemo_relay_register_scope_sanitize_end_guardrail_async(cName, C.int32_t(priority), callback, id, free)
-	}
-	return checkStatus(status)
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		callback := C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline)
+		free := C.NemoRelayFreeFn(C.goFreeTrampoline)
+		switch kind {
+		case 0:
+			return C.nemo_relay_register_mark_sanitize_guardrail_async(name, priority, callback, id, free)
+		case 1:
+			return C.nemo_relay_register_scope_sanitize_start_guardrail_async(name, priority, callback, id, free)
+		default:
+			return C.nemo_relay_register_scope_sanitize_end_guardrail_async(name, priority, callback, id, free)
+		}
+	})
 }
 
 // RegisterMarkSanitizeGuardrail registers a global mark event sanitizer.
@@ -1329,13 +1326,9 @@ func RegisterToolSanitizeRequestGuardrail(name string, priority int32, fn ToolSa
 
 // RegisterToolSanitizeRequestGuardrailAsync registers an asynchronous tool request sanitizer.
 func RegisterToolSanitizeRequestGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_sanitize_request_guardrail_async(
-		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_tool_sanitize_request_guardrail_async(name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterToolSanitizeRequestGuardrail removes a previously registered tool
@@ -1365,13 +1358,9 @@ func RegisterToolSanitizeResponseGuardrail(name string, priority int32, fn ToolS
 
 // RegisterToolSanitizeResponseGuardrailAsync registers an asynchronous tool response sanitizer.
 func RegisterToolSanitizeResponseGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_sanitize_response_guardrail_async(
-		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_tool_sanitize_response_guardrail_async(name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterToolSanitizeResponseGuardrail removes a previously registered tool
@@ -1403,13 +1392,9 @@ func RegisterToolConditionalExecutionGuardrail(name string, priority int32, fn T
 
 // RegisterToolConditionalExecutionGuardrailAsync registers an asynchronous tool guardrail.
 func RegisterToolConditionalExecutionGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_conditional_execution_guardrail_async(
-		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_tool_conditional_execution_guardrail_async(name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterToolConditionalExecutionGuardrail removes a previously registered
@@ -1440,14 +1425,9 @@ func RegisterToolRequestIntercept(name string, priority int32, breakChain bool, 
 
 // RegisterToolRequestInterceptAsync registers an asynchronous tool request intercept.
 func RegisterToolRequestInterceptAsync(name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_request_intercept_async(
-		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_tool_request_intercept_async(name, priority, C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterToolRequestIntercept removes a previously registered tool request
@@ -1476,14 +1456,9 @@ func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExec
 
 // RegisterToolExecutionInterceptAsync registers an asynchronous tool execution intercept.
 func RegisterToolExecutionInterceptAsync(name string, priority int32, fn AsyncExecutionInterceptFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_execution_intercept_async(
-		cName, C.int32_t(priority),
-		C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_tool_execution_intercept_async(name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterToolExecutionIntercept removes a previously registered tool
@@ -1514,13 +1489,9 @@ func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequ
 
 // RegisterLlmSanitizeRequestGuardrailAsync registers an asynchronous LLM request sanitizer.
 func RegisterLlmSanitizeRequestGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_sanitize_request_guardrail_async(
-		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_llm_sanitize_request_guardrail_async(name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterLlmSanitizeRequestGuardrail removes a previously registered LLM
@@ -1547,13 +1518,9 @@ func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMRes
 
 // RegisterLlmSanitizeResponseGuardrailAsync registers an asynchronous LLM response sanitizer.
 func RegisterLlmSanitizeResponseGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_sanitize_response_guardrail_async(
-		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_llm_sanitize_response_guardrail_async(name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterLlmSanitizeResponseGuardrail removes a previously registered LLM
@@ -1584,13 +1551,9 @@ func RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LL
 
 // RegisterLlmConditionalExecutionGuardrailAsync registers an asynchronous LLM guardrail.
 func RegisterLlmConditionalExecutionGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_conditional_execution_guardrail_async(
-		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_llm_conditional_execution_guardrail_async(name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterLlmConditionalExecutionGuardrail removes a previously registered
@@ -1621,14 +1584,9 @@ func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, f
 
 // RegisterLlmRequestInterceptAsync registers an asynchronous LLM request intercept.
 func RegisterLlmRequestInterceptAsync(name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_request_intercept_async(
-		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_llm_request_intercept_async(name, priority, C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterLlmRequestIntercept removes a previously registered LLM request
@@ -1657,14 +1615,9 @@ func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecut
 
 // RegisterLlmExecutionInterceptAsync registers an asynchronous LLM execution intercept.
 func RegisterLlmExecutionInterceptAsync(name string, priority int32, fn AsyncExecutionInterceptFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_execution_intercept_async(
-		cName, C.int32_t(priority),
-		C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_llm_execution_intercept_async(name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterLlmExecutionIntercept removes a previously registered LLM
@@ -1694,14 +1647,9 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLM
 
 // RegisterLlmStreamExecutionInterceptAsync registers an asynchronous streaming LLM intercept.
 func RegisterLlmStreamExecutionInterceptAsync(name string, priority int32, fn AsyncExecutionInterceptFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_stream_execution_intercept_async(
-		cName, C.int32_t(priority),
-		C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline),
-		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_register_llm_stream_execution_intercept_async(name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // DeregisterLlmStreamExecutionIntercept removes a previously registered LLM
@@ -2493,12 +2441,27 @@ func (s *OpenInferenceSubscriber) Close() {
 // Scope-local guardrail/intercept registration (Tool)
 // ---------------------------------------------------------------------------
 
-func withScopeAsyncMiddleware(scopeUUID, name string, priority int32, fn any, call func(*C.char, *C.char, C.int32_t, unsafe.Pointer) C.int32_t) error {
+type asyncMiddlewareCallback interface {
+	AsyncMiddlewareFunc | AsyncExecutionInterceptFunc
+}
+
+func withGlobalAsyncMiddleware[T asyncMiddlewareCallback](name string, priority int32, fn T, call func(*C.char, C.int32_t, unsafe.Pointer) C.int32_t) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	// The C registration entry point owns id on every return path and invokes
+	// goFreeTrampoline exactly once if registration fails.
+	return checkStatus(call(cName, C.int32_t(priority), id))
+}
+
+func withScopeAsyncMiddleware[T asyncMiddlewareCallback](scopeUUID, name string, priority int32, fn T, call func(*C.char, *C.char, C.int32_t, unsafe.Pointer) C.int32_t) error {
 	id := registerClosure(fn)
 	cScopeUUID := C.CString(scopeUUID)
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
+	// The C registration entry point owns id on every return path and invokes
+	// goFreeTrampoline exactly once if registration fails.
 	return checkStatus(call(cScopeUUID, cName, C.int32_t(priority), id))
 }
 

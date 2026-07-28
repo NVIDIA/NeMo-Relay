@@ -71,6 +71,69 @@ use nemo_relay::plugin::{
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;
 
+macro_rules! global_async_registration {
+    ($fn_name:ident, $callback_ty:ty, $register:path, $wrapper:path $(, $break_chain:ident)?) => {
+        /// Register a completion-based asynchronous middleware callback.
+        #[allow(clippy::missing_safety_doc)]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $fn_name(
+            name: *const c_char,
+            priority: i32,
+            $( $break_chain: bool, )?
+            cb: $callback_ty,
+            user_data: *mut libc::c_void,
+            free_fn: NemoRelayFreeFn,
+        ) -> NemoRelayStatus {
+            clear_last_error();
+            // The wrapper assumes ownership before validation so every return
+            // path invokes free_fn exactly once.
+            let callback = $wrapper(cb, user_data, free_fn);
+            let name = match c_str_to_string(name) {
+                Ok(name) => name,
+                Err(status) => return status,
+            };
+            match $register(&name, priority, $( $break_chain, )? callback) {
+                Ok(()) => NemoRelayStatus::Ok,
+                Err(error) => status_from_error(&error),
+            }
+        }
+    };
+}
+
+macro_rules! scope_async_registration {
+    ($fn_name:ident, $callback_ty:ty, $register:path, $wrapper:path $(, $break_chain:ident)?) => {
+        /// Register a scope-local completion-based asynchronous middleware callback.
+        #[allow(clippy::missing_safety_doc)]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $fn_name(
+            scope_uuid: *const c_char,
+            name: *const c_char,
+            priority: i32,
+            $( $break_chain: bool, )?
+            cb: $callback_ty,
+            user_data: *mut libc::c_void,
+            free_fn: NemoRelayFreeFn,
+        ) -> NemoRelayStatus {
+            clear_last_error();
+            // The wrapper assumes ownership before validation so every return
+            // path invokes free_fn exactly once.
+            let callback = $wrapper(cb, user_data, free_fn);
+            let uuid = match parse_scope_uuid(scope_uuid) {
+                Ok(uuid) => uuid,
+                Err(status) => return status,
+            };
+            let name = match c_str_to_string(name) {
+                Ok(name) => name,
+                Err(status) => return status,
+            };
+            match $register(&uuid, &name, priority, $( $break_chain, )? callback) {
+                Ok(()) => NemoRelayStatus::Ok,
+                Err(error) => status_from_error(&error),
+            }
+        }
+    };
+}
+
 mod adaptive;
 mod event_registry;
 mod llm;
