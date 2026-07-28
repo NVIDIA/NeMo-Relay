@@ -3,6 +3,7 @@
 
 //! Integration tests for native subscriber dispatch behavior.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -159,6 +160,32 @@ fn mark_emission_snapshots_sanitizers_and_returns_before_they_finish() {
     );
     drop(events);
     deregister_subscriber("sanitized-mark-subscriber").unwrap();
+}
+
+#[test]
+fn mark_emission_skips_sanitizers_without_subscribers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let sanitizer_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&sanitizer_called);
+    register_mark_sanitize_guardrail(
+        "unused-mark-sanitizer",
+        10,
+        Arc::new(move |_, fields| {
+            called.store(true, Ordering::Release);
+            fields
+        }),
+    )
+    .unwrap();
+
+    emit_mark("no-subscribers");
+    flush_subscribers().unwrap();
+    deregister_mark_sanitize_guardrail("unused-mark-sanitizer").unwrap();
+
+    assert!(!sanitizer_called.load(Ordering::Acquire));
 }
 
 #[test]
