@@ -122,6 +122,27 @@ fn test_non_wire_renderings_are_not_decoded() {
     assert_eq!(annotated.model, None);
     assert_eq!(annotated.message, None);
     assert_eq!(annotated.finish_reason, None);
+
+    // CLI output: kebab-case keys wrapped in a `data` envelope.
+    let cli_shaped = json!({
+        "data": {
+            "model-id": DEDICATED_ENDPOINT,
+            "chat-response": {
+                "api-format": "GENERIC",
+                "choices": [{
+                    "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "hello"}]},
+                    "finish-reason": "stop"
+                }],
+                "usage": {"total-tokens": 9}
+            }
+        }
+    });
+    let annotated = OCIGenAIChatCodec.decode_response(&cli_shaped).unwrap();
+
+    assert_eq!(annotated.model, None);
+    assert_eq!(annotated.message, None);
+    assert_eq!(annotated.finish_reason, None);
+    assert_eq!(annotated.usage, None);
 }
 
 #[test]
