@@ -189,7 +189,8 @@ under `nemo-relay plugins edit`.
 
 Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml`.
 Global plugin configuration is system-readable (`0644` on Unix), so do not
-store credentials there.
+store credentials there. The editor rejects schema-declared secret values in
+global plugin configuration.
 
 The upstream authorization-header controls show only whether a value is
 configured and never print it in menus or previews. Prefer

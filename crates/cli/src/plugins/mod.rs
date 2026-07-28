@@ -275,6 +275,17 @@ fn save_document(
     validate_config(document.config())?;
     for plugin in dynamic_plugins {
         plugin.validate()?;
+    }
+    if scope == TargetScope::Global
+        && dynamic_plugins
+            .iter()
+            .any(DynamicPluginEditorState::has_persisted_secrets)
+    {
+        return Err(CliError::Config(
+            "global plugin configuration cannot contain schema-declared secret values; use a user or project plugin config".into(),
+        ));
+    }
+    for plugin in dynamic_plugins {
         plugin.apply_to_document(document, false)?;
     }
     document.write_for_scope(scope)?;

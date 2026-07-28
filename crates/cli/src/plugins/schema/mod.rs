@@ -209,6 +209,18 @@ impl PluginConfigSchema {
         !self.secret_patterns.is_empty()
     }
 
+    /// Returns whether a configuration contains a non-null schema-declared secret value.
+    pub(super) fn has_persisted_secrets(&self, config: &Value) -> bool {
+        let mut config = config.clone();
+        let mut has_persisted_secrets = false;
+        for pattern in &self.secret_patterns {
+            pattern.visit_matching_values(&mut config, 0, &mut |value| {
+                has_persisted_secrets |= !value.is_null();
+            });
+        }
+        has_persisted_secrets
+    }
+
     pub(super) fn has_secrets_at(&self, path: &[String]) -> bool {
         self.secret_patterns
             .iter()

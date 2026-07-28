@@ -1678,6 +1678,35 @@ fn global_plugin_document_is_system_readable() {
 }
 
 #[test]
+fn global_plugin_editor_rejects_persisted_schema_secrets() {
+    let temp = tempfile::tempdir().unwrap();
+    write_editor_dynamic_manifest(
+        &temp.path().join("plugin"),
+        "acme.secret",
+        None,
+        Some(&json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"password": {"type": "string", "writeOnly": true}}
+        })),
+    );
+    let path = temp.path().join("plugins.toml");
+    let original = "[[plugins.dynamic]]\nmanifest = \"./plugin/relay-plugin.toml\"\nconfig = { password = \"secret\" }\n";
+    std::fs::write(&path, original).unwrap();
+
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    let states = load_dynamic_plugin_states(&document).unwrap();
+    let error = save_document(&mut document, &[], &states, TargetScope::Global)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("global plugin configuration cannot contain schema-declared secret values")
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+}
+
+#[test]
 fn dynamic_config_array_resize_preserves_toml_native_values() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("plugins.toml");

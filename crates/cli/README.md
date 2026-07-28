@@ -165,7 +165,8 @@ The canonical plugin file is `plugins.toml`; user config lives at
 `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Project config lives at
 `.nemo-relay/plugins.toml`. Use `nemo-relay plugins edit --global` to edit
 `/etc/nemo-relay/plugins.toml`; it is system-readable (`0644` on Unix), so do
-not store credentials there.
+not store credentials there. The editor rejects schema-declared secret values
+in global plugin configuration.
 
 Minimal ATIF example:
 
