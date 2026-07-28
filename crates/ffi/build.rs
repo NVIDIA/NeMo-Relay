@@ -112,12 +112,14 @@ fn parse_async_macro_invocations(source: &str) -> Vec<AsyncPrototype> {
                 .collect::<Vec<_>>();
             remaining = &invocation[end + 2..];
 
-            let Some(name) = arguments.first().copied() else {
-                continue;
-            };
-            if !name.starts_with("nemo_relay_") || !name.ends_with("_async") {
-                continue;
-            }
+            let name = arguments
+                .first()
+                .copied()
+                .expect("async registration macro invocation is missing its export name");
+            assert!(
+                name.starts_with("nemo_relay_") && name.ends_with("_async"),
+                "async registration macro exported unexpected name {name}; expected nemo_relay_*_async"
+            );
             let callback_type = arguments
                 .get(1)
                 .unwrap_or_else(|| panic!("{name} macro invocation is missing its callback type"));

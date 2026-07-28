@@ -824,6 +824,9 @@ pub fn wrap_async_llm_conditional_fn(
 }
 
 /// Wrap a completion-based C LLM request sanitizer.
+///
+/// The async invocation envelope includes `codec_kind` and `codec_id`, but not
+/// the borrowed codec capability available to synchronous callbacks.
 pub fn wrap_async_llm_sanitize_request_fn(
     cb: NemoRelayAsyncJsonCb,
     user_data: *mut libc::c_void,
@@ -855,6 +858,9 @@ pub fn wrap_async_llm_sanitize_request_fn(
 }
 
 /// Wrap a completion-based C LLM response sanitizer.
+///
+/// The async invocation envelope includes `codec_kind` and `codec_id`, but not
+/// the borrowed codec capability available to synchronous callbacks.
 pub fn wrap_async_llm_sanitize_response_fn(
     cb: NemoRelayAsyncJsonCb,
     user_data: *mut libc::c_void,

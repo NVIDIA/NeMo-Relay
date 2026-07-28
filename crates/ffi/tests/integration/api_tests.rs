@@ -771,6 +771,12 @@ fn scope_stack_propagation_and_thread_binding_validate_all_ffi_inputs() {
         NemoRelayStatus::NullPointer
     );
 
+    let mut original_binding = ptr::null_mut();
+    assert_eq!(
+        unsafe { nemo_relay_scope_stack_capture_thread(&mut original_binding) },
+        NemoRelayStatus::Ok
+    );
+    assert!(!original_binding.is_null());
     let stack = unsafe { fresh_scope_stack() };
     let mut binding = ptr::null_mut();
     assert_eq!(
@@ -780,6 +786,10 @@ fn scope_stack_propagation_and_thread_binding_validate_all_ffi_inputs() {
     assert!(!binding.is_null());
     assert_eq!(
         unsafe { nemo_relay_scope_stack_restore_thread(binding) },
+        NemoRelayStatus::Ok
+    );
+    assert_eq!(
+        unsafe { nemo_relay_scope_stack_restore_thread(original_binding) },
         NemoRelayStatus::Ok
     );
     unsafe { nemo_relay_scope_stack_free(stack) };
