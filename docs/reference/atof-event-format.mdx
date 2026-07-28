@@ -412,7 +412,7 @@ Every event carries a required `atof_version` field, formatted `"MAJOR.MINOR"` â
 
 ## 7. Reference Implementations
 
-- **Python (consumer + test-producer):** `src/nat/atof/` in `nvidia_nat_atif`. Pydantic models per event kind with `model_config = ConfigDict(extra="allow")` for lossless pass-through.
+- **Python (consumer + test-producer):** [`packages/nvidia_nat_atif/src/nat/atof/`](https://github.com/NVIDIA/NeMo-Agent-Toolkit/tree/main/packages/nvidia_nat_atif/src/nat/atof) in [NVIDIA/NeMo-Agent-Toolkit](https://github.com/NVIDIA/NeMo-Agent-Toolkit). Pydantic models per event kind with `model_config = ConfigDict(extra="allow")` for lossless pass-through.
 - **Producer runtimes:** Agent runtimes emitting ATOF MAY use more granular internal types (e.g., separate `LlmStartEvent`/`ToolStartEvent` structs in typed languages) for type-safe construction, but MUST serialize to ATOF's two-kind wire format on emission.
 - **Language bindings:** Where a producer runtime exposes bindings to additional languages, those bindings SHOULD re-export the runtime's event types via language-idiomatic wrappers while preserving the wire format on serialization.
 
