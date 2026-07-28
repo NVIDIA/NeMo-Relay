@@ -21,7 +21,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
@@ -168,6 +168,27 @@ impl SendUserData {
 struct CompletionWait {
     completion: Arc<NemoRelayAsyncCompletion>,
     receiver: tokio::sync::oneshot::Receiver<Result<Json>>,
+}
+
+static ACTIVE_EVENT_SANITIZER_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+
+struct ActiveEventSanitizerCallback;
+
+impl ActiveEventSanitizerCallback {
+    fn enter() -> Self {
+        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for ActiveEventSanitizerCallback {
+    fn drop(&mut self) {
+        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn event_sanitizer_callback_active() -> bool {
+    ACTIVE_EVENT_SANITIZER_CALLBACKS.load(Ordering::Acquire) != 0
 }
 
 impl Drop for CompletionWait {
@@ -793,6 +814,7 @@ pub fn wrap_async_event_sanitize_fn(
     Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let user_data = user_data.clone();
         Box::pin(async move {
+            let _active_callback = ActiveEventSanitizerCallback::enter();
             let value = invoke_async_json(
                 cb,
                 user_data,
