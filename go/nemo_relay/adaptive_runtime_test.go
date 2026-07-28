@@ -159,7 +159,7 @@ func TestAdaptiveRuntimeBindScopeRejectsNilScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
-	defer runtime.Shutdown()
+	defer func() { _ = runtime.Shutdown() }()
 
 	if runtime.BindScope(nil) == nil {
 		t.Fatal("expected BindScope to reject nil scope")

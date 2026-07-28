@@ -44,69 +44,23 @@ unsafe fn register_global(
         .unwrap_or_else(|error| status_from_error(&error))
 }
 
-unsafe fn register_global_async(
-    name: *const c_char,
-    priority: i32,
-    cb: NemoRelayAsyncJsonCb,
-    user_data: *mut libc::c_void,
-    free_fn: NemoRelayFreeFn,
-    surface: Surface,
-) -> NemoRelayStatus {
-    clear_last_error();
-    // The wrapper assumes ownership before validation so every return path
-    // invokes free_fn exactly once.
-    let callback = wrap_async_event_sanitize_fn(cb, user_data, free_fn);
-    let name = match c_str_to_string(name) {
-        Ok(name) => name,
-        Err(status) => return status,
-    };
-    let result = match surface {
-        Surface::Mark => {
-            core_registry_api::register_mark_sanitize_guardrail(&name, priority, callback)
-        }
-        Surface::Start => {
-            core_registry_api::register_scope_sanitize_start_guardrail(&name, priority, callback)
-        }
-        Surface::End => {
-            core_registry_api::register_scope_sanitize_end_guardrail(&name, priority, callback)
-        }
-    };
-    result
-        .map(|()| NemoRelayStatus::Ok)
-        .unwrap_or_else(|error| status_from_error(&error))
-}
-
-macro_rules! global_async_event_registration {
-    ($name:ident, $callback_ty:ty, $surface:expr) => {
-        /// Register a completion-based asynchronous event sanitizer.
-        #[allow(clippy::missing_safety_doc)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name(
-            name: *const c_char,
-            priority: i32,
-            cb: $callback_ty,
-            user_data: *mut libc::c_void,
-            free_fn: NemoRelayFreeFn,
-        ) -> NemoRelayStatus {
-            unsafe { register_global_async(name, priority, cb, user_data, free_fn, $surface) }
-        }
-    };
-}
-
-global_async_event_registration!(
+global_async_registration!(
     nemo_relay_register_mark_sanitize_guardrail_async,
     NemoRelayAsyncJsonCb,
-    Surface::Mark
+    core_registry_api::register_mark_sanitize_guardrail,
+    wrap_async_event_sanitize_fn
 );
-global_async_event_registration!(
+global_async_registration!(
     nemo_relay_register_scope_sanitize_start_guardrail_async,
     NemoRelayAsyncJsonCb,
-    Surface::Start
+    core_registry_api::register_scope_sanitize_start_guardrail,
+    wrap_async_event_sanitize_fn
 );
-global_async_event_registration!(
+global_async_registration!(
     nemo_relay_register_scope_sanitize_end_guardrail_async,
     NemoRelayAsyncJsonCb,
-    Surface::End
+    core_registry_api::register_scope_sanitize_end_guardrail,
+    wrap_async_event_sanitize_fn
 );
 
 unsafe fn deregister_global(name: *const c_char, surface: Surface) -> NemoRelayStatus {
@@ -168,77 +122,23 @@ unsafe fn register_scope(
         .unwrap_or_else(|error| status_from_error(&error))
 }
 
-unsafe fn register_scope_async(
-    scope_uuid: *const c_char,
-    name: *const c_char,
-    priority: i32,
-    cb: NemoRelayAsyncJsonCb,
-    user_data: *mut libc::c_void,
-    free_fn: NemoRelayFreeFn,
-    surface: Surface,
-) -> NemoRelayStatus {
-    clear_last_error();
-    // The wrapper assumes ownership before validation so every return path
-    // invokes free_fn exactly once.
-    let callback = wrap_async_event_sanitize_fn(cb, user_data, free_fn);
-    let uuid = match parse_scope_uuid(scope_uuid) {
-        Ok(uuid) => uuid,
-        Err(status) => return status,
-    };
-    let name = match c_str_to_string(name) {
-        Ok(name) => name,
-        Err(status) => return status,
-    };
-    let result = match surface {
-        Surface::Mark => core_registry_api::scope_register_mark_sanitize_guardrail(
-            &uuid, &name, priority, callback,
-        ),
-        Surface::Start => core_registry_api::scope_register_scope_sanitize_start_guardrail(
-            &uuid, &name, priority, callback,
-        ),
-        Surface::End => core_registry_api::scope_register_scope_sanitize_end_guardrail(
-            &uuid, &name, priority, callback,
-        ),
-    };
-    result
-        .map(|()| NemoRelayStatus::Ok)
-        .unwrap_or_else(|error| status_from_error(&error))
-}
-
-macro_rules! scope_async_event_registration {
-    ($name:ident, $callback_ty:ty, $surface:expr) => {
-        /// Register a scope-local completion-based asynchronous event sanitizer.
-        #[allow(clippy::missing_safety_doc)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name(
-            scope_uuid: *const c_char,
-            name: *const c_char,
-            priority: i32,
-            cb: $callback_ty,
-            user_data: *mut libc::c_void,
-            free_fn: NemoRelayFreeFn,
-        ) -> NemoRelayStatus {
-            unsafe {
-                register_scope_async(scope_uuid, name, priority, cb, user_data, free_fn, $surface)
-            }
-        }
-    };
-}
-
-scope_async_event_registration!(
+scope_async_registration!(
     nemo_relay_scope_register_mark_sanitize_guardrail_async,
     NemoRelayAsyncJsonCb,
-    Surface::Mark
+    core_registry_api::scope_register_mark_sanitize_guardrail,
+    wrap_async_event_sanitize_fn
 );
-scope_async_event_registration!(
+scope_async_registration!(
     nemo_relay_scope_register_scope_sanitize_start_guardrail_async,
     NemoRelayAsyncJsonCb,
-    Surface::Start
+    core_registry_api::scope_register_scope_sanitize_start_guardrail,
+    wrap_async_event_sanitize_fn
 );
-scope_async_event_registration!(
+scope_async_registration!(
     nemo_relay_scope_register_scope_sanitize_end_guardrail_async,
     NemoRelayAsyncJsonCb,
-    Surface::End
+    core_registry_api::scope_register_scope_sanitize_end_guardrail,
+    wrap_async_event_sanitize_fn
 );
 
 unsafe fn deregister_scope(
