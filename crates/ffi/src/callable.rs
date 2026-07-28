@@ -332,6 +332,9 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke(
 }
 
 /// Invoke the next execution layer and report its result through a callback.
+///
+/// A non-`Ok` return means invocation was not scheduled and `callback` is
+/// never invoked; the caller owns any state it allocated for `user_data`.
 #[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_async_next_invoke_callback(

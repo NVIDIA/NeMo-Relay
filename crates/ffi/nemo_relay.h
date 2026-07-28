@@ -2585,6 +2585,9 @@ NemoRelayStatus nemo_relay_async_next_invoke(const struct NemoRelayAsyncNext *ne
 
 /**
  * Invoke the next execution layer and report its result through a callback.
+ *
+ * A non-`Ok` return means invocation was not scheduled and `callback` is
+ * never invoked; the caller owns any state it allocated for `user_data`.
  */
 NemoRelayStatus nemo_relay_async_next_invoke_callback(const struct NemoRelayAsyncNext *next,
                                                       const char *invocation_json,

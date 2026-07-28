@@ -298,4 +298,33 @@ fn async_next_callback_reports_tool_llm_and_stream_results() {
         assert_eq!(runtime.block_on(receiver).unwrap().unwrap(), expected);
         unsafe { nemo_relay_async_next_release(next_ref) };
     }
+
+    let next = Arc::new(NemoRelayAsyncNext {
+        inner: AsyncNextInner::Tool(Arc::new(|_value| {
+            Box::pin(async { Err(FlowError::Internal("next failed".into())) })
+        })),
+        runtime: runtime.handle().clone(),
+    });
+    let next_ref = Arc::into_raw(next);
+    let invocation = CString::new("{}").unwrap();
+    let (sender, receiver) = tokio::sync::oneshot::channel::<std::result::Result<Json, String>>();
+    assert_eq!(
+        unsafe {
+            nemo_relay_async_next_invoke_callback(
+                next_ref,
+                invocation.as_ptr(),
+                send_next_result,
+                Box::into_raw(Box::new(sender)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(
+        runtime
+            .block_on(receiver)
+            .unwrap()
+            .unwrap_err()
+            .contains("next failed")
+    );
+    unsafe { nemo_relay_async_next_release(next_ref) };
 }
