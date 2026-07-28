@@ -1341,8 +1341,39 @@ fn make_user_data(
 }
 
 /// One-shot state retained by a v3 native async callback.
+enum NativeAsyncResult {
+    Json(Json),
+    LlmStream(LlmJsonStream),
+}
+
+impl std::fmt::Debug for NativeAsyncResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(value) => formatter.debug_tuple("Json").field(value).finish(),
+            Self::LlmStream(_) => formatter.write_str("LlmStream(..)"),
+        }
+    }
+}
+
+impl PartialEq<Json> for NativeAsyncResult {
+    fn eq(&self, other: &Json) -> bool {
+        matches!(self, Self::Json(value) if value == other)
+    }
+}
+
+impl NativeAsyncResult {
+    fn into_json(self) -> FlowResult<Json> {
+        match self {
+            Self::Json(value) => Ok(value),
+            Self::LlmStream(_) => Err(FlowError::Internal(
+                "native async callback returned a stream for a non-stream invocation".into(),
+            )),
+        }
+    }
+}
+
 struct NativeAsyncCompletion {
-    sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>,
+    sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<NativeAsyncResult>>>>,
     cancelled: AtomicBool,
     // A pending native callback can continue running after its completion
     // wakes the awaiting task. Keep the callback's dynamic-library instance
@@ -1352,7 +1383,7 @@ struct NativeAsyncCompletion {
 
 struct NativeAsyncWait {
     completion: Arc<NativeAsyncCompletion>,
-    receiver: tokio::sync::oneshot::Receiver<FlowResult<Json>>,
+    receiver: tokio::sync::oneshot::Receiver<FlowResult<NativeAsyncResult>>,
 }
 
 impl Drop for NativeAsyncWait {
@@ -1380,7 +1411,7 @@ async fn invoke_native_async_callback(
     user_data: Arc<NativeCallbackUserData>,
     invocation: Json,
     next: Option<NativeAsyncNextInner>,
-) -> FlowResult<Json> {
+) -> FlowResult<NativeAsyncResult> {
     let runtime = if next.is_some() {
         Some(tokio::runtime::Handle::try_current().map_err(|error| {
             FlowError::Internal(format!(
@@ -1486,7 +1517,7 @@ unsafe extern "C" fn native_async_completion_resolve_json(
     else {
         return NemoRelayStatus::InvalidArg;
     };
-    let _ = sender.send(Ok(value));
+    let _ = sender.send(Ok(NativeAsyncResult::Json(value)));
     NemoRelayStatus::Ok
 }
 
@@ -1563,11 +1594,14 @@ unsafe extern "C" fn native_async_next_invoke(
     };
     unsafe { Arc::increment_strong_count(completion as *const NativeAsyncCompletion) };
     let completion = unsafe { Arc::from_raw(completion as *const NativeAsyncCompletion) };
-    let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> = match &next.inner {
+    let future: Pin<Box<dyn Future<Output = FlowResult<NativeAsyncResult>> + Send>> = match &next
+        .inner
+    {
         NativeAsyncNextInner::Tool(next) => {
             let next = next.clone();
             Box::pin(async move {
                 serde_json::to_value(ToolExecutionInterceptOutcome::new(next(invocation).await?))
+                    .map(NativeAsyncResult::Json)
                     .map_err(|error| {
                         FlowError::Internal(format!(
                             "failed to serialize native async tool outcome: {error}"
@@ -1589,7 +1623,7 @@ unsafe extern "C" fn native_async_next_invoke(
                 }
             };
             let next = next.clone();
-            Box::pin(async move { next(request).await })
+            Box::pin(async move { next(request).await.map(NativeAsyncResult::Json) })
         }
         NativeAsyncNextInner::LlmStream(next) => {
             let request = match serde_json::from_value(invocation) {
@@ -1605,14 +1639,7 @@ unsafe extern "C" fn native_async_next_invoke(
                 }
             };
             let next = next.clone();
-            Box::pin(async move {
-                let mut stream = next(request).await?;
-                let mut chunks = Vec::new();
-                while let Some(chunk) = stream.next().await {
-                    chunks.push(chunk?);
-                }
-                Ok(Json::Array(chunks))
-            })
+            Box::pin(async move { next(request).await.map(NativeAsyncResult::LlmStream) })
         }
     };
     next.runtime.spawn(async move {
@@ -1645,7 +1672,8 @@ fn wrap_native_async_tool_json(
                 serde_json::json!({"name": name, "value": value}),
                 None,
             )
-            .await?;
+            .await?
+            .into_json()?;
             Ok(value)
         })
     })
@@ -1668,6 +1696,7 @@ fn wrap_native_async_tool_conditional(
                 None,
             )
             .await?
+            .into_json()?
             {
                 Json::Null => Ok(None),
                 Json::String(reason) => Ok(Some(reason)),
@@ -1696,6 +1725,7 @@ fn wrap_native_async_llm_conditional(
                 None,
             )
             .await?
+            .into_json()?
             {
                 Json::Null => Ok(None),
                 Json::String(reason) => Ok(Some(reason)),
@@ -1724,7 +1754,8 @@ fn wrap_native_async_llm_sanitize_request(
                 serde_json::json!({"request": request, "context": {"codec": codec}}),
                 None,
             )
-            .await?;
+            .await?
+            .into_json()?;
             if value.is_null() {
                 Ok(None)
             } else {
@@ -1753,7 +1784,8 @@ fn wrap_native_async_llm_sanitize_response(
                 serde_json::json!({"response": response, "context": {"codec": codec}}),
                 None,
             )
-            .await?;
+            .await?
+            .into_json()?;
             Ok((!value.is_null()).then_some(value))
         })
     })
@@ -1780,7 +1812,8 @@ fn wrap_native_async_llm_request_intercept(
                     }),
                     None,
                 )
-                .await?,
+                .await?
+                .into_json()?,
             )
             .map_err(|error| {
                 FlowError::Internal(format!(
@@ -1808,7 +1841,8 @@ fn wrap_native_async_event_sanitize(
                     serde_json::json!({"event": event, "fields": fields}),
                     None,
                 )
-                .await?,
+                .await?
+                .into_json()?,
             )
             .map_err(|error| {
                 FlowError::Internal(format!("invalid native async event fields: {error}"))
@@ -1835,7 +1869,8 @@ fn wrap_native_async_tool_execution(
                     invocation,
                     Some(NativeAsyncNextInner::Tool(next)),
                 )
-                .await?,
+                .await?
+                .into_json()?,
             )
             .map_err(|error| {
                 FlowError::Internal(format!("invalid native async tool outcome: {error}"))
@@ -1853,12 +1888,17 @@ fn wrap_native_async_llm_execution(
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, request, next| {
         let user_data = user_data.clone();
-        Box::pin(invoke_native_async_callback(
-            cb,
-            user_data,
-            serde_json::json!({"name": name, "request": request}),
-            Some(NativeAsyncNextInner::Llm(next)),
-        ))
+        let name = name.to_owned();
+        Box::pin(async move {
+            invoke_native_async_callback(
+                cb,
+                user_data,
+                serde_json::json!({"name": name, "request": request}),
+                Some(NativeAsyncNextInner::Llm(next)),
+            )
+            .await?
+            .into_json()
+        })
     })
 }
 
@@ -1880,14 +1920,15 @@ fn wrap_native_async_llm_stream_execution(
                 Some(NativeAsyncNextInner::LlmStream(next)),
             )
             .await?;
-            let chunks = value.as_array().cloned().ok_or_else(|| {
-                FlowError::Internal(
+            match value {
+                NativeAsyncResult::LlmStream(stream) => Ok(stream),
+                NativeAsyncResult::Json(Json::Array(chunks)) => Ok(LlmJsonStream::new(
+                    tokio_stream::iter(chunks.into_iter().map(Ok)),
+                )),
+                NativeAsyncResult::Json(_) => Err(FlowError::Internal(
                     "native async LLM stream intercept must resolve to an array".into(),
-                )
-            })?;
-            Ok(LlmJsonStream::new(tokio_stream::iter(
-                chunks.into_iter().map(Ok),
-            )))
+                )),
+            }
         })
     })
 }

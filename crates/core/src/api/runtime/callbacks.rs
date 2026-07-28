@@ -29,7 +29,7 @@ use crate::json::Json;
 /// it may replace. Later callbacks observe fields returned by earlier entries.
 pub type EventSanitizeFn = Arc<
     dyn Fn(
-            Event,
+            Arc<Event>,
             EventSanitizeFields,
         ) -> Pin<Box<dyn Future<Output = Result<EventSanitizeFields>> + Send>>
         + Send

@@ -461,8 +461,9 @@ impl CompiledBuiltinBackend {
 }
 
 pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSanitizeFn {
+    let backend = Arc::new(backend);
     Arc::new(move |_name: String, payload: Json| {
-        let backend = backend.clone();
+        let backend = Arc::clone(&backend);
         Box::pin(async move {
             Ok(match backend.trajectory.as_ref() {
                 Some(trajectory) => trajectory.sanitize_tool_payload(payload),
@@ -488,11 +489,12 @@ fn event_sanitize_callback_with_scope_categories(
     backend: CompiledBuiltinBackend,
     scope_categories: Option<(bool, bool)>,
 ) -> EventSanitizeFn {
+    let backend = Arc::new(backend);
     Arc::new(move |event, mut fields| {
-        let backend = backend.clone();
+        let backend = Arc::clone(&backend);
         Box::pin(async move {
             if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
-                matches!(event, Event::Scope(_))
+                matches!(event.as_ref(), Event::Scope(_))
                     && event
                         .category()
                         .is_some_and(|category| match category.as_str() {
@@ -507,7 +509,7 @@ fn event_sanitize_callback_with_scope_categories(
             if let Some(trajectory) = backend.trajectory.as_ref() {
                 return Ok(trajectory.sanitize_event_fields(&event, fields));
             }
-            let specialized_scope = matches!(event, Event::Scope(_))
+            let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
                 && event
                     .category()
                     .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
@@ -532,8 +534,9 @@ fn event_sanitize_callback_with_scope_categories(
 pub(super) fn llm_sanitize_request_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeRequestFn {
+    let backend = Arc::new(backend);
     Arc::new(move |mut request: LlmRequest, context| {
-        let backend = backend.clone();
+        let backend = Arc::clone(&backend);
         Box::pin(async move {
             if let Some(trajectory) = backend.trajectory.as_ref() {
                 request.headers = trajectory
@@ -577,8 +580,9 @@ pub(super) fn llm_sanitize_request_callback(
 pub(super) fn llm_sanitize_response_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeResponseFn {
+    let backend = Arc::new(backend);
     Arc::new(move |payload: Json, context| {
-        let backend = backend.clone();
+        let backend = Arc::clone(&backend);
         Box::pin(async move {
             if let Some(trajectory) = backend.trajectory.as_ref() {
                 return Ok(Some(trajectory.sanitize_provider_payload(payload)));

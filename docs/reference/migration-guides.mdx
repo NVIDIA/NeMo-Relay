@@ -41,6 +41,12 @@ existing error behavior for its middleware family.
 | Node.js | Direct return value | Direct return value or `Promise` |
 | Go / raw C FFI | Synchronous callback | Existing synchronous callback, or the new `Async` / completion-based registration API |
 
+Python's standalone middleware helpers preserve their direct synchronous
+return when called without a running `asyncio` loop. In that mode, registered
+callbacks must also return direct values; an awaitable callback raises a clear
+runtime error. Call the helper from async Python and await its result when any
+entry may return an awaitable.
+
 For Rust, wrap the existing result in a ready async future, or use an async
 block when the callback needs to await work:
 

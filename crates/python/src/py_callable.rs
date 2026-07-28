@@ -53,6 +53,23 @@ use crate::py_types::{
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
 
+tokio::task_local! {
+    pub(crate) static PY_AWAITABLES_ALLOWED: bool;
+}
+
+fn reject_awaitable_from_sync_caller(result: &Bound<'_, PyAny>) -> FlowResult<()> {
+    if PY_AWAITABLES_ALLOWED
+        .try_with(|allowed| *allowed)
+        .unwrap_or(true)
+    {
+        return Ok(());
+    }
+    let _ = result.call_method0("close");
+    Err(FlowError::Internal(
+        "awaitable Python middleware requires an async caller".into(),
+    ))
+}
+
 fn validate_python_llm_sanitizer_signature(py_fn: &Py<PyAny>) -> PyResult<()> {
     Python::attach(|py| {
         let inspect = py.import("inspect")?;
@@ -79,6 +96,7 @@ fn split_json_or_future(
 ) -> FlowResult<Result<Json, PyValueFuture>> {
     let bound = result.bind(py);
     if bound.getattr("__await__").is_ok() {
+        reject_awaitable_from_sync_caller(bound)?;
         let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
             .map_err(|e| FlowError::Internal(e.to_string()))?;
         Ok(Err(Box::pin(future) as PyValueFuture))
@@ -111,6 +129,7 @@ fn split_py_object_or_future(
 ) -> FlowResult<Result<Py<PyAny>, PyValueFuture>> {
     let bound = result.bind(py);
     if bound.getattr("__await__").is_ok() {
+        reject_awaitable_from_sync_caller(bound)?;
         let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
             .map_err(|e| FlowError::Internal(e.to_string()))?;
         Ok(Err(Box::pin(future) as PyValueFuture))
@@ -1095,12 +1114,12 @@ pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> EventSubscriberFn {
 /// Wrap a Python callable ``(Event, EventSanitizeFields) -> EventSanitizeFields``.
 pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
     let py_fn = Arc::new(py_fn);
-    Arc::new(move |event: Event, fields: EventSanitizeFields| {
+    Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
             let result = Python::attach(
                 |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
-                    let py_event = match &event {
+                    let py_event = match event.as_ref() {
                         Event::Scope(inner) => Py::new(
                             py,
                             crate::py_types::PyScopeEvent {
@@ -1119,27 +1138,18 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                     let py_event = match py_event {
                         Ok(value) => value,
                         Err(error) => {
-                            eprintln!(
-                                "nemo_relay: failed to convert event sanitizer context: {error}"
-                            );
                             return Err(FlowError::Internal(error.to_string()));
                         }
                     };
                     let fields_json = match serde_json::to_value(&fields) {
                         Ok(value) => value,
                         Err(error) => {
-                            eprintln!(
-                                "nemo_relay: failed to serialize event sanitizer fields: {error}"
-                            );
                             return Err(FlowError::Internal(error.to_string()));
                         }
                     };
                     let py_fields = match json_to_py(py, &fields_json) {
                         Ok(value) => value,
                         Err(error) => {
-                            eprintln!(
-                                "nemo_relay: failed to convert event sanitizer fields: {error}"
-                            );
                             return Err(FlowError::Internal(error.to_string()));
                         }
                     };

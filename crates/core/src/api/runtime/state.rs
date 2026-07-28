@@ -637,9 +637,10 @@ impl NemoRelayContextState {
         mut event: Event,
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
+        let event_context = Arc::new(event.clone());
         for entry in entries {
             let fields = event.sanitize_fields();
-            match (entry.payload)(event.clone(), fields).await {
+            match (entry.payload)(Arc::clone(&event_context), fields).await {
                 Ok(fields) => event.apply_sanitize_fields(fields),
                 Err(error) => log::error!(
                     target: "nemo_relay.runtime",

@@ -284,22 +284,6 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
             .unwrap(),
             json!({"llm": true}),
         ),
-        (
-            NativeAsyncNextInner::LlmStream(Arc::new(|_request| {
-                Box::pin(async {
-                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![
-                        Ok(json!({"chunk": 1})),
-                        Ok(json!({"chunk": 2})),
-                    ])))
-                })
-            })),
-            serde_json::to_value(LlmRequest {
-                headers: Map::new(),
-                content: json!({"stream": true}),
-            })
-            .unwrap(),
-            json!([{"chunk": 1}, {"chunk": 2}]),
-        ),
     ];
 
     for (inner, invocation, expected) in cases {
@@ -328,6 +312,53 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
             native_async_next_release(next_ref);
             native_async_completion_release(completion_ref);
         }
+    }
+
+    let next = Arc::new(NativeAsyncNext {
+        inner: NativeAsyncNextInner::LlmStream(Arc::new(|_request| {
+            Box::pin(async {
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                    Ok(json!({"chunk": 1})),
+                    Ok(json!({"chunk": 2})),
+                ])))
+            })
+        })),
+        runtime: runtime.handle().clone(),
+        _callback_user_data: None,
+    });
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        _callback_user_data: None,
+    });
+    let completion_ref =
+        Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
+    let invocation = native_string_from_json(
+        &serde_json::to_value(LlmRequest {
+            headers: Map::new(),
+            content: json!({"stream": true}),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        unsafe { native_async_next_invoke(next_ref, invocation, completion_ref) },
+        NemoRelayStatus::Ok
+    );
+    let NativeAsyncResult::LlmStream(mut stream) = runtime.block_on(receiver).unwrap().unwrap()
+    else {
+        panic!("stream continuation should preserve the downstream stream");
+    };
+    assert_eq!(
+        runtime.block_on(stream.next()).unwrap().unwrap(),
+        json!({"chunk": 1})
+    );
+    unsafe {
+        native_string_free(invocation);
+        native_async_next_release(next_ref);
+        native_async_completion_release(completion_ref);
     }
 }
 
