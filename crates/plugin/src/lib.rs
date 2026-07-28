@@ -36,7 +36,15 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 2;
+///
+/// Version 3 reserves the native async middleware extension. Hosts retain a
+/// version-2 table for already-built plugins during entry-point negotiation.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 3;
+/// ABI version that introduced completion-based asynchronous middleware.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
+
+/// Legacy native plugin ABI accepted by Relay hosts for compatibility.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
 
 /// Built-in LLM codec identities available to native plugins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -753,6 +761,133 @@ pub struct NemoRelayNativeHostApiV1 {
             free_fn: NemoRelayNativeFreeFn,
         ) -> NemoRelayStatus,
 }
+
+/// Middleware surface selected by the native async registration hook.
+///
+/// The host only exposes this through the ABI-v3 extension table.  It keeps
+/// every asynchronous callback shape uniform while allowing the host to
+/// deserialize the surface-specific invocation and result payloads.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemoRelayNativeAsyncMiddlewareKind {
+    /// Tool start-event request sanitizer.
+    ToolSanitizeRequest = 0,
+    /// Tool end-event response sanitizer.
+    ToolSanitizeResponse = 1,
+    /// Tool execution admission guardrail.
+    ToolConditionalExecution = 2,
+    /// Tool request rewrite intercept.
+    ToolRequestIntercept = 3,
+    /// Tool execution intercept with a continuation.
+    ToolExecutionIntercept = 4,
+    /// LLM start-event request sanitizer.
+    LlmSanitizeRequest = 5,
+    /// LLM end-event response sanitizer.
+    LlmSanitizeResponse = 6,
+    /// LLM execution admission guardrail.
+    LlmConditionalExecution = 7,
+    /// LLM request rewrite intercept.
+    LlmRequestIntercept = 8,
+    /// LLM execution intercept with a continuation.
+    LlmExecutionIntercept = 9,
+    /// Streaming LLM execution intercept with a continuation.
+    LlmStreamExecutionIntercept = 10,
+    /// Mark event sanitizer.
+    MarkSanitize = 11,
+    /// Scope-start event sanitizer.
+    ScopeSanitizeStart = 12,
+    /// Scope-end event sanitizer.
+    ScopeSanitizeEnd = 13,
+}
+
+/// Indicates whether an asynchronous native callback settled before returning.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemoRelayNativeAsyncCallbackState {
+    /// The callback settled its completion before returning.
+    Complete = 0,
+    /// The callback retained its completion for later settlement.
+    Pending = 1,
+}
+
+/// Opaque one-shot completion retained by a pending native callback.
+#[repr(C)]
+pub struct NemoRelayNativeAsyncCompletion {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Opaque native execution continuation supplied only to execution intercepts.
+#[repr(C)]
+pub struct NemoRelayNativeAsyncNext {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Completion-based native middleware callback.
+///
+/// `invocation_json` is borrowed for the call. A callback that returns
+/// [`NemoRelayNativeAsyncCallbackState::Pending`] owns one completion
+/// reference and must settle it then call the v3 `async_completion_release`
+/// hook. When `next` is non-null, the callback owns that handle for the
+/// invocation and must call `async_next_release` after its final use. `next`
+/// is null for non-execution middleware.
+pub type NemoRelayNativeAsyncMiddlewareCb =
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        invocation_json: *const NemoRelayNativeString,
+        next: *const NemoRelayNativeAsyncNext,
+        completion: *const NemoRelayNativeAsyncCompletion,
+    ) -> NemoRelayNativeAsyncCallbackState;
+
+/// ABI-v3 host extension appended to [`NemoRelayNativeHostApiV1`].
+///
+/// Its first field is the complete v1/v2 table, so legacy plugins can keep
+/// treating the pointer as a [`NemoRelayNativeHostApiV1`].
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV3 {
+    /// Compatibility prefix for ABI-v1/v2 plugins.
+    pub v1: NemoRelayNativeHostApiV1,
+    /// Resolves an async callback completion with a JSON value.
+    pub async_completion_resolve_json: unsafe extern "C" fn(
+        completion: *const NemoRelayNativeAsyncCompletion,
+        value_json: *const NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Rejects an async callback completion with a UTF-8 message.
+    pub async_completion_reject: unsafe extern "C" fn(
+        completion: *const NemoRelayNativeAsyncCompletion,
+        message: *const NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Returns true after the awaiting runtime has cancelled the invocation.
+    pub async_completion_is_cancelled:
+        unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion) -> bool,
+    /// Releases the callback-owned reference after a pending completion settles.
+    pub async_completion_release:
+        unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion),
+    /// Invokes an execution continuation and settles a supplied completion.
+    pub async_next_invoke: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        invocation_json: *const NemoRelayNativeString,
+        completion: *const NemoRelayNativeAsyncCompletion,
+    ) -> NemoRelayStatus,
+    /// Releases the callback-owned continuation reference for a pending callback.
+    pub async_next_release: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext),
+    /// Registers any completion-based asynchronous middleware surface.
+    pub plugin_context_register_async_middleware: unsafe extern "C" fn(
+        ctx: *mut NemoRelayNativePluginContext,
+        kind: NemoRelayNativeAsyncMiddlewareKind,
+        name: *const NemoRelayNativeString,
+        priority: i32,
+        break_chain: bool,
+        cb: NemoRelayNativeAsyncMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus,
+}
+
+unsafe impl Send for NemoRelayNativeHostApiV3 {}
+unsafe impl Sync for NemoRelayNativeHostApiV3 {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -2227,6 +2362,47 @@ impl<'a> PluginContext<'a> {
         self.with_name(name, |host, name| unsafe {
             (host.plugin_context_register_llm_stream_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
+    /// Registers completion-based asynchronous middleware through the ABI-v3
+    /// extension table.
+    ///
+    /// Plugins built against older hosts receive [`NemoRelayStatus::InvalidArg`]
+    /// instead of attempting to read beyond the legacy host table.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid until the host
+    /// deregisters the callback or invokes `free_fn`. A callback returning
+    /// `Pending` must settle and release its completion/next references.
+    #[allow(clippy::too_many_arguments)] // Mirrors the native C ABI registration callback.
+    pub unsafe fn register_async_middleware_raw(
+        &mut self,
+        kind: NemoRelayNativeAsyncMiddlewareKind,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        cb: NemoRelayNativeAsyncMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        {
+            return NemoRelayStatus::InvalidArg;
+        }
+        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
+        self.with_name(name, |_, name| unsafe {
+            (host.plugin_context_register_async_middleware)(
+                self.raw,
+                kind,
+                name,
+                priority,
+                break_chain,
+                cb,
+                user_data,
+                free_fn,
             )
         })
     }

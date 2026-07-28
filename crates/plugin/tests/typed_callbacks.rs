@@ -300,8 +300,8 @@ static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestInte
     Mutex::new(None);
 
 #[test]
-fn native_abi_v2_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 2);
+fn native_abi_v3_struct_sizes_are_self_describing() {
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 3);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size

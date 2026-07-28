@@ -146,3 +146,7 @@ pub(crate) fn rotated_log_path(base_path: &Path, index: usize) -> PathBuf {
     }
     base_path.with_file_name(file_name)
 }
+
+#[cfg(test)]
+#[path = "../../tests/coverage/logging_rotation_tests.rs"]
+mod tests;

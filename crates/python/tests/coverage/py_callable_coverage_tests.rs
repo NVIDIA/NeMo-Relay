@@ -153,7 +153,13 @@ class RaisingResponseCodec:
             "model": "codec-model"
         }))
         .unwrap();
-        let outcome = request_intercept("llm", make_request(), Some(annotated.clone())).unwrap();
+        let outcome = runtime
+            .block_on(request_intercept(
+                "llm".to_string(),
+                make_request(),
+                Some(annotated.clone()),
+            ))
+            .unwrap();
         assert_eq!(
             outcome.annotated_request.unwrap().last_user_message(),
             Some("annotated")
@@ -163,7 +169,12 @@ class RaisingResponseCodec:
             module.getattr("request_bad_annotated").unwrap().unbind(),
         );
         assert!(
-            bad_request_intercept("llm", make_request(), Some(annotated))
+            runtime
+                .block_on(bad_request_intercept(
+                    "llm".to_string(),
+                    make_request(),
+                    Some(annotated),
+                ))
                 .unwrap_err()
                 .to_string()
                 .contains("must return LLMRequestInterceptOutcome")
@@ -173,7 +184,12 @@ class RaisingResponseCodec:
             module.getattr("request_short_tuple").unwrap().unbind(),
         );
         assert!(
-            short_request_intercept("llm", make_request(), None)
+            runtime
+                .block_on(short_request_intercept(
+                    "llm".to_string(),
+                    make_request(),
+                    None
+                ))
                 .unwrap_err()
                 .to_string()
                 .contains("must return LLMRequestInterceptOutcome")
@@ -189,12 +205,13 @@ class RaisingResponseCodec:
         let llm_response =
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_bad_json").unwrap().unbind())
                 .unwrap();
-        assert_eq!(
-            llm_response(
-                json!({"ok": true}),
-                nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
-            ),
-            None
+        assert!(
+            runtime
+                .block_on(llm_response(
+                    json!({"ok": true}),
+                    nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
+                ))
+                .is_err()
         );
 
         let bad_codec = PyLlmCodecWrapper {
@@ -683,23 +700,31 @@ def invalid(event, fields):
             metadata: Some(json!({"secret": true})),
         };
 
-        let sanitized = wrap_py_event_sanitize_fn(module.getattr("sanitize").unwrap().unbind())(
-            &event,
-            fields.clone(),
-        );
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let sanitized = runtime
+            .block_on(wrap_py_event_sanitize_fn(
+                module.getattr("sanitize").unwrap().unbind(),
+            )(event.clone(), fields.clone()))
+            .unwrap();
         assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
         assert_eq!(sanitized.metadata, None);
 
-        let raised = wrap_py_event_sanitize_fn(module.getattr("raises").unwrap().unbind())(
-            &event,
-            fields.clone(),
-        );
-        assert_eq!(raised, EventSanitizeFields::default());
+        let raised = runtime
+            .block_on(wrap_py_event_sanitize_fn(
+                module.getattr("raises").unwrap().unbind(),
+            )(event.clone(), fields.clone()))
+            .unwrap_err();
+        assert!(raised.to_string().contains("sanitize boom"));
 
-        let invalid = wrap_py_event_sanitize_fn(module.getattr("invalid").unwrap().unbind())(
-            &event,
-            fields.clone(),
+        let invalid = runtime
+            .block_on(wrap_py_event_sanitize_fn(
+                module.getattr("invalid").unwrap().unbind(),
+            )(event, fields.clone()))
+            .unwrap_err();
+        assert!(
+            invalid
+                .to_string()
+                .contains("invalid event sanitizer result")
         );
-        assert_eq!(invalid, EventSanitizeFields::default());
     });
 }

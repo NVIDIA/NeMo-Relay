@@ -7,12 +7,15 @@ use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
+use crate::api::runtime::subscriber_dispatcher::{
+    dispatch_sanitized_event, dispatch_transformed_event,
+};
 use crate::api::runtime::{EventSubscriberFn, ToolExecutionNextFn, with_active_event_uuid};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
     ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid, sanitize_event,
-    snapshot_event_subscribers,
+    snapshot_event_sanitizers, snapshot_event_subscribers,
 };
 use crate::api::skill_load;
 use crate::error::{FlowError, Result};
@@ -206,11 +209,107 @@ pub struct ToolCallEndParams<'a> {
 /// Sanitize-request guardrails affect only the emitted start-event payload, not
 /// the caller-owned `args` value.
 pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
-    let (handle, _) = tool_call_with_subscriber_snapshot(params)?;
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let (entries, subscribers) = {
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+            &registries.tool_sanitize_request_guardrails
+        });
+        let subscribers =
+            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        (
+            state.tool_sanitize_request_entries(&scope_locals),
+            subscribers,
+        )
+    };
+    let handled_skill_loads = params
+        .metadata
+        .as_ref()
+        .and_then(Json::as_object)
+        .and_then(|metadata| metadata.get(skill_load::HANDLED_METADATA_KEY))
+        .and_then(Json::as_bool)
+        .is_some_and(|handled| handled);
+    let skill_loads = if handled_skill_loads {
+        Vec::new()
+    } else if let Some(skill_loads) = skill_load::precomputed(params.metadata.as_ref()) {
+        skill_loads
+    } else {
+        skill_load::detect(params.name, &params.args)
+    };
+    let raw_args = params.args;
+    let (handle, event, marks) = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        let handle = state.create_tool_handle(
+            CreateToolHandleParams::builder()
+                .name(params.name)
+                .parent_uuid_opt(resolve_parent_uuid(params.parent))
+                .attributes(params.attributes)
+                .data_opt(params.data)
+                .metadata_opt(params.metadata)
+                .tool_call_id_opt(params.tool_call_id)
+                .timestamp_opt(params.timestamp)
+                .build(),
+        );
+        let event = state.build_tool_start_event(&handle, None);
+        let marks = skill_loads
+            .into_iter()
+            .map(|skill_load| {
+                state.create_event(MarkEvent::new(
+                    BaseEvent::builder()
+                        .name("skill.load")
+                        .parent_uuid(handle.uuid)
+                        .timestamp(handle.started_at)
+                        .data(json!({"skill_name": skill_load.name}))
+                        .metadata(json!({
+                            "skill_load_source": <&str>::from(skill_load.source),
+                            "tool_name": handle.name,
+                        }))
+                        .build(),
+                    None,
+                    None,
+                ))
+            })
+            .collect::<Vec<_>>();
+        (handle, event, marks)
+    };
+    let tool_name = handle.name.clone();
+    if let Some(event_sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) {
+        dispatch_transformed_event(
+            event,
+            Box::new(move |mut event| {
+                Box::pin(async move {
+                    let sanitized = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                        &tool_name, raw_args, &entries,
+                    )
+                    .await;
+                    let mut fields = event.sanitize_fields();
+                    fields.data = Some(sanitized);
+                    event.apply_sanitize_fields(fields);
+                    event
+                })
+            }),
+            event_sanitizers,
+            &subscribers,
+            scope_stack.clone(),
+        );
+    }
+    for mark in marks {
+        if let Some(sanitizers) = snapshot_event_sanitizers(&mark, &scope_stack) {
+            dispatch_sanitized_event(mark, sanitizers, &subscribers, scope_stack.clone());
+        }
+    }
     Ok(handle)
 }
 
-fn tool_call_with_subscriber_snapshot(
+async fn tool_call_with_subscriber_snapshot(
     params: ToolCallParams<'_>,
 ) -> Result<(ToolHandle, Vec<EventSubscriberFn>)> {
     ensure_runtime_owner()?;
@@ -248,7 +347,8 @@ fn tool_call_with_subscriber_snapshot(
         params.name,
         params.args,
         &entries,
-    );
+    )
+    .await;
     let (handle, event, marks) = {
         let context = global_context();
         let state = context
@@ -286,14 +386,16 @@ fn tool_call_with_subscriber_snapshot(
             .collect::<Vec<_>>();
         (handle, event, marks)
     };
-    let marks = marks
-        .into_iter()
-        .filter_map(sanitize_event)
-        .collect::<Vec<_>>();
-    if let Some(event) = sanitize_event(event) {
+    let mut sanitized_marks = Vec::with_capacity(marks.len());
+    for mark in marks {
+        if let Some(mark) = sanitize_event(mark).await {
+            sanitized_marks.push(mark);
+        }
+    }
+    if let Some(event) = sanitize_event(event).await {
         NemoRelayContextState::emit_event(&event, &subscribers);
     }
-    for mark in marks {
+    for mark in sanitized_marks {
         NemoRelayContextState::emit_event(&mark, &subscribers);
     }
     Ok((handle, subscribers))
@@ -326,10 +428,69 @@ fn tool_call_with_subscriber_snapshot(
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
 /// the caller-owned `result` value.
 pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
-    tool_call_end_with_pending_marks(params, Vec::new(), None)
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let (entries, subscribers) = {
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+            &registries.tool_sanitize_response_guardrails
+        });
+        let subscribers =
+            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        (
+            state.tool_sanitize_response_entries(&scope_locals),
+            subscribers,
+        )
+    };
+    let result = params.result;
+    let fallback = params.data;
+    let event = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        state.build_tool_end_event(
+            EndToolHandleParams::builder()
+                .handle(params.handle)
+                .data(Json::Null)
+                .metadata_opt(params.metadata)
+                .timestamp_opt(params.timestamp)
+                .build(),
+        )
+    };
+    let tool_name = params.handle.name.clone();
+    if let Some(event_sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) {
+        dispatch_transformed_event(
+            event,
+            Box::new(move |mut event| {
+                Box::pin(async move {
+                    let sanitized = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+                        &tool_name, result, &entries,
+                    )
+                    .await;
+                    let mut fields = event.sanitize_fields();
+                    fields.data = if sanitized.is_null() {
+                        fallback
+                    } else {
+                        Some(sanitized)
+                    };
+                    event.apply_sanitize_fields(fields);
+                    event
+                })
+            }),
+            event_sanitizers,
+            &subscribers,
+            scope_stack,
+        );
+    }
+    Ok(())
 }
 
-fn tool_call_end_with_pending_marks(
+async fn tool_call_end_with_pending_marks(
     params: ToolCallEndParams<'_>,
     pending_marks: Vec<PendingMarkSpec>,
     lifecycle_subscribers: Option<&[EventSubscriberFn]>,
@@ -358,7 +519,8 @@ fn tool_call_end_with_pending_marks(
         &params.handle.name,
         params.result,
         &entries,
-    );
+    )
+    .await;
     let data = if sanitized_result.is_null() {
         params.data
     } else {
@@ -396,18 +558,23 @@ fn tool_call_end_with_pending_marks(
                 mark.category_profile,
             ))
         })
-        .filter_map(sanitize_event)
         .collect::<Vec<_>>();
-    if let Some(event) = sanitize_event(event) {
+    let mut sanitized_marks = Vec::with_capacity(marks.len());
+    for mark in marks {
+        if let Some(mark) = sanitize_event(mark).await {
+            sanitized_marks.push(mark);
+        }
+    }
+    if let Some(event) = sanitize_event(event).await {
         NemoRelayContextState::emit_event(&event, subscribers);
     }
-    for mark in marks {
+    for mark in sanitized_marks {
         NemoRelayContextState::emit_event(&mark, subscribers);
     }
     Ok(())
 }
 
-fn emit_tool_end_without_output(
+async fn emit_tool_end_without_output(
     handle: &ToolHandle,
     metadata: Option<Json>,
     lifecycle_subscribers: &[EventSubscriberFn],
@@ -420,7 +587,7 @@ fn emit_tool_end_without_output(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.end_tool_handle(handle, handle.data.clone(), metadata)
     };
-    if let Some(event) = sanitize_event(event) {
+    if let Some(event) = sanitize_event(event).await {
         NemoRelayContextState::emit_event(&event, lifecycle_subscribers);
     }
     Ok(())
@@ -493,7 +660,9 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
             &subscribers,
             parent_uuid,
             guardrail_metadata,
-        )? {
+        )
+        .await?
+        {
             let mut rejection_data = json!({});
             if let Some(object) = rejection_data.as_object_mut() {
                 object.insert("rejected".into(), json!(true));
@@ -526,7 +695,8 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         &name,
         args,
         &intercept_entries,
-    )?;
+    )
+    .await?;
 
     let (handle, lifecycle_subscribers) = tool_call_with_subscriber_snapshot(
         ToolCallParams::builder()
@@ -537,7 +707,8 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
             .data_opt(data.clone())
             .metadata_opt(metadata.clone())
             .build(),
-    )?;
+    )
+    .await?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -567,13 +738,15 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
                     .build(),
                 pending_marks,
                 Some(&lifecycle_subscribers),
-            )?;
+            )
+            .await?;
             Ok(result)
         }
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ = emit_tool_end_without_output(&handle, end_metadata, &lifecycle_subscribers);
+            let _ =
+                emit_tool_end_without_output(&handle, end_metadata, &lifecycle_subscribers).await;
             Err(error)
         }
     }
@@ -596,7 +769,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
 ///
 /// # Notes
 /// Conditional guardrails and execution intercepts are not run by this helper.
-pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+pub async fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
     ensure_runtime_owner()?;
     let entries = {
         let scope_stack = current_scope_stack();
@@ -609,7 +782,7 @@ pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.tool_request_intercept_entries(&scope_locals)
     };
-    NemoRelayContextState::tool_request_intercepts_snapshot_chain(name, args, &entries)
+    NemoRelayContextState::tool_request_intercepts_snapshot_chain(name, args, &entries).await
 }
 
 /// Run only the tool conditional-execution guardrail chain.
@@ -633,7 +806,7 @@ pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 /// This helper is useful for preflight checks when the caller needs the
 /// rejection result without starting a tool span. Guardrail scopes are still
 /// emitted for the conditional checks themselves.
-pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+pub async fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     ensure_runtime_owner()?;
     let (entries, subscribers, parent_uuid) = {
         let scope_stack = current_scope_stack();
@@ -657,7 +830,9 @@ pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
         &subscribers,
         parent_uuid,
         None,
-    )? {
+    )
+    .await?
+    {
         return Err(FlowError::GuardrailRejected(error));
     }
     Ok(())

@@ -19,6 +19,19 @@ events. NeMo Relay applies each surface at a specific lifecycle point.
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
 
+## Asynchronous Callbacks
+
+All middleware families accept asynchronous callbacks. Rust callbacks return a
+future; Python callbacks may return a value or an awaitable; and Node callbacks
+may return a value or a Promise. Relay awaits entries sequentially in priority
+order, so later callbacks observe earlier middleware output.
+
+Managed execution and standalone conditional/request-intercept helpers are
+asynchronous because their result depends on middleware completion. Manual
+lifecycle APIs (`tool_call`, `tool_call_end`, `llm_call`, and `llm_call_end`)
+remain synchronous: they create or close their handle immediately and queue
+observability work rather than awaiting it.
+
 ## Registration Levels
 
 Middleware and subscribers can be registered at different levels depending on their
@@ -124,6 +137,19 @@ context. For the callback contract and binding APIs, refer to
 
 Sanitize guardrails are observability-oriented. They do not rewrite the real
 arguments passed to the callback or the real value returned to the caller.
+
+## Queued Event Publication
+
+Scope operations, marks, and manual tool/LLM lifecycle calls never become
+awaitable because an event sanitizer is asynchronous. At emission time Relay
+snapshots the event, visible sanitizer chain, and subscribers, then places the
+work on a serial dispatcher. The dispatcher awaits sanitizers and publishes the
+event later in FIFO order.
+
+Subscriber and exporter delivery is therefore delayed, while start/end/mark
+order is preserved. Closing a scope or deregistering middleware after emission
+does not affect queued snapshots. Sanitizer failures fail open: Relay records
+the callback failure and publishes the last valid event snapshot.
 
 ## Managed Execution Order
 

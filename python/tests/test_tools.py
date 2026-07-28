@@ -361,7 +361,7 @@ class TestToolIntercepts:
     def test_request_intercept_raises_on_exception(self):
         intercepts.register_tool_request("py_req_raise", 1, False, lambda n, a: raise_runtime_error("boom"))
         try:
-            with pytest.raises(RuntimeError, match="callable failed"):
+            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
                 tools.request_intercepts("raise_tool", {"value": 1})
         finally:
             intercepts.deregister_tool_request("py_req_raise")
@@ -374,7 +374,7 @@ class TestToolIntercepts:
             cast(intercepts.ToolRequestIntercept, lambda n, a: object()),
         )
         try:
-            with pytest.raises(RuntimeError, match="py_to_json failed"):
+            with pytest.raises(RuntimeError, match="unsupported type object"):
                 tools.request_intercepts("bad_return_tool", {"value": 1})
         finally:
             intercepts.deregister_tool_request("py_req_bad_return")
@@ -485,7 +485,7 @@ class TestToolGuardrailsEdgeCases:
             cast(guardrails.ToolConditionalExecutionGuardrail, lambda name, args: 123),
         )
         try:
-            with pytest.raises(RuntimeError, match="expected str or None"):
+            with pytest.raises(RuntimeError, match="unexpected type"):
                 tools.conditional_execution("bad_type_tool", {})
         finally:
             guardrails.deregister_tool_conditional_execution("py_cond_bad_type")
@@ -497,7 +497,7 @@ class TestToolGuardrailsEdgeCases:
             lambda name, args: raise_runtime_error("boom"),
         )
         try:
-            with pytest.raises(RuntimeError, match="callable failed"):
+            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
                 tools.conditional_execution("error_tool", {})
         finally:
             guardrails.deregister_tool_conditional_execution("py_cond_error")

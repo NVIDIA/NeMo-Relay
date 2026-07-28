@@ -472,18 +472,31 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         )
         .unwrap();
 
-        let tool_intercepted =
-            tool_request_intercepts(py, "demo-tool", &py_dict(py, json!({"value": 1}))).unwrap();
+        let tool_intercepted = tool_request_intercepts(
+            py,
+            "demo-tool".to_string(),
+            &py_dict(py, json!({"value": 1})),
+        )
+        .unwrap();
         assert_eq!(
-            crate::convert::py_to_json(tool_intercepted.bind(py)).unwrap(),
+            crate::convert::py_to_json(&tool_intercepted).unwrap(),
             json!({"value": 3})
         );
-        tool_conditional_execution("demo-tool", &py_dict(py, json!({"value": 1}))).unwrap();
+        tool_conditional_execution(
+            py,
+            "demo-tool".to_string(),
+            &py_dict(py, json!({"value": 1})),
+        )
+        .unwrap();
         assert!(
-            tool_conditional_execution("demo-tool", &py_dict(py, json!({"value": -1})))
-                .unwrap_err()
-                .to_string()
-                .contains("blocked")
+            tool_conditional_execution(
+                py,
+                "demo-tool".to_string(),
+                &py_dict(py, json!({"value": -1}))
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("blocked")
         );
 
         let llm_request = PyLLMRequest {
@@ -492,7 +505,10 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
             },
         };
-        let intercepted_request = llm_request_intercepts("demo-llm", llm_request.clone()).unwrap();
+        let intercepted_request =
+            llm_request_intercepts(py, "demo-llm".to_string(), llm_request.clone()).unwrap();
+        let intercepted_request: PyRef<'_, crate::py_types::PyLLMRequestInterceptOutcome> =
+            intercepted_request.extract().unwrap();
         assert_eq!(
             intercepted_request
                 .inner
@@ -501,14 +517,17 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 .get("x-intercepted"),
             Some(&json!("1"))
         );
-        llm_conditional_execution(llm_request.clone()).unwrap();
+        llm_conditional_execution(py, llm_request.clone()).unwrap();
         assert!(
-            llm_conditional_execution(PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
-                    headers: serde_json::Map::new(),
-                    content: json!({"messages": [], "model": "blocked"}),
-                },
-            })
+            llm_conditional_execution(
+                py,
+                PyLLMRequest {
+                    inner: nemo_relay::api::llm::LlmRequest {
+                        headers: serde_json::Map::new(),
+                        content: json!({"messages": [], "model": "blocked"}),
+                    },
+                }
+            )
             .unwrap_err()
             .to_string()
             .contains("blocked")

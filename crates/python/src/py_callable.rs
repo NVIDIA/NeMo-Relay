@@ -39,7 +39,7 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
-use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
@@ -408,71 +408,69 @@ fn stream_from_async_iter(async_iter: Py<PyAny>) -> FlowResult<LlmJsonStream> {
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
 pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
-    Arc::new(move |name: &str, args: Json| {
-        Python::attach(|py| {
-            let py_args = match json_to_py(py, &args) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("nemo_relay: json_to_py failed in tool fn for '{name}': {e}");
-                    return args.clone();
-                }
-            };
-            let result = match py_fn.call1(py, (name, py_args)) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("nemo_relay: Python tool callable failed for '{name}': {e}");
-                    return args.clone();
-                }
-            };
-            py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nemo_relay: py_to_json failed in tool fn for '{name}': {e}");
-                args.clone()
-            })
+    let py_fn = Arc::new(py_fn);
+    Arc::new(move |name: String, args: Json| {
+        let py_fn = py_fn.clone();
+        Box::pin(async move {
+            resolve_json_or_future(Python::attach(|py| {
+                let py_args = json_to_py(py, &args)
+                    .map_err(|e| FlowError::Internal(format!("tool json_to_py failed: {e}")))?;
+                let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
+                    FlowError::Internal(format!("Python tool callback failed: {e}"))
+                })?;
+                split_json_or_future(py, result)
+            }))
+            .await
         })
     })
 }
 
 /// Wrap a Python callable `(str, Json) -> Optional[str]` for tool conditional guardrails.
 pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
-    Arc::new(move |name: &str, args: &Json| {
-        Python::attach(|py| {
-            let py_args = json_to_py(py, args).map_err(|e| {
-                FlowError::Internal(format!(
-                    "tool conditional json_to_py failed for '{name}': {e}"
-                ))
-            })?;
-            let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
-                FlowError::Internal(format!(
-                    "Python tool conditional callable failed for '{name}': {e}"
-                ))
-            })?;
-            let bound = result.bind(py);
-            if bound.is_none() {
-                Ok(None)
-            } else {
-                bound.extract::<String>().map(Some).map_err(|e| {
-                    FlowError::Internal(format!(
-                        "tool conditional guardrail for '{name}' returned unexpected type (expected str or None): {e}"
-                    ))
-                })
-            }
+    let py_fn = Arc::new(py_fn);
+    Arc::new(move |name: String, args: Json| {
+        let py_fn = py_fn.clone();
+        Box::pin(async move {
+            let result = resolve_py_object_or_future(Python::attach(|py| {
+                let py_args =
+                    json_to_py(py, &args).map_err(|e| FlowError::Internal(e.to_string()))?;
+                let result = py_fn
+                    .call1(py, (name, py_args))
+                    .map_err(|e| FlowError::Internal(e.to_string()))?;
+                split_py_object_or_future(py, result)
+            }))
+            .await?;
+            Python::attach(|py| {
+                let bound = result.bind(py);
+                if bound.is_none() {
+                    Ok(None)
+                } else {
+                    bound.extract::<String>().map(Some).map_err(|e| {
+                        FlowError::Internal(format!(
+                            "tool conditional guardrail returned unexpected type: {e}"
+                        ))
+                    })
+                }
+            })
         })
     })
 }
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool request intercepts.
 pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
-    Arc::new(move |name: &str, args: Json| {
-        Python::attach(|py| {
-            let py_args = json_to_py(py, &args).map_err(|e| {
-                FlowError::Internal(format!("tool callback json_to_py failed for '{name}': {e}"))
-            })?;
-            let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
-                FlowError::Internal(format!("Python tool callable failed for '{name}': {e}"))
-            })?;
-            py_to_json(result.bind(py)).map_err(|e| {
-                FlowError::Internal(format!("tool callback py_to_json failed for '{name}': {e}"))
-            })
+    let py_fn = Arc::new(py_fn);
+    Arc::new(move |name: String, args: Json| {
+        let py_fn = py_fn.clone();
+        Box::pin(async move {
+            resolve_json_or_future(Python::attach(|py| {
+                let py_args =
+                    json_to_py(py, &args).map_err(|e| FlowError::Internal(e.to_string()))?;
+                let result = py_fn
+                    .call1(py, (name, py_args))
+                    .map_err(|e| FlowError::Internal(e.to_string()))?;
+                split_json_or_future(py, result)
+            }))
+            .await
         })
     })
 }
@@ -815,30 +813,38 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
 
 /// Wrap a Python callable `(LlmRequest, LlmSanitizeRequestContext) -> Optional<LlmRequest>`.
 fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn {
+    let py_fn = Arc::new(py_fn);
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
-            Python::attach(|py| {
-                let py_context = PyLlmSanitizeRequestContext { inner: context };
-                let py_request = PyLLMRequest { inner: request };
-                let result = match py_fn.call1(py, (py_request, py_context)) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!("nemo_relay: LLM sanitize request callable failed: {error}");
-                        return None;
+            let py_fn = py_fn.clone();
+            Box::pin(async move {
+                let result = resolve_py_object_or_future(Python::attach(|py| {
+                    let result = py_fn
+                        .call1(
+                            py,
+                            (
+                                PyLLMRequest { inner: request },
+                                PyLlmSanitizeRequestContext { inner: context },
+                            ),
+                        )
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
+                    split_py_object_or_future(py, result)
+                }))
+                .await?;
+                Python::attach(|py| {
+                    if result.is_none(py) {
+                        Ok(None)
+                    } else {
+                        result
+                            .extract::<PyLLMRequest>(py)
+                            .map(|request| Some(request.inner))
+                            .map_err(|error| {
+                                FlowError::Internal(format!(
+                                    "LLM sanitize request returned unexpected type: {error}"
+                                ))
+                            })
                     }
-                };
-                if result.is_none(py) {
-                    return None;
-                }
-                match result.extract::<PyLLMRequest>(py) {
-                    Ok(request) => Some(request.inner),
-                    Err(error) => {
-                        eprintln!(
-                            "nemo_relay: LLM sanitize request callable returned unexpected type: {error}"
-                        );
-                        None
-                    }
-                }
+                })
             })
         },
     )
@@ -846,24 +852,29 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
 
 /// Wrap a Python callable `(LlmRequest) -> Optional[str]` for LLM conditional guardrails.
 pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
-    Arc::new(move |request: &LlmRequest| {
-        Python::attach(|py| {
-            let py_req = PyLLMRequest {
-                inner: request.clone(),
-            };
-            let result = py_fn.call1(py, (py_req,)).map_err(|e| {
-                FlowError::Internal(format!("LLM conditional guardrail callable failed: {e}"))
-            })?;
-            let bound = result.bind(py);
-            if bound.is_none() {
-                Ok(None)
-            } else {
-                bound.extract::<String>().map(Some).map_err(|e| {
-                    FlowError::Internal(format!(
-                        "LLM conditional guardrail returned unexpected type (expected str or None): {e}"
-                    ))
-                })
-            }
+    let py_fn = Arc::new(py_fn);
+    Arc::new(move |request: LlmRequest| {
+        let py_fn = py_fn.clone();
+        Box::pin(async move {
+            let result = resolve_py_object_or_future(Python::attach(|py| {
+                let result = py_fn
+                    .call1(py, (PyLLMRequest { inner: request },))
+                    .map_err(|e| FlowError::Internal(e.to_string()))?;
+                split_py_object_or_future(py, result)
+            }))
+            .await?;
+            Python::attach(|py| {
+                let bound = result.bind(py);
+                if bound.is_none() {
+                    Ok(None)
+                } else {
+                    bound.extract::<String>().map(Some).map_err(|e| {
+                        FlowError::Internal(format!(
+                            "LLM conditional guardrail returned unexpected type: {e}"
+                        ))
+                    })
+                }
+            })
         })
     })
 }
@@ -875,42 +886,45 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
 /// When ``annotated`` is present, request content is read-only and provider-body
 /// edits must be made through the returned annotation; headers remain writable.
 pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestInterceptFn {
+    let py_fn = Arc::new(py_fn);
     Arc::new(
-        move |name: &str,
-              request: LlmRequest,
-              annotated: Option<AnnotatedLLMRequest>|
-              -> FlowResult<LlmRequestInterceptOutcome> {
-            Python::attach(|py| {
-                let py_req = PyLLMRequest {
-                    inner: request.clone(),
-                };
-                let py_ann: Py<PyAny> = match annotated {
-                    Some(ann) => {
-                        let wrapper = PyAnnotatedLLMRequest { inner: ann };
-                        wrapper
-                            .into_pyobject(py)
-                            .map_err(|e| {
-                                FlowError::Internal(format!(
-                                    "Failed to convert AnnotatedLLMRequest to Python: {e}"
-                                ))
-                            })?
-                            .into_any()
-                            .unbind()
-                    }
-                    None => py.None(),
-                };
-                let result = py_fn.call1(py, (name, py_req, py_ann)).map_err(|e| {
-                    FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
-                })?;
+        move |name: String, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
+            let py_fn = py_fn.clone();
+            Box::pin(async move {
+                let result = resolve_py_object_or_future(Python::attach(|py| {
+                    let py_req = PyLLMRequest { inner: request };
+                    let py_ann: Py<PyAny> = match annotated {
+                        Some(ann) => {
+                            let wrapper = PyAnnotatedLLMRequest { inner: ann };
+                            wrapper
+                                .into_pyobject(py)
+                                .map_err(|e| {
+                                    FlowError::Internal(format!(
+                                        "Failed to convert AnnotatedLLMRequest to Python: {e}"
+                                    ))
+                                })?
+                                .into_any()
+                                .unbind()
+                        }
+                        None => py.None(),
+                    };
+                    let result = py_fn.call1(py, (name, py_req, py_ann)).map_err(|e| {
+                        FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
+                    })?;
 
-                result
-                    .extract::<PyLLMRequestInterceptOutcome>(py)
-                    .map(|value| value.inner)
-                    .map_err(|e| {
-                        FlowError::Internal(format!(
-                            "LLM request intercept must return LLMRequestInterceptOutcome: {e}"
-                        ))
-                    })
+                    split_py_object_or_future(py, result)
+                }))
+                .await?;
+                Python::attach(|py| {
+                    result
+                        .extract::<PyLLMRequestInterceptOutcome>(py)
+                        .map(|value| value.inner)
+                        .map_err(|e| {
+                            FlowError::Internal(format!(
+                                "LLM request intercept must return LLMRequestInterceptOutcome: {e}"
+                            ))
+                        })
+                })
             })
         },
     )
@@ -1014,33 +1028,29 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
 
 /// Wrap a Python callable `(Json, LlmSanitizeResponseContext) -> Optional[Json]`.
 fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeResponseFn {
+    let py_fn = Arc::new(py_fn);
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
-        Python::attach(|py| {
-            let py_context = PyLlmSanitizeResponseContext { inner: context };
-            let py_response = match json_to_py(py, &response) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: json_to_py failed in LLM sanitize response: {error}");
-                    return None;
+        let py_fn = py_fn.clone();
+        Box::pin(async move {
+            let result = resolve_py_object_or_future(Python::attach(|py| {
+                let py_context = PyLlmSanitizeResponseContext { inner: context };
+                let py_response = json_to_py(py, &response)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let result = py_fn
+                    .call1(py, (py_response, py_context))
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                split_py_object_or_future(py, result)
+            }))
+            .await?;
+            Python::attach(|py| {
+                if result.is_none(py) {
+                    Ok(None)
+                } else {
+                    py_to_json(result.bind(py))
+                        .map(Some)
+                        .map_err(|error| FlowError::Internal(error.to_string()))
                 }
-            };
-            let result = match py_fn.call1(py, (py_response, py_context)) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: LLM sanitize response callable failed: {error}");
-                    return None;
-                }
-            };
-            if result.is_none(py) {
-                return None;
-            }
-            match py_to_json(result.bind(py)) {
-                Ok(response) => Some(response),
-                Err(error) => {
-                    eprintln!("nemo_relay: py_to_json failed in LLM sanitize response: {error}");
-                    None
-                }
-            }
+            })
         })
     })
 }
@@ -1084,61 +1094,71 @@ pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> EventSubscriberFn {
 
 /// Wrap a Python callable ``(Event, EventSanitizeFields) -> EventSanitizeFields``.
 pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
-    Arc::new(move |event: &Event, fields: EventSanitizeFields| {
-        Python::attach(|py| {
-            let py_event = match event {
-                Event::Scope(inner) => Py::new(
-                    py,
-                    crate::py_types::PyScopeEvent {
-                        inner: inner.clone(),
-                    },
-                )
-                .map(|value| value.into_any()),
-                Event::Mark(inner) => Py::new(
-                    py,
-                    crate::py_types::PyMarkEvent {
-                        inner: inner.clone(),
-                    },
-                )
-                .map(|value| value.into_any()),
-            };
-            let py_event = match py_event {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: failed to convert event sanitizer context: {error}");
-                    return EventSanitizeFields::default();
-                }
-            };
-            let fields_json = match serde_json::to_value(&fields) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: failed to serialize event sanitizer fields: {error}");
-                    return EventSanitizeFields::default();
-                }
-            };
-            let py_fields = match json_to_py(py, &fields_json) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: failed to convert event sanitizer fields: {error}");
-                    return EventSanitizeFields::default();
-                }
-            };
-            let result = match py_fn.call1(py, (py_event, py_fields)) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!("nemo_relay: Python event sanitizer callable failed: {error}");
-                    return EventSanitizeFields::default();
-                }
-            };
-            py_to_json(result.bind(py))
-                .ok()
-                .and_then(|value| serde_json::from_value(value).ok())
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "nemo_relay: event sanitizer must return data, category_profile, and metadata fields"
-                    );
-                    EventSanitizeFields::default()
-                })
+    let py_fn = Arc::new(py_fn);
+    Arc::new(move |event: Event, fields: EventSanitizeFields| {
+        let py_fn = py_fn.clone();
+        Box::pin(async move {
+            let result = Python::attach(
+                |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
+                    let py_event = match &event {
+                        Event::Scope(inner) => Py::new(
+                            py,
+                            crate::py_types::PyScopeEvent {
+                                inner: inner.clone(),
+                            },
+                        )
+                        .map(|value| value.into_any()),
+                        Event::Mark(inner) => Py::new(
+                            py,
+                            crate::py_types::PyMarkEvent {
+                                inner: inner.clone(),
+                            },
+                        )
+                        .map(|value| value.into_any()),
+                    };
+                    let py_event = match py_event {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!(
+                                "nemo_relay: failed to convert event sanitizer context: {error}"
+                            );
+                            return Err(FlowError::Internal(error.to_string()));
+                        }
+                    };
+                    let fields_json = match serde_json::to_value(&fields) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!(
+                                "nemo_relay: failed to serialize event sanitizer fields: {error}"
+                            );
+                            return Err(FlowError::Internal(error.to_string()));
+                        }
+                    };
+                    let py_fields = match json_to_py(py, &fields_json) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!(
+                                "nemo_relay: failed to convert event sanitizer fields: {error}"
+                            );
+                            return Err(FlowError::Internal(error.to_string()));
+                        }
+                    };
+                    let result = py_fn
+                        .call1(py, (py_event, py_fields))
+                        .map_err(|error| FlowError::Internal(error.to_string()))?;
+                    split_py_object_or_future(py, result)
+                },
+            );
+            let result = resolve_py_object_or_future(result).await?;
+            Python::attach(|py| {
+                py_to_json(result.bind(py))
+                    .map_err(|error| FlowError::Internal(error.to_string()))
+                    .and_then(|value| {
+                        serde_json::from_value(value).map_err(|error| {
+                            FlowError::Internal(format!("invalid event sanitizer result: {error}"))
+                        })
+                    })
+            })
         })
     })
 }
