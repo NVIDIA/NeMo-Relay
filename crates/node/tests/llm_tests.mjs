@@ -51,7 +51,7 @@ function rejectWith(value) {
 }
 
 async function flushSubscriberCallbacks() {
-  flushSubscribers();
+  await flushSubscribers();
   for (let i = 0; i < 10; i += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
