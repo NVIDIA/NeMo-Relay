@@ -723,6 +723,18 @@ fn scope_stack_propagation_and_thread_binding_validate_all_ffi_inputs() {
         },
         NemoRelayStatus::NullPointer
     );
+    let mut null_context_stack = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            nemo_relay_scope_stack_create_from_propagation_json(
+                ptr::null(),
+                &mut null_context_stack,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert!(null_context_stack.is_null());
+
     let invalid_context = cstring("not-json");
     let mut stack = ptr::null_mut();
     assert_eq!(
