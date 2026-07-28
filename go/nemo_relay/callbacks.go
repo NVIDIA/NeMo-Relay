@@ -722,7 +722,7 @@ func goAsyncMiddlewareTrampoline(userData unsafe.Pointer, invocationJSON *C.char
 	invocation := append(json.RawMessage(nil), []byte(C.GoString(invocationJSON))...)
 	go func() {
 		defer C.nemo_relay_async_completion_release(completion)
-		defer rejectAsyncCallbackPanic(completion)
+		defer rejectAsyncCallbackPanic(completion, "middleware")
 		ctx, cancel := contextForCompletion(completion)
 		defer cancel()
 		value, err := fn(ctx, invocation)
@@ -746,12 +746,12 @@ func goAsyncMiddlewareTrampoline(userData unsafe.Pointer, invocationJSON *C.char
 	return asyncCallbackPending
 }
 
-func rejectAsyncCallbackPanic(completion *C.NemoRelayAsyncCompletion) {
+func rejectAsyncCallbackPanic(completion *C.NemoRelayAsyncCompletion, kind string) {
 	recovered := recover()
 	if recovered == nil {
 		return
 	}
-	message := C.CString(fmt.Sprintf("panic in async middleware callback: %v", recovered))
+	message := C.CString(fmt.Sprintf("panic in async %s callback: %v", kind, recovered))
 	defer C.free(unsafe.Pointer(message))
 	C.nemo_relay_async_completion_reject(completion, message)
 }
@@ -796,7 +796,7 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 	invocation := append(json.RawMessage(nil), []byte(C.GoString(invocationJSON))...)
 	go func() {
 		defer C.nemo_relay_async_completion_release(completion)
-		defer rejectAsyncCallbackPanic(completion)
+		defer rejectAsyncCallbackPanic(completion, "execution intercept")
 		ctx, cancel := contextForCompletion(completion)
 		defer cancel()
 		var nextMu sync.RWMutex

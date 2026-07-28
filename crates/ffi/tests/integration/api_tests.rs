@@ -843,6 +843,20 @@ fn observability_component_helpers_serialize_defaults_and_validate_inputs() {
         NemoRelayStatus::InvalidJson
     );
     assert!(rejected.is_null());
+
+    let wrong_shape = cstring(r#"{"version":"invalid"}"#);
+    let mut wrong_shape_out = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_observability_component_spec_json(
+                wrong_shape.as_ptr(),
+                false,
+                &mut wrong_shape_out,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(wrong_shape_out.is_null());
 }
 
 #[test]

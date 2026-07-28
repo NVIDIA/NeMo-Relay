@@ -243,6 +243,36 @@ fn async_next_invocation_supports_tool_llm_and_stream_continuations() {
             nemo_relay_async_completion_release(completion_ref);
         }
     }
+
+    let next = Arc::new(NemoRelayAsyncNext {
+        inner: AsyncNextInner::Llm(Arc::new(|request| {
+            Box::pin(async move { Ok(request.content) })
+        })),
+        runtime: runtime.handle().clone(),
+    });
+    let next_ref = Arc::into_raw(next);
+    let (sender, _receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NemoRelayAsyncCompletion {
+        sender: std::sync::Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+    });
+    let completion_ref = Arc::into_raw(Arc::clone(&completion));
+    let malformed_request = CString::new(r#"{"content":{}}"#).unwrap();
+    assert_eq!(
+        unsafe {
+            nemo_relay_async_next_invoke(next_ref, malformed_request.as_ptr(), completion_ref)
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert_eq!(
+        Arc::strong_count(&completion),
+        2,
+        "rejected invocation must not retain the completion"
+    );
+    unsafe {
+        nemo_relay_async_next_release(next_ref);
+        nemo_relay_async_completion_release(completion_ref);
+    }
 }
 
 #[test]

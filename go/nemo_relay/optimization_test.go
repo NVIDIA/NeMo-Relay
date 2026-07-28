@@ -98,7 +98,7 @@ func TestLLMOptimizationContributionOmittedAppliedIsNonApplied(t *testing.T) {
 	}
 }
 
-func TestLLMOptimizationContributionRejectsMalformedAndUnknownWireShapes(t *testing.T) {
+func TestLLMOptimizationContributionRejectsMalformedAndNonObjectWireShapes(t *testing.T) {
 	var contribution LLMOptimizationContribution
 	if err := json.Unmarshal([]byte(`not-json`), &contribution); err == nil {
 		t.Fatal("expected malformed optimization contribution JSON to fail")

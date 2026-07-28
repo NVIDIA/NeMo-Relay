@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -317,9 +318,15 @@ func TestAsyncNextObservesOuterCancellationWithDetachedContext(t *testing.T) {
 		const name = "go-async-detached-next"
 		nextStarted := make(chan struct{})
 		releaseNext := make(chan struct{})
+		nextDone := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() {
+			releaseOnce.Do(func() { close(releaseNext) })
+		}
 		if err := RegisterToolExecutionInterceptAsync(name, 0,
 			func(_ context.Context, invocation json.RawMessage, next AsyncNext) (any, error) {
 				go func() {
+					defer close(nextDone)
 					_, _ = next(context.Background(), invocation)
 				}()
 				<-nextStarted
@@ -339,6 +346,14 @@ func TestAsyncNextObservesOuterCancellationWithDetachedContext(t *testing.T) {
 			})
 			result <- err
 		}()
+		defer func() {
+			release()
+			select {
+			case <-nextDone:
+			case <-time.After(time.Second):
+				t.Error("detached next continuation never settled during cleanup")
+			}
+		}()
 
 		select {
 		case err := <-result:
@@ -346,9 +361,13 @@ func TestAsyncNextObservesOuterCancellationWithDetachedContext(t *testing.T) {
 				t.Fatalf("execution error = %v, want intercept failure", err)
 			}
 		case <-time.After(time.Second):
-			close(releaseNext)
 			t.Fatal("detached next context prevented intercept cleanup")
 		}
-		close(releaseNext)
+		release()
+		select {
+		case <-nextDone:
+		case <-time.After(time.Second):
+			t.Fatal("detached next continuation never settled")
+		}
 	})
 }

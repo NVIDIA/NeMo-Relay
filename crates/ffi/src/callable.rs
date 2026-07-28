@@ -310,8 +310,6 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke(
     let Some(invocation) = c_str_to_json(invocation_json) else {
         return NemoRelayStatus::InvalidJson;
     };
-    unsafe { Arc::increment_strong_count(completion) };
-    let completion = unsafe { Arc::from_raw(completion) };
     let future: Pin<Box<dyn Future<Output = Result<Json>> + Send>> = match &next.inner {
         AsyncNextInner::Tool(next) => {
             let next = next.clone();
@@ -338,6 +336,8 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke(
             Box::pin(async move { collect_async_stream_for_completion(next(request).await?).await })
         }
     };
+    unsafe { Arc::increment_strong_count(completion) };
+    let completion = unsafe { Arc::from_raw(completion) };
     next.runtime.spawn(async move {
         let result = future.await;
         if let Some(sender) = completion
