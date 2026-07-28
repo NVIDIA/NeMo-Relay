@@ -6,7 +6,7 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-**Version:** 0.1
+<Badge intent="info" minimal>ATOF 0.1</Badge>
 
 **NVIDIA NeMo Relay reference implementation:** `crates/types/src/api/event.rs`
 
@@ -37,9 +37,27 @@ What *kind of work* an event represents — an LLM call, a tool invocation, an a
 
 **Wire envelope example:**
 
-```json
-{"kind":"scope","scope_category":"start","atof_version":"0.1","uuid":"...","parent_uuid":"...","timestamp":"...","name":"agent001","attributes":["streaming"],"category":"llm","category_profile":{"model_name":"gpt-4.1"},"data":{...},"data_schema":null,"metadata":null}
+```json title="Scope start event" showLineNumbers={false}
+{
+  "kind": "scope",
+  "scope_category": "start",
+  "atof_version": "0.1",
+  "uuid": "01958bbf-66d4-7b42-83ef-21c483a37e61",
+  "parent_uuid": "01958ba4-7c2e-7a31-8c42-4c8b9a5f6d21",
+  "timestamp": "2026-03-01T12:34:56.123456Z",
+  "name": "gpt-4.1",
+  "attributes": ["streaming"],
+  "category": "llm",
+  "category_profile": {
+    "model_name": "gpt-4.1"
+  },
+  "data": {},
+  "data_schema": null,
+  "metadata": null
+}
 ```
+
+`data` is empty in this example. Producers can populate it with any application-defined JSON object.
 
 ### 1.1 Two Producer Enrichment Tiers
 
@@ -52,7 +70,9 @@ ATOF is designed for progressive enrichment at the producer's discretion. A prod
 | **2. Semantic-tagged**  | the kind of work (LLM, tool, specific category) | typed event kind + populated `category` + kind-appropriate `category_profile` keys (`model_name`, `tool_call_id`, `subtype`, …) + `attributes` (on scope) | native agent runtimes emitting their own events; framework wrappers that can classify at the hook site |
 
 
-**Design principle:** Tier 1 must always work. A consumer that doesn't understand tier-2 enrichment MUST still preserve the event verbatim. Consumers SHOULD NOT reject events whose `category` they don't recognize — unknown values are forward-compat extensions, not errors.
+<Info title="Tier 1 Compatibility">
+  Tier 1 must always work. A consumer that doesn't understand tier-2 enrichment MUST still preserve the event verbatim. Consumers SHOULD NOT reject events whose `category` they don't recognize — unknown values are forward-compat extensions, not errors.
+</Info>
 
 ### 1.2 The Structured Fields at a Glance
 
@@ -298,17 +318,25 @@ The `category` `enum` is closed but `"custom"` + `category_profile.subtype` prov
 
 ### 4.4 The `category_profile` Object
 
-`category_profile` packages category-specific typed fields into a sub-object. It is optional: `null` is legal for tier-1 opaque events and for categories with no defined profile keys in this version.
+<ParamField path="category_profile" type="object | null">
+  Packages category-specific typed fields. It can be `null` for tier-1 opaque events and for categories with no defined profile keys in this version.
+</ParamField>
 
-Per-category keys defined in v0.1:
+<Indent>
+  <ParamField path="category_profile.model_name" type="string | null">
+    LLM model identifier when `category == "llm"`. It can be `null` when the model is unknown.
+  </ParamField>
 
-| `category`                                                                                  | `category_profile` shape                                                                                                 |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `"llm"`                                                                                     | `{"model_name": "gpt-4.1"}` — LLM model identifier; null if not known.                                                   |
-| `"tool"`                                                                                    | `{"tool_call_id": "call_abc"}` — LLM-provider correlation ID; null if the tool was not invoked via an LLM tool-use flow. |
-| `"custom"`                                                                                  | `{"subtype": "nvidia.speculative_decode"}` — REQUIRED per §4.2.                                                          |
-| `"unknown"`                                                                                 | `null` — tier-1 pass-through carries no profile information.                                                             |
-| others (`agent`, `function`, `retriever`, `embedder`, `reranker`, `guardrail`, `evaluator`) | Reserved. No keys defined in v0.1; producers MAY emit `null` or `{}`. Future MINOR versions MAY define keys.             |
+  <ParamField path="category_profile.tool_call_id" type="string | null">
+    LLM-provider correlation ID when `category == "tool"`. It can be `null` when the tool was not invoked through an LLM tool-use flow.
+  </ParamField>
+
+  <ParamField path="category_profile.subtype" type="string">
+    Vendor category name. REQUIRED when `category == "custom"` per §4.2.
+  </ParamField>
+</Indent>
+
+For `category == "unknown"`, `category_profile` is `null`. For `agent`, `function`, `retriever`, `embedder`, `reranker`, `guardrail`, and `evaluator`, no profile keys are defined in v0.1; producers MAY emit `null` or `{}`. Future MINOR versions MAY define keys for these categories.
 
 Unknown `category_profile` keys MUST be preserved verbatim by consumers. Adding new keys to an existing profile shape is a backward-compatible MINOR bump per §5.6.
 
@@ -327,7 +355,9 @@ Emitters choose per event. A single stream MAY contain events in both forms.
 
 **Why microseconds and not nanoseconds.** JSON numbers are IEEE 754 doubles with 53 bits of integer precision (~9 × 10¹⁵). Nanoseconds since epoch for 2026 is ~1.76 × 10¹⁸ — exceeds safe integer range. Microseconds fits safely and remains precise enough for agent-scope event correlation.
 
-**Ordering.** Events are emitted in wall-clock order. Delivery from subscriber callbacks MAY arrive out-of-order for concurrent operations. Consumers MUST sort by `timestamp` before processing. When sorting a mixed-format stream, consumers MUST normalize both forms to a common representation (typically integer microseconds) before comparison — lexicographic string vs integer comparison is undefined.
+<Warning title="Normalize Timestamps Before Sorting">
+  Events are emitted in wall-clock order. Delivery from subscriber callbacks MAY arrive out-of-order for concurrent operations. Consumers MUST sort by `timestamp` before processing. When sorting a mixed-format stream, consumers MUST normalize both forms to a common representation (typically integer microseconds) before comparison — lexicographic string vs integer comparison is undefined.
+</Warning>
 
 **ATIF compatibility.** ATIF requires timestamps as ISO 8601 strings. RFC 3339 is a strict subset of ISO 8601, so the ATOF → ATIF converter forwards the RFC 3339 string form unchanged as a zero-cost pass-through; only the integer microsecond form is serialized to an RFC 3339 string before emitting ATIF.
 
