@@ -178,7 +178,7 @@ impl LlmStreamWrapper {
         &self.scope_stack
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self, background_thread: bool) {
         if self.ended {
             return;
         }
@@ -193,7 +193,7 @@ impl LlmStreamWrapper {
         self.handle
             .optimization_recorder
             .close_for_finalization(Some("stream_interrupted"));
-        self.finalization = self.emit_end_event(metadata, true, true);
+        self.finalization = self.emit_end_event(metadata, true, background_thread);
     }
 
     fn finish_with_status(
@@ -236,21 +236,31 @@ impl LlmStreamWrapper {
             aggregated
         };
 
-        let snapshot = {
-            let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
-            let sl =
-                ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
-            let ctx = global_context();
-            let state = ctx.read();
-            match state {
-                Ok(state) => {
-                    let entries = state.llm_sanitize_response_entries(&sl);
-                    Some(entries)
+        let entries = match self.scope_stack.read() {
+            Ok(scope_guard) => {
+                let scope_locals = scope_guard
+                    .collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
+                match global_context().read() {
+                    Ok(state) => state.llm_sanitize_response_entries(&scope_locals),
+                    Err(error) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "stream_end_sanitizer_snapshot_failed";
+                            "LLM stream END sanitizer snapshot failed open: {error}"
+                        );
+                        Vec::new()
+                    }
                 }
-                Err(_) => None,
+            }
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "stream_end_sanitizer_snapshot_failed";
+                    "LLM stream END sanitizer snapshot failed open: {error}"
+                );
+                Vec::new()
             }
         };
-        let entries = snapshot?;
         let handle = self.handle.clone();
         let scope_stack = self.scope_stack.clone();
         let subscribers = self.subscribers.clone();
@@ -468,7 +478,7 @@ impl LlmStreamInner for LlmStreamWrapper {
                 return result.clone();
             }
             let result = this.inner.close().await;
-            this.finish();
+            this.finish(false);
             if let Some(finalization) = this.finalization.take() {
                 finalization.await.map_err(|error| {
                     FlowError::Internal(format!("stream finalization task failed: {error}"))
@@ -741,7 +751,7 @@ fn non_empty_object(object: Map<String, Json>) -> Option<Json> {
 
 impl Drop for LlmStreamWrapper {
     fn drop(&mut self) {
-        self.finish();
+        self.finish(true);
     }
 }
 

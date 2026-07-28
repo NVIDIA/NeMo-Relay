@@ -673,6 +673,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
     }])
     .expect("v3 async native fixture should load");
+    let mut cleanup = NativePluginTestCleanup::new();
     let mut config = PluginConfig::default();
     config.components.push(PluginComponentSpec {
         kind: "fixture_async".into(),
@@ -682,6 +683,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     initialize_plugins_exact(config)
         .await
         .expect("v3 async native fixture should register");
+    cleanup.mark_plugin_configuration_active();
 
     let rewritten = tool_request_intercepts("async-tool", json!({"input": true}))
         .await
@@ -766,12 +768,14 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     });
     tokio::task::yield_now().await;
     clear_plugin_configuration().expect("v3 async native fixture should clear while pending");
+    cleanup.plugin_configuration_active = false;
     let pending = pending
         .await
         .expect("pending v3 async task should not panic")
         .expect("pending v3 async request intercept should settle after clear");
     assert_eq!(pending["native_async"], true);
 
+    drop(cleanup);
     drop(activation);
 }
 

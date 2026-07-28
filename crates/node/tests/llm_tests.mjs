@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { waitForSubscriberCallbacks } from './test_support.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -55,18 +56,6 @@ async function flushSubscriberCallbacks() {
   for (let i = 0; i < 10; i += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
-}
-
-async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    await flushSubscribers();
-    if (Date.now() >= deadline) {
-      throw new Error('timed out waiting for subscriber callbacks');
-    }
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  await flushSubscribers();
 }
 
 function makeNative() {

@@ -57,6 +57,25 @@ mod native {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
     }
 
+    fn sanitizer_runtime() -> std::result::Result<&'static tokio::runtime::Runtime, String> {
+        SANITIZER_RUNTIME
+            .get_or_init(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    #[cfg(test)]
+    pub(super) fn block_on_sanitizer_future<F: Future>(
+        future: F,
+    ) -> std::result::Result<F::Output, String> {
+        sanitizer_runtime().map(|runtime| runtime.block_on(future))
+    }
+
     pub(super) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
         if subscribers.is_empty() {
             return true;
@@ -297,12 +316,7 @@ mod native {
         transform: Option<EventTransformFn>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
     ) -> Option<Event> {
-        let runtime = match SANITIZER_RUNTIME.get_or_init(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())
-        }) {
+        let runtime = match sanitizer_runtime() {
             Ok(runtime) => runtime,
             Err(error) => {
                 if !SANITIZER_RUNTIME_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
@@ -343,6 +357,13 @@ mod native {
             )),
         )
     }
+}
+
+#[cfg(test)]
+pub(crate) fn block_on_sanitizer_future<F: Future>(
+    future: F,
+) -> std::result::Result<F::Output, String> {
+    native::block_on_sanitizer_future(future)
 }
 
 /// Queue an event for subscriber delivery.

@@ -52,6 +52,16 @@ pub struct ScopeHandle {
     pub parent_uuid: Option<Uuid>,
 }
 
+fn scope_stack_lock_error(error: impl std::fmt::Display, operation: &'static str) -> FlowError {
+    log::error!(
+        target: "nemo_relay.runtime",
+        event = "scope_stack_unavailable",
+        operation = operation;
+        "Scope operation failed because the scope stack lock is poisoned: {error}"
+    );
+    FlowError::Internal(error.to_string())
+}
+
 /// Builder parameters for [`push_scope`].
 #[derive(TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
@@ -224,7 +234,9 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
     let parent_uuid = resolve_parent_uuid(params.parent);
     let (handle, event, subscribers, emission_scope_stack) = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| scope_stack_lock_error(error, "push"))?;
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
@@ -287,7 +299,9 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
     let (scope, event, subscribers, emission_scope_stack) = {
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| scope_stack_lock_error(error, "pop"))?;
         let top = scope_guard.top();
         if top.uuid != *params.handle_uuid {
             if scope_guard.find(params.handle_uuid).is_some() {
@@ -361,27 +375,17 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     let scope_stack = current_scope_stack();
     let (event, subscribers, emission_scope_stack) = {
         let subscribers = if params.name == COMPACTION_EVENT_NAME {
-            let mut scope_guard = scope_stack.write().map_err(|error| {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "mark_event_scope_stack_unavailable";
-                    "Mark event was dropped because the scope stack lock is poisoned: {error}"
-                );
-                FlowError::Internal(error.to_string())
-            })?;
+            let mut scope_guard = scope_stack
+                .write()
+                .map_err(|error| scope_stack_lock_error(error, "mark"))?;
             let subscribers =
                 snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
             scope_guard.mark_agent_fresh(parent_uuid);
             subscribers
         } else {
-            let scope_guard = scope_stack.read().map_err(|error| {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "mark_event_scope_stack_unavailable";
-                    "Mark event was dropped because the scope stack lock is poisoned: {error}"
-                );
-                FlowError::Internal(error.to_string())
-            })?;
+            let scope_guard = scope_stack
+                .read()
+                .map_err(|error| scope_stack_lock_error(error, "mark"))?;
             snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
         };
         let context = global_context();

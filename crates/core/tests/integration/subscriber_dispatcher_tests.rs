@@ -145,12 +145,7 @@ fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_fails() {
     let observed_events = Arc::clone(&observed);
     register_subscriber(
         "fail-open-sanitizer-subscriber",
-        Arc::new(move |event| {
-            observed_events
-                .lock()
-                .unwrap()
-                .push(event.name().to_string())
-        }),
+        Arc::new(move |event| observed_events.lock().unwrap().push(event.clone())),
     )
     .unwrap();
     register_mark_sanitize_guardrail(
@@ -166,13 +161,28 @@ fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_fails() {
     )
     .unwrap();
 
-    emit_mark("unsanitized-fallback");
+    event(
+        EmitMarkEventParams::builder()
+            .name("unsanitized-fallback")
+            .data(json!({"original_data": true}))
+            .metadata(json!({"original_metadata": true}))
+            .build(),
+    )
+    .unwrap();
     flush_subscribers().unwrap();
 
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].name(), "unsanitized-fallback");
     assert_eq!(
-        observed.lock().unwrap().as_slice(),
-        ["unsanitized-fallback"]
+        observed[0].sanitize_fields().data,
+        Some(json!({"original_data": true}))
     );
+    assert_eq!(
+        observed[0].sanitize_fields().metadata,
+        Some(json!({"original_metadata": true}))
+    );
+    drop(observed);
     deregister_mark_sanitize_guardrail("fail-open-mark-sanitizer").unwrap();
     deregister_subscriber("fail-open-sanitizer-subscriber").unwrap();
 }

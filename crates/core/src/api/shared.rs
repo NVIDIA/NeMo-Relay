@@ -260,7 +260,9 @@ async fn run_request_intercepts_with_codec_inner(
 
     let entries = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let scope_locals = scope_guard
             .collect_scope_local_registries(|registries| &registries.llm_request_intercepts);
 

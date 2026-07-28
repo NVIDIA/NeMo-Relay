@@ -84,6 +84,25 @@ pub struct CreateToolHandleParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
+fn resolve_skill_loads(
+    name: &str,
+    args: &Json,
+    metadata: Option<&Json>,
+) -> Vec<skill_load::SkillLoad> {
+    let already_handled = metadata
+        .and_then(Json::as_object)
+        .and_then(|metadata| metadata.get(skill_load::HANDLED_METADATA_KEY))
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    if already_handled {
+        Vec::new()
+    } else if let Some(skill_loads) = skill_load::precomputed(metadata) {
+        skill_loads
+    } else {
+        skill_load::detect(name, args)
+    }
+}
+
 /// Builder parameters for [`NemoRelayContextState::build_tool_end_event`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
@@ -227,20 +246,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
             subscribers,
         )
     };
-    let handled_skill_loads = params
-        .metadata
-        .as_ref()
-        .and_then(Json::as_object)
-        .and_then(|metadata| metadata.get(skill_load::HANDLED_METADATA_KEY))
-        .and_then(Json::as_bool)
-        .is_some_and(|handled| handled);
-    let skill_loads = if handled_skill_loads {
-        Vec::new()
-    } else if let Some(skill_loads) = skill_load::precomputed(params.metadata.as_ref()) {
-        skill_loads
-    } else {
-        skill_load::detect(params.name, &params.args)
-    };
+    let skill_loads = resolve_skill_loads(params.name, &params.args, params.metadata.as_ref());
     let raw_args = params.args;
     let (handle, event, marks) = {
         let context = global_context();
@@ -301,9 +307,8 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
         scope_stack.clone(),
     );
     for mark in marks {
-        if let Some(sanitizers) = snapshot_event_sanitizers(&mark, &scope_stack) {
-            dispatch_sanitized_event(mark, sanitizers, &subscribers, scope_stack.clone());
-        }
+        let sanitizers = snapshot_event_sanitizers(&mark, &scope_stack).unwrap_or_default();
+        dispatch_sanitized_event(mark, sanitizers, &subscribers, scope_stack.clone());
     }
     Ok(handle)
 }
@@ -328,20 +333,7 @@ async fn tool_call_with_subscriber_snapshot(
         let entries = state.tool_sanitize_request_entries(&scope_locals);
         (entries, subscribers)
     };
-    let handled_skill_loads = params
-        .metadata
-        .as_ref()
-        .and_then(Json::as_object)
-        .and_then(|metadata| metadata.get(skill_load::HANDLED_METADATA_KEY))
-        .and_then(Json::as_bool)
-        .is_some_and(|handled| handled);
-    let skill_loads = if handled_skill_loads {
-        Vec::new()
-    } else if let Some(skill_loads) = skill_load::precomputed(params.metadata.as_ref()) {
-        skill_loads
-    } else {
-        skill_load::detect(params.name, &params.args)
-    };
+    let skill_loads = resolve_skill_loads(params.name, &params.args, params.metadata.as_ref());
     let sanitized_args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
         params.name,
         params.args,

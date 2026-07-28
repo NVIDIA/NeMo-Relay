@@ -192,10 +192,15 @@ activation fails.
 
 The source-first C API retains `NemoRelayEventSanitizeCb` and adds parallel
 completion-based async registration APIs. An async callback returns `Complete`
-or `Pending` and settles its one-shot completion handle with resolve or reject;
-there is no implicit timeout. A callback that returns `Pending` must settle the
-handle exactly once, or serial event publication remains blocked. Relay cancels
-the handle when the invocation is abandoned; late or duplicate settlement after
+or `Pending` and settles its one-shot completion handle with resolve or reject.
+The absence of an implicit timeout is intentional: Relay preserves strict FIFO
+publication, so one unsettled `Pending` completion blocks every later event in
+that publication queue. Plugin authors should arrange their own operation
+deadline and settle each retained completion exactly once on every success,
+failure, and cancellation path.
+
+Relay cancels the handle when its invocation is abandoned, which is the
+host-supported recovery mechanism; late or duplicate settlement after
 cancellation is rejected safely. After resolving or rejecting a retained
 completion, call `nemo_relay_async_completion_release` to release the
 callback-owned reference. Global names start with `nemo_relay_register_`, and

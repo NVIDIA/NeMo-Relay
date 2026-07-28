@@ -296,13 +296,13 @@ pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
     {
         return NemoRelayStatus::InvalidArg;
     }
-    let host_v2 = unsafe { &*(host as *const NemoRelayNativeHostApiV3) };
+    let host_v3 = unsafe { &*(host as *const NemoRelayNativeHostApiV3) };
     let mut plugin = NemoRelayNativePluginV1::default();
-    plugin.plugin_kind = unsafe { raw_host_string(&host_v2.v1, "fixture_async") };
+    plugin.plugin_kind = unsafe { raw_host_string(&host_v3.v1, "fixture_async") };
     if plugin.plugin_kind.is_null() {
         return NemoRelayStatus::Internal;
     }
-    plugin.user_data = Box::into_raw(Box::new(*host_v2)).cast();
+    plugin.user_data = Box::into_raw(Box::new(*host_v3)).cast();
     plugin.register = Some(raw_register_async_tool_request);
     plugin.drop = Some(raw_drop_async_host);
     unsafe { *out = plugin };
