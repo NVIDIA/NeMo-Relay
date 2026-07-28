@@ -13,6 +13,8 @@ output_dir := ""
 ref_name := ""
 # Linux package artifacts target this minimum glibc version for compatibility.
 linux_glibc_version := "2.17"
+# Supported Node package platform key. CI sets this from its package matrix.
+node_platform := ""
 
 bash_helpers := '''
 set -euo pipefail
@@ -1560,6 +1562,11 @@ package-node:
     # If `ref_name` is empty, append the current short HEAD SHA to the version.
     # If `ref_name` is set, write it as the exact package version before packing.
     linux_glibc_version="{{ linux_glibc_version }}"
+    node_platform="{{ node_platform }}"
+    python_executable="python"
+    if ! command -v "$python_executable" >/dev/null 2>&1; then
+        python_executable="python3"
+    fi
     output_dir="{{ output_dir }}"
     cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir npm)"
@@ -1587,7 +1594,34 @@ package-node:
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     npm run --workspace=nemo-relay-node "${build_args[@]}"
-    npm pack --workspace=nemo-relay-node --pack-destination "$package_dir"
+    if [[ -z "$node_platform" ]]; then
+        case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) node_platform="linux-amd64" ;;
+            Linux-aarch64|Linux-arm64) node_platform="linux-arm64" ;;
+            Darwin-arm64) node_platform="macos-arm64" ;;
+            MINGW*|MSYS*|CYGWIN*)
+                if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                    node_platform="windows-arm64"
+                else
+                    node_platform="windows-amd64"
+                fi
+                ;;
+            *)
+                echo "Error: unsupported Node package host $(uname -s)/$(uname -m)" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    package_args=(
+        --node-dir crates/node
+        --platform "$node_platform"
+        --version "$package_version"
+        --output-dir "$package_dir"
+    )
+    if [[ "$node_platform" == "linux-amd64" ]]; then
+        package_args+=(--metapackage)
+    fi
+    "$python_executable" scripts/package-node-bin.py "${package_args[@]}"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then

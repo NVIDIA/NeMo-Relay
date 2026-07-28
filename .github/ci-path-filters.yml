@@ -86,6 +86,7 @@ node_package:
   - 'pyproject.toml'
   - 'rust-toolchain.toml'
   - 'scripts/package-cli-bin.py'
+  - 'scripts/package-node-bin.py'
   - 'uv.lock'
 
 python_package:

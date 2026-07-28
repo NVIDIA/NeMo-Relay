@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 import tarfile
 import zipfile
 from dataclasses import dataclass
@@ -119,7 +120,8 @@ def add_zip_file(archive: zipfile.ZipFile, path: str, content: bytes, executable
     """Add one regular file to a wheel archive."""
     info = zipfile.ZipInfo(path)
     info.compress_type = zipfile.ZIP_DEFLATED
-    info.external_attr = ((0o755 if executable else 0o644) & 0xFFFF) << 16
+    info.create_system = 3
+    info.external_attr = (stat.S_IFREG | (0o755 if executable else 0o644)) << 16
     archive.writestr(info, content)
 
 
@@ -177,7 +179,7 @@ def add_tar_bytes(archive: tarfile.TarFile, path: str, content: bytes, mode: int
 
 def build_npm_platform(binary: Path, platform: Platform, version: str, output: Path) -> Path:
     """Build an OS- and CPU-constrained npm package containing the CLI binary."""
-    filename = f"{platform.npm_package}-{version}.tgz"
+    filename = f"nemo-relay-bin-npm-{platform.npm_os}-{platform.npm_cpu}-{version}.tgz"
     destination = output / filename
     manifest = {
         "name": platform.npm_package,
@@ -245,7 +247,7 @@ def launcher_source() -> bytes:
 
 def build_npm_launcher(version: str, output: Path) -> Path:
     """Build the portable npm launcher package."""
-    destination = output / f"{PACKAGE_NAME}-{version}.tgz"
+    destination = output / f"nemo-relay-bin-npm-{version}.tgz"
     manifest = {
         "name": PACKAGE_NAME,
         "version": version,

@@ -6,6 +6,7 @@
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tarfile
@@ -50,10 +51,14 @@ class PackageCliBinTests(unittest.TestCase):
             self.assertIn("0.7.0rc1-py3-none-manylinux_2_17_x86_64", wheel.name)
             with zipfile.ZipFile(wheel) as archive:
                 names = archive.namelist()
-                self.assertTrue(any(name.endswith(".data/scripts/nemo-relay") for name in names))
+                script = next(info for info in archive.infolist() if info.filename.endswith(".data/scripts/nemo-relay"))
+                script_mode = script.external_attr >> 16
+                self.assertTrue(stat.S_ISREG(script_mode))
+                self.assertEqual(stat.S_IMODE(script_mode), 0o755)
                 wheel_metadata = archive.read(next(name for name in names if name.endswith("/WHEEL")))
                 self.assertIn(b"Tag: py3-none-musllinux_1_2_x86_64", wheel_metadata)
 
+            self.assertEqual(native.name, "nemo-relay-bin-npm-linux-x64-0.7.0-rc.1.tgz")
             with tarfile.open(native) as archive:
                 manifest = json.load(required_member(archive, "package/package.json"))
                 self.assertEqual(manifest["os"], ["linux"])
@@ -63,6 +68,7 @@ class PackageCliBinTests(unittest.TestCase):
                     b"test-binary",
                 )
 
+            self.assertEqual(launcher.name, "nemo-relay-bin-npm-0.7.0-rc.1.tgz")
             with tarfile.open(launcher) as archive:
                 manifest = json.load(required_member(archive, "package/package.json"))
                 self.assertEqual(manifest["bin"]["nemo-relay"], "bin/nemo-relay.js")
@@ -87,6 +93,17 @@ class PackageCliBinTests(unittest.TestCase):
     def test_rejects_unsupported_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported package version"):
             PACKAGE_CLI_BIN.wheel_version("dev-deadbeef")
+
+    def test_translates_release_versions_to_pep440(self) -> None:
+        versions = {
+            "0.7.0": "0.7.0",
+            "0.7.0-alpha.1": "0.7.0a1",
+            "0.7.0-rc.1": "0.7.0rc1",
+            "0.7.0+deadbeef": "0.7.0+deadbeef",
+        }
+        for version, expected in versions.items():
+            with self.subTest(version=version):
+                self.assertEqual(PACKAGE_CLI_BIN.wheel_version(version), expected)
 
 
 if __name__ == "__main__":

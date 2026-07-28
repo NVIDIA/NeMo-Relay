@@ -305,23 +305,31 @@ jobs:
           fi
           python scripts/package-cli-bin.py "${args[@]}"
 
+      - name: Install and run CLI wheel
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          wheels=("${NEMO_RELAY_CI_WORKSPACE_TMP}"/cli-packages/*.whl)
+          python -m pip install --force-reinstall --no-deps "${wheels[0]}"
+          nemo-relay --version
+
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: cli-${{ matrix.platform }}
+          name: cli-binary-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli/*
           if-no-files-found: error
 
       - name: Upload CLI wheel artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: cli-wheel-${{ matrix.platform }}
+          name: cli-python-wheel-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.whl
           if-no-files-found: error
 
       - name: Upload CLI npm artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: cli-npm-${{ matrix.platform }}
+          name: cli-npm-package-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.tgz
           if-no-files-found: error
