@@ -21,10 +21,13 @@ PACKAGE_NAME = "nemo-relay-cli-bin"
 SUMMARY = "Prebuilt NeMo Relay command-line interface."
 LICENSE = "Apache-2.0"
 REPOSITORY = "https://github.com/NVIDIA/NeMo-Relay"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass(frozen=True)
 class Platform:
+    """Describe one supported CLI distribution platform."""
+
     target: str
     npm_suffix: str
     npm_os: str
@@ -34,6 +37,7 @@ class Platform:
 
     @property
     def npm_package(self) -> str:
+        """Return the npm package name for this platform."""
         return f"{PACKAGE_NAME}-{self.npm_suffix}"
 
 
@@ -106,11 +110,13 @@ def wheel_version(version: str) -> str:
 
 
 def record_entry(path: str, content: bytes) -> str:
+    """Return one wheel RECORD entry for the provided file."""
     digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode()
     return f"{path},sha256={digest},{len(content)}"
 
 
 def add_zip_file(archive: zipfile.ZipFile, path: str, content: bytes, executable: bool = False) -> None:
+    """Add one regular file to a wheel archive."""
     info = zipfile.ZipInfo(path)
     info.compress_type = zipfile.ZIP_DEFLATED
     info.external_attr = ((0o755 if executable else 0o644) & 0xFFFF) << 16
@@ -118,6 +124,7 @@ def add_zip_file(archive: zipfile.ZipFile, path: str, content: bytes, executable
 
 
 def build_wheel(binary: Path, platform: Platform, version: str, output: Path) -> Path:
+    """Build a platform-tagged wheel containing the CLI binary."""
     pep440_version = wheel_version(version)
     normalized_name = PACKAGE_NAME.replace("-", "_")
     platform_tag = ".".join(platform.wheel_platforms)
@@ -142,7 +149,7 @@ def build_wheel(binary: Path, platform: Platform, version: str, output: Path) ->
         "Generator: NeMo Relay package-cli-bin.py\n"
         "Root-Is-Purelib: false\n" + "".join(f"Tag: py3-none-{tag}\n" for tag in platform.wheel_platforms) + "\n"
     ).encode()
-    license_text = Path("LICENSE").read_bytes()
+    license_text = (ROOT / "LICENSE").read_bytes()
     binary_content = binary.read_bytes()
     files = {
         script_path: binary_content,
@@ -161,6 +168,7 @@ def build_wheel(binary: Path, platform: Platform, version: str, output: Path) ->
 
 
 def add_tar_bytes(archive: tarfile.TarFile, path: str, content: bytes, mode: int = 0o644) -> None:
+    """Add one regular file to an npm tarball."""
     info = tarfile.TarInfo(path)
     info.size = len(content)
     info.mode = mode
@@ -168,6 +176,7 @@ def add_tar_bytes(archive: tarfile.TarFile, path: str, content: bytes, mode: int
 
 
 def build_npm_platform(binary: Path, platform: Platform, version: str, output: Path) -> Path:
+    """Build an OS- and CPU-constrained npm package containing the CLI binary."""
     filename = f"{platform.npm_package}-{version}.tgz"
     destination = output / filename
     manifest = {
@@ -188,11 +197,12 @@ def build_npm_platform(binary: Path, platform: Platform, version: str, output: P
             binary.read_bytes(),
             mode=0o755,
         )
-        add_tar_bytes(archive, "package/LICENSE", Path("LICENSE").read_bytes())
+        add_tar_bytes(archive, "package/LICENSE", (ROOT / "LICENSE").read_bytes())
     return destination
 
 
 def launcher_source() -> bytes:
+    """Return the Node.js launcher that selects the installed native package."""
     mapping = {
         f"{platform.npm_os}-{platform.npm_cpu}": {
             "package": platform.npm_package,
@@ -234,6 +244,7 @@ def launcher_source() -> bytes:
 
 
 def build_npm_launcher(version: str, output: Path) -> Path:
+    """Build the portable npm launcher package."""
     destination = output / f"{PACKAGE_NAME}-{version}.tgz"
     manifest = {
         "name": PACKAGE_NAME,
@@ -249,11 +260,12 @@ def build_npm_launcher(version: str, output: Path) -> Path:
     with tarfile.open(destination, "w:gz") as archive:
         add_tar_bytes(archive, "package/package.json", json.dumps(manifest, indent=2).encode() + b"\n")
         add_tar_bytes(archive, "package/bin/nemo-relay.js", launcher_source(), mode=0o755)
-        add_tar_bytes(archive, "package/LICENSE", Path("LICENSE").read_bytes())
+        add_tar_bytes(archive, "package/LICENSE", (ROOT / "LICENSE").read_bytes())
     return destination
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI package assembly arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--target", choices=sorted(PLATFORMS), required=True)
@@ -264,6 +276,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Build the wheel and npm artifacts requested on the command line."""
     args = parse_args()
     if not args.binary.is_file():
         raise SystemExit(f"CLI binary does not exist: {args.binary}")

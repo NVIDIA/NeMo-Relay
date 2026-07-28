@@ -5,6 +5,7 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -37,9 +38,14 @@ class PackageCliBinTests(unittest.TestCase):
             binary.write_bytes(b"test-binary")
             platform = PACKAGE_CLI_BIN.PLATFORMS["x86_64-unknown-linux-musl"]
 
-            wheel = PACKAGE_CLI_BIN.build_wheel(binary, platform, "0.7.0-rc.1", output)
-            native = PACKAGE_CLI_BIN.build_npm_platform(binary, platform, "0.7.0-rc.1", output)
-            launcher = PACKAGE_CLI_BIN.build_npm_launcher("0.7.0-rc.1", output)
+            previous_directory = Path.cwd()
+            try:
+                os.chdir(output)
+                wheel = PACKAGE_CLI_BIN.build_wheel(binary, platform, "0.7.0-rc.1", output)
+                native = PACKAGE_CLI_BIN.build_npm_platform(binary, platform, "0.7.0-rc.1", output)
+                launcher = PACKAGE_CLI_BIN.build_npm_launcher("0.7.0-rc.1", output)
+            finally:
+                os.chdir(previous_directory)
 
             self.assertIn("0.7.0rc1-py3-none-manylinux_2_17_x86_64", wheel.name)
             with zipfile.ZipFile(wheel) as archive:

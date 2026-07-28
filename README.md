@@ -45,18 +45,20 @@ trajectory file, you have concrete data to inspect, debug, and build on.
 ### Local Agent Trajectory
 
 This walkthrough shows an end-to-end quick success setup. Install the
-`nemo-relay-cli`, turn on local exporters, run Codex, Claude Code, or Hermes
+NeMo Relay CLI, turn on local exporters, run Codex, Claude Code, or Hermes
 through Relay, and check that Relay wrote both raw events and normalized
 trajectories.
 
 
 #### 1. Install the CLI
 
-Install the prebuilt CLI with Python or npm:
+Install the prebuilt CLI from PyPI:
 
 ```bash
 pip install nemo-relay-cli-bin
 ```
+
+Install the prebuilt CLI from npm:
 
 ```bash
 npm install --global nemo-relay-cli-bin
