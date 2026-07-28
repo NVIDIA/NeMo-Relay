@@ -121,9 +121,6 @@ mod native {
         subscribers: &[EventSubscriberFn],
         scope_stack: ScopeStackHandle,
     ) -> bool {
-        if subscribers.is_empty() {
-            return true;
-        }
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: Some(transform),
