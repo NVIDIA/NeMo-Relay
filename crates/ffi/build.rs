@@ -8,29 +8,29 @@ fn main() {
     validate_async_registration_parity(&crate_dir);
     let config = cbindgen::Config::from_file(format!("{crate_dir}/cbindgen.toml"))
         .expect("Unable to read cbindgen.toml");
+    let include_guard = config
+        .include_guard
+        .clone()
+        .expect("cbindgen.toml must configure an include guard");
 
-    if let Ok(bindings) = cbindgen::Builder::new()
+    let bindings = cbindgen::Builder::new()
         .with_crate(&crate_dir)
         .with_config(config)
         .generate()
-    {
-        let header_path = format!("{crate_dir}/nemo_relay.h");
-        bindings.write_to_file(&header_path);
-        // cbindgen intentionally does not expand declarative macros. Keep the
-        // macro-generated async registration functions in the generated C ABI.
-        let header = std::fs::read_to_string(&header_path).expect("read generated FFI header");
-        let marker = "\n#endif  /* NEMO_RELAY_H */\n";
-        assert!(
-            header.contains(marker),
-            "generated FFI header is missing its NEMO_RELAY_H closing guard"
-        );
-        let header = header.replacen(
-            marker,
-            &format!("\n{}\n#endif  /* NEMO_RELAY_H */\n", ASYNC_REGISTRATIONS),
-            1,
-        );
-        std::fs::write(header_path, header).expect("write generated FFI header");
-    }
+        .expect("Unable to generate FFI header");
+    let header_path = format!("{crate_dir}/nemo_relay.h");
+    bindings.write_to_file(&header_path);
+    // cbindgen intentionally does not expand declarative macros. Keep the
+    // macro-generated async registration functions in the generated C ABI.
+    let header = std::fs::read_to_string(&header_path).expect("read generated FFI header");
+    let marker = format!("\n#endif  /* {include_guard} */\n");
+    assert!(
+        header.contains(&marker),
+        "generated FFI header is missing its configured closing guard"
+    );
+    let replacement = format!("\n{}\n#endif  /* {include_guard} */\n", ASYNC_REGISTRATIONS);
+    let header = header.replacen(&marker, &replacement, 1);
+    std::fs::write(header_path, header).expect("write generated FFI header");
 }
 
 #[derive(Debug, PartialEq, Eq)]
