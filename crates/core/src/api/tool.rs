@@ -377,17 +377,13 @@ async fn tool_call_with_subscriber_snapshot(
             .collect::<Vec<_>>();
         (handle, event, marks)
     };
-    let mut sanitized_marks = Vec::with_capacity(marks.len());
-    for mark in marks {
-        if let Some(mark) = sanitize_event(mark).await {
-            sanitized_marks.push(mark);
-        }
-    }
     if let Some(event) = sanitize_event(event).await {
         NemoRelayContextState::emit_event(&event, &subscribers);
     }
-    for mark in sanitized_marks {
-        NemoRelayContextState::emit_event(&mark, &subscribers);
+    for mark in marks {
+        if let Some(mark) = sanitize_event(mark).await {
+            NemoRelayContextState::emit_event(&mark, &subscribers);
+        }
     }
     Ok((handle, subscribers))
 }
@@ -549,17 +545,13 @@ async fn tool_call_end_with_pending_marks(
             ))
         })
         .collect::<Vec<_>>();
-    let mut sanitized_marks = Vec::with_capacity(marks.len());
-    for mark in marks {
-        if let Some(mark) = sanitize_event(mark).await {
-            sanitized_marks.push(mark);
-        }
-    }
     if let Some(event) = sanitize_event(event).await {
         NemoRelayContextState::emit_event(&event, subscribers);
     }
-    for mark in sanitized_marks {
-        NemoRelayContextState::emit_event(&mark, subscribers);
+    for mark in marks {
+        if let Some(mark) = sanitize_event(mark).await {
+            NemoRelayContextState::emit_event(&mark, subscribers);
+        }
     }
     Ok(())
 }

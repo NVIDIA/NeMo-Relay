@@ -4,6 +4,7 @@
 """Tests for NeMo Relay LLM lifecycle, guardrails, intercepts, and streaming."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import NoReturn, cast
 
 import pytest
@@ -670,13 +671,13 @@ class TestLLMStreaming:
         originating_loop = asyncio.get_running_loop()
         subscribers.register("py_llm_async_stream_sanitizer_sub", events.append)
 
-        async def sanitize_response(response, context):
+        async def sanitize_response(response, context) -> dict:
             del context
             await asyncio.sleep(0)
             assert asyncio.get_running_loop() is originating_loop
             return {"sanitized": response["raw"]}
 
-        async def stream_func(request):
+        async def stream_func(request) -> AsyncIterator[dict]:
             del request
             yield {"token": "hello"}
 
@@ -686,7 +687,7 @@ class TestLLMStreaming:
                 "stream_async_response_sanitizer",
                 make_request(),
                 stream_func,
-                lambda chunk: None,
+                lambda _chunk: None,
                 lambda: {"raw": True},
             )
             assert [chunk async for chunk in stream] == [{"token": "hello"}]

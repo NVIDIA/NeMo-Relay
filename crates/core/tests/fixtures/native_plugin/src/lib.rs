@@ -3,6 +3,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
@@ -16,6 +17,13 @@ use nemo_relay_plugin::{
 use serde_json::{Map, json};
 
 struct FixtureNativePlugin;
+
+static ASYNC_PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_async_pending_entered() -> bool {
+    ASYNC_PENDING_ENTERED.swap(false, Ordering::AcqRel)
+}
 
 impl NativePlugin for FixtureNativePlugin {
     fn plugin_kind(&self) -> &str {
@@ -634,7 +642,7 @@ unsafe extern "C" fn raw_register_async_tool_request(
         }
         let status = unsafe {
             (host.plugin_context_register_async_middleware)(
-                ctx, kind, name, 0, false, callback, user_data, None,
+                ctx, kind as u32, name, 0, false, callback, user_data, None,
             )
         };
         unsafe { (host.v1.string_free)(name) };
@@ -650,9 +658,9 @@ unsafe extern "C" fn raw_async_allow_callback(
     _invocation_json: *const NemoRelayNativeString,
     _next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
     completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
-) -> NemoRelayNativeAsyncCallbackState {
+) -> u32 {
     let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     };
     let result = unsafe { raw_host_string(&host.v1, "null") };
     if result.is_null() {
@@ -663,7 +671,7 @@ unsafe extern "C" fn raw_async_allow_callback(
             (host.v1.string_free)(result);
         }
     }
-    NemoRelayNativeAsyncCallbackState::Complete
+    NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 
 unsafe extern "C" fn raw_async_passthrough_callback(
@@ -671,9 +679,9 @@ unsafe extern "C" fn raw_async_passthrough_callback(
     invocation_json: *const NemoRelayNativeString,
     _next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
     completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
-) -> NemoRelayNativeAsyncCallbackState {
+) -> u32 {
     let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     };
     let result = unsafe { raw_host_string_value(&host.v1, invocation_json) }
         .and_then(|value| serde_json::from_str::<Json>(&value).ok())
@@ -694,7 +702,7 @@ unsafe extern "C" fn raw_async_passthrough_callback(
         .and_then(|value| serde_json::to_string(&value).ok());
     let Some(result) = result else {
         unsafe { reject_async_completion(host, completion, "invalid async passthrough invocation") };
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     };
     let result = unsafe { raw_host_string(&host.v1, &result) };
     if result.is_null() {
@@ -705,7 +713,7 @@ unsafe extern "C" fn raw_async_passthrough_callback(
             (host.v1.string_free)(result);
         }
     }
-    NemoRelayNativeAsyncCallbackState::Complete
+    NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 
 unsafe extern "C" fn raw_async_tool_request_callback(
@@ -713,9 +721,9 @@ unsafe extern "C" fn raw_async_tool_request_callback(
     invocation_json: *const NemoRelayNativeString,
     _next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
     completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
-) -> NemoRelayNativeAsyncCallbackState {
+) -> u32 {
     let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     };
     let invocation = unsafe { raw_host_string_value(&host.v1, invocation_json) }
         .and_then(|json| serde_json::from_str::<Json>(&json).ok())
@@ -737,9 +745,10 @@ unsafe extern "C" fn raw_async_tool_request_callback(
         });
     let Some((result, pending, duplicate)) = invocation else {
         unsafe { reject_async_completion(host, completion, "invalid async tool request invocation") };
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     };
     if pending {
+        ASYNC_PENDING_ENTERED.store(true, Ordering::Release);
         let host = *host;
         let completion = completion as usize;
         std::thread::spawn(move || {
@@ -769,7 +778,7 @@ unsafe extern "C" fn raw_async_tool_request_callback(
                 }
             }
         });
-        return NemoRelayNativeAsyncCallbackState::Pending;
+        return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let result = unsafe { raw_host_string(&host.v1, &result) };
     if !result.is_null() {
@@ -783,7 +792,7 @@ unsafe extern "C" fn raw_async_tool_request_callback(
     } else {
         unsafe { reject_async_completion(host, completion, "failed to allocate async tool request result") };
     }
-    NemoRelayNativeAsyncCallbackState::Complete
+    NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 
 unsafe extern "C" fn raw_async_tool_execution_callback(
@@ -791,16 +800,16 @@ unsafe extern "C" fn raw_async_tool_execution_callback(
     invocation_json: *const NemoRelayNativeString,
     next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
     completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
-) -> NemoRelayNativeAsyncCallbackState {
+) -> u32 {
     let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     };
     if next.is_null() || completion.is_null() {
         unsafe { reject_async_completion(host, completion, "async tool execution requires next and completion") };
         if !next.is_null() {
             unsafe { (host.async_next_release)(next) };
         }
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     }
     let value = unsafe { raw_host_string_value(&host.v1, invocation_json) }
         .and_then(|json| serde_json::from_str::<Json>(&json).ok())
@@ -816,13 +825,13 @@ unsafe extern "C" fn raw_async_tool_execution_callback(
     let Some(value) = value else {
         unsafe { reject_async_completion(host, completion, "invalid async tool execution invocation") };
         unsafe { (host.async_next_release)(next) };
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     };
     let value = unsafe { raw_host_string(&host.v1, &value) };
     if value.is_null() {
         unsafe { reject_async_completion(host, completion, "failed to allocate async tool execution invocation") };
         unsafe { (host.async_next_release)(next) };
-        return NemoRelayNativeAsyncCallbackState::Complete;
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
     }
     let status = unsafe { (host.async_next_invoke)(next, value, completion) };
     unsafe {
@@ -833,11 +842,11 @@ unsafe extern "C" fn raw_async_tool_execution_callback(
             (host.async_next_release)(next);
             (host.async_completion_release)(completion);
         }
-        NemoRelayNativeAsyncCallbackState::Pending
+        NemoRelayNativeAsyncCallbackState::Pending as u32
     } else {
         unsafe { reject_async_completion(host, completion, "failed to invoke async tool execution next") };
         unsafe { (host.async_next_release)(next) };
-        NemoRelayNativeAsyncCallbackState::Complete
+        NemoRelayNativeAsyncCallbackState::Complete as u32
     }
 }
 
