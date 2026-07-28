@@ -33,9 +33,15 @@ fn main() {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct AsyncPrototype<'a> {
+    name: &'a str,
+    parameters: Vec<&'a str>,
+}
+
 /// cbindgen does not expand the declarative registration macros. Keep the
-/// handwritten C declarations checked against the macro invocations so a new
-/// Rust export cannot silently disappear from the public header.
+/// handwritten C declarations checked against macro-generated exports, their
+/// complete parameter lists, and ordering.
 fn validate_async_registration_parity(crate_dir: &str) {
     const REGISTRATION_SOURCES: &[&str] = &[
         "src/api/event_registry.rs",
@@ -62,39 +68,62 @@ fn validate_async_registration_parity(crate_dir: &str) {
 
     let mut declared = ASYNC_REGISTRATIONS
         .lines()
-        .filter_map(|line| {
-            line.strip_prefix("NemoRelayStatus ")
-                .and_then(|line| line.split_once('('))
-                .map(|(name, _)| name.to_owned())
-        })
+        .filter_map(parse_async_prototype)
         .collect::<Vec<_>>();
-    declared.sort();
-    declared.dedup();
+    declared.sort_by(|left, right| left.name.cmp(right.name));
+    declared.dedup_by(|left, right| left.name == right.name);
+    let declared_names = declared
+        .iter()
+        .map(|prototype| prototype.name.to_owned())
+        .collect::<Vec<_>>();
     assert_eq!(
-        declared, exported,
+        declared_names, exported,
         "ASYNC_REGISTRATIONS must declare exactly the async Rust FFI exports"
     );
 
-    for declaration in ASYNC_REGISTRATIONS
-        .lines()
-        .filter(|line| line.starts_with("NemoRelayStatus "))
-    {
-        let name = declaration
-            .strip_prefix("NemoRelayStatus ")
-            .and_then(|line| line.split_once('('))
-            .map(|(name, _)| name)
-            .expect("async declaration has a function name");
-        let expects_intercept_callback = name.contains("execution_intercept_async");
-        let callback_type = if expects_intercept_callback {
-            "NemoRelayAsyncInterceptCb"
-        } else {
-            "NemoRelayAsyncJsonCb"
-        };
+    for prototype in declared {
         assert!(
-            declaration.contains(callback_type),
-            "async declaration for {name} must use {callback_type}"
+            exported
+                .binary_search_by(|name| name.as_str().cmp(prototype.name))
+                .is_ok(),
+            "async declaration for {} is not a Rust FFI export",
+            prototype.name
+        );
+        assert_eq!(
+            prototype,
+            expected_async_prototype(prototype.name),
+            "async declaration for {} has a mismatched C prototype",
+            prototype.name
         );
     }
+}
+
+fn parse_async_prototype(line: &str) -> Option<AsyncPrototype<'_>> {
+    let line = line.strip_prefix("NemoRelayStatus ")?;
+    let (name, parameters) = line.split_once('(')?;
+    let parameters = parameters.strip_suffix(");")?;
+    Some(AsyncPrototype {
+        name,
+        parameters: parameters.split(", ").collect(),
+    })
+}
+
+fn expected_async_prototype(name: &str) -> AsyncPrototype<'_> {
+    let mut parameters = Vec::new();
+    if name.starts_with("nemo_relay_scope_") {
+        parameters.push("const char *scope_uuid");
+    }
+    parameters.extend(["const char *name", "int32_t priority"]);
+    if name.contains("request_intercept_async") {
+        parameters.push("bool break_chain");
+    }
+    parameters.push(if name.contains("execution_intercept_async") {
+        "NemoRelayAsyncInterceptCb cb"
+    } else {
+        "NemoRelayAsyncJsonCb cb"
+    });
+    parameters.extend(["void *user_data", "NemoRelayFreeFn free_fn"]);
+    AsyncPrototype { name, parameters }
 }
 
 const ASYNC_REGISTRATIONS: &str = r#"

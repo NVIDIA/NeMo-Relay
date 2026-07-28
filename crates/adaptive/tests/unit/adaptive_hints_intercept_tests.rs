@@ -4,6 +4,7 @@
 //! Unit tests for adaptive hints intercept in the NeMo Relay adaptive crate.
 
 use super::*;
+
 use std::sync::{Mutex, OnceLock};
 
 use crate::trie::data_models::{LlmCallPrediction, PredictionMetrics};
