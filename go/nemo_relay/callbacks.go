@@ -194,6 +194,7 @@ const asyncCallbackPending = C.uint32_t(1)
 func contextForCompletion(completion *C.NemoRelayAsyncCompletion) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	var doneOnce sync.Once
 	go func() {
 		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
@@ -209,7 +210,10 @@ func contextForCompletion(completion *C.NemoRelayAsyncCompletion) (context.Conte
 			}
 		}
 	}()
-	return ctx, func() { close(done); cancel() }
+	return ctx, func() {
+		doneOnce.Do(func() { close(done) })
+		cancel()
+	}
 }
 
 // ToolExecutionFunc is a callback that executes a tool call, receiving the
@@ -712,11 +716,18 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 		defer C.nemo_relay_async_completion_release(completion)
 		ctx, cancel := contextForCompletion(completion)
 		defer cancel()
-		defer C.nemo_relay_async_next_release(next)
-		var nextOpen atomic.Bool
-		nextOpen.Store(true)
+		var nextMu sync.RWMutex
+		nextOpen := true
+		defer func() {
+			nextMu.Lock()
+			nextOpen = false
+			nextMu.Unlock()
+			C.nemo_relay_async_next_release(next)
+		}()
 		nextFn := func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
-			if !nextOpen.Load() {
+			nextMu.RLock()
+			defer nextMu.RUnlock()
+			if !nextOpen {
 				return nil, context.Canceled
 			}
 			ch := make(chan asyncNextResult, 1)
@@ -739,7 +750,6 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 			}
 		}
 		value, err := fn(ctx, invocation, nextFn)
-		nextOpen.Store(false)
 		if err != nil {
 			message := C.CString(err.Error())
 			C.nemo_relay_async_completion_reject(completion, message)

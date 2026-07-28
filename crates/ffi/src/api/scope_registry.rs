@@ -44,6 +44,7 @@ macro_rules! scope_async_registration {
             user_data: *mut libc::c_void,
             free_fn: NemoRelayFreeFn,
         ) -> NemoRelayStatus {
+            clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(uuid) => uuid,
                 Err(status) => return status,
@@ -122,6 +123,7 @@ macro_rules! scope_async_execution_registration {
             user_data: *mut libc::c_void,
             free_fn: NemoRelayFreeFn,
         ) -> NemoRelayStatus {
+            clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(uuid) => uuid,
                 Err(status) => return status,

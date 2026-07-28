@@ -892,9 +892,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
             let py_fn = py_fn.clone();
             Box::pin(async move {
                 let result = resolve_py_object_or_future(Python::attach(|py| {
-                    let py_req = PyLLMRequest {
-                        inner: request.clone(),
-                    };
+                    let py_req = PyLLMRequest { inner: request };
                     let py_ann: Py<PyAny> = match annotated {
                         Some(ann) => {
                             let wrapper = PyAnnotatedLLMRequest { inner: ann };
@@ -1036,22 +1034,11 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let py_context = PyLlmSanitizeResponseContext { inner: context };
-                let py_response = match json_to_py(py, &response) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!(
-                            "nemo_relay: json_to_py failed in LLM sanitize response: {error}"
-                        );
-                        return Err(FlowError::Internal(error.to_string()));
-                    }
-                };
-                let result = match py_fn.call1(py, (py_response, py_context)) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!("nemo_relay: LLM sanitize response callable failed: {error}");
-                        return Err(FlowError::Internal(error.to_string()));
-                    }
-                };
+                let py_response = json_to_py(py, &response)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let result = py_fn
+                    .call1(py, (py_response, py_context))
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
                 split_py_object_or_future(py, result)
             }))
             .await?;

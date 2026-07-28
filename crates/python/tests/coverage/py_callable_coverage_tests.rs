@@ -700,8 +700,8 @@ def invalid(event, fields):
             metadata: Some(json!({"secret": true})),
         };
 
-        let sanitized = tokio::runtime::Runtime::new()
-            .unwrap()
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let sanitized = runtime
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("sanitize").unwrap().unbind(),
             )(event.clone(), fields.clone()))
@@ -709,16 +709,14 @@ def invalid(event, fields):
         assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
         assert_eq!(sanitized.metadata, None);
 
-        let raised = tokio::runtime::Runtime::new()
-            .unwrap()
+        let raised = runtime
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("raises").unwrap().unbind(),
             )(event.clone(), fields.clone()))
             .unwrap_err();
         assert!(raised.to_string().contains("sanitize boom"));
 
-        let invalid = tokio::runtime::Runtime::new()
-            .unwrap()
+        let invalid = runtime
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("invalid").unwrap().unbind(),
             )(event, fields.clone()))

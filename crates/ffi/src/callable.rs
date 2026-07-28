@@ -102,6 +102,11 @@ pub type NemoRelayAsyncInterceptCb = unsafe extern "C" fn(
 ) -> NemoRelayAsyncCallbackState;
 
 /// Result callback used by channel/future-style async `next` wrappers.
+///
+/// Invoked on a Tokio runtime worker thread, not necessarily the thread that
+/// called `nemo_relay_async_next_invoke_callback`; `user_data` must therefore
+/// be safe for cross-thread use. `value_json` and `error_message` are borrowed
+/// for the duration of the callback only.
 pub type NemoRelayAsyncNextResultCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     value_json: *const c_char,

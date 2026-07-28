@@ -486,6 +486,11 @@ typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncInterceptCb)(void *user_data
 
 /**
  * Result callback used by channel/future-style async `next` wrappers.
+ *
+ * Invoked on a Tokio runtime worker thread, not necessarily the thread that
+ * called `nemo_relay_async_next_invoke_callback`; `user_data` must therefore
+ * be safe for cross-thread use. `value_json` and `error_message` are borrowed
+ * for the duration of the callback only.
  */
 typedef void (*NemoRelayAsyncNextResultCb)(void *user_data,
                                            const char *value_json,

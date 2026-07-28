@@ -829,7 +829,9 @@ pub struct NemoRelayNativeAsyncNext {
 /// `invocation_json` is borrowed for the call. A callback that returns
 /// [`NemoRelayNativeAsyncCallbackState::Pending`] owns one completion
 /// reference and must settle it then call the v3 `async_completion_release`
-/// hook. `next` is null for non-execution middleware.
+/// hook. When `next` is non-null, the callback owns that handle for the
+/// invocation and must call `async_next_release` after its final use. `next`
+/// is null for non-execution middleware.
 pub type NemoRelayNativeAsyncMiddlewareCb =
     unsafe extern "C" fn(
         user_data: *mut c_void,

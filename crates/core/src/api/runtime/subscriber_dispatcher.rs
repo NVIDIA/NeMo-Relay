@@ -107,10 +107,7 @@ mod native {
             subscribers: subscribers.to_vec(),
             scope_stack,
         };
-        match dispatcher_sender() {
-            Ok(sender) => sender.send(message).is_ok(),
-            Err(_) => false,
-        }
+        send_dispatch_message(message)
     }
 
     pub(super) fn dispatch_transformed_event(
@@ -127,10 +124,7 @@ mod native {
             subscribers: subscribers.to_vec(),
             scope_stack,
         };
-        match dispatcher_sender() {
-            Ok(sender) => sender.send(message).is_ok(),
-            Err(_) => false,
-        }
+        send_dispatch_message(message)
     }
 
     /// Insert a FIFO barrier for work that will enqueue a publication from an
@@ -169,6 +163,30 @@ mod native {
 
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
         DISPATCHER.get_or_init(start_dispatcher).clone()
+    }
+
+    fn send_dispatch_message(message: DispatcherMessage) -> bool {
+        match dispatcher_sender() {
+            Ok(sender) if sender.send(message).is_ok() => true,
+            Ok(_) => {
+                log::warn!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_event_dropped",
+                    reason = "dispatcher_disconnected";
+                    "Subscriber event was dropped because the dispatcher stopped"
+                );
+                false
+            }
+            Err(error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_dispatcher_failed";
+                    "Subscriber dispatcher failed to start: {error}"
+                );
+                false
+            }
+            Err(_) => false,
+        }
     }
 
     fn start_dispatcher() -> std::result::Result<Sender<DispatcherMessage>, String> {

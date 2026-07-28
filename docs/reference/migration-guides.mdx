@@ -206,8 +206,8 @@ request/response sanitizers. Python worker middleware can return either an
 immediate value or an awaitable. Python LLM sanitizers must still accept both
 the payload and directional context.
 
-Update Rust worker callbacks to use `async move` and return `Result` from the
-future.
+Update Rust worker callbacks to return `Box::pin(async move { ... })` and
+resolve to `Result` from the future.
 
 <Tabs>
 <Tab title="Rust Worker" language="rust">

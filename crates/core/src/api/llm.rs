@@ -707,7 +707,9 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
         let agent_is_fresh = scope_guard.take_agent_freshness(handle.parent_uuid);
         (entries, subscribers, agent_is_fresh)
     };
-    let request = params.request.clone();
+    // Middleware and event publication only observe a credential-free copy.
+    // Keep `params.request` untouched: it remains the caller/provider request.
+    let request = remove_observability_credential_headers(params.request.clone());
     let annotated_request = params.annotated_request;
     let event = {
         let context = global_context();

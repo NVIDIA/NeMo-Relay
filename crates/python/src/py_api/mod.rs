@@ -1370,12 +1370,15 @@ fn tool_conditional_execution<'py>(
         .call_method0("get_running_loop")
         .is_err()
     {
+        let scope_stack = current_scope_stack_handle();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| to_py_err(FlowError::Internal(error.to_string())))?;
         runtime
-            .block_on(core_tool_api::tool_conditional_execution(&name, &args_json))
+            .block_on(TASK_SCOPE_STACK.scope(scope_stack, async move {
+                core_tool_api::tool_conditional_execution(&name, &args_json).await
+            }))
             .map_err(to_py_err)?;
         return Ok(py.None().into_bound(py));
     }
@@ -1411,12 +1414,15 @@ fn llm_request_intercepts<'py>(
         .call_method0("get_running_loop")
         .is_err()
     {
+        let scope_stack = current_scope_stack_handle();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| to_py_err(FlowError::Internal(error.to_string())))?;
         let result = runtime
-            .block_on(core_llm_api::llm_request_intercepts(&name, request.inner))
+            .block_on(TASK_SCOPE_STACK.scope(scope_stack, async move {
+                core_llm_api::llm_request_intercepts(&name, request.inner).await
+            }))
             .map_err(to_py_err)?;
         return Py::new(
             py,
@@ -1453,12 +1459,15 @@ fn llm_conditional_execution<'py>(
         .call_method0("get_running_loop")
         .is_err()
     {
+        let scope_stack = current_scope_stack_handle();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| to_py_err(FlowError::Internal(error.to_string())))?;
         runtime
-            .block_on(core_llm_api::llm_conditional_execution(&request.inner))
+            .block_on(TASK_SCOPE_STACK.scope(scope_stack, async move {
+                core_llm_api::llm_conditional_execution(&request.inner).await
+            }))
             .map_err(to_py_err)?;
         return Ok(py.None().into_bound(py));
     }

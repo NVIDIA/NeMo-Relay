@@ -644,7 +644,8 @@ impl NemoRelayContextState {
                 Err(error) => log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_failed",
-                    sanitizer = entry.name.as_str();
+                    sanitizer = entry.name.as_str(),
+                    event_name = event.name();
                     "Event sanitizer failed; preserving the last valid event snapshot: {error}"
                 ),
             }
@@ -692,7 +693,8 @@ impl NemoRelayContextState {
                 Err(error) => log::error!(
                     target: "nemo_relay.runtime",
                     event = "tool_request_sanitizer_failed",
-                    sanitizer = entry.name.as_str();
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
                     "Tool request sanitizer failed; preserving the last valid payload: {error}"
                 ),
             }
@@ -740,7 +742,8 @@ impl NemoRelayContextState {
                 Err(error) => log::error!(
                     target: "nemo_relay.runtime",
                     event = "tool_response_sanitizer_failed",
-                    sanitizer = entry.name.as_str();
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
                     "Tool response sanitizer failed; preserving the last valid payload: {error}"
                 ),
             }
@@ -1003,8 +1006,9 @@ impl NemoRelayContextState {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "llm_request_sanitizer_failed",
-                            sanitizer = entry.name.as_str();
-                            "LLM request sanitizer failed; preserving the last valid payload: {error}"
+                            sanitizer = entry.name.as_str(),
+                            preserved_payload = "unsanitized_request";
+                            "LLM request sanitizer failed; preserving the last valid unsanitized request: {error}"
                         );
                         value = Some(current);
                     }
@@ -1055,8 +1059,9 @@ impl NemoRelayContextState {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "llm_response_sanitizer_failed",
-                            sanitizer = entry.name.as_str();
-                            "LLM response sanitizer failed; preserving the last valid payload: {error}"
+                            sanitizer = entry.name.as_str(),
+                            preserved_payload = "unsanitized_response";
+                            "LLM response sanitizer failed; preserving the last valid unsanitized response: {error}"
                         );
                         value = Some(current);
                     }

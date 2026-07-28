@@ -118,19 +118,21 @@ with validation, middleware, scopes, and configuration schema support.
 
 ## Native ABI v3
 
-The host passes a v3 `NemoRelayNativeHostApiV3` table, whose prefix remains
-compatible with `NemoRelayNativeHostApiV1`, to the entry symbol. The plugin
-returns a `NemoRelayNativePluginV1` descriptor:
+The entry symbol receives a `*const NemoRelayNativeHostApiV1` pointer. It
+points at the v1 prefix of a v3 `NemoRelayNativeHostApiV3` table; check
+`abi_version` and `struct_size` before casting. The plugin returns a
+`NemoRelayNativePluginV1` descriptor:
 
 ```rust
 extern "C" fn nemo_relay_register_plugin(
-    host: *const NemoRelayNativeHostApiV3,
+    host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus
 ```
 
-The v3 host table retains the v2 prefix for compatibility and appends a
-completion-based asynchronous middleware extension. Rust plugins using the
+The v3 host table retains the frozen legacy prefix and appends a
+completion-based asynchronous middleware extension. An entry that rejects the
+v3 table with `InvalidArg` is retried with the legacy table. Rust plugins using the
 typed `NativePlugin` APIs continue to work unchanged. Raw ABI plugins can use
 `PluginContext::register_async_middleware_raw` when a callback must complete
 later. The callback receives a JSON invocation, an optional continuation for

@@ -454,9 +454,11 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
             let event_json = JsEvent::try_from_event(&event)
                 .map(JsEvent::into_json)
                 .map_err(|error| {
-                    FlowError::Internal(format!(
+                    let error = FlowError::Internal(format!(
                         "failed to serialize JS event sanitizer context: {error}"
-                    ))
+                    ));
+                    record_callback_error(error.to_string());
+                    error
                 })?;
             let js_fields = EventSanitizeFields {
                 data: fields.data,
@@ -478,9 +480,11 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
                 .call_spread(vec![
                     event_json,
                     serde_json::to_value(js_fields).map_err(|error| {
-                        FlowError::Internal(format!(
+                        let error = FlowError::Internal(format!(
                             "failed to serialize JS event sanitizer fields: {error}"
-                        ))
+                        ));
+                        record_callback_error(error.to_string());
+                        error
                     })?,
                 ])
                 .await

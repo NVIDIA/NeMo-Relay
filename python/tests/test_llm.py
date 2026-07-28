@@ -286,6 +286,7 @@ class TestLLMGuardrails:
         )
         try:
             request = make_request()
+            request.headers = {"authorization": "secret", "x-request-id": "safe"}
             handle = llm.call("llm_sanitize_req_fail", request)
             llm.call_end(handle, {"ok": True})
         finally:
@@ -296,7 +297,7 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_sub")
 
         start = _llm_event(events, "llm_sanitize_req_fail", "start")
-        assert start.data == {"headers": request.headers, "content": request.content}
+        assert start.data == {"headers": {"x-request-id": "safe"}, "content": request.content}
         assert start.annotated_request is None
 
     def test_sanitize_request_invalid_return_preserves_observability_input(self):
@@ -309,6 +310,7 @@ class TestLLMGuardrails:
         )
         try:
             request = make_request()
+            request.headers = {"authorization": "secret", "x-request-id": "safe"}
             handle = llm.call("llm_sanitize_req_bad", request)
             llm.call_end(handle, {"ok": True})
         finally:
@@ -319,7 +321,7 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_bad_sub")
 
         start = _llm_event(events, "llm_sanitize_req_bad", "start")
-        assert start.data == {"headers": request.headers, "content": request.content}
+        assert start.data == {"headers": {"x-request-id": "safe"}, "content": request.content}
         assert start.annotated_request is None
 
     def test_sanitize_response_callable_error_preserves_observability_output(self):
