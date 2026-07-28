@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::agents::CodingAgent;
 use crate::configuration::{
     AgentConfigs, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
-    default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
+    diagnostic_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
 };
 use crate::error::CliError;
 use crate::server::{GatewayOverrides, register_and_validate_plugin_components};
@@ -54,8 +54,9 @@ struct PluginConfigurationDiagnostics {
 /// the first missing directory.
 pub(crate) async fn collect_report(
     target_agent: Option<CodingAgent>,
+    gateway_overrides: &GatewayOverrides,
 ) -> Result<DoctorReport, CliError> {
-    let (resolved, resolution) = match resolve_server_config(&GatewayOverrides::default()) {
+    let (resolved, resolution) = match resolve_server_config(gateway_overrides) {
         Ok(resolved) => (
             resolved,
             Check {
@@ -77,7 +78,9 @@ pub(crate) async fn collect_report(
                 Check {
                     name: "Resolution",
                     status: Status::Fail,
-                    details: format!("could not resolve merged config: {err}"),
+                    details: format!(
+                        "could not resolve merged config: {err}; repair or recreate the named configuration file, or rerun the setup or installer that manages it"
+                    ),
                 },
             )
         }
@@ -85,7 +88,10 @@ pub(crate) async fn collect_report(
     let cwd = std::env::current_dir().ok();
     let home = home_dir();
     let configured_agents = configured_agent_names(&resolved.agents);
-    let (plugin_sources, plugin_error) = match effective_plugin_toml_sources() {
+    let (plugin_sources, plugin_error) = match effective_plugin_toml_sources(
+        gateway_overrides.config.as_ref(),
+        gateway_overrides.plugin_config_path.as_ref(),
+    ) {
         Ok(sources) => (sources, None),
         Err(error) => {
             log::warn!(
@@ -114,6 +120,7 @@ pub(crate) async fn collect_report(
         configuration: collect_configuration(
             cwd.as_deref(),
             home.as_deref(),
+            gateway_overrides,
             resolution,
             configured_agents,
             &resolved.dynamic_plugins,
@@ -129,6 +136,7 @@ pub(crate) async fn collect_report(
 fn collect_configuration(
     cwd: Option<&Path>,
     home: Option<&Path>,
+    gateway_overrides: &GatewayOverrides,
     resolution: Check,
     configured_agents: Vec<String>,
     dynamic_plugins: &[crate::configuration::ResolvedDynamicPluginConfig],
@@ -149,16 +157,19 @@ fn collect_configuration(
         workspace: layer_status(&workspace_path),
         global: layer_status(&global_path),
         system: layer_status(&system_path),
-        plugin_configs: default_plugin_config_paths()
-            .iter()
-            .map(|path| {
-                plugin_layer_status(
-                    path,
-                    &plugin_diagnostics.sources,
-                    plugin_diagnostics.error.as_deref(),
-                )
-            })
-            .collect(),
+        plugin_configs: diagnostic_plugin_config_paths(
+            gateway_overrides.config.as_ref(),
+            gateway_overrides.plugin_config_path.as_ref(),
+        )
+        .iter()
+        .map(|path| {
+            plugin_layer_status(
+                path,
+                &plugin_diagnostics.sources,
+                plugin_diagnostics.error.as_deref(),
+            )
+        })
+        .collect(),
         plugin_resolution: plugin_diagnostics.resolution.clone(),
         resolution,
         // `default_agent` is reserved in the design for Phase 2 dispatch; not currently parsed
@@ -1183,8 +1194,9 @@ pub(crate) fn format_agents_json(agents: &[AgentInfo]) -> Result<String, CliErro
 pub(crate) async fn run_doctor(
     target_agent: Option<CodingAgent>,
     json: bool,
+    gateway_overrides: &GatewayOverrides,
 ) -> Result<std::process::ExitCode, CliError> {
-    let report = collect_report(target_agent).await?;
+    let report = collect_report(target_agent, gateway_overrides).await?;
     log::info!(
         target: "nemo_relay.diagnostics",
         event = "diagnostics_completed",
