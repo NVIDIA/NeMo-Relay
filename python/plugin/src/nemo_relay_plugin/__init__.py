@@ -20,6 +20,11 @@ Public data types:
     Event: A Relay event represented as a JSON object.
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
+    LlmCodecIdentity: Typed discriminator for the active LLM codec.
+    LlmSanitizeRequestContext: Per-call context supplied to an LLM request sanitizer.
+    LlmSanitizeResponseContext: Per-call context supplied to an LLM response sanitizer.
+    WorkerRequestCodec: Invocation-scoped async proxy for an active request codec.
+    WorkerResponseCodec: Invocation-scoped async proxy for an active response codec.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
@@ -71,6 +76,7 @@ from ._api import (
     EventSanitizeCallback,
     EventSanitizeFields,
     Json,
+    LlmCodecIdentity,
     LlmConditionalCallback,
     LlmExecutionCallback,
     LlmNext,
@@ -85,7 +91,9 @@ from ._api import (
     LlmRequestCallback,
     LlmRequestInterceptOutcome,
     LlmSanitizeRequestCallback,
+    LlmSanitizeRequestContext,
     LlmSanitizeResponseCallback,
+    LlmSanitizeResponseContext,
     LlmStreamExecutionCallback,
     LlmStreamNext,
     PendingMarkSpec,
@@ -100,6 +108,8 @@ from ._api import (
     ToolRequestCallback,
     ToolSanitizeCallback,
     WorkerPlugin,
+    WorkerRequestCodec,
+    WorkerResponseCodec,
     WorkerSdkError,
     serve_plugin,
 )
@@ -113,6 +123,7 @@ __all__ = [
     "EventSanitizeFields",
     "Json",
     "LlmConditionalCallback",
+    "LlmCodecIdentity",
     "LlmExecutionCallback",
     "LlmOptimizationContribution",
     "LlmOptimizationDataSchema",
@@ -123,6 +134,8 @@ __all__ = [
     "LlmOptimizationTokens",
     "LlmNext",
     "LlmRequest",
+    "LlmSanitizeRequestContext",
+    "LlmSanitizeResponseContext",
     "LlmRequestCallback",
     "LlmRequestInterceptOutcome",
     "LlmSanitizeRequestCallback",
@@ -140,6 +153,8 @@ __all__ = [
     "ToolNext",
     "ToolRequestCallback",
     "ToolSanitizeCallback",
+    "WorkerRequestCodec",
+    "WorkerResponseCodec",
     "WorkerPlugin",
     "WorkerSdkError",
     "serve_plugin",

@@ -3,9 +3,14 @@
 
 //! Native dynamic plugin loader and host-side ABI adapter.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
+#[cfg(test)]
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::ptr;
@@ -17,13 +22,16 @@ use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCb, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
-    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
-    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
@@ -34,10 +42,11 @@ use tokio_stream::{Stream, StreamExt};
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn,
+    LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
+    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -49,6 +58,8 @@ use crate::api::scope::{
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
 use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
@@ -491,6 +502,9 @@ struct NativeHostPluginContext {
 
 struct NativeHostString(Vec<u8>);
 
+struct NativeHostLlmRequestCodec(Arc<dyn LlmCodec>);
+struct NativeHostLlmResponseCodec(Arc<dyn LlmResponseCodec>);
+
 struct NativeHostScopeHandle(ScopeHandle);
 
 struct NativeHostScopeStack(ScopeStackHandle);
@@ -499,6 +513,10 @@ struct NativeHostScopeStackBinding(ThreadScopeStackBinding);
 
 thread_local! {
     static NATIVE_LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static NATIVE_STRING_LIVE_ALLOCATIONS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+    #[cfg(test)]
+    static NATIVE_STRING_FAIL_AFTER: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 fn set_native_last_error(message: impl Into<String>) {
@@ -511,6 +529,16 @@ fn clear_native_last_error() {
 
 fn native_last_error_message() -> Option<String> {
     NATIVE_LAST_ERROR.with(|cell| cell.borrow().clone())
+}
+
+#[cfg(test)]
+fn fail_native_string_allocation_after(successful_allocations: usize) {
+    NATIVE_STRING_FAIL_AFTER.with(|cell| cell.set(Some(successful_allocations)));
+}
+
+#[cfg(test)]
+fn native_string_live_allocations() -> usize {
+    NATIVE_STRING_LIVE_ALLOCATIONS.with(|allocations| allocations.borrow().len())
 }
 
 unsafe extern "C" fn native_string_new(
@@ -536,8 +564,29 @@ unsafe extern "C" fn native_string_new(
         set_native_last_error(format!("string data is not valid UTF-8: {err}"));
         return NemoRelayStatus::InvalidUtf8;
     }
+    #[cfg(test)]
+    let should_fail = NATIVE_STRING_FAIL_AFTER.with(|cell| match cell.get() {
+        Some(0) => {
+            cell.set(None);
+            true
+        }
+        Some(remaining) => {
+            cell.set(Some(remaining - 1));
+            false
+        }
+        None => false,
+    });
+    #[cfg(test)]
+    if should_fail {
+        set_native_last_error("injected native string allocation failure");
+        return NemoRelayStatus::Internal;
+    }
     let handle = Box::new(NativeHostString(bytes.to_vec()));
     unsafe { *out = Box::into_raw(handle) as *mut NemoRelayNativeString };
+    #[cfg(test)]
+    NATIVE_STRING_LIVE_ALLOCATIONS.with(|allocations| {
+        allocations.borrow_mut().insert(unsafe { *out } as usize);
+    });
     NemoRelayStatus::Ok
 }
 
@@ -560,6 +609,10 @@ unsafe extern "C" fn native_string_len(value: *const NemoRelayNativeString) -> u
 unsafe extern "C" fn native_string_free(value: *mut NemoRelayNativeString) {
     if !value.is_null() {
         drop(unsafe { Box::from_raw(value as *mut NativeHostString) });
+        #[cfg(test)]
+        NATIVE_STRING_LIVE_ALLOCATIONS.with(|allocations| {
+            allocations.borrow_mut().remove(&(value as usize));
+        });
     }
 }
 
@@ -571,6 +624,162 @@ unsafe extern "C" fn native_last_error_set(message: *const NemoRelayNativeString
     match read_native_string(message) {
         Ok(message) => set_native_last_error(message),
         Err(err) => set_native_last_error(err.to_string()),
+    }
+}
+
+unsafe extern "C" fn native_llm_request_codec_decode(
+    codec: *const NemoRelayNativeLlmRequestCodec,
+    request_json: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    if out.is_null() {
+        set_native_last_error("request codec decode output pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = ptr::null_mut() };
+    if codec.is_null() {
+        set_native_last_error("request codec decode capability is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if request_json.is_null() {
+        set_native_last_error("request codec decode request is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| -> std::result::Result<_, String> {
+        let request: LlmRequest = serde_json::from_str(
+            &read_native_string(request_json).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("invalid request JSON: {error}"))?;
+        let codec = unsafe { &*(codec as *const NativeHostLlmRequestCodec) };
+        let annotated = codec
+            .0
+            .decode(&request)
+            .map_err(|error| error.to_string())?;
+        let annotated = serde_json::to_value(annotated).map_err(|error| error.to_string())?;
+        native_string_from_json(&annotated)
+            .ok_or_else(|| "failed to allocate decoded request".to_string())
+    }));
+    match result {
+        Ok(Ok(value)) => {
+            unsafe { *out = value };
+            NemoRelayStatus::Ok
+        }
+        Ok(Err(error)) => {
+            set_native_last_error(format!("request codec decode failed: {error}"));
+            NemoRelayStatus::Internal
+        }
+        Err(_) => {
+            set_native_last_error("request codec decode panicked");
+            NemoRelayStatus::Internal
+        }
+    }
+}
+
+unsafe extern "C" fn native_llm_request_codec_encode(
+    codec: *const NemoRelayNativeLlmRequestCodec,
+    annotated_json: *const NemoRelayNativeString,
+    original_json: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    if out.is_null() {
+        set_native_last_error("request codec encode output pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = ptr::null_mut() };
+    if codec.is_null() {
+        set_native_last_error("request codec encode capability is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if annotated_json.is_null() {
+        set_native_last_error("request codec encode annotated request is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if original_json.is_null() {
+        set_native_last_error("request codec encode original request is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| -> std::result::Result<_, String> {
+        let annotated: AnnotatedLlmRequest = serde_json::from_str(
+            &read_native_string(annotated_json).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("invalid annotated request JSON: {error}"))?;
+        let original: LlmRequest = serde_json::from_str(
+            &read_native_string(original_json).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("invalid original request JSON: {error}"))?;
+        let codec = unsafe { &*(codec as *const NativeHostLlmRequestCodec) };
+        let request = codec
+            .0
+            .encode(&annotated, &original)
+            .map_err(|error| error.to_string())?;
+        let request = serde_json::to_value(request).map_err(|error| error.to_string())?;
+        native_string_from_json(&request)
+            .ok_or_else(|| "failed to allocate encoded request".to_string())
+    }));
+    match result {
+        Ok(Ok(value)) => {
+            unsafe { *out = value };
+            NemoRelayStatus::Ok
+        }
+        Ok(Err(error)) => {
+            set_native_last_error(format!("request codec encode failed: {error}"));
+            NemoRelayStatus::Internal
+        }
+        Err(_) => {
+            set_native_last_error("request codec encode panicked");
+            NemoRelayStatus::Internal
+        }
+    }
+}
+
+unsafe extern "C" fn native_llm_response_codec_decode(
+    codec: *const NemoRelayNativeLlmResponseCodec,
+    response_json: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    if out.is_null() {
+        set_native_last_error("response codec decode output pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = ptr::null_mut() };
+    if codec.is_null() {
+        set_native_last_error("response codec decode capability is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if response_json.is_null() {
+        set_native_last_error("response codec decode response is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| -> std::result::Result<_, String> {
+        let response: Json = serde_json::from_str(
+            &read_native_string(response_json).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("invalid response JSON: {error}"))?;
+        let codec = unsafe { &*(codec as *const NativeHostLlmResponseCodec) };
+        let annotated = codec
+            .0
+            .decode_response(&response)
+            .map_err(|error| error.to_string())?;
+        let annotated = serde_json::to_value(annotated).map_err(|error| error.to_string())?;
+        native_string_from_json(&annotated)
+            .ok_or_else(|| "failed to allocate decoded response".to_string())
+    }));
+    match result {
+        Ok(Ok(value)) => {
+            unsafe { *out = value };
+            NemoRelayStatus::Ok
+        }
+        Ok(Err(error)) => {
+            set_native_last_error(format!("response codec decode failed: {error}"));
+            NemoRelayStatus::Internal
+        }
+        Err(_) => {
+            set_native_last_error("response codec decode panicked");
+            NemoRelayStatus::Internal
+        }
     }
 }
 
@@ -587,6 +796,9 @@ fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
         string_free: native_string_free,
         last_error_clear: native_last_error_clear,
         last_error_set: native_last_error_set,
+        llm_request_codec_decode: native_llm_request_codec_decode,
+        llm_request_codec_encode: native_llm_request_codec_encode,
+        llm_response_codec_decode: native_llm_response_codec_decode,
         plugin_context_register_subscriber: native_plugin_context_register_subscriber,
         plugin_context_register_tool_sanitize_request_guardrail:
             native_plugin_context_register_tool_sanitize_request_guardrail,
@@ -679,6 +891,22 @@ fn take_json_from_native_string(
     let result = json_from_native_string(value, fallback);
     unsafe { native_string_free(value) };
     result
+}
+
+unsafe fn free_native_sanitizer_strings(
+    input: *mut NemoRelayNativeString,
+    codec_id: Option<*mut NemoRelayNativeString>,
+    output: *mut NemoRelayNativeString,
+) {
+    unsafe { native_string_free(input) };
+    if let Some(codec_id) = codec_id
+        && codec_id != input
+    {
+        unsafe { native_string_free(codec_id) };
+    }
+    if !output.is_null() && output != input && Some(output) != codec_id {
+        unsafe { native_string_free(output) };
+    }
 }
 
 fn optional_json_from_native_string(
@@ -1261,7 +1489,7 @@ unsafe extern "C" fn native_plugin_context_register_llm_sanitize_request_guardra
     ctx: *mut NemoRelayNativePluginContext,
     name: *const NemoRelayNativeString,
     priority: i32,
-    cb: NemoRelayNativeLlmRequestCb,
+    cb: NemoRelayNativeLlmSanitizeRequestCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
@@ -1279,7 +1507,7 @@ unsafe extern "C" fn native_plugin_context_register_llm_sanitize_request_guardra
     match ctx.register_llm_sanitize_request_guardrail(
         &name,
         priority,
-        wrap_llm_request_fn(instance, cb, user_data, free_fn),
+        wrap_llm_sanitize_request_fn(instance, cb, user_data, free_fn),
     ) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(err),
@@ -1290,7 +1518,7 @@ unsafe extern "C" fn native_plugin_context_register_llm_sanitize_response_guardr
     ctx: *mut NemoRelayNativePluginContext,
     name: *const NemoRelayNativeString,
     priority: i32,
-    cb: NemoRelayNativeJsonCb,
+    cb: NemoRelayNativeLlmSanitizeResponseCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
@@ -1308,7 +1536,7 @@ unsafe extern "C" fn native_plugin_context_register_llm_sanitize_response_guardr
     match ctx.register_llm_sanitize_response_guardrail(
         &name,
         priority,
-        wrap_json_fn(instance, cb, user_data, free_fn),
+        wrap_llm_sanitize_response_fn(instance, cb, user_data, free_fn),
     ) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(err),
@@ -1725,74 +1953,161 @@ unsafe extern "C" fn native_tool_next(
     }
 }
 
-fn wrap_llm_request_fn(
+fn wrap_llm_sanitize_request_fn(
     instance: Arc<NativePluginInstance>,
-    cb: NemoRelayNativeLlmRequestCb,
+    cb: NemoRelayNativeLlmSanitizeRequestCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> LlmSanitizeRequestFn {
     let user_data = make_user_data(instance, user_data, free_fn);
-    Arc::new(move |request| {
-        call_llm_request_callback(cb, user_data.ptr, &request).unwrap_or_else(|_| LlmRequest {
-            headers: Map::new(),
-            content: Json::Null,
-        })
+    Arc::new(move |request, context| {
+        call_llm_sanitize_request_callback(cb, user_data.ptr, &request, context)
+            .ok()
+            .flatten()
     })
 }
 
-fn call_llm_request_callback(
-    cb: NemoRelayNativeLlmRequestCb,
-    user_data: *mut c_void,
-    request: &LlmRequest,
-) -> FlowResult<LlmRequest> {
-    clear_native_last_error();
-    let request_json = serde_json::to_value(request)
-        .map_err(|err| FlowError::Internal(format!("failed to serialize LLM request: {err}")))?;
-    let request_string = native_string_from_json(&request_json)
-        .ok_or_else(|| FlowError::Internal("failed to allocate native LLM request".into()))?;
-    let mut out = ptr::null_mut();
-    let status = unsafe { cb(user_data, request_string, &mut out) };
-    unsafe { native_string_free(request_string) };
-    if status != NemoRelayStatus::Ok {
-        if !out.is_null() {
-            unsafe { native_string_free(out) };
-        }
-        return Err(flow_error_from_status(
-            status,
-            "native LLM request callback failed",
-        ));
-    }
-    let result_json =
-        take_json_from_native_string(out, "native LLM request callback returned null")?;
-    serde_json::from_value(result_json)
-        .map_err(|err| FlowError::Internal(format!("invalid LLM request JSON: {err}")))
-}
-
-fn wrap_json_fn(
+fn wrap_llm_sanitize_response_fn(
     instance: Arc<NativePluginInstance>,
-    cb: NemoRelayNativeJsonCb,
+    cb: NemoRelayNativeLlmSanitizeResponseCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> LlmSanitizeResponseFn {
     let user_data = make_user_data(instance, user_data, free_fn);
-    Arc::new(move |payload| {
-        clear_native_last_error();
-        let payload_string = native_string_from_json(&payload);
-        let Some(payload_string) = payload_string else {
-            return Json::Null;
-        };
-        let mut out = ptr::null_mut();
-        let status = unsafe { cb(user_data.ptr, payload_string, &mut out) };
-        unsafe { native_string_free(payload_string) };
-        if status != NemoRelayStatus::Ok {
-            if !out.is_null() {
-                unsafe { native_string_free(out) };
-            }
-            return Json::Null;
-        }
-        take_json_from_native_string(out, "native JSON callback returned null")
-            .unwrap_or(Json::Null)
+    Arc::new(move |payload, context| {
+        call_llm_sanitize_response_callback(cb, user_data.ptr, &payload, context)
+            .ok()
+            .flatten()
     })
+}
+
+fn call_llm_sanitize_request_callback(
+    cb: NemoRelayNativeLlmSanitizeRequestCb,
+    user_data: *mut c_void,
+    request: &LlmRequest,
+    context: LlmSanitizeRequestContext,
+) -> FlowResult<Option<LlmRequest>> {
+    clear_native_last_error();
+    let codec = context.resolve_codec().map(NativeHostLlmRequestCodec);
+    let (codec_kind, context_id) = native_llm_codec_identity(context.codec())?;
+    let request_json = match serde_json::to_value(request) {
+        Ok(request_json) => request_json,
+        Err(err) => {
+            if let Some(context_id) = context_id {
+                unsafe { native_string_free(context_id) };
+            }
+            return Err(FlowError::Internal(format!(
+                "failed to serialize LLM request: {err}"
+            )));
+        }
+    };
+    let request_string = match native_string_from_json(&request_json) {
+        Some(request_string) => request_string,
+        None => {
+            if let Some(context_id) = context_id {
+                unsafe { native_string_free(context_id) };
+            }
+            return Err(FlowError::Internal(
+                "failed to allocate native LLM request".into(),
+            ));
+        }
+    };
+    let context = NemoRelayNativeLlmSanitizeRequestContext {
+        codec_kind,
+        codec_id: context_id.map_or(ptr::null(), |value| value.cast_const()),
+        codec: codec
+            .as_ref()
+            .map_or(ptr::null(), |value| std::ptr::from_ref(value).cast()),
+    };
+    let mut out = ptr::null_mut();
+    let status = unsafe { cb(user_data, request_string, context, &mut out) };
+    if status != NemoRelayStatus::Ok {
+        unsafe { free_native_sanitizer_strings(request_string, context_id, out) };
+        return Err(flow_error_from_status(
+            status,
+            "native LLM sanitize-request callback failed",
+        ));
+    }
+    if out.is_null() {
+        unsafe { free_native_sanitizer_strings(request_string, context_id, out) };
+        return Ok(None);
+    }
+    let result_json =
+        json_from_native_string(out, "native LLM sanitize-request returned invalid JSON");
+    unsafe { free_native_sanitizer_strings(request_string, context_id, out) };
+    let result_json = result_json?;
+    serde_json::from_value(result_json)
+        .map(Some)
+        .map_err(|err| FlowError::Internal(format!("invalid LLM request JSON: {err}")))
+}
+
+fn call_llm_sanitize_response_callback(
+    cb: NemoRelayNativeLlmSanitizeResponseCb,
+    user_data: *mut c_void,
+    payload: &Json,
+    context: LlmSanitizeResponseContext,
+) -> FlowResult<Option<Json>> {
+    clear_native_last_error();
+    let codec = context.resolve_codec().map(NativeHostLlmResponseCodec);
+    let (codec_kind, context_id) = native_llm_codec_identity(context.codec())?;
+    let payload_string = match native_string_from_json(payload) {
+        Some(payload_string) => payload_string,
+        None => {
+            if let Some(context_id) = context_id {
+                unsafe { native_string_free(context_id) };
+            }
+            return Err(FlowError::Internal(
+                "failed to allocate native LLM response".into(),
+            ));
+        }
+    };
+    let context = NemoRelayNativeLlmSanitizeResponseContext {
+        codec_kind,
+        codec_id: context_id.map_or(ptr::null(), |value| value.cast_const()),
+        codec: codec
+            .as_ref()
+            .map_or(ptr::null(), |value| std::ptr::from_ref(value).cast()),
+    };
+    let mut out = ptr::null_mut();
+    let status = unsafe { cb(user_data, payload_string, context, &mut out) };
+    if status != NemoRelayStatus::Ok {
+        unsafe { free_native_sanitizer_strings(payload_string, context_id, out) };
+        return Err(flow_error_from_status(
+            status,
+            "native LLM sanitize-response callback failed",
+        ));
+    }
+    if out.is_null() {
+        unsafe { free_native_sanitizer_strings(payload_string, context_id, out) };
+        return Ok(None);
+    }
+    let result = json_from_native_string(out, "native LLM sanitize-response returned invalid JSON");
+    unsafe { free_native_sanitizer_strings(payload_string, context_id, out) };
+    result.map(Some)
+}
+
+fn native_llm_codec_identity(
+    context: &LlmCodecIdentity,
+) -> FlowResult<(
+    NemoRelayNativeLlmCodecKind,
+    Option<*mut NemoRelayNativeString>,
+)> {
+    let (codec_kind, codec_id) = match context {
+        LlmCodecIdentity::None => (NemoRelayNativeLlmCodecKind::None, None),
+        LlmCodecIdentity::BuiltIn(codec) => {
+            (NemoRelayNativeLlmCodecKind::BuiltIn, Some(codec.id()))
+        }
+        LlmCodecIdentity::Runtime(id) => (NemoRelayNativeLlmCodecKind::Runtime, Some(id.as_str())),
+        LlmCodecIdentity::Opaque => (NemoRelayNativeLlmCodecKind::Opaque, None),
+    };
+    let codec_id =
+        match codec_id {
+            Some(codec_id) => Some(native_string_from_str(codec_id).ok_or_else(|| {
+                FlowError::Internal("failed to allocate native LLM codec ID".into())
+            })?),
+            None => None,
+        };
+    Ok((codec_kind, codec_id))
 }
 
 fn wrap_llm_conditional_fn(

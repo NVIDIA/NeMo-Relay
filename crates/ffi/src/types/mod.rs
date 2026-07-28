@@ -47,6 +47,10 @@ pub struct FfiToolHandle(pub ToolHandle);
 pub struct FfiLLMHandle(pub LlmHandle);
 /// Opaque wrapper around an LLM request (headers, content).
 pub struct FfiLLMRequest(pub LlmRequest);
+/// Borrowed, callback-scoped request codec capability supplied to an LLM sanitizer.
+pub struct FfiLlmSanitizeRequestCodec(pub std::sync::Arc<dyn LlmCodec>);
+/// Borrowed, callback-scoped response codec capability supplied to an LLM sanitizer.
+pub struct FfiLlmSanitizeResponseCodec(pub std::sync::Arc<dyn LlmResponseCodec>);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.

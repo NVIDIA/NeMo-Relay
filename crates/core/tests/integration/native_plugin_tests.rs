@@ -640,12 +640,17 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     flush_subscribers().expect("llm response annotation event should flush");
     let llm_events = events.lock().unwrap().clone();
     let llm_end = find_event(&llm_events, "native-fixture-llm", Some(ScopeCategory::End));
-    let annotated = llm_end
-        .annotated_response()
-        .expect("native plugin should preserve response annotation");
-    assert_eq!(annotated.id.as_deref(), Some("annotation-before-plugin"));
-    assert_eq!(annotated.extra["preexisting_annotation"], json!("kept"));
-    assert!(annotated.extra.get("native_plugin_annotation").is_none());
+    assert_eq!(
+        llm_end.output().unwrap()["native_plugin_llm_sanitize_response"],
+        true
+    );
+    assert!(
+        llm_end.annotated_response().is_none(),
+        "a changed response without an active codec must discard the stale caller annotation"
+    );
+    let serialized = serde_json::to_string(llm_end).expect("LLM end event should serialize");
+    assert!(!serialized.contains("annotation-before-plugin"));
+    assert!(!serialized.contains("preexisting_annotation"));
 
     drop(cleanup);
     activation.clear();

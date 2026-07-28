@@ -39,8 +39,8 @@ class _EventSanitizeFields(TypedDict):
 
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
-_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest"], "LLMRequest"]
-_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject], _JsonObject]
+_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest", "LlmSanitizeRequestContext"], Optional["LLMRequest"]]
+_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_Json, "LlmSanitizeResponseContext"], Optional[_Json]]
 _EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
@@ -60,6 +60,35 @@ _LlmStreamExecutionIntercept: TypeAlias = Callable[
     ["LLMRequest", Callable[["LLMRequest"], Awaitable[AsyncIterator[_Json]]]],
     AsyncIterator[_Json] | Awaitable[AsyncIterator[_Json]],
 ]
+
+class LlmCodecIdentity:
+    """Structured identity of the active managed LLM codec."""
+
+    @property
+    def kind(self) -> Literal["none", "builtin", "runtime", "opaque"]: ...
+    @property
+    def id(self) -> str | None: ...
+
+class LlmSanitizeRequestContext:
+    """Per-call context passed to an LLM request sanitizer callback."""
+
+    @property
+    def codec(self) -> LlmCodecIdentity: ...
+    def resolve_codec(self) -> LlmSanitizeRequestCodec | None: ...
+
+class LlmSanitizeResponseContext:
+    """Per-call context passed to an LLM response sanitizer callback."""
+
+    @property
+    def codec(self) -> LlmCodecIdentity: ...
+    def resolve_codec(self) -> LlmSanitizeResponseCodec | None: ...
+
+class LlmSanitizeRequestCodec:
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
+
+class LlmSanitizeResponseCodec:
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse: ...
 
 class ScopeAttributes:
     """Bitflags describing scope properties.
@@ -1296,6 +1325,31 @@ def create_scope_stack() -> ScopeStack:
     """
     ...
 
+class PropagationContext:
+    """Transport-neutral Relay causal context."""
+    def __init__(self, parent_uuid: str, root_uuid: str | None = None, version: int = 1) -> None: ...
+    @property
+    def version(self) -> int: ...
+    @property
+    def root_uuid(self) -> str | None: ...
+    @property
+    def parent_uuid(self) -> str: ...
+    def to_json(self) -> str:
+        """Serialize this context to the Relay JSON wire format."""
+        ...
+    @staticmethod
+    def from_json(value: str) -> PropagationContext:
+        """Deserialize and validate a Relay JSON wire context."""
+        ...
+
+def capture_propagation_context() -> PropagationContext: ...
+def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext: ...
+def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack: ...
+
+class _ThreadScopeStackBinding: ...
+
+def capture_thread_scope_stack() -> _ThreadScopeStackBinding: ...
+def restore_thread_scope_stack(binding: _ThreadScopeStackBinding) -> None: ...
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Install a scope stack into native thread-local storage.
 

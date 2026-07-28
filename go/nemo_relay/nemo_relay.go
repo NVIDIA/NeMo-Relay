@@ -38,6 +38,10 @@ typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 typedef struct FfiCodecHandle FfiCodecHandle;
+typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
+typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
+typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeRequestCodec* codec; } NemoRelayLlmSanitizeRequestContext;
+typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
@@ -135,12 +139,12 @@ extern int32_t nemo_relay_register_tool_execution_intercept(const char* name, in
 extern int32_t nemo_relay_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
-typedef FfiLLMRequest* (*NemoRelayLlmRequestCb)(void* user_data, const FfiLLMRequest* request);
-extern int32_t nemo_relay_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NemoRelayLlmRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
+typedef FfiLLMRequest* (*NemoRelayLlmSanitizeRequestCb)(void* user_data, const FfiLLMRequest* request, NemoRelayLlmSanitizeRequestContext context);
+extern int32_t nemo_relay_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NemoRelayLlmSanitizeRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_sanitize_request_guardrail(const char* name);
 
-typedef char* (*NemoRelayLlmResponseFn)(void* user_data, const char* response_json);
-extern int32_t nemo_relay_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NemoRelayLlmResponseFn cb, void* user_data, NemoRelayFreeFn free_fn);
+typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeResponseContext context);
+extern int32_t nemo_relay_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NemoRelayLlmSanitizeResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_sanitize_response_guardrail(const char* name);
 
 typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const FfiLLMRequest* request);
@@ -193,9 +197,9 @@ extern int32_t nemo_relay_scope_register_tool_execution_intercept(const char* sc
 extern int32_t nemo_relay_scope_deregister_tool_execution_intercept(const char* scope_uuid, const char* name);
 
 // Scope-local LLM guardrails
-extern int32_t nemo_relay_scope_register_llm_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_llm_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmSanitizeRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_sanitize_request_guardrail(const char* scope_uuid, const char* name);
-extern int32_t nemo_relay_scope_register_llm_sanitize_response_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmResponseFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_llm_sanitize_response_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmSanitizeResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_sanitize_response_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_llm_conditional_execution_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmConditionalCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_conditional_execution_guardrail(const char* scope_uuid, const char* name);
@@ -225,6 +229,9 @@ extern void nemo_relay_string_free(char* ptr);
 
 // Scope stack isolation
 extern int32_t nemo_relay_scope_stack_create(FfiScopeStack** out);
+extern int32_t nemo_relay_capture_propagation_context_json(char** out);
+extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
+extern int32_t nemo_relay_scope_stack_create_from_propagation_json(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
 extern int32_t nemo_relay_scope_stack_restore_thread(FfiThreadScopeStackBinding* binding);
@@ -274,8 +281,8 @@ extern char* goToolConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
 extern void goFreeTrampoline(void*);
-extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*);
-extern char* goLlmResponseTrampoline(void*, const char*);
+extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*, NemoRelayLlmSanitizeRequestContext);
+extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeResponseContext);
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
@@ -1367,17 +1374,15 @@ func DeregisterToolExecutionIntercept(name string) error {
 // Guardrail/Intercept registration (LLM)
 // ---------------------------------------------------------------------------
 
-// RegisterLlmSanitizeRequestGuardrail registers a guardrail that sanitizes LLM
-// request data before the call is made. The callback receives the request
-// headers and content JSON and must return the (possibly modified) versions.
-// Guardrails are invoked in priority order (lower values run first).
+// RegisterLlmSanitizeRequestGuardrail registers a codec-aware LLM request
+// sanitizer. Returning omit true removes only the emitted payload.
 func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequestFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nemo_relay_register_llm_sanitize_request_guardrail(
 		cName, C.int32_t(priority),
-		C.NemoRelayLlmRequestCb(C.goLlmRequestTrampoline),
+		C.NemoRelayLlmSanitizeRequestCb(C.goLlmRequestTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
@@ -1391,17 +1396,15 @@ func DeregisterLlmSanitizeRequestGuardrail(name string) error {
 	return checkStatus(C.nemo_relay_deregister_llm_sanitize_request_guardrail(cName))
 }
 
-// RegisterLlmSanitizeResponseGuardrail registers a guardrail that sanitizes
-// LLM response data before it is returned to the caller. The callback receives
-// the response as plain JSON and must return the (possibly modified) response
-// JSON. Guardrails are invoked in priority order (lower values run first).
+// RegisterLlmSanitizeResponseGuardrail registers a codec-aware LLM response
+// sanitizer. Returning omit true removes only the emitted payload.
 func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMResponseFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nemo_relay_register_llm_sanitize_response_guardrail(
 		cName, C.int32_t(priority),
-		C.NemoRelayLlmResponseFn(C.goLlmResponseTrampoline),
+		C.NemoRelayLlmSanitizeResponseCb(C.goLlmResponseTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
@@ -1567,10 +1570,89 @@ type ScopeStack struct {
 	ptr *C.FfiScopeStack
 }
 
+// PropagationContext is the versioned, transport-neutral causal context used
+// to continue Relay work in another process.
+type PropagationContext struct {
+	Version    uint16  `json:"version"`
+	RootUUID   *string `json:"root_uuid,omitempty"`
+	ParentUUID string  `json:"parent_uuid"`
+}
+
+// ToJSON serializes a validated propagation context for application-managed transport.
+func (context PropagationContext) ToJSON() (string, error) {
+	if err := validatePropagationContext(context); err != nil {
+		return "", err
+	}
+	// PropagationContext has only JSON-native fields, so marshaling cannot fail.
+	payload, _ := json.Marshal(context)
+	return string(payload), nil
+}
+
+// PropagationContextFromJSON deserializes and validates a transport context.
+func PropagationContextFromJSON(value string) (PropagationContext, error) {
+	var context PropagationContext
+	if err := json.Unmarshal([]byte(value), &context); err != nil {
+		return PropagationContext{}, err
+	}
+	if err := validatePropagationContext(context); err != nil {
+		return PropagationContext{}, err
+	}
+	return context, nil
+}
+
+func validatePropagationContext(context PropagationContext) error {
+	stack, err := NewScopeStackFromPropagation(context)
+	if err != nil {
+		return err
+	}
+	stack.Close()
+	return nil
+}
+
+// CapturePropagationContext captures the current Relay causal parent.
+func CapturePropagationContext() (PropagationContext, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_propagation_context_json(&out)); err != nil {
+		return PropagationContext{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+	return PropagationContextFromJSON(C.GoString(out))
+}
+
+// CapturePropagationContextWithRoot captures the current parent with an
+// application-supplied stable session root. Pass nil when no root is known.
+func CapturePropagationContextWithRoot(rootUUID *string) (PropagationContext, error) {
+	var cRoot *C.char
+	if rootUUID != nil {
+		cRoot = C.CString(*rootUUID)
+		defer C.free(unsafe.Pointer(cRoot))
+	}
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_propagation_context_with_root_json(cRoot, &out)); err != nil {
+		return PropagationContext{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+	return PropagationContextFromJSON(C.GoString(out))
+}
+
 // NewScopeStack creates a new isolated scope stack.
 // The caller must call Close() when done.
 func NewScopeStack() (*ScopeStack, error) {
 	return newScopeStackFunc()
+}
+
+// NewScopeStackFromPropagation creates an isolated stack seeded from a
+// received propagation context. The caller must call Close when done.
+func NewScopeStackFromPropagation(context PropagationContext) (*ScopeStack, error) {
+	payload, err := json.Marshal(context)
+	if err != nil {
+		return nil, err
+	}
+	cPayload := C.CString(string(payload))
+	defer C.free(unsafe.Pointer(cPayload))
+	var ptr *C.FfiScopeStack
+	status := C.nemo_relay_scope_stack_create_from_propagation_json(cPayload, &ptr)
+	return checkedValue(int32(status), &ScopeStack{ptr: ptr})
 }
 
 // Close frees the scope stack. After calling Close, the ScopeStack must not be used.
@@ -2426,7 +2508,7 @@ func ScopeRegisterLlmSanitizeRequestGuardrail(scopeUUID, name string, priority i
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nemo_relay_scope_register_llm_sanitize_request_guardrail(
 		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayLlmRequestCb(C.goLlmRequestTrampoline),
+		C.NemoRelayLlmSanitizeRequestCb(C.goLlmRequestTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
@@ -2452,7 +2534,7 @@ func ScopeRegisterLlmSanitizeResponseGuardrail(scopeUUID, name string, priority 
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nemo_relay_scope_register_llm_sanitize_response_guardrail(
 		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayLlmResponseFn(C.goLlmResponseTrampoline),
+		C.NemoRelayLlmSanitizeResponseCb(C.goLlmResponseTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))

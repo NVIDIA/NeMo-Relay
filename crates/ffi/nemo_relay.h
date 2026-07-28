@@ -59,6 +59,29 @@ enum NemoRelayStatus {
 typedef int32_t NemoRelayStatus;
 
 /**
+ * Codec identity kind supplied to an LLM sanitizer.
+ */
+enum NemoRelayLlmSanitizeCodecKind {
+  /**
+   * No codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_NONE = 0,
+  /**
+   * A Relay built-in codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_BUILT_IN = 1,
+  /**
+   * A runtime-registered codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_RUNTIME = 2,
+  /**
+   * A codec was active but has no registered identity.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_OPAQUE = 3,
+};
+typedef uint32_t NemoRelayLlmSanitizeCodecKind;
+
+/**
  * The type of scope in the agent execution hierarchy.
  */
 enum NemoRelayScopeType {
@@ -148,6 +171,16 @@ typedef struct FfiLLMHandle FfiLLMHandle;
  * Opaque wrapper around an LLM request (headers, content).
  */
 typedef struct FfiLLMRequest FfiLLMRequest;
+
+/**
+ * Borrowed, callback-scoped request codec capability supplied to an LLM sanitizer.
+ */
+typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
+
+/**
+ * Borrowed, callback-scoped response codec capability supplied to an LLM sanitizer.
+ */
+typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
 
 /**
  * Opaque OpenInference subscriber handle.
@@ -248,17 +281,61 @@ typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
                                         const struct FfiLLMRequest *original_request);
 
 /**
- * Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
- * a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
+ * Codec identity supplied to an LLM sanitizer. `codec_id` is null for
+ * `None` and `Opaque`, and is valid only for the duration of the callback.
  */
-typedef struct FfiLLMRequest *(*NemoRelayLlmRequestCb)(void *user_data,
-                                                       const struct FfiLLMRequest *request);
+typedef struct NemoRelayLlmSanitizeRequestContext {
+  /**
+   * Kind of active codec identity.
+   */
+  NemoRelayLlmSanitizeCodecKind codec_kind;
+  /**
+   * Built-in or runtime codec ID, when applicable.
+   */
+  const char *codec_id;
+  /**
+   * Borrowed request codec capability, or null when no codec is active.
+   */
+  const struct FfiLlmSanitizeRequestCodec *codec;
+} NemoRelayLlmSanitizeRequestContext;
 
 /**
- * Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
- * The returned string must be allocated with `malloc` or equivalent.
+ * LLM request sanitizer. It receives the request first and its codec context
+ * second. Return null to omit the observability payload. The request is
+ * borrowed, but returning that same pointer is supported as a pass-through.
+ * Any other non-null result transfers ownership to Relay.
  */
-typedef char *(*NemoRelayJsonCb)(void *user_data, const char *json);
+typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
+                                                               const struct FfiLLMRequest *request,
+                                                               struct NemoRelayLlmSanitizeRequestContext context);
+
+/**
+ * Directional codec context supplied to an LLM response sanitizer.
+ */
+typedef struct NemoRelayLlmSanitizeResponseContext {
+  /**
+   * Kind of active codec identity.
+   */
+  NemoRelayLlmSanitizeCodecKind codec_kind;
+  /**
+   * Built-in or runtime codec ID, when applicable.
+   */
+  const char *codec_id;
+  /**
+   * Borrowed response codec capability, or null when no codec is active.
+   */
+  const struct FfiLlmSanitizeResponseCodec *codec;
+} NemoRelayLlmSanitizeResponseContext;
+
+/**
+ * LLM response sanitizer. It receives response JSON first and its codec
+ * context second. Return null to omit the observability payload. The response
+ * is borrowed, but returning that same pointer is supported as a pass-through.
+ * Any other non-null result transfers ownership to Relay.
+ */
+typedef char *(*NemoRelayLlmSanitizeResponseCb)(void *user_data,
+                                                const char *response_json,
+                                                struct NemoRelayLlmSanitizeResponseContext context);
 
 /**
  * Callback for LLM conditional execution guardrails.
@@ -704,6 +781,41 @@ NemoRelayStatus nemo_relay_scope_deregister_scope_sanitize_end_guardrail(const c
                                                                          const char *name);
 
 /**
+ * Decode a request through a callback-scoped sanitizer codec capability.
+ *
+ * The returned JSON string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * Both pointers must be non-null and valid only during the sanitizer callback.
+ */
+char *nemo_relay_llm_sanitize_request_codec_decode(const struct FfiLlmSanitizeRequestCodec *codec,
+                                                   const struct FfiLLMRequest *request);
+
+/**
+ * Encode normalized request changes through a callback-scoped codec capability.
+ *
+ * The returned request is owned by the caller and must be freed with
+ * `nemo_relay_llm_request_free`. Returns null on failure.
+ *
+ * # Safety
+ * All pointers must be non-null and valid only during the sanitizer callback.
+ */
+struct FfiLLMRequest *nemo_relay_llm_sanitize_request_codec_encode(const struct FfiLlmSanitizeRequestCodec *codec,
+                                                                   const char *annotated_json,
+                                                                   const struct FfiLLMRequest *original);
+
+/**
+ * Decode a response through a callback-scoped sanitizer codec capability.
+ *
+ * The returned JSON string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * All pointers must be non-null and valid only during the sanitizer callback.
+ */
+char *nemo_relay_llm_sanitize_response_codec_decode(const struct FfiLlmSanitizeResponseCodec *codec,
+                                                    const char *response_json);
+
+/**
  * Begin a manual LLM call lifecycle span.
  *
  * This emits an LLM Start event after applying sanitize-request guardrails to
@@ -942,8 +1054,8 @@ int32_t nemo_relay_stream_next(struct FfiStream *stream, char **out_chunk);
 void nemo_relay_stream_free(struct FfiStream *stream);
 
 /**
- * Register an LLM request sanitization guardrail. The callback can modify or
- * replace the LLM request before it is sent.
+ * Register an LLM request sanitizer. The callback receives the emitted
+ * request first and per-call codec context second; null omits observability.
  *
  * # Parameters
  * - `name`: Unique guardrail name.
@@ -957,7 +1069,7 @@ void nemo_relay_stream_free(struct FfiStream *stream);
  */
 NemoRelayStatus nemo_relay_register_llm_sanitize_request_guardrail(const char *name,
                                                                    int32_t priority,
-                                                                   NemoRelayLlmRequestCb cb,
+                                                                   NemoRelayLlmSanitizeRequestCb cb,
                                                                    void *user_data,
                                                                    NemoRelayFreeFn free_fn);
 
@@ -985,7 +1097,7 @@ NemoRelayStatus nemo_relay_deregister_llm_sanitize_request_guardrail(const char 
  */
 NemoRelayStatus nemo_relay_register_llm_sanitize_response_guardrail(const char *name,
                                                                     int32_t priority,
-                                                                    NemoRelayJsonCb cb,
+                                                                    NemoRelayLlmSanitizeResponseCb cb,
                                                                     void *user_data,
                                                                     NemoRelayFreeFn free_fn);
 
@@ -1704,7 +1816,7 @@ NemoRelayStatus nemo_relay_plugin_context_register_tool_conditional_execution_gu
 NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(struct FfiPluginContext *ctx,
                                                                                   const char *name,
                                                                                   int32_t priority,
-                                                                                  NemoRelayLlmRequestCb cb,
+                                                                                  NemoRelayLlmSanitizeRequestCb cb,
                                                                                   void *user_data,
                                                                                   NemoRelayFreeFn free_fn);
 
@@ -1718,7 +1830,7 @@ NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_request_guardrai
 NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(struct FfiPluginContext *ctx,
                                                                                    const char *name,
                                                                                    int32_t priority,
-                                                                                   NemoRelayJsonCb cb,
+                                                                                   NemoRelayLlmSanitizeResponseCb cb,
                                                                                    void *user_data,
                                                                                    NemoRelayFreeFn free_fn);
 
@@ -2007,7 +2119,7 @@ NemoRelayStatus nemo_relay_scope_deregister_tool_execution_intercept(const char 
 NemoRelayStatus nemo_relay_scope_register_llm_sanitize_request_guardrail(const char *scope_uuid,
                                                                          const char *name,
                                                                          int32_t priority,
-                                                                         NemoRelayLlmRequestCb cb,
+                                                                         NemoRelayLlmSanitizeRequestCb cb,
                                                                          void *user_data,
                                                                          NemoRelayFreeFn free_fn);
 
@@ -2037,7 +2149,7 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_sanitize_request_guardrail(const
 NemoRelayStatus nemo_relay_scope_register_llm_sanitize_response_guardrail(const char *scope_uuid,
                                                                           const char *name,
                                                                           int32_t priority,
-                                                                          NemoRelayJsonCb cb,
+                                                                          NemoRelayLlmSanitizeResponseCb cb,
                                                                           void *user_data,
                                                                           NemoRelayFreeFn free_fn);
 
@@ -2228,6 +2340,39 @@ NemoRelayStatus nemo_relay_scope_deregister_subscriber(const char *scope_uuid, c
  * `out` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_scope_stack_create(struct FfiScopeStack **out);
+
+/**
+ * Serialize the current causal parent as a versioned propagation context.
+ *
+ * The returned JSON must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_json(char **out);
+
+/**
+ * Serialize the current causal parent with an application-supplied root UUID.
+ *
+ * Pass null for `root_uuid` to omit the root. The returned JSON must be freed
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * When non-null, `root_uuid` must point to a valid NUL-terminated C string;
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_with_root_json(const char *root_uuid,
+                                                                      char **out);
+
+/**
+ * Create an isolated scope stack from propagation-context JSON.
+ *
+ * # Safety
+ * `context_json` must point to a valid NUL-terminated C string and `out` must
+ * be a valid, writable pointer to a scope-stack output slot.
+ */
+NemoRelayStatus nemo_relay_scope_stack_create_from_propagation_json(const char *context_json,
+                                                                    struct FfiScopeStack **out);
 
 /**
  * Bind an isolated scope stack to the current OS thread.

@@ -7,7 +7,7 @@ use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
-use crate::api::runtime::{EventSubscriberFn, ToolExecutionNextFn};
+use crate::api::runtime::{EventSubscriberFn, ToolExecutionNextFn, with_active_event_uuid};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
@@ -551,7 +551,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         state.tool_build_execution_chain(&name, func, &scope_locals)
     };
 
-    match execution(intercepted_args).await {
+    match with_active_event_uuid(handle.uuid, execution(intercepted_args)).await {
         Ok(outcome) => {
             let ToolExecutionInterceptOutcome {
                 result,

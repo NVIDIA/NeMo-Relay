@@ -8,8 +8,11 @@ use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     tool_attributes_to_strings,
 };
-use crate::api::runtime::NemoRelayContextState;
-use crate::api::runtime::global_context;
+use crate::api::runtime::{
+    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding, capture_thread_scope_stack,
+    create_scope_stack_from_propagation, global_context, restore_thread_scope_stack,
+    set_thread_scope_stack,
+};
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
@@ -20,6 +23,7 @@ use crate::codec::response::{
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
+use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::HashMap;
@@ -34,6 +38,14 @@ struct ResetPricingResolverGuard;
 impl Drop for ResetPricingResolverGuard {
     fn drop(&mut self) {
         let _ = reset_active_pricing_resolver();
+    }
+}
+
+struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
+
+impl Drop for RestoreThreadScopeStackGuard {
+    fn drop(&mut self) {
+        restore_thread_scope_stack(self.0.clone());
     }
 }
 
@@ -329,6 +341,33 @@ fn make_start_event(
         scope_type,
         input,
     )
+}
+
+#[test]
+fn propagated_root_parent_projects_as_a_remote_otel_parent() {
+    let root_uuid = Uuid::now_v7();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    let imported_stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid: root_uuid,
+    })
+    .unwrap();
+    set_thread_scope_stack(imported_stack);
+
+    let processor = OtelEventProcessor::new(make_provider().0, "test".into());
+    let parent_context = processor.parent_context(&make_start_event(
+        Uuid::now_v7(),
+        Some(root_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    ));
+    let parent_span = parent_context.span();
+    let span_context = parent_span.span_context();
+    assert!(span_context.is_remote());
+    assert_eq!(span_context.trace_id(), relay_trace_id(root_uuid));
+    assert_eq!(span_context.span_id(), relay_span_id(root_uuid));
 }
 
 fn make_start_event_with_metadata(

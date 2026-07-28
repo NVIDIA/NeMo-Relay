@@ -79,6 +79,7 @@ from __future__ import annotations
 import contextvars
 import typing
 from collections.abc import Callable as AbcCallable
+from contextlib import contextmanager
 from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias, TypedDict
 
 # Native bitflag classes exported at the top level for user code.
@@ -96,15 +97,21 @@ from nemo_relay._native import (
     AtofExporterMode,
     AtofStreamSinkConfig,
     LLMAttributes,
+    LlmCodecIdentity,
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
+    LlmSanitizeRequestCodec,
+    LlmSanitizeRequestContext,
+    LlmSanitizeResponseCodec,
+    LlmSanitizeResponseContext,
     MarkEvent,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
     PendingMarkSpec,
+    PropagationContext,
     ScopeAttributes,
     ScopeEvent,
     ScopeHandle,
@@ -114,7 +121,18 @@ from nemo_relay._native import (
     ToolExecutionInterceptOutcome,
     ToolHandle,
 )
+from nemo_relay._native import (
+    capture_propagation_context as _capture_propagation_context,
+)
+from nemo_relay._native import (
+    capture_propagation_context_with_root as _capture_propagation_context_with_root,
+)
+from nemo_relay._native import capture_thread_scope_stack as _capture_thread_scope_stack
 from nemo_relay._native import create_scope_stack as _create_scope_stack
+from nemo_relay._native import (
+    create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
+)
+from nemo_relay._native import restore_thread_scope_stack as _restore_thread_scope_stack
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
 from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
@@ -157,12 +175,13 @@ EventSanitizeGuardrail: TypeAlias = Callable[["Event", EventSanitizeFields], Eve
 #: message. Returning ``None`` allows execution to continue.
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
 #: Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
-#: The returned request is recorded for observability and does not replace the
-#: caller-visible request value unless the managed LLM API documents otherwise.
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest]
-#: Guardrail callback that sanitizes an emitted JSON LLM response payload. The
-#: returned object is recorded on the event; callback exceptions propagate.
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject]
+#: Callbacks receive ``(request, context)``. Returning ``None`` omits the LLM observability
+#: payload and annotation without changing the caller-visible request.
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeRequestContext"], Optional[LLMRequest]]
+#: Guardrail callback that sanitizes an emitted JSON LLM response payload.
+#: Callbacks receive ``(response, context)`` and can return ``None`` to omit
+#: observability payload and annotation without changing the caller response.
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[Json, "LlmSanitizeResponseContext"], Optional[Json]]
 #: Guardrail callback that can block an LLM call by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
@@ -387,6 +406,36 @@ def create_scope_stack() -> ScopeStack:
     return _create_scope_stack()
 
 
+def capture_propagation_context() -> PropagationContext:
+    """Capture the current Relay causal parent for application-managed transport."""
+    get_scope_stack()
+    return _capture_propagation_context()
+
+
+def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
+    """Capture the current parent with an optional stable application session root."""
+    get_scope_stack()
+    return _capture_propagation_context_with_root(root_uuid)
+
+
+def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack:
+    """Create an isolated stack seeded from a received propagation context."""
+    return _create_scope_stack_from_propagation(context)
+
+
+@contextmanager
+def use_scope_stack(stack: ScopeStack):
+    """Temporarily install ``stack`` in the current Python context."""
+    previous_native_stack = _capture_thread_scope_stack()
+    token = _scope_stack_var.set(stack)
+    _sync_thread_scope_stack(stack)
+    try:
+        yield stack
+    finally:
+        _scope_stack_var.reset(token)
+        _restore_thread_scope_stack(previous_native_stack)
+
+
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Install a scope stack into the current thread's native runtime context.
 
@@ -455,11 +504,16 @@ __all__ = [
     "model_pricing",
     # Scope stack isolation
     "ScopeStack",
+    "PropagationContext",
     "create_scope_stack",
+    "capture_propagation_context",
+    "capture_propagation_context_with_root",
+    "create_scope_stack_from_propagation",
     "get_scope_stack",
     "scope_stack_active",
     "propagate_scope_to_thread",
     "set_thread_scope_stack",
+    "use_scope_stack",
     # Types
     "ScopeAttributes",
     "ToolAttributes",
@@ -497,6 +551,11 @@ __all__ = [
     "ToolConditionalExecutionGuardrail",
     "LlmSanitizeRequestGuardrail",
     "LlmSanitizeResponseGuardrail",
+    "LlmCodecIdentity",
+    "LlmSanitizeRequestContext",
+    "LlmSanitizeResponseContext",
+    "LlmSanitizeRequestCodec",
+    "LlmSanitizeResponseCodec",
     "LlmConditionalExecutionGuardrail",
     "ToolRequestIntercept",
     "ToolExecutionIntercept",

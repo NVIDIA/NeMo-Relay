@@ -73,7 +73,7 @@ def collector_ok(chunk):
 def finalizer_bad_json():
     return object()
 
-def llm_resp_bad_json(response):
+def llm_resp_bad_json(response, context):
     return object()
 
 class BadCodec:
@@ -187,8 +187,15 @@ class RaisingResponseCodec:
         assert_eq!(finalizer(), serde_json::Value::Null);
 
         let llm_response =
-            wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_bad_json").unwrap().unbind());
-        assert_eq!(llm_response(json!({"ok": true})), json!({"ok": true}));
+            wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_bad_json").unwrap().unbind())
+                .unwrap();
+        assert_eq!(
+            llm_response(
+                json!({"ok": true}),
+                nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
+            ),
+            None
+        );
 
         let bad_codec = PyLlmCodecWrapper {
             py_codec: module

@@ -74,6 +74,12 @@ The collector should receive OTLP trace export requests. The tracing backend
 should show spans for NeMo Relay scopes, tools, LLM calls, and marks grouped by
 root scope.
 
+For an imported Relay propagation context with both a root and an external
+parent, Relay uses the root UUID as the OTLP trace ID and the lower 64 bits of
+the parent UUID as a remote parent span ID. A rootless import begins a new
+native trace. Relay does not derive W3C sampling flags or `tracestate`; carry
+those separately in an integration when they are required.
+
 The default `inherit` projection follows exporter-native handling: a mark with
 an active parent span is a span event, while an orphan mark is a standalone
 zero-duration `mark:<name>` span. `mark_projection = "event"` explicitly selects

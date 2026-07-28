@@ -97,7 +97,8 @@ pub struct PiiRedactionConfig {
         skip_serializing_if = "is_default_priority"
     )]
     pub priority: i32,
-    /// Provider request/response codec for LLM-managed surfaces.
+    /// Compatibility fallback codec for LLM-managed surfaces without an active
+    /// per-call codec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "codec_schema"))]
     pub codec: Option<String>,
@@ -926,6 +927,19 @@ fn validate_builtin_action_requirements(
         return;
     };
 
+    for (index, target_path) in builtin.target_paths.iter().enumerate() {
+        if !is_valid_json_pointer(target_path) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some(format!("builtin.target_paths[{index}]")),
+                "builtin.target_paths entries must be valid RFC 6901 JSON pointers".to_string(),
+            );
+        }
+    }
+
     if builtin.preset.is_some() {
         validate_builtin_preset_requirements(diagnostics, policy, plugin_config, builtin);
         return;
@@ -1034,19 +1048,6 @@ fn validate_builtin_action_requirements(
             "builtin.mask_char must not be empty when builtin.action = 'mask'".to_string(),
         );
     }
-
-    for (index, target_path) in builtin.target_paths.iter().enumerate() {
-        if !is_valid_json_pointer(target_path) {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "pii_redaction.unsupported_value",
-                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
-                Some(format!("builtin.target_paths[{index}]")),
-                "builtin.target_paths entries must be valid RFC 6901 JSON pointers".to_string(),
-            );
-        }
-    }
 }
 
 fn validate_builtin_preset_requirements(
@@ -1126,14 +1127,6 @@ fn validate_codec_requirements(
     }
 
     let Some(codec) = config.codec.as_deref() else {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "pii_redaction.unsupported_value",
-            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
-            Some("codec".to_string()),
-            "codec is required when any LLM surface is enabled".to_string(),
-        );
         return;
     };
 

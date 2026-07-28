@@ -85,7 +85,6 @@ sanitization surface:
 kind = "pii_redaction"
 
 [components.config]
-codec = "openai_chat"
 
 [[components.config.profiles]]
 mode = "builtin"
@@ -124,7 +123,6 @@ enabled = true
 
 [components.config]
 version = 1
-codec = "anthropic_messages"
 
 [[components.config.profiles]]
 mode = "builtin"

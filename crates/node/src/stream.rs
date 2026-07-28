@@ -11,6 +11,9 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use nemo_relay::error::Result as FlowResult;
 use serde_json::Value as Json;
+use std::sync::Arc;
+
+use crate::api::PersistentJsFunction;
 
 /// An async iterator over chunks from a streaming LLM response.
 ///
@@ -21,6 +24,7 @@ pub struct LlmStream {
     pub(crate) receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Json>>>,
     pub(crate) cancel: tokio::sync::watch::Sender<bool>,
     pub(crate) closed: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
+    pub(crate) codec_references: Vec<Arc<PersistentJsFunction>>,
 }
 
 #[napi]
