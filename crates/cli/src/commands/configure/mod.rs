@@ -15,6 +15,7 @@ mod wizard;
 pub(super) use wizard::run;
 
 #[derive(Debug, Clone, Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct ConfigCommand {
     #[command(subcommand)]
     pub(crate) command: Option<ConfigSubcommand>,
@@ -55,11 +56,6 @@ pub(crate) struct ConfigEditCommand {
 
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {
     if let Some(ConfigSubcommand::Edit(edit)) = command.command.as_ref() {
-        if command.reset || command.scope.is_some() || command.agent.is_some() {
-            return Err(CliError::Config(
-                "`config edit` cannot be combined with setup or reset arguments".into(),
-            ));
-        }
         editor::edit(edit.clone())?;
         return Ok(ExitCode::SUCCESS);
     }

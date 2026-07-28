@@ -74,7 +74,11 @@ pub(super) fn edit(command: ConfigEditCommand) -> Result<(), CliError> {
 }
 
 fn ensure_tty() -> Result<(), CliError> {
-    if std::io::stdin().is_terminal() {
+    ensure_tty_with(std::io::stdin().is_terminal())
+}
+
+fn ensure_tty_with(stdin_is_terminal: bool) -> Result<(), CliError> {
+    if stdin_is_terminal {
         Ok(())
     } else {
         Err(CliError::Config(
@@ -506,19 +510,23 @@ impl ConfigDocument {
     }
 
     fn write(&self) -> Result<(), CliError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&self.path, self.document.to_string())?;
-        Ok(())
+        crate::filesystem::atomic_write_private(&self.path, self.document.to_string().as_bytes())
+            .map_err(CliError::Config)
     }
 
     fn preview(&self) -> String {
         let mut document = self.document.clone();
-        if let Some(upstream) = document.get_mut("upstream").and_then(Item::as_table_mut) {
+        if let Some(upstream) = document.get_mut("upstream") {
             for key in ["openai_auth_header", "anthropic_auth_header"] {
-                if upstream.contains_key(key) {
-                    upstream[key] = value("<redacted>");
+                if let Some(table) = upstream.as_table_mut() {
+                    if table.contains_key(key) {
+                        table[key] = value("<redacted>");
+                    }
+                } else if let Some(inline) =
+                    upstream.as_value_mut().and_then(Value::as_inline_table_mut)
+                    && inline.contains_key(key)
+                {
+                    inline.insert(key, Value::from("<redacted>"));
                 }
             }
         }
@@ -531,19 +539,41 @@ impl ConfigDocument {
 
     fn has_key(&self, section: &str, key: &str) -> bool {
         self.item(section, key).is_some()
+            || self
+                .document
+                .get(section)
+                .and_then(Item::as_value)
+                .and_then(Value::as_inline_table)
+                .is_some_and(|table| table.contains_key(key))
     }
 
     fn string(&self, section: &str, key: &str) -> Option<String> {
-        self.item(section, key)?
-            .as_value()?
-            .as_str()
+        self.item(section, key)
+            .and_then(Item::as_value)
+            .and_then(Value::as_str)
+            .or_else(|| {
+                self.document
+                    .get(section)
+                    .and_then(Item::as_value)
+                    .and_then(Value::as_inline_table)
+                    .and_then(|table| table.get(key))
+                    .and_then(Value::as_str)
+            })
             .map(str::to_owned)
     }
 
     fn integer(&self, section: &str, key: &str) -> Option<u64> {
-        self.item(section, key)?
-            .as_value()?
-            .as_integer()
+        self.item(section, key)
+            .and_then(Item::as_value)
+            .and_then(Value::as_integer)
+            .or_else(|| {
+                self.document
+                    .get(section)
+                    .and_then(Item::as_value)
+                    .and_then(Value::as_inline_table)
+                    .and_then(|table| table.get(key))
+                    .and_then(Value::as_integer)
+            })
             .and_then(|value| u64::try_from(value).ok())
     }
 
@@ -609,15 +639,13 @@ impl ConfigDocument {
     }
 
     fn set_string(&mut self, section: &str, key: &str, new_value: String) -> Result<(), CliError> {
-        self.table_mut(section)?[key] = value(new_value);
-        Ok(())
+        self.set_value(section, key, Value::from(new_value))
     }
 
     fn set_integer(&mut self, section: &str, key: &str, new_value: u64) -> Result<(), CliError> {
         let numeric = i64::try_from(new_value)
             .map_err(|_| CliError::Config(format!("{section}.{key} is too large")))?;
-        self.table_mut(section)?[key] = value(numeric);
-        Ok(())
+        self.set_value(section, key, Value::from(numeric))
     }
 
     fn set_positive_integer(
@@ -665,13 +693,18 @@ impl ConfigDocument {
     fn clear_key(&mut self, section: &str, key: &str) -> Result<(), CliError> {
         let empty = match self.document.get_mut(section) {
             Some(item) => {
-                let table = item.as_table_mut().ok_or_else(|| {
-                    CliError::Config(format!(
+                if let Some(table) = item.as_table_mut() {
+                    table.remove(key);
+                    table.is_empty()
+                } else if let Some(table) = item.as_value_mut().and_then(Value::as_inline_table_mut)
+                {
+                    table.remove(key);
+                    table.is_empty()
+                } else {
+                    return Err(CliError::Config(format!(
                         "[{section}] must be a TOML table before it can be edited"
-                    ))
-                })?;
-                table.remove(key);
-                table.is_empty()
+                    )));
+                }
             }
             None => false,
         };
@@ -866,13 +899,15 @@ impl ConfigDocument {
         let max_size = i64::try_from(max_size).map_err(|_| {
             CliError::Config("logging sink max_file_size_bytes is too large".into())
         })?;
+        let retained_i64 = i64::try_from(retained)
+            .map_err(|_| CliError::Config("logging sink retained_files is too large".into()))?;
         let retained = usize::try_from(retained)
             .map_err(|_| CliError::Config("logging sink retained_files is too large".into()))?;
         nemo_relay::logging::FileLogRotationConfig::new(max_size as u64, retained)
             .map_err(|error| CliError::Config(error.to_string()))?;
         let sink = self.sink_mut(index)?;
         sink["max_file_size_bytes"] = value(max_size);
-        sink["retained_files"] = value(retained as i64);
+        sink["retained_files"] = value(retained_i64);
         Ok(())
     }
 
@@ -886,6 +921,24 @@ impl ConfigDocument {
         sink.remove("max_file_size_bytes");
         sink.remove("retained_files");
         Ok(())
+    }
+
+    fn set_value(&mut self, section: &str, key: &str, new_value: Value) -> Result<(), CliError> {
+        if self.document.get(section).is_none() {
+            self.document[section] = Item::Table(Table::new());
+        }
+        let item = &mut self.document[section];
+        if let Some(table) = item.as_table_mut() {
+            table[key] = Item::Value(new_value);
+            Ok(())
+        } else if let Some(table) = item.as_value_mut().and_then(Value::as_inline_table_mut) {
+            table.insert(key, new_value);
+            Ok(())
+        } else {
+            Err(CliError::Config(format!(
+                "[{section}] must be a TOML table before it can be edited"
+            )))
+        }
     }
 }
 
@@ -914,255 +967,5 @@ fn project_config_path(start: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn document(contents: &str) -> ConfigDocument {
-        ConfigDocument {
-            path: PathBuf::from("config.toml"),
-            document: contents.parse().unwrap(),
-        }
-    }
-
-    #[test]
-    fn document_preserves_untouched_toml_and_redacts_auth_headers() {
-        let mut document = document(
-            "# keep this comment\n[agents.codex]\ncommand = \"codex\"\n\n[upstream]\nopenai_auth_header = \"Bearer secret\"\nanthropic_auth_header = \"Basic secret\"\n",
-        );
-        document
-            .set_positive_integer("gateway", "max_hook_payload_bytes", 42)
-            .unwrap();
-
-        let preview = document.preview();
-        assert!(preview.contains("# keep this comment"));
-        assert!(preview.contains("[agents.codex]"));
-        assert!(preview.contains("<redacted>"));
-        assert!(!preview.contains("Bearer secret"));
-        assert!(!preview.contains("Basic secret"));
-        assert!(document.document.to_string().contains("Bearer secret"));
-    }
-
-    #[test]
-    fn clears_remove_empty_sections() {
-        let mut document = document("[gateway]\nmax_hook_payload_bytes = 42\n");
-        document
-            .clear_key("gateway", "max_hook_payload_bytes")
-            .unwrap();
-        assert!(!document.document.to_string().contains("[gateway]"));
-    }
-
-    #[test]
-    fn validates_gateway_auth_and_sink_values() {
-        let mut document = document("");
-        assert!(
-            document
-                .set_positive_integer("gateway", "max_hook_payload_bytes", 0)
-                .is_err()
-        );
-        assert!(
-            document
-                .set_auth_header("openai_auth_header", "\n".into())
-                .is_err()
-        );
-
-        document.add_sink("relay.log".into()).unwrap();
-        assert!(document.set_sink_queue_capacity(0, 0).is_err());
-        assert!(
-            document
-                .set_sink_queue_capacity(0, MAX_FILE_SINK_QUEUE_ENTRIES as u64 + 1)
-                .is_err()
-        );
-        assert!(document.set_sink_rotation(0, 1024, 10).is_err());
-        assert!(
-            document
-                .set_sink_enum(0, "level", "invalid", LOG_LEVELS)
-                .is_err()
-        );
-        assert!(
-            document
-                .set_enum("logging", "level", "invalid", LOG_LEVELS)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn manages_sink_lifecycle() {
-        let mut document = document("");
-        document.add_sink("relay.log".into()).unwrap();
-        document.set_sink_queue_capacity(0, 128).unwrap();
-        document.set_sink_rotation(0, 1024 * 1024, 2).unwrap();
-        assert_eq!(document.sink_count(), 1);
-        assert!(document.sink_rotation_summary(0).contains("1048576"));
-        document.clear_sink_rotation(0).unwrap();
-        document.remove_sink(0).unwrap();
-        assert_eq!(document.sink_count(), 0);
-        assert!(!document.document.to_string().contains("[logging]"));
-    }
-
-    #[test]
-    fn reports_configuration_and_sink_summaries_without_exposing_secrets() {
-        let document = document(
-            "[gateway]\nmax_hook_payload_bytes = 512\n\n[upstream]\nopenai_base_url = \"https://openai.example/v1\"\nopenai_auth_header = \"Bearer secret\"\n\n[logging]\nlevel = \"warn\"\nflush_interval_millis = 250\n\n[[logging.sinks]]\npath = \"relay.log\"\nlevel = \"debug\"\nformat = \"jsonl\"\nqueue_capacity = 128\nmax_file_size_bytes = 1048576\nretained_files = 3\n\n[[logging.sinks]]\npath = 42\nmax_file_size_bytes = 1024\n",
-        );
-
-        assert_eq!(document.gateway_summary(), "configured");
-        assert_eq!(document.upstream_summary(), "configured");
-        assert_eq!(document.logging_summary(), "configured");
-        assert_eq!(document.secret_summary("openai_auth_header"), "configured");
-        assert_eq!(document.secret_summary("anthropic_auth_header"), "unset");
-        assert_eq!(
-            document.integer_summary("gateway", "max_hook_payload_bytes"),
-            "512"
-        );
-        assert_eq!(document.string_summary("logging", "level"), "warn");
-        assert_eq!(
-            document.sink_labels(),
-            ["sink 1 (relay.log)", "sink 2 (invalid path)"]
-        );
-        assert_eq!(document.sink_string_summary(0, "level"), "debug");
-        assert_eq!(document.sink_integer_summary(0, "queue_capacity"), "128");
-        assert_eq!(
-            document.sink_rotation_summary(0),
-            "1048576 bytes, 3 backups"
-        );
-        assert_eq!(document.sink_rotation_summary(1), "incomplete");
-        assert_eq!(document.sink_string_summary(1, "path"), "invalid");
-        assert_eq!(document.sink_integer_summary(1, "queue_capacity"), "unset");
-    }
-
-    #[test]
-    fn edits_supported_scalars_and_reports_invalid_existing_values() {
-        let mut document = document(
-            "[gateway]\nmax_hook_payload_bytes = \"not-a-number\"\n\n[upstream]\nopenai_base_url = \"https://example.test/v1\"\n\n[logging]\nlevel = \"info\"\nstderr_format = \"human\"\n",
-        );
-
-        assert_eq!(
-            document.integer_summary("gateway", "max_hook_payload_bytes"),
-            "invalid"
-        );
-        assert_eq!(
-            document.string_summary("upstream", "openai_base_url"),
-            "https://example.test/v1"
-        );
-        document
-            .set_positive_integer("gateway", "max_hook_payload_bytes", 2048)
-            .unwrap();
-        document
-            .set_enum("logging", "level", "debug", LOG_LEVELS)
-            .unwrap();
-        document
-            .set_enum("logging", "stderr_format", "jsonl", LOG_FORMATS)
-            .unwrap();
-        document
-            .set_integer("logging", "flush_interval_millis", 0)
-            .unwrap();
-        document.clear_key("upstream", "openai_base_url").unwrap();
-
-        let rendered = document.document.to_string();
-        assert!(rendered.contains("max_hook_payload_bytes = 2048"));
-        assert!(rendered.contains("level = \"debug\""));
-        assert!(rendered.contains("stderr_format = \"jsonl\""));
-        assert!(rendered.contains("flush_interval_millis = 0"));
-        assert!(!rendered.contains("example.test"));
-    }
-
-    #[test]
-    fn malformed_sections_and_missing_sinks_report_errors_without_panicking() {
-        let mut malformed = document("gateway = \"invalid\"\nlogging = \"invalid\"\n");
-        assert!(
-            malformed
-                .set_positive_integer("gateway", "max_hook_payload_bytes", 1)
-                .is_err()
-        );
-        assert!(malformed.add_sink("relay.log".into()).is_err());
-
-        let mut document = document("");
-        assert!(document.remove_sink(0).is_err());
-        assert!(document.sink_has_key(0, "path").is_err());
-        assert!(document.clear_sink_key(0, "path").is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_auth_headers_and_values_that_cannot_fit_in_toml_integers() {
-        let mut document = document("");
-        assert!(
-            document
-                .set_auth_header("openai_auth_header", "Bearer\nsecret".into())
-                .is_err()
-        );
-        assert!(
-            document
-                .set_integer("logging", "flush_interval_millis", u64::MAX)
-                .is_err()
-        );
-
-        document.add_sink("relay.log".into()).unwrap();
-        assert!(document.set_sink_rotation(0, u64::MAX, 1).is_err());
-        assert!(document.set_sink_rotation(0, 1024, u64::MAX).is_err());
-    }
-
-    #[test]
-    fn target_scope_defaults_to_user_and_honors_explicit_flags() {
-        let user = ConfigEditCommand::default();
-        assert_eq!(TargetScope::from(&user), TargetScope::User);
-        let project = ConfigEditCommand {
-            project: true,
-            ..ConfigEditCommand::default()
-        };
-        assert_eq!(TargetScope::from(&project), TargetScope::Project);
-        let global = ConfigEditCommand {
-            global: true,
-            ..ConfigEditCommand::default()
-        };
-        assert_eq!(TargetScope::from(&global), TargetScope::Global);
-    }
-
-    #[test]
-    fn project_path_prefers_nearest_existing_config() {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("project");
-        let nested = project.join("nested");
-        std::fs::create_dir_all(&nested).unwrap();
-        let config = project.join(".nemo-relay/config.toml");
-        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-        std::fs::write(&config, "").unwrap();
-        assert_eq!(project_config_path(&nested), config);
-        assert_eq!(
-            project_config_path(&root.path().join("new-project")),
-            root.path().join("new-project/.nemo-relay/config.toml")
-        );
-    }
-
-    #[test]
-    fn missing_document_is_created_only_when_written() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("nested/config.toml");
-        let document = ConfigDocument::read(path.clone()).unwrap();
-        assert!(!path.exists());
-        document.write().unwrap();
-        assert!(path.exists());
-    }
-
-    #[test]
-    fn invalid_document_on_disk_is_rejected() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        std::fs::write(&path, "[gateway\n").unwrap();
-
-        let error = match ConfigDocument::read(path.clone()) {
-            Ok(_) => panic!("invalid TOML should be rejected"),
-            Err(error) => error.to_string(),
-        };
-        assert!(error.contains("invalid TOML"));
-        assert!(error.contains(&path.display().to_string()));
-    }
-
-    #[test]
-    fn editor_requires_an_interactive_terminal() {
-        let error = edit(ConfigEditCommand::default()).unwrap_err().to_string();
-        assert_eq!(
-            error,
-            "configuration error: interactive configuration editing requires a TTY"
-        );
-    }
-}
+#[path = "../../../tests/coverage/commands/configure_editor_tests.rs"]
+mod tests;

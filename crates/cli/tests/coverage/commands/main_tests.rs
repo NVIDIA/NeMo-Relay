@@ -251,6 +251,13 @@ fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
     let error =
         Cli::try_parse_from(["nemo-relay", "config", "edit", "--user", "--global"]).unwrap_err();
     assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+    for arguments in [
+        ["nemo-relay", "config", "codex", "edit", "--reset"].as_slice(),
+        ["nemo-relay", "config", "--reset", "edit"].as_slice(),
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
 }
 
 #[test]
