@@ -42,9 +42,25 @@ unsafe extern "C" fn async_json_passthrough_callback(
             "optimization_contributions": [],
         }),
         7 => invocation["fields"].clone(),
+        8 => Json::String("blocked by async guardrail".into()),
+        9 => json!({"invalid": true}),
         _ => unreachable!("test callback kind must be known"),
     };
     let value = CString::new(value.to_string()).expect("JSON has no NUL");
+    assert_eq!(
+        unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
+        NemoRelayStatus::Ok
+    );
+    NemoRelayAsyncCallbackState::Complete
+}
+
+unsafe extern "C" fn async_invalid_stream_callback(
+    _user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    _next: *const NemoRelayAsyncNext,
+    completion: *const NemoRelayAsyncCompletion,
+) -> NemoRelayAsyncCallbackState {
+    let value = CString::new(json!({"not": "an array"}).to_string()).expect("JSON has no NUL");
     assert_eq!(
         unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
         NemoRelayStatus::Ok
@@ -201,6 +217,71 @@ fn async_callback_wrappers_cover_all_middleware_shapes() {
         resolve(event_sanitizer(Arc::new(event), fields.clone())).unwrap(),
         fields
     );
+}
+
+#[test]
+fn async_conditional_and_stream_wrappers_validate_callback_results() {
+    let tool_rejection = wrap_async_tool_conditional_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(8),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(tool_rejection("tool".into(), json!({}))).unwrap(),
+        Some("blocked by async guardrail".into())
+    );
+
+    let llm_rejection = wrap_async_llm_conditional_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(8),
+        Some(free_async_callback_user_data),
+    );
+    assert_eq!(
+        resolve(llm_rejection(make_request())).unwrap(),
+        Some("blocked by async guardrail".into())
+    );
+
+    let tool_invalid = wrap_async_tool_conditional_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(9),
+        Some(free_async_callback_user_data),
+    );
+    assert!(
+        resolve(tool_invalid("tool".into(), json!({})))
+            .unwrap_err()
+            .to_string()
+            .contains("expected string or null")
+    );
+
+    let llm_invalid = wrap_async_llm_conditional_fn(
+        async_json_passthrough_callback,
+        async_callback_user_data(9),
+        Some(free_async_callback_user_data),
+    );
+    assert!(
+        resolve(llm_invalid(make_request()))
+            .unwrap_err()
+            .to_string()
+            .contains("expected string or null")
+    );
+
+    let stream_intercept = wrap_async_llm_stream_execution_intercept_fn(
+        async_invalid_stream_callback,
+        std::ptr::null_mut(),
+        None,
+    );
+    let next: nemo_relay::api::runtime::LlmStreamExecutionNextFn = Arc::new(|_request| {
+        Box::pin(async {
+            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                tokio_stream::empty(),
+            ))
+        })
+    });
+    let result = resolve(stream_intercept("llm", make_request(), next));
+    let Err(error) = result else {
+        panic!("a non-array async stream result must fail");
+    };
+    assert!(error.to_string().contains("must resolve to an array"));
 }
 
 #[test]
