@@ -10,6 +10,25 @@ use crate::api::registry::{RegistryRecord, RequestIntercept};
 
 #[tokio::test]
 async fn middleware_snapshot_chains_contain_callback_panics() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("preserved-event")
+            .data(json!({"event": "preserved"}))
+            .metadata(json!({"metadata": "preserved"}))
+            .build(),
+        None,
+        None,
+    ));
+    let event_sanitizer: EventSanitizeFn =
+        Arc::new(|_, _| Box::pin(async { panic!("event sanitizer panic") }));
+    let sanitized_event = NemoRelayContextState::event_sanitize_snapshot_chain(
+        event.clone(),
+        &[RegistryRecord::new("event-panic", 0, event_sanitizer)],
+    )
+    .await;
+    assert_eq!(sanitized_event.data(), event.data());
+    assert_eq!(sanitized_event.metadata(), event.metadata());
+
     let tool_payload = json!({"tool": "preserved"});
     let tool_sanitizer: ToolSanitizeFn =
         Arc::new(|_, _| Box::pin(async { panic!("tool sanitizer panic") }));
@@ -22,6 +41,22 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
         )
         .await,
         tool_payload
+    );
+    let tool_response = json!({"tool_response": "preserved"});
+    let tool_response_sanitizer: ToolSanitizeFn =
+        Arc::new(|_, _| Box::pin(async { panic!("tool response sanitizer panic") }));
+    assert_eq!(
+        NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+            "tool",
+            tool_response.clone(),
+            &[RegistryRecord::new(
+                "tool-response-panic",
+                0,
+                tool_response_sanitizer,
+            )],
+        )
+        .await,
+        tool_response
     );
 
     let request = LlmRequest {
@@ -39,6 +74,22 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
         )
         .await,
         Some(request.clone())
+    );
+    let llm_response = json!({"llm_response": "preserved"});
+    let llm_response_sanitizer: LlmSanitizeResponseFn =
+        Arc::new(|_, _| Box::pin(async { panic!("LLM response sanitizer panic") }));
+    assert_eq!(
+        NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+            llm_response.clone(),
+            LlmSanitizeResponseContext::default(),
+            &[RegistryRecord::new(
+                "llm-response-panic",
+                0,
+                llm_response_sanitizer,
+            )],
+        )
+        .await,
+        Some(llm_response)
     );
 
     let tool_conditional: ToolConditionalFn =
