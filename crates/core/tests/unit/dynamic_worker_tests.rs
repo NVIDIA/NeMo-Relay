@@ -1335,7 +1335,7 @@ async fn install_registrations_covers_registry_error_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
+#[allow(clippy::await_holding_lock)] // The process-wide test mutex intentionally serializes runtime state.
 async fn installed_callbacks_apply_surface_specific_fallbacks() {
     struct RuntimeCleanup {
         registrations: Option<PluginRegistrationContext>,
@@ -1423,64 +1423,79 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
     let llm_request = valid_llm_request();
     let llm_response = json!({"response": "preserved"});
 
-    {
+    let (
+        subscribers,
+        mark_entries,
+        scope_start_entries,
+        scope_end_entries,
+        tool_request_entries,
+        tool_response_entries,
+        llm_request_entries,
+        llm_response_entries,
+    ) = {
         let state = context.read().unwrap();
-        let subscribers = state.collect_event_subscribers(&[]);
-        NemoRelayContextState::emit_event(&event, &subscribers);
+        (
+            state.collect_event_subscribers(&[]),
+            NemoRelayContextState::event_sanitize_entries(&state.mark_sanitize_guardrails, &[]),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.scope_sanitize_start_guardrails,
+                &[],
+            ),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.scope_sanitize_end_guardrails,
+                &[],
+            ),
+            state.tool_sanitize_request_entries(&[]),
+            state.tool_sanitize_response_entries(&[]),
+            state.llm_sanitize_request_entries(&[]),
+            state.llm_sanitize_response_entries(&[]),
+        )
+    };
+    NemoRelayContextState::emit_event(&event, &subscribers);
 
-        for registry in [
-            &state.mark_sanitize_guardrails,
-            &state.scope_sanitize_start_guardrails,
-            &state.scope_sanitize_end_guardrails,
-        ] {
-            let entries = NemoRelayContextState::event_sanitize_entries(registry, &[]);
-            let sanitized =
-                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries).await;
-            assert_eq!(sanitized.data(), event.data());
-            assert_eq!(sanitized.metadata(), event.metadata());
-        }
-
-        let entries = state.tool_sanitize_request_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::tool_sanitize_request_snapshot_chain(
-                "tool",
-                tool_request.clone(),
-                &entries,
-            )
-            .await,
-            tool_request
-        );
-        let entries = state.tool_sanitize_response_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::tool_sanitize_response_snapshot_chain(
-                "tool",
-                tool_response.clone(),
-                &entries,
-            )
-            .await,
-            tool_response
-        );
-        let entries = state.llm_sanitize_request_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::llm_sanitize_request_snapshot_chain(
-                llm_request.clone(),
-                crate::api::runtime::LlmSanitizeRequestContext::default(),
-                &entries,
-            )
-            .await,
-            Some(llm_request),
-        );
-        let entries = state.llm_sanitize_response_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::llm_sanitize_response_snapshot_chain(
-                llm_response.clone(),
-                crate::api::runtime::LlmSanitizeResponseContext::default(),
-                &entries,
-            )
-            .await,
-            Some(llm_response),
-        );
+    for entries in [mark_entries, scope_start_entries, scope_end_entries] {
+        let sanitized =
+            NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries).await;
+        assert_eq!(sanitized.data(), event.data());
+        assert_eq!(sanitized.metadata(), event.metadata());
     }
+
+    assert_eq!(
+        NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+            "tool",
+            tool_request.clone(),
+            &tool_request_entries,
+        )
+        .await,
+        tool_request
+    );
+    assert_eq!(
+        NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+            "tool",
+            tool_response.clone(),
+            &tool_response_entries,
+        )
+        .await,
+        tool_response
+    );
+    assert_eq!(
+        NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+            llm_request.clone(),
+            crate::api::runtime::LlmSanitizeRequestContext::default(),
+            &llm_request_entries,
+        )
+        .await,
+        Some(llm_request),
+    );
+    assert_eq!(
+        NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+            llm_response.clone(),
+            crate::api::runtime::LlmSanitizeResponseContext::default(),
+            &llm_response_entries,
+        )
+        .await,
+        Some(llm_response),
+    );
     crate::api::subscriber::flush_subscribers().expect("subscriber callback should flush");
 }
 

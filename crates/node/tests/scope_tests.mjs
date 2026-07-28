@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { waitForSubscriberCallbacks } from './test_support.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -27,18 +28,6 @@ const SCOPE_ATTR_RELOCATABLE = 0b10;
 
 function rejectWithPrimitive(value) {
   return Promise.reject(value);
-}
-
-async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    await flushSubscribers();
-    if (Date.now() >= deadline) {
-      throw new Error('timed out waiting for subscriber callbacks');
-    }
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  await flushSubscribers();
 }
 
 // ===========================================================================

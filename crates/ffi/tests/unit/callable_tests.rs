@@ -676,14 +676,18 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
     assert_eq!(sanitize_calls.load(Ordering::SeqCst), 2);
 
     let invalid = wrap_event_sanitize_fn(invalid_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(
-        resolve(invalid(Arc::new(event.clone()), original_fields.clone())).unwrap(),
-        EventSanitizeFields::default()
+    assert!(
+        resolve(invalid(Arc::new(event.clone()), original_fields.clone()))
+            .unwrap_err()
+            .to_string()
+            .contains("invalid event sanitizer result")
     );
     let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(
-        resolve(null(Arc::new(event), original_fields.clone())).unwrap(),
-        EventSanitizeFields::default()
+    assert!(
+        resolve(null(Arc::new(event), original_fields.clone()))
+            .unwrap_err()
+            .to_string()
+            .contains("invalid event sanitizer result")
     );
 
     let handle = LlmHandle::builder()

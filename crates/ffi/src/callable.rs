@@ -947,9 +947,11 @@ pub fn wrap_event_sanitize_fn(
                 json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
             let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
             unsafe { nemo_relay_string_free_internal(fields_json) };
-            let result = serde_json::from_value(ptr_to_json(result_ptr)).unwrap_or_default();
+            let result = serde_json::from_value(ptr_to_json(result_ptr)).map_err(|error| {
+                FlowError::Internal(format!("invalid event sanitizer result: {error}"))
+            });
             unsafe { nemo_relay_string_free_internal(result_ptr) };
-            Ok(result)
+            result
         })
     })
 }

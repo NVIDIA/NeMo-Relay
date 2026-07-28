@@ -713,10 +713,25 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     )
     .unwrap();
 
+    let handle = create_llm_handle(
+        CreateLlmHandleParams::builder()
+            .name("buffered-explicit-null-fallback")
+            .build(),
+    )
+    .unwrap();
+    llm_call_end(
+        LlmCallEndParams::builder()
+            .handle(&handle)
+            .response(Json::Null)
+            .data(Json::Null)
+            .build(),
+    )
+    .unwrap();
+
     flush_subscribers().unwrap();
     let captured = events.lock().unwrap();
     assert_eq!(*seen.lock().unwrap(), vec![fallback]);
-    assert_eq!(captured.len(), 3);
+    assert_eq!(captured.len(), 4);
     assert_eq!(captured[0].output(), Some(&Json::Null));
     assert!(captured[0].annotated_response().is_none());
     assert_eq!(captured[1].output(), Some(&redacted_response()));
@@ -726,6 +741,8 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     );
     assert!(captured[2].output().is_none());
     assert!(captured[2].annotated_response().is_none());
+    assert_eq!(captured[3].output(), Some(&Json::Null));
+    assert!(captured[3].annotated_response().is_none());
     assert!(
         captured
             .iter()

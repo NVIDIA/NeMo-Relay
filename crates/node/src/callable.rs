@@ -705,11 +705,20 @@ pub fn wrap_js_llm_request_intercept_fn(
         move |name: String, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
             let func = func.clone();
             Box::pin(async move {
-                let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-                let annotated_json = annotated
-                    .as_ref()
-                    .map(|a| serde_json::to_value(a).unwrap_or(Json::Null))
-                    .unwrap_or(Json::Null);
+                let req_json = serde_json::to_value(&request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let annotated_json = serde_json::to_value(annotated).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept annotation: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
                 let arg = serde_json::json!({
                     "name": name,
                     "request": req_json,
@@ -1004,7 +1013,13 @@ pub fn wrap_js_llm_conditional_fn(
     Arc::new(move |request: LlmRequest| {
         let func = func.clone();
         Box::pin(async move {
-            let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
+            let req_json = serde_json::to_value(request).map_err(|error| {
+                let error = FlowError::Internal(format!(
+                    "failed to serialize JS LLM conditional request: {error}"
+                ));
+                record_callback_error(error.to_string());
+                error
+            })?;
             let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
                 req_json,

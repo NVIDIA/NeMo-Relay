@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { waitForSubscriberCallbacks } from './test_support.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -45,23 +46,6 @@ function sparseArray() {
   const values = new Array(2);
   values[1] = 1;
   return values;
-}
-
-async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  await flushSubscribers();
-  // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
-  // subscriber callbacks are queued onto Node's event loop through N-API
-  // ThreadsafeFunction. Yield event-loop turns until the observed JS-side
-  // callback state is ready, with a timeout to avoid hanging the test forever.
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    await flushSubscribers();
-    if (Date.now() >= deadline) {
-      throw new Error('timed out waiting for subscriber callbacks');
-    }
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  await flushSubscribers();
 }
 
 // ===========================================================================

@@ -42,6 +42,7 @@ use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
     merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
 };
+use crate::error::FlowError;
 use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
@@ -703,14 +704,27 @@ impl NemoRelayContextState {
     ) -> Json {
         let mut value = args;
         for entry in entries {
-            match (entry.payload)(name.to_string(), value.clone()).await {
-                Ok(next) => value = next,
-                Err(error) => log::error!(
+            let callback = Arc::clone(&entry.payload);
+            let callback_name = name.to_string();
+            let current = value.clone();
+            match AssertUnwindSafe(async move { callback(callback_name, current).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(next)) => value = next,
+                Ok(Err(error)) => log::error!(
                     target: "nemo_relay.runtime",
                     event = "tool_request_sanitizer_failed",
                     sanitizer = entry.name.as_str(),
                     tool_name = name;
                     "Tool request sanitizer failed; preserving the last valid payload: {error}"
+                ),
+                Err(_) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_request_sanitizer_panicked",
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
+                    "Tool request sanitizer panicked; preserving the last valid payload"
                 ),
             }
         }
@@ -752,14 +766,27 @@ impl NemoRelayContextState {
     ) -> Json {
         let mut value = result;
         for entry in entries {
-            match (entry.payload)(name.to_string(), value.clone()).await {
-                Ok(next) => value = next,
-                Err(error) => log::error!(
+            let callback = Arc::clone(&entry.payload);
+            let callback_name = name.to_string();
+            let current = value.clone();
+            match AssertUnwindSafe(async move { callback(callback_name, current).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(next)) => value = next,
+                Ok(Err(error)) => log::error!(
                     target: "nemo_relay.runtime",
                     event = "tool_response_sanitizer_failed",
                     sanitizer = entry.name.as_str(),
                     tool_name = name;
                     "Tool response sanitizer failed; preserving the last valid payload: {error}"
+                ),
+                Err(_) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_response_sanitizer_panicked",
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
+                    "Tool response sanitizer panicked; preserving the last valid payload"
                 ),
             }
         }
@@ -831,7 +858,20 @@ impl NemoRelayContextState {
                 subscribers,
             )
             .await;
-            let result = (entry.payload)(name.to_string(), args.clone()).await;
+            let callback = Arc::clone(&entry.payload);
+            let callback_name = name.to_string();
+            let callback_args = args.clone();
+            let result =
+                match AssertUnwindSafe(async move { callback(callback_name, callback_args).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(FlowError::Internal(format!(
+                        "tool conditional guardrail '{}' panicked",
+                        entry.name
+                    ))),
+                };
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -897,7 +937,20 @@ impl NemoRelayContextState {
     ) -> crate::error::Result<Json> {
         let mut value = args;
         for entry in entries {
-            value = (entry.payload.callable)(name.to_string(), value).await?;
+            let callback = Arc::clone(&entry.payload.callable);
+            let callback_name = name.to_string();
+            value = match AssertUnwindSafe(async move { callback(callback_name, value).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(FlowError::Internal(format!(
+                        "tool request intercept '{}' panicked",
+                        entry.name
+                    )));
+                }
+            };
             if entry.payload.break_chain {
                 break;
             }
@@ -1015,15 +1068,32 @@ impl NemoRelayContextState {
         let mut value = Some(request);
         for entry in entries {
             if let Some(current) = value.take() {
-                match (entry.payload)(current.clone(), context.clone()).await {
-                    Ok(next) => value = next,
-                    Err(error) => {
+                let callback = Arc::clone(&entry.payload);
+                let callback_value = current.clone();
+                let callback_context = context.clone();
+                match AssertUnwindSafe(
+                    async move { callback(callback_value, callback_context).await },
+                )
+                .catch_unwind()
+                .await
+                {
+                    Ok(Ok(next)) => value = next,
+                    Ok(Err(error)) => {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "llm_request_sanitizer_failed",
                             sanitizer = entry.name.as_str(),
                             preserved_value = "unsanitized_request";
                             "LLM request sanitizer failed; preserving the last valid unsanitized request: {error}"
+                        );
+                        value = Some(current);
+                    }
+                    Err(_) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_request_sanitizer_panicked",
+                            sanitizer = entry.name.as_str();
+                            "LLM request sanitizer panicked; preserving the last valid request"
                         );
                         value = Some(current);
                     }
@@ -1068,15 +1138,32 @@ impl NemoRelayContextState {
         let mut value = Some(response);
         for entry in entries {
             if let Some(current) = value.take() {
-                match (entry.payload)(current.clone(), context.clone()).await {
-                    Ok(next) => value = next,
-                    Err(error) => {
+                let callback = Arc::clone(&entry.payload);
+                let callback_value = current.clone();
+                let callback_context = context.clone();
+                match AssertUnwindSafe(
+                    async move { callback(callback_value, callback_context).await },
+                )
+                .catch_unwind()
+                .await
+                {
+                    Ok(Ok(next)) => value = next,
+                    Ok(Err(error)) => {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "llm_response_sanitizer_failed",
                             sanitizer = entry.name.as_str(),
                             preserved_value = "unsanitized_response";
                             "LLM response sanitizer failed; preserving the last valid unsanitized response: {error}"
+                        );
+                        value = Some(current);
+                    }
+                    Err(_) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_response_sanitizer_panicked",
+                            sanitizer = entry.name.as_str();
+                            "LLM response sanitizer panicked; preserving the last valid response"
                         );
                         value = Some(current);
                     }
@@ -1148,7 +1235,18 @@ impl NemoRelayContextState {
                 subscribers,
             )
             .await;
-            let result = (entry.payload)(request.clone()).await;
+            let callback = Arc::clone(&entry.payload);
+            let callback_request = request.clone();
+            let result = match AssertUnwindSafe(async move { callback(callback_request).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(FlowError::Internal(format!(
+                    "LLM conditional guardrail '{}' panicked",
+                    entry.name
+                ))),
+            };
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -1245,8 +1343,22 @@ impl NemoRelayContextState {
         let mut optimization_contributions = Vec::new();
         for entry in entries {
             let input_content = request_value.content.clone();
-            let outcome =
-                (entry.payload.callable)(name.to_string(), request_value, annotated_value).await?;
+            let callback = Arc::clone(&entry.payload.callable);
+            let callback_name = name.to_string();
+            let outcome = match AssertUnwindSafe(async move {
+                callback(callback_name, request_value, annotated_value).await
+            })
+            .catch_unwind()
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(FlowError::Internal(format!(
+                        "LLM request intercept '{}' panicked",
+                        entry.name
+                    )));
+                }
+            };
             if codec_active && outcome.request.content != input_content {
                 return Err(crate::error::FlowError::InvalidArgument(format!(
                     "LLM request intercept '{}' changed request.content while a request codec is active; modify annotated_request instead",
@@ -1352,5 +1464,113 @@ fn end_timestamp_after(started_at: chrono::DateTime<Utc>) -> chrono::DateTime<Ut
 impl Default for NemoRelayContextState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod panic_tests {
+    use super::*;
+    use crate::api::registry::{RegistryRecord, RequestIntercept};
+    use serde_json::{Map, json};
+
+    #[tokio::test]
+    async fn middleware_snapshot_chains_contain_callback_panics() {
+        let tool_payload = json!({"tool": "preserved"});
+        let tool_sanitizer: ToolSanitizeFn =
+            Arc::new(|_, _| Box::pin(async { panic!("tool sanitizer panic") }));
+        let tool_entries = vec![RegistryRecord::new("tool-panic", 0, tool_sanitizer)];
+        assert_eq!(
+            NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                "tool",
+                tool_payload.clone(),
+                &tool_entries,
+            )
+            .await,
+            tool_payload
+        );
+
+        let request = LlmRequest {
+            headers: Map::new(),
+            content: json!({"llm": "preserved"}),
+        };
+        let llm_sanitizer: LlmSanitizeRequestFn =
+            Arc::new(|_, _| Box::pin(async { panic!("LLM sanitizer panic") }));
+        let llm_entries = vec![RegistryRecord::new("llm-panic", 0, llm_sanitizer)];
+        assert_eq!(
+            NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+                request.clone(),
+                LlmSanitizeRequestContext::default(),
+                &llm_entries,
+            )
+            .await,
+            Some(request.clone())
+        );
+
+        let tool_conditional: ToolConditionalFn =
+            Arc::new(|_, _| Box::pin(async { panic!("tool conditional panic") }));
+        let error = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
+            "tool",
+            &tool_payload,
+            &[RegistryRecord::new(
+                "tool-conditional-panic",
+                0,
+                tool_conditional,
+            )],
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("tool-conditional-panic"));
+
+        let llm_conditional: LlmConditionalFn =
+            Arc::new(|_| Box::pin(async { panic!("LLM conditional panic") }));
+        let error = NemoRelayContextState::llm_conditional_execution_snapshot_chain(
+            &request,
+            &[RegistryRecord::new(
+                "llm-conditional-panic",
+                0,
+                llm_conditional,
+            )],
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("llm-conditional-panic"));
+
+        let tool_intercept: ToolInterceptFn =
+            Arc::new(|_, _| Box::pin(async { panic!("tool intercept panic") }));
+        let error = NemoRelayContextState::tool_request_intercepts_snapshot_chain(
+            "tool",
+            tool_payload,
+            &[RegistryRecord::new(
+                "tool-intercept-panic",
+                0,
+                RequestIntercept::new(false, tool_intercept),
+            )],
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("tool-intercept-panic"));
+
+        let llm_intercept: LlmRequestInterceptFn =
+            Arc::new(|_, _, _| Box::pin(async { panic!("LLM intercept panic") }));
+        let error = NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+            "llm",
+            request,
+            None,
+            &[RegistryRecord::new(
+                "llm-intercept-panic",
+                0,
+                RequestIntercept::new(false, llm_intercept),
+            )],
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("llm-intercept-panic"));
     }
 }

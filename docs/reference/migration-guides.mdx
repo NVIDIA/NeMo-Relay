@@ -20,9 +20,10 @@ observability sanitizer contract. Complete the following migrations before you
 run existing middleware or a sanitizer with a 0.7 host.
 
 <Warning>
-Do not deploy a 0.6 plugin or worker against a 0.7 host. The middleware
-callback contract, LLM callback signature, native ABI layout, and worker
-invocation schema changed. NeMo Relay does not adapt synchronous Rust
+A 0.6 native plugin can still load through the legacy v2 table fallback, but it
+is not compatible with the changed middleware and LLM sanitizer callback
+contracts or other changed ABI and schema behavior. Rebuild plugins and workers
+for 0.7 before using those surfaces. NeMo Relay does not adapt synchronous Rust
 middleware callbacks or one-argument LLM sanitizer callbacks.
 </Warning>
 
@@ -282,9 +283,11 @@ NeMo Relay 0.7 uses native ABI v3. Recompile native plugins against the 0.7
 0.7 header.
 
 The v3 table preserves the v2 prefix, and Relay retries a legacy v2 table when
-loading a plugin that rejects v3. Rebuild anyway if a plugin uses raw ABI
-callbacks: v3 adds completion-based async middleware registration, async
-execution continuations, and explicit cancellation/late-settlement behavior.
+loading a plugin that rejects v3. That fallback supports loading, not
+compatibility with changed middleware, LLM sanitizer, ABI, or schema contracts.
+Rebuild plugins that use raw ABI callbacks: v3 adds completion-based async
+middleware registration, async execution continuations, and explicit
+cancellation/late-settlement behavior.
 
 The plugin manifest value remains `compat.native_api = "1"`. This manifest
 contract version is separate from the host ABI version; do not change it to
