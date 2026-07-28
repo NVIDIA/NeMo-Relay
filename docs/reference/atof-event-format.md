@@ -69,7 +69,7 @@ Beyond the base envelope (`kind`, `uuid`, `parent_uuid`, `timestamp`, `name`, `a
 - `category` — semantic category of the work. Closed `enum` (see §4). Required on `scope`, optional on `mark`.
 - `category_profile` — category-specific typed fields packaged as a sub-object. Keys vary by `category` — `subtype` for `custom`, `model_name` for `llm`, `tool_call_id` for `tool`, additional keys reserved for future categories (see §4.4). Null for tier-1 opaque events and for categories with no kind-specific fields.
 - `data` — application-defined payload. Opaque to ATOF. On `scope` events, typically carries the scope's input on `scope_category: "start"` and the scope's output on `scope_category: "end"`. Consumers MUST NOT dispatch on `data` contents.
-- `data_schema` — optional identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; the producer declares it, and validation of `data` against the named schema is the consumer's responsibility. The reference ATOF→ATIF converter provides two registries keyed on this identifier: `nat.atof.schemas` for JSON Schema validators and `nat.atof.extractors` for payload parsers. See [examples/atof_to_atif/README.md](examples/atof_to_atif/README.md#extending-the-converter) for registration guidance.
+- `data_schema` — optional identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; the producer declares it, and validation of `data` against the named schema is the consumer's responsibility. The reference ATOF→ATIF converter provides two registries keyed on this identifier: `nat.atof.schemas` for JSON Schema validators and `nat.atof.extractors` for payload parsers. Refer to [Extending the converter](https://github.com/NVIDIA/NeMo-Agent-Toolkit/blob/develop/packages/nvidia_nat_atif/examples/atof_to_atif/README.md#extending-the-converter) for registration guidance.
 - `metadata` — tracing and correlation envelope (`trace_id`, `span_id`, etc.).
 
 ---
@@ -263,7 +263,7 @@ Every `scope` event with `scope_category: "start"` is paired with exactly one `s
 
 `mark` events have no paired event — they are single-shot.
 
-If the runtime dies before emitting a paired end event, no event appears in the stream. The pairing guarantee is contingent on orderly shutdown. Consumers that detect an unpaired start event after the stream ends MAY synthesize an end event for downstream processing; such synthetic events are out of scope for ATOF Core.
+If the runtime dies before emitting a paired end event, the already-emitted start event remains in the stream, but no paired end event appears. The pairing guarantee is contingent on orderly shutdown. Consumers that detect an unpaired start event after the stream ends MAY synthesize an end event for downstream processing; such synthetic events are out of scope for ATOF Core.
 
 ### 5.4 UUID Uniqueness
 
@@ -293,7 +293,7 @@ Every event carries a required `atof_version` field, formatted `"MAJOR.MINOR"` �
 
 ## 6. What ATOF Is Not
 
-- **Not ATIF.** ATIF is a higher-level trajectory format with computed ancestry, merged observations, sequenced `step_ids`, and turn-based structure. ATOF events are the raw observations ATIF is built from. See `examples/atof_to_atif/README.md` for the conversion reference.
+- **Not ATIF.** ATIF is a higher-level trajectory format with computed ancestry, merged observations, sequenced `step_ids`, and turn-based structure. ATOF events are the raw observations ATIF is built from. Refer to the [ATOF-to-ATIF conversion reference](https://github.com/NVIDIA/NeMo-Agent-Toolkit/blob/develop/packages/nvidia_nat_atif/examples/atof_to_atif/README.md#conversion-reference).
 - **Not a metrics format.** Token counts, latency budgets, cost attribution — those live in `data` payloads or in downstream aggregation. ATOF does not normalize or roll up metrics.
 - **Not a trace format.** ATOF is compatible with distributed tracing (subscribers can export to OpenTelemetry via `metadata.trace_id`/`metadata.span_id`) but is not itself an OTLP-equivalent wire format.
 - **Not a replay executor.** An ATOF stream lets you reconstruct what happened. It does not provide the mechanism to re-run it — that's a separate layer built on top.
@@ -306,7 +306,7 @@ Every event carries a required `atof_version` field, formatted `"MAJOR.MINOR"` �
 - **Producer runtimes:** Agent runtimes emitting ATOF MAY use more granular internal types (e.g., separate `LlmStartEvent`/`ToolStartEvent` structs in typed languages) for type-safe construction, but MUST serialize to ATOF's two-kind wire format on emission.
 - **Language bindings:** Where a producer runtime exposes bindings to additional languages, those bindings SHOULD re-export the runtime's event types via language-idiomatic wrappers while preserving the wire format on serialization.
 
-See `examples/atof_to_atif/README.md` for the normative ATOF → ATIF conversion reference.
+Refer to the [ATOF-to-ATIF conversion reference](https://github.com/NVIDIA/NeMo-Agent-Toolkit/blob/develop/packages/nvidia_nat_atif/examples/atof_to_atif/README.md#conversion-reference) for the normative conversion mapping.
 
 ---
 
