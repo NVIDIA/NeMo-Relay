@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from typing import cast
 
@@ -71,6 +72,29 @@ def test_mark_sanitizer_exception_preserves_observability_fields(capture_events)
 
     assert events[-1].data == {"kept": True}
     assert events[-1].metadata is None
+
+
+async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
+    _capture_name, events = capture_events
+    originating_loop = asyncio.get_running_loop()
+
+    async def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        await asyncio.sleep(0)
+        assert asyncio.get_running_loop() is originating_loop
+        return {
+            "data": {"async": True},
+            "category_profile": fields["category_profile"],
+            "metadata": fields["metadata"],
+        }
+
+    guardrails.register_mark_sanitize("python-async-mark", 0, sanitize)
+    try:
+        scope.event("async-checkpoint", data={"raw": True})
+        await asyncio.to_thread(subscribers.flush)
+    finally:
+        guardrails.deregister_mark_sanitize("python-async-mark")
+
+    assert events[-1].data == {"async": True}
 
 
 def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events):

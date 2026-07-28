@@ -665,6 +665,39 @@ class TestLLMStreaming:
         # Collector should have received all chunks
         assert len(collected) == len(chunks)
 
+    async def test_async_response_sanitizer_runs_during_stream_finalization(self):
+        events = []
+        originating_loop = asyncio.get_running_loop()
+        subscribers.register("py_llm_async_stream_sanitizer_sub", events.append)
+
+        async def sanitize_response(response, context):
+            del context
+            await asyncio.sleep(0)
+            assert asyncio.get_running_loop() is originating_loop
+            return {"sanitized": response["raw"]}
+
+        async def stream_func(request):
+            del request
+            yield {"token": "hello"}
+
+        guardrails.register_llm_sanitize_response("py_llm_async_stream_sanitizer", 1, sanitize_response)
+        try:
+            stream = await llm.stream_execute(
+                "stream_async_response_sanitizer",
+                make_request(),
+                stream_func,
+                lambda chunk: None,
+                lambda: {"raw": True},
+            )
+            assert [chunk async for chunk in stream] == [{"token": "hello"}]
+            await asyncio.to_thread(subscribers.flush)
+        finally:
+            guardrails.deregister_llm_sanitize_response("py_llm_async_stream_sanitizer")
+            subscribers.deregister("py_llm_async_stream_sanitizer_sub")
+
+        end = _llm_event(events, "stream_async_response_sanitizer", "end")
+        assert end.data == {"sanitized": True}
+
     async def test_stream_execute_aclose_stops_partially_consumed_stream(self):
         producer_closed = asyncio.Event()
         wait_for_more_chunks = asyncio.Event()
