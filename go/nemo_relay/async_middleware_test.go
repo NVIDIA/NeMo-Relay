@@ -57,8 +57,14 @@ func TestAsyncMiddlewareGlobalRegistrationParity(t *testing.T) {
 			if err := registration.register(name); err != nil {
 				t.Fatalf("register: %v", err)
 			}
+			if err := registration.register(name); err == nil {
+				t.Fatal("duplicate registration unexpectedly succeeded")
+			}
 			if err := registration.deregister(name); err != nil {
 				t.Fatalf("deregister: %v", err)
+			}
+			if err := registration.deregister(name); err != nil {
+				t.Fatalf("idempotent deregister: %v", err)
 			}
 		})
 	}
@@ -131,9 +137,50 @@ func TestAsyncMiddlewareScopeLocalRegistrationParity(t *testing.T) {
 			if err := registration.register(name); err != nil {
 				t.Fatalf("register %s: %v", registration.name, err)
 			}
+			if err := registration.register(name); err == nil {
+				t.Fatalf("duplicate registration %s unexpectedly succeeded", registration.name)
+			}
 			if err := registration.deregister(name); err != nil {
 				t.Fatalf("deregister %s: %v", registration.name, err)
 			}
+			if err := registration.deregister(name); err != nil {
+				t.Fatalf("idempotent deregistration %s: %v", registration.name, err)
+			}
+		}
+	})
+}
+
+func TestAsyncToolRequestInterceptPriorityOrdering(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		register := func(name string, priority int32, marker string) {
+			t.Helper()
+			err := RegisterToolRequestInterceptAsync(name, priority, false,
+				func(_ context.Context, invocation json.RawMessage) (any, error) {
+					var envelope struct {
+						Value map[string]any `json:"value"`
+					}
+					if err := json.Unmarshal(invocation, &envelope); err != nil {
+						return nil, err
+					}
+					order, _ := envelope.Value["order"].(string)
+					envelope.Value["order"] = order + marker
+					return envelope.Value, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("register %s: %v", name, err)
+			}
+			t.Cleanup(func() { _ = DeregisterToolRequestIntercept(name) })
+		}
+		register("go-async-priority-late", 10, "B")
+		register("go-async-priority-early", 0, "A")
+
+		result, err := ToolRequestIntercepts("priority", json.RawMessage(`{"order":""}`))
+		if err != nil {
+			t.Fatalf("tool request intercepts: %v", err)
+		}
+		if string(result) != `{"order":"AB"}` {
+			t.Fatalf("result = %s, want priority order AB", result)
 		}
 	})
 }

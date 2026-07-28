@@ -173,6 +173,7 @@ unsafe fn register_scope_async(
     surface: Surface,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let callback = wrap_async_event_sanitize_fn(cb, user_data, free_fn);
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(uuid) => uuid,
         Err(status) => return status,
@@ -181,7 +182,6 @@ unsafe fn register_scope_async(
         Ok(name) => name,
         Err(status) => return status,
     };
-    let callback = wrap_async_event_sanitize_fn(cb, user_data, free_fn);
     let result = match surface {
         Surface::Mark => core_registry_api::scope_register_mark_sanitize_guardrail(
             &uuid, &name, priority, callback,

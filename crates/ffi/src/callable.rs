@@ -97,6 +97,36 @@ enum AsyncNextInner {
     LlmStream(LlmStreamExecutionNextFn),
 }
 
+const ASYNC_STREAM_MAX_CHUNKS: usize = 4096;
+const ASYNC_STREAM_MAX_SERIALIZED_BYTES: usize = 16 * 1024 * 1024;
+
+async fn collect_async_stream_for_completion(mut stream: LlmJsonStream) -> Result<Json> {
+    let mut chunks = Vec::new();
+    let mut serialized_bytes = 0usize;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if chunks.len() >= ASYNC_STREAM_MAX_CHUNKS {
+            return Err(FlowError::Internal(format!(
+                "async stream continuation exceeded the {ASYNC_STREAM_MAX_CHUNKS}-chunk completion limit"
+            )));
+        }
+        serialized_bytes = serialized_bytes.saturating_add(
+            serde_json::to_vec(&chunk)
+                .map_err(|error| {
+                    FlowError::Internal(format!("failed to measure async stream chunk: {error}"))
+                })?
+                .len(),
+        );
+        if serialized_bytes > ASYNC_STREAM_MAX_SERIALIZED_BYTES {
+            return Err(FlowError::Internal(format!(
+                "async stream continuation exceeded the {ASYNC_STREAM_MAX_SERIALIZED_BYTES}-byte completion limit"
+            )));
+        }
+        chunks.push(chunk);
+    }
+    Ok(Json::Array(chunks))
+}
+
 /// Completion-based execution-intercept callback.
 pub type NemoRelayAsyncInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
@@ -222,6 +252,9 @@ pub unsafe extern "C" fn nemo_relay_async_next_release(next: *const NemoRelayAsy
 }
 
 /// Invoke the next execution layer and settle `completion` with its result.
+///
+/// A non-`Ok` return means invocation was not scheduled and never settles
+/// `completion`; the caller remains responsible for rejecting or releasing it.
 #[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_async_next_invoke(
@@ -252,17 +285,7 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke(
         AsyncNextInner::Llm(next) => {
             let request = match serde_json::from_value(invocation) {
                 Ok(request) => request,
-                Err(error) => {
-                    return {
-                        let _ = completion
-                            .sender
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .take()
-                            .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
-                        NemoRelayStatus::InvalidJson
-                    };
-                }
+                Err(_) => return NemoRelayStatus::InvalidJson,
             };
             let next = next.clone();
             Box::pin(async move { next(request).await })
@@ -270,27 +293,10 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke(
         AsyncNextInner::LlmStream(next) => {
             let request = match serde_json::from_value(invocation) {
                 Ok(request) => request,
-                Err(error) => {
-                    return {
-                        let _ = completion
-                            .sender
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .take()
-                            .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
-                        NemoRelayStatus::InvalidJson
-                    };
-                }
+                Err(_) => return NemoRelayStatus::InvalidJson,
             };
             let next = next.clone();
-            Box::pin(async move {
-                let mut stream = next(request).await?;
-                let mut chunks = Vec::new();
-                while let Some(chunk) = stream.next().await {
-                    chunks.push(chunk?);
-                }
-                Ok(Json::Array(chunks))
-            })
+            Box::pin(async move { collect_async_stream_for_completion(next(request).await?).await })
         }
     };
     next.runtime.spawn(async move {
@@ -344,14 +350,7 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke_callback(
                 Err(_) => return NemoRelayStatus::InvalidJson,
             };
             let next = next.clone();
-            Box::pin(async move {
-                let mut stream = next(request).await?;
-                let mut chunks = Vec::new();
-                while let Some(chunk) = stream.next().await {
-                    chunks.push(chunk?);
-                }
-                Ok(Json::Array(chunks))
-            })
+            Box::pin(async move { collect_async_stream_for_completion(next(request).await?).await })
         }
     };
     let user_data = user_data as usize;
@@ -770,7 +769,7 @@ pub fn wrap_async_event_sanitize_fn(
     free_fn: NemoRelayFreeFn,
 ) -> EventSanitizeFn {
     let user_data = make_user_data(user_data, free_fn);
-    Arc::new(move |event: Event, fields: EventSanitizeFields| {
+    Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let user_data = user_data.clone();
         Box::pin(async move {
             let value = invoke_async_json(
@@ -816,12 +815,13 @@ pub fn wrap_async_llm_sanitize_request_fn(
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
             let user_data = user_data.clone();
-            let codec = format!("{:?}", context.codec());
+            let codec = ffi_codec_identity_json(context.codec());
             Box::pin(async move {
+                let codec = codec?;
                 let value = invoke_async_json(
                     cb,
                     user_data,
-                    serde_json::json!({"request": request, "context": {"codec": codec}}),
+                    serde_json::json!({"request": request, "context": codec}),
                 )
                 .await?;
                 if value.is_null() {
@@ -845,12 +845,13 @@ pub fn wrap_async_llm_sanitize_response_fn(
     let user_data = make_user_data(user_data, free_fn);
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         let user_data = user_data.clone();
-        let codec = format!("{:?}", context.codec());
+        let codec = ffi_codec_identity_json(context.codec());
         Box::pin(async move {
+            let codec = codec?;
             let value = invoke_async_json(
                 cb,
                 user_data,
-                serde_json::json!({"response": response, "context": {"codec": codec}}),
+                serde_json::json!({"response": response, "context": codec}),
             )
             .await?;
             Ok((!value.is_null()).then_some(value))
@@ -933,6 +934,7 @@ pub fn wrap_async_llm_execution_intercept_fn(
 /// The completion ABI resolves one JSON value, so a stream intercept must
 /// resolve to an array of chunks. Relay replays that array as a stream after
 /// completion; incremental chunk delivery is not available through this ABI.
+/// Relay rejects more than 4096 chunks or 16 MiB of serialized chunk data.
 pub fn wrap_async_llm_stream_execution_intercept_fn(
     cb: NemoRelayAsyncInterceptCb,
     user_data: *mut libc::c_void,
@@ -1477,6 +1479,22 @@ fn ffi_codec_identity(
         ),
         LlmCodecIdentity::Opaque => (NemoRelayLlmSanitizeCodecKind::Opaque, None),
     })
+}
+
+fn ffi_codec_identity_json(identity: &LlmCodecIdentity) -> Result<Json> {
+    let (kind, id) = ffi_codec_identity(identity)?;
+    let id = id
+        .as_ref()
+        .map(|id| {
+            id.to_str()
+                .map(str::to_owned)
+                .map_err(|error| FlowError::Internal(error.to_string()))
+        })
+        .transpose()?;
+    Ok(serde_json::json!({
+        "codec_kind": kind as u32,
+        "codec_id": id,
+    }))
 }
 
 /// Wrap a C LLM conditional callback into a Rust closure.

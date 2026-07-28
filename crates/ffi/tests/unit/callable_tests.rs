@@ -198,7 +198,7 @@ fn async_callback_wrappers_cover_all_middleware_shapes() {
         Some(free_async_callback_user_data),
     );
     assert_eq!(
-        resolve(event_sanitizer(event, fields.clone())).unwrap(),
+        resolve(event_sanitizer(Arc::new(event), fields.clone())).unwrap(),
         fields
     );
 }

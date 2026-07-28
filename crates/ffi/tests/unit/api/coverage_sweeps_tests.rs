@@ -148,7 +148,7 @@ fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
         nemo_relay_deregister_llm_stream_execution_intercept
     );
 
-    let _stack = unsafe { fresh_scope_stack() };
+    let stack = unsafe { fresh_scope_stack() };
     let mut scope = ptr::null_mut();
     assert_eq!(
         unsafe { nemo_relay_get_handle(&mut scope) },
@@ -284,6 +284,7 @@ fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
         nemo_relay_scope_deregister_llm_stream_execution_intercept
     );
     unsafe { nemo_relay_scope_handle_free(scope) };
+    unsafe { nemo_relay_scope_stack_free(stack) };
 }
 
 impl EnvGuard {

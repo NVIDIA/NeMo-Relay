@@ -30,128 +30,72 @@ fn parse_scope_uuid(scope_uuid: *const c_char) -> Result<uuid::Uuid, NemoRelaySt
     })
 }
 
-macro_rules! scope_async_registration {
-    ($fn_name:ident, $register:path, $wrapper:path $(, $break_chain:ident)?) => {
-        /// Register a scope-local completion-based asynchronous middleware callback.
-        #[allow(clippy::missing_safety_doc)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $fn_name(
-            scope_uuid: *const c_char,
-            name: *const c_char,
-            priority: i32,
-            $( $break_chain: bool, )?
-            cb: NemoRelayAsyncJsonCb,
-            user_data: *mut libc::c_void,
-            free_fn: NemoRelayFreeFn,
-        ) -> NemoRelayStatus {
-            clear_last_error();
-            let uuid = match parse_scope_uuid(scope_uuid) {
-                Ok(uuid) => uuid,
-                Err(status) => return status,
-            };
-            let name = match c_str_to_string(name) {
-                Ok(name) => name,
-                Err(status) => return status,
-            };
-            match $register(
-                &uuid,
-                &name,
-                priority,
-                $( $break_chain, )?
-                $wrapper(cb, user_data, free_fn),
-            ) {
-                Ok(()) => NemoRelayStatus::Ok,
-                Err(error) => status_from_error(&error),
-            }
-        }
-    };
-}
-
 scope_async_registration!(
     nemo_relay_scope_register_tool_sanitize_request_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_tool_sanitize_request_guardrail,
     wrap_async_tool_json_fn
 );
 scope_async_registration!(
     nemo_relay_scope_register_tool_sanitize_response_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_tool_sanitize_response_guardrail,
     wrap_async_tool_json_fn
 );
 scope_async_registration!(
     nemo_relay_scope_register_tool_conditional_execution_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_tool_conditional_execution_guardrail,
     wrap_async_tool_conditional_fn
 );
 scope_async_registration!(
     nemo_relay_scope_register_tool_request_intercept_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_tool_request_intercept,
     wrap_async_tool_json_fn,
     break_chain
 );
 scope_async_registration!(
     nemo_relay_scope_register_llm_sanitize_request_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_llm_sanitize_request_guardrail,
     wrap_async_llm_sanitize_request_fn
 );
 scope_async_registration!(
     nemo_relay_scope_register_llm_sanitize_response_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_llm_sanitize_response_guardrail,
     wrap_async_llm_sanitize_response_fn
 );
 scope_async_registration!(
     nemo_relay_scope_register_llm_conditional_execution_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_llm_conditional_execution_guardrail,
     wrap_async_llm_conditional_fn
 );
 scope_async_registration!(
     nemo_relay_scope_register_llm_request_intercept_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::scope_register_llm_request_intercept,
     wrap_async_llm_request_intercept_fn,
     break_chain
 );
 
-macro_rules! scope_async_execution_registration {
-    ($fn_name:ident, $register:path, $wrapper:path) => {
-        /// Register a scope-local completion-based asynchronous execution intercept.
-        #[allow(clippy::missing_safety_doc)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $fn_name(
-            scope_uuid: *const c_char,
-            name: *const c_char,
-            priority: i32,
-            cb: NemoRelayAsyncInterceptCb,
-            user_data: *mut libc::c_void,
-            free_fn: NemoRelayFreeFn,
-        ) -> NemoRelayStatus {
-            clear_last_error();
-            let uuid = match parse_scope_uuid(scope_uuid) {
-                Ok(uuid) => uuid,
-                Err(status) => return status,
-            };
-            let name = match c_str_to_string(name) {
-                Ok(name) => name,
-                Err(status) => return status,
-            };
-            match $register(&uuid, &name, priority, $wrapper(cb, user_data, free_fn)) {
-                Ok(()) => NemoRelayStatus::Ok,
-                Err(error) => status_from_error(&error),
-            }
-        }
-    };
-}
-
-scope_async_execution_registration!(
+scope_async_registration!(
     nemo_relay_scope_register_tool_execution_intercept_async,
+    NemoRelayAsyncInterceptCb,
     core_registry_api::scope_register_tool_execution_intercept,
     wrap_async_tool_execution_intercept_fn
 );
-scope_async_execution_registration!(
+scope_async_registration!(
     nemo_relay_scope_register_llm_execution_intercept_async,
+    NemoRelayAsyncInterceptCb,
     core_registry_api::scope_register_llm_execution_intercept,
     wrap_async_llm_execution_intercept_fn
 );
-scope_async_execution_registration!(
+scope_async_registration!(
     nemo_relay_scope_register_llm_stream_execution_intercept_async,
+    NemoRelayAsyncInterceptCb,
     core_registry_api::scope_register_llm_stream_execution_intercept,
     wrap_async_llm_stream_execution_intercept_fn
 );

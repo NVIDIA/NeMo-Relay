@@ -14,90 +14,40 @@ use super::{
     wrap_llm_stream_exec_intercept_fn,
 };
 
-macro_rules! async_llm_registration {
-    ($fn_name:ident, $register:path, $wrapper:path $(, $break_chain:ident)?) => {
-        /// Register a completion-based asynchronous LLM middleware callback.
-        #[allow(clippy::missing_safety_doc)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $fn_name(
-            name: *const c_char,
-            priority: i32,
-            $( $break_chain: bool, )?
-            cb: NemoRelayAsyncJsonCb,
-            user_data: *mut libc::c_void,
-            free_fn: NemoRelayFreeFn,
-        ) -> NemoRelayStatus {
-            clear_last_error();
-            let name = match c_str_to_string(name) {
-                Ok(name) => name,
-                Err(status) => return status,
-            };
-            match $register(
-                &name,
-                priority,
-                $( $break_chain, )?
-                $wrapper(cb, user_data, free_fn),
-            ) {
-                Ok(()) => NemoRelayStatus::Ok,
-                Err(error) => status_from_error(&error),
-            }
-        }
-    };
-}
-
-async_llm_registration!(
+global_async_registration!(
     nemo_relay_register_llm_sanitize_request_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::register_llm_sanitize_request_guardrail,
     wrap_async_llm_sanitize_request_fn
 );
 
-macro_rules! async_llm_execution_registration {
-    ($name:ident, $register:path, $wrapper:path) => {
-        /// Register a completion-based asynchronous LLM execution intercept.
-        #[allow(clippy::missing_safety_doc)]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name(
-            name: *const c_char,
-            priority: i32,
-            cb: NemoRelayAsyncInterceptCb,
-            user_data: *mut libc::c_void,
-            free_fn: NemoRelayFreeFn,
-        ) -> NemoRelayStatus {
-            clear_last_error();
-            let name = match c_str_to_string(name) {
-                Ok(name) => name,
-                Err(status) => return status,
-            };
-            match $register(&name, priority, $wrapper(cb, user_data, free_fn)) {
-                Ok(()) => NemoRelayStatus::Ok,
-                Err(error) => status_from_error(&error),
-            }
-        }
-    };
-}
-
-async_llm_execution_registration!(
+global_async_registration!(
     nemo_relay_register_llm_execution_intercept_async,
+    NemoRelayAsyncInterceptCb,
     core_registry_api::register_llm_execution_intercept,
     wrap_async_llm_execution_intercept_fn
 );
-async_llm_execution_registration!(
+global_async_registration!(
     nemo_relay_register_llm_stream_execution_intercept_async,
+    NemoRelayAsyncInterceptCb,
     core_registry_api::register_llm_stream_execution_intercept,
     wrap_async_llm_stream_execution_intercept_fn
 );
-async_llm_registration!(
+global_async_registration!(
     nemo_relay_register_llm_sanitize_response_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::register_llm_sanitize_response_guardrail,
     wrap_async_llm_sanitize_response_fn
 );
-async_llm_registration!(
+global_async_registration!(
     nemo_relay_register_llm_conditional_execution_guardrail_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::register_llm_conditional_execution_guardrail,
     wrap_async_llm_conditional_fn
 );
-async_llm_registration!(
+global_async_registration!(
     nemo_relay_register_llm_request_intercept_async,
+    NemoRelayAsyncJsonCb,
     core_registry_api::register_llm_request_intercept,
     wrap_async_llm_request_intercept_fn,
     break_chain
