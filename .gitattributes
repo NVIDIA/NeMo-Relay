@@ -2,3 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 examples/python-grpc-worker-plugin/nemo_relay_python_grpc_worker_example/worker.py text eol=lf
+
+Cargo.lock linguist-generated=true
+ATTRIBUTIONS-*.md linguist-generated=true
