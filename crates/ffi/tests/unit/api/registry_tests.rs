@@ -169,7 +169,8 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             nemo_relay_deregister_mark_sanitize_guardrail(invalid_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
-        // The queued event retains its sanitizer snapshot after deregistration.
+        // A queued event owns its sanitizer snapshot until publication. Flush
+        // before observing the callback-data destructor.
         assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         assert_eq!(*lock_unpoisoned(plugin_frees()), 4);
 
@@ -334,6 +335,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
         );
         nemo_relay_scope_handle_free(owner);
         assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 7);
         let events = lock_unpoisoned(event_log());
         let invalid_callback_event = events
             .iter()

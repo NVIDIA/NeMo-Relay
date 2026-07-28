@@ -44,6 +44,10 @@ typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const c
 typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
+typedef struct NemoRelayAsyncCompletion NemoRelayAsyncCompletion;
+typedef struct NemoRelayAsyncNext NemoRelayAsyncNext;
+typedef uint32_t (*NemoRelayAsyncJsonCb)(void*, const char*, const NemoRelayAsyncCompletion*);
+typedef uint32_t (*NemoRelayAsyncInterceptCb)(void*, const char*, const NemoRelayAsyncNext*, const NemoRelayAsyncCompletion*);
 
 // Core API
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
@@ -121,46 +125,57 @@ extern void nemo_relay_set_last_error_message(const char* msg);
 // Tool guardrails
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 extern int32_t nemo_relay_register_tool_sanitize_request_guardrail(const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_tool_sanitize_request_guardrail_async(const char*, int32_t, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_tool_sanitize_request_guardrail(const char* name);
 extern int32_t nemo_relay_register_tool_sanitize_response_guardrail(const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_tool_sanitize_response_guardrail_async(const char*, int32_t, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_tool_sanitize_response_guardrail(const char* name);
 
 typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, const char* args_json);
 extern int32_t nemo_relay_register_tool_conditional_execution_guardrail(const char* name, int32_t priority, NemoRelayToolConditionalFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_tool_conditional_execution_guardrail_async(const char*, int32_t, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_tool_conditional_execution_guardrail(const char* name);
 
 // Tool intercepts
 extern int32_t nemo_relay_register_tool_request_intercept(const char* name, int32_t priority, _Bool break_chain, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_tool_request_intercept_async(const char*, int32_t, _Bool, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_tool_request_intercept(const char* name);
 // Middleware chain intercept callback types (must be declared before use in externs)
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
 extern int32_t nemo_relay_register_tool_execution_intercept(const char* name, int32_t priority, NemoRelayToolExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_register_tool_execution_intercept_async(const char*, int32_t, NemoRelayAsyncInterceptCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
 typedef FfiLLMRequest* (*NemoRelayLlmSanitizeRequestCb)(void* user_data, const FfiLLMRequest* request, NemoRelayLlmSanitizeRequestContext context);
 extern int32_t nemo_relay_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NemoRelayLlmSanitizeRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_llm_sanitize_request_guardrail_async(const char*, int32_t, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_sanitize_request_guardrail(const char* name);
 
 typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeResponseContext context);
 extern int32_t nemo_relay_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NemoRelayLlmSanitizeResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_llm_sanitize_response_guardrail_async(const char*, int32_t, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_sanitize_response_guardrail(const char* name);
 
 typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const FfiLLMRequest* request);
 extern int32_t nemo_relay_register_llm_conditional_execution_guardrail(const char* name, int32_t priority, NemoRelayLlmConditionalCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_llm_conditional_execution_guardrail_async(const char*, int32_t, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_conditional_execution_guardrail(const char* name);
 
 // LLM intercepts
 typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* name, const FfiLLMRequest* request, const char* annotated_json, char** out_outcome_json);
 extern int32_t nemo_relay_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NemoRelayLlmRequestInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_llm_request_intercept_async(const char*, int32_t, _Bool, NemoRelayAsyncJsonCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_request_intercept(const char* name);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 
 extern int32_t nemo_relay_register_llm_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_register_llm_execution_intercept_async(const char*, int32_t, NemoRelayAsyncInterceptCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_execution_intercept(const char* name);
 extern int32_t nemo_relay_register_llm_stream_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_register_llm_stream_execution_intercept_async(const char*, int32_t, NemoRelayAsyncInterceptCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* name);
 
 // Subscribers
@@ -170,46 +185,63 @@ extern int32_t nemo_relay_register_subscriber(const char* name, NemoRelayEventSu
 extern int32_t nemo_relay_deregister_subscriber(const char* name);
 extern int32_t nemo_relay_flush_subscribers(void);
 extern int32_t nemo_relay_register_mark_sanitize_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_mark_sanitize_guardrail_async(const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_mark_sanitize_guardrail(const char* name);
 extern int32_t nemo_relay_register_scope_sanitize_start_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_scope_sanitize_start_guardrail_async(const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_scope_sanitize_start_guardrail(const char* name);
 extern int32_t nemo_relay_register_scope_sanitize_end_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_register_scope_sanitize_end_guardrail_async(const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_scope_sanitize_end_guardrail(const char* name);
 
 // Scope-local tool guardrails
 extern int32_t nemo_relay_scope_register_mark_sanitize_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_mark_sanitize_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_mark_sanitize_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_scope_sanitize_start_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_scope_sanitize_start_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_scope_sanitize_start_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_scope_sanitize_end_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_scope_sanitize_end_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_scope_sanitize_end_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_tool_sanitize_request_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_tool_sanitize_response_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_tool_sanitize_response_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_tool_sanitize_response_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_tool_conditional_execution_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolConditionalFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_tool_conditional_execution_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_tool_conditional_execution_guardrail(const char* scope_uuid, const char* name);
 
 // Scope-local tool intercepts
 extern int32_t nemo_relay_scope_register_tool_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_tool_request_intercept_async(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_tool_request_intercept(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_tool_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_scope_register_tool_execution_intercept_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_tool_execution_intercept(const char* scope_uuid, const char* name);
 
 // Scope-local LLM guardrails
 extern int32_t nemo_relay_scope_register_llm_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmSanitizeRequestCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_llm_sanitize_request_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_sanitize_request_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_llm_sanitize_response_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmSanitizeResponseCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_llm_sanitize_response_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_sanitize_response_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_llm_conditional_execution_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmConditionalCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_llm_conditional_execution_guardrail_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_conditional_execution_guardrail(const char* scope_uuid, const char* name);
 
 // Scope-local LLM intercepts
 extern int32_t nemo_relay_scope_register_llm_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NemoRelayLlmRequestInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_llm_request_intercept_async(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NemoRelayAsyncJsonCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_request_intercept(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_llm_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_scope_register_llm_execution_intercept_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_execution_intercept(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_llm_stream_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_scope_register_llm_stream_execution_intercept_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_stream_execution_intercept(const char* scope_uuid, const char* name);
 
 // Scope-local subscribers
@@ -276,6 +308,8 @@ extern void nemo_relay_openinference_subscriber_free(void*);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
+extern uint32_t goAsyncMiddlewareTrampoline(void*, const char*, const NemoRelayAsyncCompletion*);
+extern uint32_t goAsyncExecutionInterceptTrampoline(void*, const char*, const NemoRelayAsyncNext*, const NemoRelayAsyncCompletion*);
 extern char* goEventSanitizeTrampoline(void*, const FfiEvent*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
@@ -1206,9 +1240,32 @@ func registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, k
 	return checkStatus(status)
 }
 
+func registerAsyncEventSanitizer(name string, priority int32, fn AsyncMiddlewareFunc, kind int) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	callback := C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline)
+	free := C.NemoRelayFreeFn(C.goFreeTrampoline)
+	var status C.int32_t
+	switch kind {
+	case 0:
+		status = C.nemo_relay_register_mark_sanitize_guardrail_async(cName, C.int32_t(priority), callback, id, free)
+	case 1:
+		status = C.nemo_relay_register_scope_sanitize_start_guardrail_async(cName, C.int32_t(priority), callback, id, free)
+	default:
+		status = C.nemo_relay_register_scope_sanitize_end_guardrail_async(cName, C.int32_t(priority), callback, id, free)
+	}
+	return checkStatus(status)
+}
+
 // RegisterMarkSanitizeGuardrail registers a global mark event sanitizer.
 func RegisterMarkSanitizeGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
 	return registerEventSanitizer(name, priority, fn, 0)
+}
+
+// RegisterMarkSanitizeGuardrailAsync registers an asynchronous global mark sanitizer.
+func RegisterMarkSanitizeGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return registerAsyncEventSanitizer(name, priority, fn, 0)
 }
 
 // DeregisterMarkSanitizeGuardrail removes a global mark event sanitizer.
@@ -1223,6 +1280,11 @@ func RegisterScopeSanitizeStartGuardrail(name string, priority int32, fn EventSa
 	return registerEventSanitizer(name, priority, fn, 1)
 }
 
+// RegisterScopeSanitizeStartGuardrailAsync registers an asynchronous global scope-start sanitizer.
+func RegisterScopeSanitizeStartGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return registerAsyncEventSanitizer(name, priority, fn, 1)
+}
+
 // DeregisterScopeSanitizeStartGuardrail removes a global scope-start event sanitizer.
 func DeregisterScopeSanitizeStartGuardrail(name string) error {
 	cName := C.CString(name)
@@ -1233,6 +1295,11 @@ func DeregisterScopeSanitizeStartGuardrail(name string) error {
 // RegisterScopeSanitizeEndGuardrail registers a global scope-end event sanitizer.
 func RegisterScopeSanitizeEndGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
 	return registerEventSanitizer(name, priority, fn, 2)
+}
+
+// RegisterScopeSanitizeEndGuardrailAsync registers an asynchronous global scope-end sanitizer.
+func RegisterScopeSanitizeEndGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return registerAsyncEventSanitizer(name, priority, fn, 2)
 }
 
 // DeregisterScopeSanitizeEndGuardrail removes a global scope-end event sanitizer.
@@ -1260,6 +1327,17 @@ func RegisterToolSanitizeRequestGuardrail(name string, priority int32, fn ToolSa
 	))
 }
 
+// RegisterToolSanitizeRequestGuardrailAsync registers an asynchronous tool request sanitizer.
+func RegisterToolSanitizeRequestGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_tool_sanitize_request_guardrail_async(
+		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
 // DeregisterToolSanitizeRequestGuardrail removes a previously registered tool
 // sanitize-request guardrail by name. Returns a NotFound error if no guardrail
 // with the given name is registered.
@@ -1282,6 +1360,17 @@ func RegisterToolSanitizeResponseGuardrail(name string, priority int32, fn ToolS
 		C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// RegisterToolSanitizeResponseGuardrailAsync registers an asynchronous tool response sanitizer.
+func RegisterToolSanitizeResponseGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_tool_sanitize_response_guardrail_async(
+		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
 }
 
@@ -1312,6 +1401,17 @@ func RegisterToolConditionalExecutionGuardrail(name string, priority int32, fn T
 	))
 }
 
+// RegisterToolConditionalExecutionGuardrailAsync registers an asynchronous tool guardrail.
+func RegisterToolConditionalExecutionGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_tool_conditional_execution_guardrail_async(
+		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
 // DeregisterToolConditionalExecutionGuardrail removes a previously registered
 // tool conditional-execution guardrail by name. Returns a NotFound error if no
 // guardrail with the given name is registered.
@@ -1338,6 +1438,18 @@ func RegisterToolRequestIntercept(name string, priority int32, breakChain bool, 
 	))
 }
 
+// RegisterToolRequestInterceptAsync registers an asynchronous tool request intercept.
+func RegisterToolRequestInterceptAsync(name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_tool_request_intercept_async(
+		cName, C.int32_t(priority), C._Bool(breakChain),
+		C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
 // DeregisterToolRequestIntercept removes a previously registered tool request
 // intercept by name.
 func DeregisterToolRequestIntercept(name string) error {
@@ -1359,6 +1471,18 @@ func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExec
 		C.NemoRelayToolExecInterceptCb(C.goToolExecInterceptTrampoline),
 		execID,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// RegisterToolExecutionInterceptAsync registers an asynchronous tool execution intercept.
+func RegisterToolExecutionInterceptAsync(name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_tool_execution_intercept_async(
+		cName, C.int32_t(priority),
+		C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
 }
 
@@ -1388,6 +1512,17 @@ func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequ
 	))
 }
 
+// RegisterLlmSanitizeRequestGuardrailAsync registers an asynchronous LLM request sanitizer.
+func RegisterLlmSanitizeRequestGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_llm_sanitize_request_guardrail_async(
+		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
 // DeregisterLlmSanitizeRequestGuardrail removes a previously registered LLM
 // sanitize-request guardrail by name.
 func DeregisterLlmSanitizeRequestGuardrail(name string) error {
@@ -1407,6 +1542,17 @@ func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMRes
 		C.NemoRelayLlmSanitizeResponseCb(C.goLlmResponseTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// RegisterLlmSanitizeResponseGuardrailAsync registers an asynchronous LLM response sanitizer.
+func RegisterLlmSanitizeResponseGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_llm_sanitize_response_guardrail_async(
+		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
 }
 
@@ -1436,6 +1582,17 @@ func RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LL
 	))
 }
 
+// RegisterLlmConditionalExecutionGuardrailAsync registers an asynchronous LLM guardrail.
+func RegisterLlmConditionalExecutionGuardrailAsync(name string, priority int32, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_llm_conditional_execution_guardrail_async(
+		cName, C.int32_t(priority), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
 // DeregisterLlmConditionalExecutionGuardrail removes a previously registered
 // LLM conditional-execution guardrail by name.
 func DeregisterLlmConditionalExecutionGuardrail(name string) error {
@@ -1459,6 +1616,18 @@ func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, f
 		C.NemoRelayLlmRequestInterceptCb(C.goLlmRequestInterceptTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// RegisterLlmRequestInterceptAsync registers an asynchronous LLM request intercept.
+func RegisterLlmRequestInterceptAsync(name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_llm_request_intercept_async(
+		cName, C.int32_t(priority), C._Bool(breakChain),
+		C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
 }
 
@@ -1486,6 +1655,18 @@ func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecut
 	))
 }
 
+// RegisterLlmExecutionInterceptAsync registers an asynchronous LLM execution intercept.
+func RegisterLlmExecutionInterceptAsync(name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_llm_execution_intercept_async(
+		cName, C.int32_t(priority),
+		C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
 // DeregisterLlmExecutionIntercept removes a previously registered LLM
 // execution intercept by name.
 func DeregisterLlmExecutionIntercept(name string) error {
@@ -1508,6 +1689,18 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLM
 		C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
 		execID,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// RegisterLlmStreamExecutionInterceptAsync registers an asynchronous streaming LLM intercept.
+func RegisterLlmStreamExecutionInterceptAsync(name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_llm_stream_execution_intercept_async(
+		cName, C.int32_t(priority),
+		C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline),
+		id, C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
 }
 
@@ -2300,6 +2493,71 @@ func (s *OpenInferenceSubscriber) Close() {
 // Scope-local guardrail/intercept registration (Tool)
 // ---------------------------------------------------------------------------
 
+func withScopeAsyncMiddleware(scopeUUID, name string, priority int32, fn any, call func(*C.char, *C.char, C.int32_t, unsafe.Pointer) C.int32_t) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(call(cScopeUUID, cName, C.int32_t(priority), id))
+}
+
+// ScopeRegisterMarkSanitizeGuardrailAsync registers an asynchronous scope-local mark sanitizer.
+func ScopeRegisterMarkSanitizeGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_mark_sanitize_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterScopeSanitizeStartGuardrailAsync registers an asynchronous scope-local start sanitizer.
+func ScopeRegisterScopeSanitizeStartGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_scope_sanitize_start_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterScopeSanitizeEndGuardrailAsync registers an asynchronous scope-local end sanitizer.
+func ScopeRegisterScopeSanitizeEndGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_scope_sanitize_end_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterToolSanitizeRequestGuardrailAsync registers an asynchronous scope-local tool request sanitizer.
+func ScopeRegisterToolSanitizeRequestGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_tool_sanitize_request_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterToolSanitizeResponseGuardrailAsync registers an asynchronous scope-local tool response sanitizer.
+func ScopeRegisterToolSanitizeResponseGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_tool_sanitize_response_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterToolConditionalExecutionGuardrailAsync registers an asynchronous scope-local tool guardrail.
+func ScopeRegisterToolConditionalExecutionGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_tool_conditional_execution_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterToolRequestInterceptAsync registers an asynchronous scope-local tool request intercept.
+func ScopeRegisterToolRequestInterceptAsync(scopeUUID, name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_tool_request_intercept_async(scope, name, priority, C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterToolExecutionInterceptAsync registers an asynchronous scope-local tool execution intercept.
+func ScopeRegisterToolExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_tool_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
 func registerScopeEventSanitizer(scopeUUID, name string, priority int32, fn EventSanitizeFunc, kind int) error {
 	id := registerClosure(fn)
 	cScopeUUID := C.CString(scopeUUID)
@@ -2497,6 +2755,48 @@ func ScopeDeregisterToolExecutionIntercept(scopeUUID, name string) error {
 // ---------------------------------------------------------------------------
 // Scope-local guardrail/intercept registration (LLM)
 // ---------------------------------------------------------------------------
+
+// ScopeRegisterLlmSanitizeRequestGuardrailAsync registers an asynchronous scope-local LLM request sanitizer.
+func ScopeRegisterLlmSanitizeRequestGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_sanitize_request_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterLlmSanitizeResponseGuardrailAsync registers an asynchronous scope-local LLM response sanitizer.
+func ScopeRegisterLlmSanitizeResponseGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_sanitize_response_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterLlmConditionalExecutionGuardrailAsync registers an asynchronous scope-local LLM guardrail.
+func ScopeRegisterLlmConditionalExecutionGuardrailAsync(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_conditional_execution_guardrail_async(scope, name, priority, C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterLlmRequestInterceptAsync registers an asynchronous scope-local LLM request intercept.
+func ScopeRegisterLlmRequestInterceptAsync(scopeUUID, name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_request_intercept_async(scope, name, priority, C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterLlmExecutionInterceptAsync registers an asynchronous scope-local LLM execution intercept.
+func ScopeRegisterLlmExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
+
+// ScopeRegisterLlmStreamExecutionInterceptAsync registers an asynchronous scope-local streaming LLM intercept.
+func ScopeRegisterLlmStreamExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_stream_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
+}
 
 // ScopeRegisterLlmSanitizeRequestGuardrail registers a scope-local guardrail
 // that sanitizes LLM request data.

@@ -662,6 +662,168 @@ fn scope_stack_api_round_trip() {
 }
 
 #[test]
+fn scope_stack_propagation_and_thread_binding_validate_all_ffi_inputs() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+
+    assert_eq!(
+        unsafe { nemo_relay_capture_propagation_context_json(ptr::null_mut()) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            nemo_relay_capture_propagation_context_with_root_json(ptr::null(), ptr::null_mut())
+        },
+        NemoRelayStatus::NullPointer
+    );
+
+    let mut inherited_context = ptr::null_mut();
+    assert_eq!(
+        unsafe { nemo_relay_capture_propagation_context_json(&mut inherited_context) },
+        NemoRelayStatus::Ok
+    );
+    let inherited_context = unsafe { take_string(inherited_context) }.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Json>(&inherited_context).unwrap()["version"],
+        json!(1)
+    );
+
+    let root_uuid = cstring("018f13f0-7c1a-7a80-8000-000000000001");
+    let mut rooted_context = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            nemo_relay_capture_propagation_context_with_root_json(
+                root_uuid.as_ptr(),
+                &mut rooted_context,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let rooted_context = unsafe { take_string(rooted_context) }.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Json>(&rooted_context).unwrap()["root_uuid"],
+        json!("018f13f0-7c1a-7a80-8000-000000000001")
+    );
+
+    let invalid_root = cstring("not-a-uuid");
+    let mut context_json = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            nemo_relay_capture_propagation_context_with_root_json(
+                invalid_root.as_ptr(),
+                &mut context_json,
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(context_json.is_null());
+
+    assert_eq!(
+        unsafe {
+            nemo_relay_scope_stack_create_from_propagation_json(ptr::null(), ptr::null_mut())
+        },
+        NemoRelayStatus::NullPointer
+    );
+    let invalid_context = cstring("not-json");
+    let mut stack = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            nemo_relay_scope_stack_create_from_propagation_json(
+                invalid_context.as_ptr(),
+                &mut stack,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(stack.is_null());
+
+    let rooted_context = cstring(&rooted_context);
+    assert_eq!(
+        unsafe {
+            nemo_relay_scope_stack_create_from_propagation_json(rooted_context.as_ptr(), &mut stack)
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(!stack.is_null());
+    unsafe { nemo_relay_scope_stack_free(stack) };
+
+    assert_eq!(
+        unsafe { nemo_relay_scope_stack_set_thread(ptr::null()) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe { nemo_relay_scope_stack_capture_thread(ptr::null_mut()) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe { nemo_relay_scope_stack_restore_thread(ptr::null_mut()) },
+        NemoRelayStatus::NullPointer
+    );
+
+    let stack = unsafe { fresh_scope_stack() };
+    let mut binding = ptr::null_mut();
+    assert_eq!(
+        unsafe { nemo_relay_scope_stack_capture_thread(&mut binding) },
+        NemoRelayStatus::Ok
+    );
+    assert!(!binding.is_null());
+    assert_eq!(
+        unsafe { nemo_relay_scope_stack_restore_thread(binding) },
+        NemoRelayStatus::Ok
+    );
+    unsafe { nemo_relay_scope_stack_free(stack) };
+}
+
+#[test]
+fn observability_component_helpers_serialize_defaults_and_validate_inputs() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+
+    let kind = unsafe { take_string(api::nemo_relay_observability_plugin_kind()) }.unwrap();
+    assert_eq!(kind, "observability");
+
+    assert_eq!(
+        unsafe { api::nemo_relay_observability_default_config_json(ptr::null_mut()) },
+        NemoRelayStatus::NullPointer
+    );
+    let mut default_config = ptr::null_mut();
+    assert_eq!(
+        unsafe { api::nemo_relay_observability_default_config_json(&mut default_config) },
+        NemoRelayStatus::Ok
+    );
+    assert!(unsafe { returned_json(default_config) }.is_object());
+
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_observability_component_spec_json(ptr::null(), true, ptr::null_mut())
+        },
+        NemoRelayStatus::NullPointer
+    );
+    let mut component = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_observability_component_spec_json(ptr::null(), true, &mut component)
+        },
+        NemoRelayStatus::Ok
+    );
+    let component = unsafe { returned_json(component) };
+    assert_eq!(component["kind"], json!("observability"));
+    assert_eq!(component["enabled"], json!(true));
+
+    let invalid_config = cstring("not-json");
+    let mut rejected = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_observability_component_spec_json(
+                invalid_config.as_ptr(),
+                false,
+                &mut rejected,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(rejected.is_null());
+}
+
+#[test]
 fn llm_request_accessors_round_trip() {
     let headers = cstring(r#"{"x-trace":"1"}"#);
     let content = cstring(r#"{"model":"test-model","messages":[]}"#);
