@@ -23,6 +23,7 @@ use crate::codec::response::{
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
+use crate::observability::{relay_span_id, relay_trace_id};
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;

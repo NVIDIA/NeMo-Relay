@@ -29,7 +29,7 @@ use super::{
     effective_mark_projection, estimate_cost_for_response_or_model,
     estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
     push_serialized_top_level_attributes, push_session_identity_attributes,
-    push_top_level_json_attributes,
+    push_top_level_json_attributes, relay_span_id, relay_trace_id,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
@@ -1056,6 +1056,9 @@ impl OtelEventProcessor {
         if let Some(active_span) = self.find_parent_span(event) {
             return Context::new().with_remote_span_context(active_span.span_context.clone());
         }
+        if let Some(span_context) = event
+            .parent_uuid()
+            .and_then(|uuid| self.completed_span_contexts.get(&uuid))
         {
             return Context::new().with_remote_span_context(span_context.clone());
         }
