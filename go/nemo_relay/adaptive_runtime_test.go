@@ -172,12 +172,36 @@ func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestAdaptiveRuntimeRejectsNilHandles(t *testing.T) {
+	var nilRuntime *AdaptiveRuntime
+	if err := nilRuntime.Register(); err == nil {
+		t.Fatal("expected nil Register to fail")
+	}
+	if err := nilRuntime.Deregister(); err == nil {
+		t.Fatal("expected nil Deregister to fail")
+	}
+	if err := nilRuntime.Shutdown(); err == nil {
+		t.Fatal("expected nil Shutdown to fail")
+	}
+	if err := nilRuntime.WaitForIdle(); err == nil {
+		t.Fatal("expected nil WaitForIdle to fail")
+	}
+	if _, err := nilRuntime.Report(); err == nil {
+		t.Fatal("expected nil Report to fail")
+	}
+	if err := nilRuntime.BindScope(nil); err == nil {
+		t.Fatal("expected nil BindScope to fail")
+	}
+	if _, err := nilRuntime.BuildCacheRequestFacts(CacheRequestFactsInput{}); err == nil {
+		t.Fatal("expected nil BuildCacheRequestFacts to fail")
+	}
+}
+
 func TestAdaptiveRuntimeLifecycleRejectsUseAfterShutdown(t *testing.T) {
-	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
+	runtime, err := NewAdaptiveRuntime(NewAdaptiveConfig())
 	if err != nil {
 		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
-
 	if err := runtime.Shutdown(); err != nil {
 		t.Fatalf("Shutdown failed: %v", err)
 	}
@@ -210,6 +234,33 @@ func assertAdaptiveRuntimeClosed(t *testing.T, runtime *AdaptiveRuntime) {
 	}
 	if err := runtime.Shutdown(); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
 		t.Fatalf("expected repeated Shutdown to reject a shut down runtime, got %v", err)
+	}
+}
+
+func TestAdaptiveRuntimeHelpersRejectInvalidInputs(t *testing.T) {
+	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{
+		Provider:  "unsupported",
+		RequestID: "not-a-uuid",
+	}); err == nil {
+		t.Fatal("expected invalid telemetry input to fail")
+	}
+
+	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
+	if err != nil {
+		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
+	}
+	defer runtime.Shutdown()
+	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{
+		Provider:         "unsupported",
+		RequestID:        "not-a-uuid",
+		AnnotatedRequest: json.RawMessage(`{}`),
+	}); err == nil {
+		t.Fatal("expected invalid cache request facts input to fail")
+	}
+	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{
+		AnnotatedRequest: json.RawMessage(`not-json`),
+	}); err == nil {
+		t.Fatal("expected malformed annotated request JSON to fail before the FFI call")
 	}
 }
 

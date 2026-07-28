@@ -133,6 +133,21 @@ enum NemoRelayScopeType {
 typedef int32_t NemoRelayScopeType;
 
 /**
+ * Indicates whether an async callback settled its completion before returning.
+ */
+enum NemoRelayAsyncCallbackState {
+  /**
+   * The callback called a resolve/reject function before returning.
+   */
+  NEMO_RELAY_ASYNC_CALLBACK_STATE_COMPLETE = 0,
+  /**
+   * The callback retained the completion and will settle it later.
+   */
+  NEMO_RELAY_ASYNC_CALLBACK_STATE_PENDING = 1,
+};
+typedef uint32_t NemoRelayAsyncCallbackState;
+
+/**
  * Opaque owned adaptive runtime handle.
  */
 typedef struct FfiAdaptiveRuntime FfiAdaptiveRuntime;
@@ -234,6 +249,16 @@ typedef struct FfiThreadScopeStackBinding FfiThreadScopeStackBinding;
  * Opaque handle representing an active tool call.
  */
 typedef struct FfiToolHandle FfiToolHandle;
+
+/**
+ * One-shot completion passed to asynchronous C callbacks.
+ */
+typedef struct NemoRelayAsyncCompletion NemoRelayAsyncCompletion;
+
+/**
+ * Runtime-owned asynchronous `next` continuation for execution intercepts.
+ */
+typedef struct NemoRelayAsyncNext NemoRelayAsyncNext;
 
 typedef struct Option_NemoRelayCollectorCb Option_NemoRelayCollectorCb;
 
@@ -444,6 +469,26 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
  * or equivalent.
  */
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
+
+/**
+ * Completion-based execution-intercept callback.
+ */
+typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncInterceptCb)(void *user_data,
+                                                                 const char *invocation_json,
+                                                                 const struct NemoRelayAsyncNext *next,
+                                                                 const struct NemoRelayAsyncCompletion *completion);
+
+/**
+ * Result callback used by channel/future-style async `next` wrappers.
+ *
+ * Invoked on a Tokio runtime worker thread, not necessarily the thread that
+ * called `nemo_relay_async_next_invoke_callback`; `user_data` must therefore
+ * be safe for cross-thread use. `value_json` and `error_message` are borrowed
+ * for the duration of the callback only.
+ */
+typedef void (*NemoRelayAsyncNextResultCb)(void *user_data,
+                                           const char *value_json,
+                                           const char *error_message);
 
 /**
  * Run the registered tool request intercept chain on the given arguments.
@@ -2485,6 +2530,15 @@ NemoRelayStatus nemo_relay_tool_call_execute(const char *name,
                                              char **out);
 
 /**
+ * Register a completion-based asynchronous tool execution intercept.
+ */
+NemoRelayStatus nemo_relay_register_tool_execution_intercept_async(const char *name,
+                                                                   int32_t priority,
+                                                                   NemoRelayAsyncInterceptCb cb,
+                                                                   void *user_data,
+                                                                   NemoRelayFreeFn free_fn);
+
+/**
  * Register a tool conditional execution guardrail. The callback decides whether
  * a tool call should proceed. Returns an error message to reject, or null to allow.
  *
@@ -2545,6 +2599,48 @@ NemoRelayStatus nemo_relay_register_tool_execution_intercept(const char *name,
  * `name` must be a valid C string.
  */
 NemoRelayStatus nemo_relay_deregister_tool_execution_intercept(const char *name);
+
+/**
+ * Release the callback-owned async `next` reference after a pending intercept.
+ */
+void nemo_relay_async_next_release(const struct NemoRelayAsyncNext *next);
+
+/**
+ * Invoke the next execution layer and settle `completion` with its result.
+ */
+NemoRelayStatus nemo_relay_async_next_invoke(const struct NemoRelayAsyncNext *next,
+                                             const char *invocation_json,
+                                             const struct NemoRelayAsyncCompletion *completion);
+
+/**
+ * Invoke the next execution layer and report its result through a callback.
+ */
+NemoRelayStatus nemo_relay_async_next_invoke_callback(const struct NemoRelayAsyncNext *next,
+                                                      const char *invocation_json,
+                                                      NemoRelayAsyncNextResultCb callback,
+                                                      void *user_data);
+
+/**
+ * Resolve an async C callback with owned JSON.
+ */
+NemoRelayStatus nemo_relay_async_completion_resolve_json(const struct NemoRelayAsyncCompletion *completion,
+                                                         const char *value_json);
+
+/**
+ * Reject an async C callback with an error message.
+ */
+NemoRelayStatus nemo_relay_async_completion_reject(const struct NemoRelayAsyncCompletion *completion,
+                                                   const char *message);
+
+/**
+ * Returns whether an async completion's invocation has been cancelled.
+ */
+bool nemo_relay_async_completion_is_cancelled(const struct NemoRelayAsyncCompletion *completion);
+
+/**
+ * Release the callback-owned completion reference after a pending invocation.
+ */
+void nemo_relay_async_completion_release(const struct NemoRelayAsyncCompletion *completion);
 
 /**
  * Free a C string previously returned by any `nemo_relay_*` accessor function.
@@ -3038,5 +3134,37 @@ char *nemo_relay_event_annotated_request(const struct FfiEvent *ptr);
  * `ptr` must be a valid `FfiEvent` pointer or null.
  */
 char *nemo_relay_event_annotated_response(const struct FfiEvent *ptr);
+
+
+/* Completion-based async middleware registrations generated from Rust macros. */
+typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncJsonCb)(void *user_data, const char *invocation_json, const struct NemoRelayAsyncCompletion *completion);
+NemoRelayStatus nemo_relay_register_mark_sanitize_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_scope_sanitize_start_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_scope_sanitize_end_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_mark_sanitize_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_scope_sanitize_start_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_scope_sanitize_end_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_tool_sanitize_request_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_tool_sanitize_response_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_tool_conditional_execution_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_tool_request_intercept_async(const char *name, int32_t priority, bool break_chain, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_tool_execution_intercept_async(const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_llm_sanitize_request_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_llm_sanitize_response_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_llm_conditional_execution_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_llm_request_intercept_async(const char *name, int32_t priority, bool break_chain, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_llm_execution_intercept_async(const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_llm_stream_execution_intercept_async(const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_tool_sanitize_request_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_tool_sanitize_response_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_tool_conditional_execution_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_tool_request_intercept_async(const char *scope_uuid, const char *name, int32_t priority, bool break_chain, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_llm_sanitize_request_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_llm_sanitize_response_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_llm_conditional_execution_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_llm_request_intercept_async(const char *scope_uuid, const char *name, int32_t priority, bool break_chain, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_tool_execution_intercept_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_llm_execution_intercept_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_llm_stream_execution_intercept_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
 
 #endif  /* NEMO_RELAY_H */

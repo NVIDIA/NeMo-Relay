@@ -13,6 +13,279 @@ struct EnvGuard {
     original: Option<std::ffi::OsString>,
 }
 
+unsafe extern "C" fn async_json_registration_callback(
+    _user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    _completion: *const callable::NemoRelayAsyncCompletion,
+) -> callable::NemoRelayAsyncCallbackState {
+    callable::NemoRelayAsyncCallbackState::Pending
+}
+
+unsafe extern "C" fn async_intercept_registration_callback(
+    _user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    _next: *const callable::NemoRelayAsyncNext,
+    _completion: *const callable::NemoRelayAsyncCompletion,
+) -> callable::NemoRelayAsyncCallbackState {
+    callable::NemoRelayAsyncCallbackState::Pending
+}
+
+#[test]
+fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    macro_rules! global_json {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        name.as_ptr(),
+                        0,
+                        async_json_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(unsafe { $deregister(name.as_ptr()) }, NemoRelayStatus::Ok);
+        }};
+    }
+    macro_rules! global_json_with_break_chain {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        name.as_ptr(),
+                        0,
+                        false,
+                        async_json_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(unsafe { $deregister(name.as_ptr()) }, NemoRelayStatus::Ok);
+        }};
+    }
+    macro_rules! global_intercept {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        name.as_ptr(),
+                        0,
+                        async_intercept_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(unsafe { $deregister(name.as_ptr()) }, NemoRelayStatus::Ok);
+        }};
+    }
+
+    global_json!(
+        nemo_relay_register_mark_sanitize_guardrail_async,
+        nemo_relay_deregister_mark_sanitize_guardrail
+    );
+    global_json!(
+        nemo_relay_register_scope_sanitize_start_guardrail_async,
+        nemo_relay_deregister_scope_sanitize_start_guardrail
+    );
+    global_json!(
+        nemo_relay_register_scope_sanitize_end_guardrail_async,
+        nemo_relay_deregister_scope_sanitize_end_guardrail
+    );
+    global_json!(
+        nemo_relay_register_tool_sanitize_request_guardrail_async,
+        nemo_relay_deregister_tool_sanitize_request_guardrail
+    );
+    global_json!(
+        nemo_relay_register_tool_sanitize_response_guardrail_async,
+        nemo_relay_deregister_tool_sanitize_response_guardrail
+    );
+    global_json!(
+        nemo_relay_register_tool_conditional_execution_guardrail_async,
+        nemo_relay_deregister_tool_conditional_execution_guardrail
+    );
+    global_json_with_break_chain!(
+        nemo_relay_register_tool_request_intercept_async,
+        nemo_relay_deregister_tool_request_intercept
+    );
+    global_intercept!(
+        nemo_relay_register_tool_execution_intercept_async,
+        nemo_relay_deregister_tool_execution_intercept
+    );
+    global_json!(
+        nemo_relay_register_llm_sanitize_request_guardrail_async,
+        nemo_relay_deregister_llm_sanitize_request_guardrail
+    );
+    global_json!(
+        nemo_relay_register_llm_sanitize_response_guardrail_async,
+        nemo_relay_deregister_llm_sanitize_response_guardrail
+    );
+    global_json!(
+        nemo_relay_register_llm_conditional_execution_guardrail_async,
+        nemo_relay_deregister_llm_conditional_execution_guardrail
+    );
+    global_json_with_break_chain!(
+        nemo_relay_register_llm_request_intercept_async,
+        nemo_relay_deregister_llm_request_intercept
+    );
+    global_intercept!(
+        nemo_relay_register_llm_execution_intercept_async,
+        nemo_relay_deregister_llm_execution_intercept
+    );
+    global_intercept!(
+        nemo_relay_register_llm_stream_execution_intercept_async,
+        nemo_relay_deregister_llm_stream_execution_intercept
+    );
+
+    let _stack = unsafe { fresh_scope_stack() };
+    let mut scope = ptr::null_mut();
+    assert_eq!(
+        unsafe { nemo_relay_get_handle(&mut scope) },
+        NemoRelayStatus::Ok
+    );
+    let scope_uuid = cstring(
+        &unsafe { take_string(nemo_relay_scope_handle_uuid(scope)) }
+            .expect("root scope UUID should exist"),
+    );
+
+    macro_rules! scope_json {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        scope_uuid.as_ptr(),
+                        name.as_ptr(),
+                        0,
+                        async_json_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(
+                unsafe { $deregister(scope_uuid.as_ptr(), name.as_ptr()) },
+                NemoRelayStatus::Ok
+            );
+        }};
+    }
+    macro_rules! scope_json_with_break_chain {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        scope_uuid.as_ptr(),
+                        name.as_ptr(),
+                        0,
+                        false,
+                        async_json_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(
+                unsafe { $deregister(scope_uuid.as_ptr(), name.as_ptr()) },
+                NemoRelayStatus::Ok
+            );
+        }};
+    }
+    macro_rules! scope_intercept {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        scope_uuid.as_ptr(),
+                        name.as_ptr(),
+                        0,
+                        async_intercept_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(
+                unsafe { $deregister(scope_uuid.as_ptr(), name.as_ptr()) },
+                NemoRelayStatus::Ok
+            );
+        }};
+    }
+
+    scope_json!(
+        nemo_relay_scope_register_mark_sanitize_guardrail_async,
+        nemo_relay_scope_deregister_mark_sanitize_guardrail
+    );
+    scope_json!(
+        nemo_relay_scope_register_scope_sanitize_start_guardrail_async,
+        nemo_relay_scope_deregister_scope_sanitize_start_guardrail
+    );
+    scope_json!(
+        nemo_relay_scope_register_scope_sanitize_end_guardrail_async,
+        nemo_relay_scope_deregister_scope_sanitize_end_guardrail
+    );
+    scope_json!(
+        nemo_relay_scope_register_tool_sanitize_request_guardrail_async,
+        nemo_relay_scope_deregister_tool_sanitize_request_guardrail
+    );
+    scope_json!(
+        nemo_relay_scope_register_tool_sanitize_response_guardrail_async,
+        nemo_relay_scope_deregister_tool_sanitize_response_guardrail
+    );
+    scope_json!(
+        nemo_relay_scope_register_tool_conditional_execution_guardrail_async,
+        nemo_relay_scope_deregister_tool_conditional_execution_guardrail
+    );
+    scope_json_with_break_chain!(
+        nemo_relay_scope_register_tool_request_intercept_async,
+        nemo_relay_scope_deregister_tool_request_intercept
+    );
+    scope_intercept!(
+        nemo_relay_scope_register_tool_execution_intercept_async,
+        nemo_relay_scope_deregister_tool_execution_intercept
+    );
+    scope_json!(
+        nemo_relay_scope_register_llm_sanitize_request_guardrail_async,
+        nemo_relay_scope_deregister_llm_sanitize_request_guardrail
+    );
+    scope_json!(
+        nemo_relay_scope_register_llm_sanitize_response_guardrail_async,
+        nemo_relay_scope_deregister_llm_sanitize_response_guardrail
+    );
+    scope_json!(
+        nemo_relay_scope_register_llm_conditional_execution_guardrail_async,
+        nemo_relay_scope_deregister_llm_conditional_execution_guardrail
+    );
+    scope_json_with_break_chain!(
+        nemo_relay_scope_register_llm_request_intercept_async,
+        nemo_relay_scope_deregister_llm_request_intercept
+    );
+    scope_intercept!(
+        nemo_relay_scope_register_llm_execution_intercept_async,
+        nemo_relay_scope_deregister_llm_execution_intercept
+    );
+    scope_intercept!(
+        nemo_relay_scope_register_llm_stream_execution_intercept_async,
+        nemo_relay_scope_deregister_llm_stream_execution_intercept
+    );
+    unsafe { nemo_relay_scope_handle_free(scope) };
+}
+
 impl EnvGuard {
     fn set(key: &'static str, value: &str) -> Self {
         let original = std::env::var_os(key);
