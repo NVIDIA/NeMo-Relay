@@ -222,7 +222,7 @@ class TestAdaptivePluginConfiguration:
             )
             with scope.scope("adaptive-runtime-translate", ScopeType.Agent) as handle:
                 runtime.bind_scope(handle)
-                translated = llm.request_intercepts("anthropic", request)
+                translated = await llm.request_intercepts("anthropic", request)
                 assert translated.request.content == {
                     "messages": [{"role": "user", "content": "Hello"}],
                     "system": "You are helpful.",

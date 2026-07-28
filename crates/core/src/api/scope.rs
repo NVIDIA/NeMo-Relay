@@ -217,9 +217,8 @@ pub fn get_handle() -> Result<ScopeHandle> {
 /// cannot be read safely.
 ///
 /// # Notes
-/// The event and its visible middleware/subscriber chains are snapshotted
-/// before this function returns. Sanitization and subscriber delivery happen
-/// later on the serial publication dispatcher.
+/// Scope-local subscribers attached to ancestor scopes observe the emitted
+/// start event before the function returns.
 pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
@@ -310,8 +309,9 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
         );
         (scope, event, subscribers, scope_stack.clone())
     };
-    // Snapshot scope-local middleware before removing its owner. Publication
-    // happens later, but cleanup must not change the chain visible at emission.
+    // Capture the scope-local chain before removing its owner. The event is
+    // published later, but scope cleanup must not change the middleware that
+    // was visible when the end event was emitted.
     let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack);
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
@@ -348,22 +348,35 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 /// cannot be read safely.
 ///
 /// # Notes
-/// The event and its visible middleware/subscriber chains are snapshotted
-/// before this function returns. Sanitization and subscriber delivery happen
-/// later on the serial publication dispatcher.
+/// Scope-local subscribers attached to ancestor scopes observe the emitted
+/// mark event just like scope, tool, and LLM lifecycle events.
 pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
     let scope_stack = current_scope_stack();
     let (event, subscribers, emission_scope_stack) = {
         let subscribers = if params.name == COMPACTION_EVENT_NAME {
-            let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+            let mut scope_guard = scope_stack.write().map_err(|error| {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "mark_event_scope_stack_unavailable";
+                    "Mark event was dropped because the scope stack lock is poisoned: {error}"
+                );
+                FlowError::Internal(error.to_string())
+            })?;
             let subscribers =
                 snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
             scope_guard.mark_agent_fresh(parent_uuid);
             subscribers
         } else {
-            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            let scope_guard = scope_stack.read().map_err(|error| {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "mark_event_scope_stack_unavailable";
+                    "Mark event was dropped because the scope stack lock is poisoned: {error}"
+                );
+                FlowError::Internal(error.to_string())
+            })?;
             snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
         };
         let context = global_context();

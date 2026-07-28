@@ -56,7 +56,7 @@ def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_e
     assert calls == [("checkpoint", {"secret": "raw"}), ("mark", {"stage": "first"})]
 
 
-def test_mark_sanitizer_exception_clears_observability_fields(capture_events):
+def test_mark_sanitizer_exception_preserves_observability_fields(capture_events):
     _capture_name, events = capture_events
 
     def raises(_event: nemo_relay.Event, _fields: EventSanitizeFields) -> EventSanitizeFields:
@@ -69,7 +69,7 @@ def test_mark_sanitizer_exception_clears_observability_fields(capture_events):
     finally:
         guardrails.deregister_mark_sanitize("python-mark-raises")
 
-    assert events[-1].data is None
+    assert events[-1].data == {"kept": True}
     assert events[-1].metadata is None
 
 

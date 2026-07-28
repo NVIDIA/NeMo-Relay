@@ -321,14 +321,17 @@ pub fn wrap_tool_sanitize_fn(
     free_fn: NemoRelayFreeFn,
 ) -> ToolSanitizeFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |name: &str, args: Json| {
-        let c_name = CString::new(name).unwrap_or_default();
-        let c_args = json_to_c_string(&args);
-        let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nemo_relay_string_free_internal(c_args) };
-        let result = ptr_to_json(result_ptr);
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |name: String, args: Json| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            let c_name = CString::new(name).unwrap_or_default();
+            let c_args = json_to_c_string(&args);
+            let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
+            unsafe { nemo_relay_string_free_internal(c_args) };
+            let result = ptr_to_json(result_ptr);
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            Ok(result)
+        })
     })
 }
 
@@ -339,22 +342,25 @@ pub fn wrap_tool_conditional_fn(
     free_fn: NemoRelayFreeFn,
 ) -> ToolConditionalFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |name: &str, args: &Json| {
-        clear_last_error();
-        let c_name = CString::new(name).unwrap_or_default();
-        let c_args = json_to_c_string(args);
-        let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nemo_relay_string_free_internal(c_args) };
-        let result = if result_ptr.is_null() {
-            match last_error_message() {
-                Some(message) => Err(FlowError::Internal(message)),
-                None => Ok(None),
-            }
-        } else {
-            Ok(ptr_to_opt_string(result_ptr))
-        };
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |name: String, args: Json| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let c_name = CString::new(name).unwrap_or_default();
+            let c_args = json_to_c_string(&args);
+            let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
+            unsafe { nemo_relay_string_free_internal(c_args) };
+            let result = if result_ptr.is_null() {
+                match last_error_message() {
+                    Some(message) => Err(FlowError::Internal(message)),
+                    None => Ok(None),
+                }
+            } else {
+                Ok(ptr_to_opt_string(result_ptr))
+            };
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -365,16 +371,19 @@ pub fn wrap_tool_request_intercept_fn(
     free_fn: NemoRelayFreeFn,
 ) -> ToolInterceptFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |name: &str, args: Json| {
-        clear_last_error();
-        let c_name = CString::new(name).unwrap_or_default();
-        let c_args = json_to_c_string(&args);
-        let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nemo_relay_string_free_internal(c_args) };
-        let result =
-            json_result_from_ptr(result_ptr, "tool request intercept callback returned null");
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |name: String, args: Json| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let c_name = CString::new(name).unwrap_or_default();
+            let c_args = json_to_c_string(&args);
+            let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
+            unsafe { nemo_relay_string_free_internal(c_args) };
+            let result =
+                json_result_from_ptr(result_ptr, "tool request intercept callback returned null");
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -617,64 +626,67 @@ pub fn wrap_llm_request_intercept_fn(
 ) -> LlmRequestInterceptFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
-        move |name: &str, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
-            clear_last_error();
-            let c_name = CString::new(name).unwrap_or_default();
-            let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+        move |name: String, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
+            let ud = ud.clone();
+            Box::pin(async move {
+                clear_last_error();
+                let c_name = CString::new(name).unwrap_or_default();
+                let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
 
-            // Serialize annotated to JSON C string if present, else null
-            let c_annotated = match &annotated {
-                Some(a) => {
-                    let s = serde_json::to_string(a).unwrap_or_else(|_| "null".to_string());
-                    CString::new(s).unwrap_or_default()
+                // Serialize annotated to JSON C string if present, else null
+                let c_annotated = match &annotated {
+                    Some(a) => {
+                        let s = serde_json::to_string(a).unwrap_or_else(|_| "null".to_string());
+                        CString::new(s).unwrap_or_default()
+                    }
+                    None => CString::default(),
+                };
+                let annotated_ptr = if annotated.is_some() {
+                    c_annotated.as_ptr()
+                } else {
+                    std::ptr::null()
+                };
+
+                let mut out_outcome: *mut c_char = std::ptr::null_mut();
+
+                let status = unsafe {
+                    cb(
+                        ud.ptr,
+                        c_name.as_ptr(),
+                        ffi_req,
+                        annotated_ptr,
+                        &mut out_outcome,
+                    )
+                };
+
+                // Free the input request
+                unsafe { drop(Box::from_raw(ffi_req)) };
+
+                if status != NemoRelayStatus::Ok {
+                    unsafe { nemo_relay_string_free_internal(out_outcome) };
+                    let message = last_error_message()
+                        .unwrap_or_else(|| "request intercept callback failed".to_string());
+                    return Err(FlowError::Internal(message));
                 }
-                None => CString::default(),
-            };
-            let annotated_ptr = if annotated.is_some() {
-                c_annotated.as_ptr()
-            } else {
-                std::ptr::null()
-            };
 
-            let mut out_outcome: *mut c_char = std::ptr::null_mut();
-
-            let status = unsafe {
-                cb(
-                    ud.ptr,
-                    c_name.as_ptr(),
-                    ffi_req,
-                    annotated_ptr,
-                    &mut out_outcome,
-                )
-            };
-
-            // Free the input request
-            unsafe { drop(Box::from_raw(ffi_req)) };
-
-            if status != NemoRelayStatus::Ok {
+                if out_outcome.is_null() {
+                    return Err(FlowError::Internal(
+                        "request intercept returned null out_outcome_json".to_string(),
+                    ));
+                }
+                let outcome = unsafe { CStr::from_ptr(out_outcome) }
+                    .to_str()
+                    .map_err(|error| FlowError::Internal(format!("invalid outcome UTF-8: {error}")))
+                    .and_then(|json| {
+                        serde_json::from_str::<LlmRequestInterceptOutcome>(json).map_err(|error| {
+                            FlowError::Internal(format!(
+                                "invalid LLM request intercept outcome JSON: {error}"
+                            ))
+                        })
+                    });
                 unsafe { nemo_relay_string_free_internal(out_outcome) };
-                let message = last_error_message()
-                    .unwrap_or_else(|| "request intercept callback failed".to_string());
-                return Err(FlowError::Internal(message));
-            }
-
-            if out_outcome.is_null() {
-                return Err(FlowError::Internal(
-                    "request intercept returned null out_outcome_json".to_string(),
-                ));
-            }
-            let outcome = unsafe { CStr::from_ptr(out_outcome) }
-                .to_str()
-                .map_err(|error| FlowError::Internal(format!("invalid outcome UTF-8: {error}")))
-                .and_then(|json| {
-                    serde_json::from_str::<LlmRequestInterceptOutcome>(json).map_err(|error| {
-                        FlowError::Internal(format!(
-                            "invalid LLM request intercept outcome JSON: {error}"
-                        ))
-                    })
-                });
-            unsafe { nemo_relay_string_free_internal(out_outcome) };
-            outcome
+                outcome
+            })
         },
     )
 }
@@ -688,35 +700,38 @@ pub fn wrap_llm_sanitize_request_fn(
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
-            clear_last_error();
-            let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
-                Ok(identity) => identity,
-                Err(error) => {
-                    set_last_error(&error.to_string());
-                    return None;
+            let ud = ud.clone();
+            Box::pin(async move {
+                clear_last_error();
+                let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        set_last_error(&error.to_string());
+                        return Ok(None);
+                    }
+                };
+                let codec = context
+                    .resolve_codec()
+                    .map(crate::types::FfiLlmSanitizeRequestCodec);
+                let ffi_context = NemoRelayLlmSanitizeRequestContext {
+                    codec_kind,
+                    codec_id: codec_id
+                        .as_ref()
+                        .map_or(std::ptr::null(), |name| name.as_ptr()),
+                    codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
+                };
+                let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+                let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
+                if result_ptr.is_null() {
+                    unsafe { drop(Box::from_raw(ffi_req)) };
+                    return Ok(None);
                 }
-            };
-            let codec = context
-                .resolve_codec()
-                .map(crate::types::FfiLlmSanitizeRequestCodec);
-            let ffi_context = NemoRelayLlmSanitizeRequestContext {
-                codec_kind,
-                codec_id: codec_id
-                    .as_ref()
-                    .map_or(std::ptr::null(), |name| name.as_ptr()),
-                codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
-            };
-            let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
-            let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
-            if result_ptr.is_null() {
+                if result_ptr == ffi_req {
+                    return Ok(Some(unsafe { Box::from_raw(ffi_req) }.0));
+                }
                 unsafe { drop(Box::from_raw(ffi_req)) };
-                return None;
-            }
-            if result_ptr == ffi_req {
-                return Some(unsafe { Box::from_raw(ffi_req) }.0);
-            }
-            unsafe { drop(Box::from_raw(ffi_req)) };
-            Some(unsafe { Box::from_raw(result_ptr) }.0)
+                Ok(Some(unsafe { Box::from_raw(result_ptr) }.0))
+            })
         },
     )
 }
@@ -729,38 +744,41 @@ pub fn wrap_llm_sanitize_response_fn(
 ) -> LlmSanitizeResponseFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
-        clear_last_error();
-        let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
-            Ok(identity) => identity,
-            Err(error) => {
-                set_last_error(&error.to_string());
-                return None;
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    set_last_error(&error.to_string());
+                    return Ok(None);
+                }
+            };
+            let codec = context
+                .resolve_codec()
+                .map(crate::types::FfiLlmSanitizeResponseCodec);
+            let ffi_context = NemoRelayLlmSanitizeResponseContext {
+                codec_kind,
+                codec_id: codec_id
+                    .as_ref()
+                    .map_or(std::ptr::null(), |name| name.as_ptr()),
+                codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
+            };
+            let response_json = json_to_c_string(&response);
+            let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };
+            if result_ptr.is_null() {
+                unsafe { nemo_relay_string_free_internal(response_json) };
+                return Ok(None);
             }
-        };
-        let codec = context
-            .resolve_codec()
-            .map(crate::types::FfiLlmSanitizeResponseCodec);
-        let ffi_context = NemoRelayLlmSanitizeResponseContext {
-            codec_kind,
-            codec_id: codec_id
-                .as_ref()
-                .map_or(std::ptr::null(), |name| name.as_ptr()),
-            codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
-        };
-        let response_json = json_to_c_string(&response);
-        let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };
-        if result_ptr.is_null() {
-            unsafe { nemo_relay_string_free_internal(response_json) };
-            return None;
-        }
-        let result = c_str_to_json(result_ptr);
-        unsafe {
-            nemo_relay_string_free_internal(response_json);
-            if result_ptr != response_json {
-                nemo_relay_string_free_internal(result_ptr);
+            let result = c_str_to_json(result_ptr);
+            unsafe {
+                nemo_relay_string_free_internal(response_json);
+                if result_ptr != response_json {
+                    nemo_relay_string_free_internal(result_ptr);
+                }
             }
-        }
-        result
+            Ok(result)
+        })
     })
 }
 
@@ -790,20 +808,23 @@ pub fn wrap_llm_conditional_fn(
     free_fn: NemoRelayFreeFn,
 ) -> LlmConditionalFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |request: &LlmRequest| {
-        clear_last_error();
-        let ffi_req = FfiLLMRequest(request.clone());
-        let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
-        let result = if result_ptr.is_null() {
-            match last_error_message() {
-                Some(message) => Err(FlowError::Internal(message)),
-                None => Ok(None),
-            }
-        } else {
-            Ok(ptr_to_opt_string(result_ptr))
-        };
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |request: LlmRequest| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let ffi_req = FfiLLMRequest(request);
+            let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
+            let result = if result_ptr.is_null() {
+                match last_error_message() {
+                    Some(message) => Err(FlowError::Internal(message)),
+                    None => Ok(None),
+                }
+            } else {
+                Ok(ptr_to_opt_string(result_ptr))
+            };
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -918,14 +939,18 @@ pub fn wrap_event_sanitize_fn(
     free_fn: NemoRelayFreeFn,
 ) -> EventSanitizeFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |event: &Event, fields: EventSanitizeFields| {
-        let ffi_event = FfiEvent(event.clone());
-        let fields_json = json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
-        let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
-        unsafe { nemo_relay_string_free_internal(fields_json) };
-        let result = serde_json::from_value(ptr_to_json(result_ptr)).unwrap_or_default();
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |event: Event, fields: EventSanitizeFields| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            let ffi_event = FfiEvent(event);
+            let fields_json =
+                json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
+            let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
+            unsafe { nemo_relay_string_free_internal(fields_json) };
+            let result = serde_json::from_value(ptr_to_json(result_ptr)).unwrap_or_default();
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            Ok(result)
+        })
     })
 }
 

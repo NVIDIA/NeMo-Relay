@@ -167,8 +167,11 @@ class EventSanitizeFields(TypedDict):
     category_profile: JsonObject | None
     metadata: Json | None
 
-ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json]
-EventSanitizeGuardrail: TypeAlias = Callable[[Event, EventSanitizeFields], EventSanitizeFields]
+ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
+EventSanitizeGuardrail: TypeAlias = Callable[
+    [Event, EventSanitizeFields],
+    EventSanitizeFields | Awaitable[EventSanitizeFields],
+]
 """Guardrail callback that sanitizes emitted tool request or response payloads.
 
 Arguments:
@@ -181,7 +184,7 @@ Exceptional flow:
     Exceptions raised by the callback propagate through the lifecycle operation
     that invoked the guardrail.
 """
-ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
+ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 """Guardrail callback that can block tool execution.
 
 Arguments:
@@ -190,7 +193,10 @@ Arguments:
 Return:
     ``None`` to allow execution, or a rejection message to block it.
 """
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeRequestContext"], Optional[LLMRequest]]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[
+    [LLMRequest, "LlmSanitizeRequestContext"],
+    Optional[LLMRequest] | Awaitable[Optional[LLMRequest]],
+]
 """Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 
 Arguments:
@@ -203,7 +209,10 @@ Return:
     Request object recorded on the emitted lifecycle event, or ``None`` to omit
     the LLM observability payload and annotation.
 """
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[Json, "LlmSanitizeResponseContext"], Optional[Json]]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[
+    [Json, "LlmSanitizeResponseContext"],
+    Optional[Json] | Awaitable[Optional[Json]],
+]
 """Guardrail callback that sanitizes an emitted JSON LLM response payload.
 
 Arguments:
@@ -216,7 +225,7 @@ Return:
     Response object recorded on the emitted lifecycle event, or ``None`` to
     omit the LLM observability payload and annotation.
 """
-LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
+LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str] | Awaitable[Optional[str]]]
 """Guardrail callback that can block an LLM call.
 
 Arguments:
@@ -225,7 +234,7 @@ Arguments:
 Return:
     ``None`` to allow execution, or a rejection message to block it.
 """
-ToolRequestIntercept: TypeAlias = Callable[[str, Json], Json]
+ToolRequestIntercept: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 """Request intercept callback that rewrites tool arguments before execution.
 
 Arguments:
@@ -252,7 +261,7 @@ Exceptional flow:
 """
 LlmRequestIntercept: TypeAlias = Callable[
     [str, LLMRequest, AnnotatedLLMRequest | None],
-    LLMRequestInterceptOutcome,
+    LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome],
 ]
 """Request intercept callback that rewrites raw and annotated LLM requests.
 

@@ -257,8 +257,133 @@ fn native_string_and_json_helpers_cover_abi_boundaries() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV1>()
+        std::mem::size_of::<NemoRelayNativeHostApiV3>()
     );
+}
+
+#[test]
+fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let cases: Vec<(NativeAsyncNextInner, Json, Json)> = vec![
+        (
+            NativeAsyncNextInner::Tool(Arc::new(|value| Box::pin(async move { Ok(value) }))),
+            json!({"tool": true}),
+            json!({"result": {"tool": true}, "pending_marks": []}),
+        ),
+        (
+            NativeAsyncNextInner::Llm(Arc::new(|request| {
+                Box::pin(async move { Ok(request.content) })
+            })),
+            serde_json::to_value(LlmRequest {
+                headers: Map::new(),
+                content: json!({"llm": true}),
+            })
+            .unwrap(),
+            json!({"llm": true}),
+        ),
+        (
+            NativeAsyncNextInner::LlmStream(Arc::new(|_request| {
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                        Ok(json!({"chunk": 1})),
+                        Ok(json!({"chunk": 2})),
+                    ])))
+                })
+            })),
+            serde_json::to_value(LlmRequest {
+                headers: Map::new(),
+                content: json!({"stream": true}),
+            })
+            .unwrap(),
+            json!([{"chunk": 1}, {"chunk": 2}]),
+        ),
+    ];
+
+    for (inner, invocation, expected) in cases {
+        let next = Arc::new(NativeAsyncNext {
+            inner,
+            runtime: runtime.handle().clone(),
+            _callback_user_data: None,
+        });
+        let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let completion = Arc::new(NativeAsyncCompletion {
+            sender: Mutex::new(Some(sender)),
+            cancelled: AtomicBool::new(false),
+            _callback_user_data: None,
+        });
+        let completion_ref =
+            Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
+        let invocation = native_string_from_json(&invocation).unwrap();
+        assert_eq!(
+            unsafe { native_async_next_invoke(next_ref, invocation, completion_ref) },
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(runtime.block_on(receiver).unwrap().unwrap(), expected);
+        unsafe {
+            native_string_free(invocation);
+            native_async_next_release(next_ref);
+            native_async_completion_release(completion_ref);
+        }
+    }
+}
+
+#[test]
+fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlement() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        _callback_user_data: None,
+    });
+    let completion_ref =
+        Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
+    let invalid = native_string("not-json");
+    assert_eq!(
+        unsafe { native_async_completion_resolve_json(completion_ref, invalid) },
+        NemoRelayStatus::InvalidJson
+    );
+    let value = native_string(r#"{"ok":true}"#);
+    assert_eq!(
+        unsafe { native_async_completion_resolve_json(completion_ref, value) },
+        NemoRelayStatus::Ok
+    );
+    assert_eq!(
+        unsafe { native_async_completion_resolve_json(completion_ref, value) },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        runtime.block_on(receiver).unwrap().unwrap(),
+        json!({"ok": true})
+    );
+    unsafe {
+        native_string_free(invalid);
+        native_string_free(value);
+        native_async_completion_release(completion_ref);
+    }
+
+    let (sender, _receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(true),
+        _callback_user_data: None,
+    });
+    let completion_ref =
+        Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
+    assert!(unsafe { native_async_completion_is_cancelled(completion_ref) });
+    assert!(unsafe { native_async_completion_is_cancelled(ptr::null()) });
+    assert_eq!(
+        unsafe { native_async_completion_reject(completion_ref, ptr::null()) },
+        NemoRelayStatus::InvalidArg
+    );
+    unsafe { native_async_completion_release(completion_ref) };
 }
 
 #[test]

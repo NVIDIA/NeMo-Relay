@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use nemo_relay::api::event::Event;
 use nemo_relay::api::registry::{
     deregister_mark_sanitize_guardrail, register_mark_sanitize_guardrail,
 };
@@ -16,7 +15,7 @@ use nemo_relay::api::runtime::{
 };
 use nemo_relay::api::scope::{EmitMarkEventParams, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use serde_json::json;
+use nemo_relay::error::FlowError;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -103,145 +102,6 @@ fn dispatcher_preserves_event_order() {
 }
 
 #[test]
-fn mark_emission_snapshots_sanitizers_and_returns_before_they_finish() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    flush_subscribers().unwrap();
-    reset_global();
-    setup_isolated_thread();
-
-    let (sanitizer_started_tx, sanitizer_started_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let release_rx = Arc::new(Mutex::new(release_rx));
-    register_mark_sanitize_guardrail(
-        "blocking-mark-sanitizer",
-        10,
-        Arc::new(move |_, mut fields| {
-            sanitizer_started_tx.send(()).unwrap();
-            release_rx.lock().unwrap().recv().unwrap();
-            fields.data = Some(json!({"sanitized": true}));
-            fields
-        }),
-    )
-    .unwrap();
-
-    let observed = Arc::new(Mutex::new(Vec::<Event>::new()));
-    let observed_events = Arc::clone(&observed);
-    register_subscriber(
-        "sanitized-mark-subscriber",
-        Arc::new(move |event| observed_events.lock().unwrap().push(event.clone())),
-    )
-    .unwrap();
-
-    let (returned_tx, returned_rx) = mpsc::channel();
-    let event_thread = std::thread::spawn(move || {
-        emit_mark("queued-sanitizer");
-        returned_tx.send(()).unwrap();
-    });
-
-    sanitizer_started_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("sanitizer should start on the dispatcher thread");
-    returned_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("mark emission should return while its sanitizer is blocked");
-
-    // Removing the global registration cannot affect the already-snapshotted
-    // publication chain.
-    deregister_mark_sanitize_guardrail("blocking-mark-sanitizer").unwrap();
-    release_tx.send(()).unwrap();
-    event_thread.join().unwrap();
-    flush_subscribers().unwrap();
-
-    let events = observed.lock().unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(
-        events[0].sanitize_fields().data,
-        Some(json!({"sanitized": true}))
-    );
-    drop(events);
-    deregister_subscriber("sanitized-mark-subscriber").unwrap();
-}
-
-#[test]
-fn mark_emission_skips_sanitizers_without_subscribers() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    flush_subscribers().unwrap();
-    reset_global();
-    setup_isolated_thread();
-
-    let sanitizer_called = Arc::new(AtomicBool::new(false));
-    let called = Arc::clone(&sanitizer_called);
-    register_mark_sanitize_guardrail(
-        "unused-mark-sanitizer",
-        10,
-        Arc::new(move |_, fields| {
-            called.store(true, Ordering::Release);
-            fields
-        }),
-    )
-    .unwrap();
-
-    emit_mark("no-subscribers");
-    flush_subscribers().unwrap();
-    deregister_mark_sanitize_guardrail("unused-mark-sanitizer").unwrap();
-
-    assert!(!sanitizer_called.load(Ordering::Acquire));
-}
-
-#[test]
-fn sanitizer_panic_publishes_the_latest_valid_event() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    flush_subscribers().unwrap();
-    reset_global();
-    setup_isolated_thread();
-
-    register_mark_sanitize_guardrail(
-        "successful-mark-sanitizer",
-        0,
-        Arc::new(move |_, mut fields| {
-            fields.data = Some(json!({"redacted": true}));
-            fields
-        }),
-    )
-    .unwrap();
-    register_mark_sanitize_guardrail(
-        "panicking-mark-sanitizer",
-        10,
-        Arc::new(move |_, _| panic!("sanitizer failed")),
-    )
-    .unwrap();
-
-    let observed = Arc::new(Mutex::new(Vec::<Event>::new()));
-    let observed_events = Arc::clone(&observed);
-    register_subscriber(
-        "panic-fallback-subscriber",
-        Arc::new(move |event| observed_events.lock().unwrap().push(event.clone())),
-    )
-    .unwrap();
-
-    event(
-        EmitMarkEventParams::builder()
-            .name("panic-fallback")
-            .data(json!({"original": true}))
-            .build(),
-    )
-    .unwrap();
-    flush_subscribers().unwrap();
-
-    deregister_mark_sanitize_guardrail("successful-mark-sanitizer").unwrap();
-    deregister_mark_sanitize_guardrail("panicking-mark-sanitizer").unwrap();
-    deregister_subscriber("panic-fallback-subscriber").unwrap();
-
-    let events = observed.lock().unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].name(), "panic-fallback");
-    assert_eq!(
-        events[0].sanitize_fields().data,
-        Some(json!({"redacted": true}))
-    );
-}
-
-#[test]
 fn dispatcher_continues_after_subscriber_panic() {
     let _lock = TEST_MUTEX.lock().unwrap();
     flush_subscribers().unwrap();
@@ -270,4 +130,107 @@ fn dispatcher_continues_after_subscriber_panic() {
     deregister_subscriber("panic-isolated-subscriber").unwrap();
 
     assert_eq!(observed.lock().unwrap().as_slice(), ["after-panic"]);
+}
+
+#[test]
+fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_fails() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_events = Arc::clone(&observed);
+    register_subscriber(
+        "fail-open-sanitizer-subscriber",
+        Arc::new(move |event| {
+            observed_events
+                .lock()
+                .unwrap()
+                .push(event.name().to_string())
+        }),
+    )
+    .unwrap();
+    register_mark_sanitize_guardrail(
+        "fail-open-mark-sanitizer",
+        10,
+        Arc::new(|_, _| {
+            Box::pin(async {
+                Err(FlowError::Internal(
+                    "intentional event-sanitizer failure".to_string(),
+                ))
+            })
+        }),
+    )
+    .unwrap();
+
+    emit_mark("unsanitized-fallback");
+    flush_subscribers().unwrap();
+
+    assert_eq!(
+        observed.lock().unwrap().as_slice(),
+        ["unsanitized-fallback"]
+    );
+    deregister_mark_sanitize_guardrail("fail-open-mark-sanitizer").unwrap();
+    deregister_subscriber("fail-open-sanitizer-subscriber").unwrap();
+}
+
+#[test]
+fn mark_emission_skips_sanitizers_without_subscribers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let sanitizer_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&sanitizer_called);
+    register_mark_sanitize_guardrail(
+        "unused-mark-sanitizer",
+        10,
+        Arc::new(move |_, fields| {
+            called.store(true, Ordering::Release);
+            Box::pin(async move { Ok(fields) })
+        }),
+    )
+    .unwrap();
+
+    emit_mark("no-subscribers");
+    flush_subscribers().unwrap();
+    deregister_mark_sanitize_guardrail("unused-mark-sanitizer").unwrap();
+
+    assert!(!sanitizer_called.load(Ordering::Acquire));
+}
+
+#[test]
+fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_panics() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_events = Arc::clone(&observed);
+    register_subscriber(
+        "panic-sanitizer-subscriber",
+        Arc::new(move |event| {
+            observed_events
+                .lock()
+                .unwrap()
+                .push(event.name().to_string())
+        }),
+    )
+    .unwrap();
+    register_mark_sanitize_guardrail(
+        "panic-mark-sanitizer",
+        10,
+        Arc::new(|_, _| Box::pin(async { panic!("intentional event-sanitizer panic") })),
+    )
+    .unwrap();
+
+    emit_mark("panic-fallback");
+    flush_subscribers().unwrap();
+
+    assert_eq!(observed.lock().unwrap().as_slice(), ["panic-fallback"]);
+    deregister_mark_sanitize_guardrail("panic-mark-sanitizer").unwrap();
+    deregister_subscriber("panic-sanitizer-subscriber").unwrap();
 }

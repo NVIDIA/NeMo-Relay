@@ -57,6 +57,17 @@ async function flushSubscriberCallbacks() {
   }
 }
 
+async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
+  flushSubscribers();
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('timed out waiting for subscriber callbacks');
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 function makeNative() {
   return {
     headers: {},
@@ -291,7 +302,10 @@ describe('LLM execute', () => {
         /llm status failure/,
       );
 
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(
+        () => events.some((e) => e.name === 'exec_status_ok_llm' && e.scope_category === 'end')
+          && events.some((e) => e.name === 'exec_status_error_llm' && e.scope_category === 'end'),
+      );
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'end',
@@ -386,7 +400,11 @@ describe('LLM guardrails', () => {
       assert.deepEqual(result, { ok: true });
       assert.equal(requestContextChecked, true);
       assert.equal(responseContextChecked, true);
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start') &&
+          events.some((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'end'),
+      );
       const start = events.find(
         (event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start',
       );
@@ -718,7 +736,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize request guardrail failures omit the payload and remain usable', async () => {
+  it('sanitize request guardrail failures preserve the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_req_throw_sub', (event) => events.push(event));
@@ -728,7 +746,16 @@ describe('LLM guardrails', () => {
     try {
       const request = makeNative();
       await llmCallExecute('llm_san_req_throw', request, () => ({ ok: true }), null, null, null, null, null);
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some(
+            (event) =>
+              event.name === 'llm_san_req_throw' &&
+              event.kind === 'scope' &&
+              event.category === 'llm' &&
+              event.scope_category === 'start',
+          ),
+      );
       const start = events.find(
         (event) =>
           event.name === 'llm_san_req_throw' &&
@@ -736,8 +763,8 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'start',
       );
-      assert.equal(start.data, null);
-      assert.match(getLastCallbackError() ?? '', /JavaScript callback threw/i);
+      assert.deepEqual(start.data, { headers: request.headers, content: request.content });
+      assert.match(getLastCallbackError() ?? '', /(unknown error|callback)/i);
 
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_throw');
       const result = await llmCallExecute(
@@ -840,7 +867,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize response guardrail failures omit the payload and remain usable', async () => {
+  it('sanitize response guardrail failures preserve the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_resp_throw_sub', (event) => events.push(event));
@@ -850,7 +877,15 @@ describe('LLM guardrails', () => {
     try {
       const response = { ok: true };
       await llmCallExecute('llm_san_resp_throw', makeNative(), () => response, null, null, null, null, null);
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(() =>
+        events.some(
+          (event) =>
+            event.name === 'llm_san_resp_throw' &&
+            event.kind === 'scope' &&
+            event.category === 'llm' &&
+            event.scope_category === 'end',
+        ),
+      );
       const end = events.find(
         (event) =>
           event.name === 'llm_san_resp_throw' &&
@@ -858,7 +893,7 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'end',
       );
-      assert.equal(end.data, null);
+      assert.deepEqual(end.data, response);
       assert.match(getLastCallbackError() ?? '', /response sanitizer boom/i);
 
       deregisterLlmSanitizeResponseGuardrail('node_llm_san_resp_throw');
@@ -883,6 +918,19 @@ describe('LLM guardrails', () => {
   it('conditional guardrail (allow)', () => {
     registerLlmConditionalExecutionGuardrail('node_llm_cond', 10, (request) => null);
     deregisterLlmConditionalExecutionGuardrail('node_llm_cond');
+  });
+
+  it('conditional guardrail awaits a Promise result', async () => {
+    registerLlmConditionalExecutionGuardrail('node_llm_cond_promise', 10, async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return null;
+    });
+    try {
+      const result = await llmCallExecute('llm_cond_promise', makeNative(), () => ({ ok: true }), null, null, null, null, null);
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      deregisterLlmConditionalExecutionGuardrail('node_llm_cond_promise');
+    }
   });
 
   it('conditional guardrail treats implicit undefined as allow', async () => {
@@ -1019,6 +1067,28 @@ describe('LLM intercepts', () => {
     );
     assert.equal(result.saw_intercepted, true);
     deregisterLlmRequestIntercept('node_llm_req_mod');
+  });
+
+  it('request intercept awaits a Promise result', async () => {
+    registerLlmRequestIntercept('node_llm_req_promise', 10, false, async ({ request, annotated }) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return { request: { ...request, content: { ...request.content, promised: true } }, annotated };
+    });
+    try {
+      const result = await llmCallExecute(
+        'llm_req_promise',
+        makeNative(),
+        (request) => ({ promised: request.content.promised }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { promised: true });
+    } finally {
+      deregisterLlmRequestIntercept('node_llm_req_promise');
+    }
   });
 
   it('request intercept throws a catchable error without terminating Node', async () => {
@@ -1340,11 +1410,21 @@ describe('LLM intercepts', () => {
     deregisterLlmRequestIntercept('node_llm_req_helper');
   });
 
-  it('generated request-intercept declarations preserve the open optimization kind', () => {
+  it('generated request-intercept declarations reference the canonical open optimization type', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const pluginDeclarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
     const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
 
-    assert.equal(declarations.split(openKind).length - 1, 3);
+    assert.equal(declarations.split(openKind).length - 1, 1);
+    assert.equal(pluginDeclarations.split(openKind).length - 1, 1);
+    assert.match(
+      declarations,
+      /registerLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/,
+    );
+    assert.match(
+      declarations,
+      /scopeRegisterLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/,
+    );
   });
 
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
