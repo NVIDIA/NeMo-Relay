@@ -295,7 +295,7 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
         1,
         Arc::new(move |request, _context| {
             sanitizer_capture.lock().unwrap().push(request.clone());
-            Some(request)
+            Box::pin(async move { Ok(Some(request)) })
         }),
     )
     .unwrap();
