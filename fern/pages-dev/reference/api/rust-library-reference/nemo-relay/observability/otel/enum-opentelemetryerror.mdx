@@ -9,17 +9,11 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenTelemetryError &#123;\n    MissingTokioRuntime,\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenTelemetryError &#123;\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    GlobalHeaderEnvironmentUnsupported &#123;\n        variable: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
 
 Errors produced while configuring or operating the OpenTelemetry subscriber.
 
 ## Variants
-
-### `MissingTokioRuntime`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MissingTokioRuntime"}} /></pre>
-
-The tonic gRPC exporter requires an active Tokio runtime.
 
 ### `InvalidGrpcHeader`
 
@@ -36,6 +30,34 @@ Header name that failed to parse.
 ### `message: String`
 
 Parser failure message.
+
+### `InvalidHeader`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidHeader"}} /></pre>
+
+A configured OTLP header name or value is invalid.
+
+#### Fields
+
+### `key: String`
+
+Header name that failed validation.
+
+### `message: String`
+
+Validation failure message.
+
+### `GlobalHeaderEnvironmentUnsupported`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "GlobalHeaderEnvironmentUnsupported"}} /></pre>
+
+Process-global OTLP header variables cannot be isolated per endpoint.
+
+#### Fields
+
+### `variable: &'static str`
+
+Environment variable that was set.
 
 ### `ExporterBuild(String)`
 

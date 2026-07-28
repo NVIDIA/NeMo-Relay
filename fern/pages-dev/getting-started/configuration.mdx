@@ -47,10 +47,11 @@ rules.
 ## Observability Setup
 
 Agent Trajectory Observability Format (ATOF) exporters, Agent Trajectory
-Interchange Format (ATIF) exporters, OpenTelemetry subscribers, and
-OpenInference subscribers can be configured directly through binding-native
-config objects. Use the built-in `observability` plugin when you want one
-plugin component to own standard exporter setup and teardown. Refer to
+Interchange Format (ATIF) exporters, and typed OpenTelemetry subscribers can
+be configured directly through binding-native config objects. Select the
+`full`, `gen_ai`, or `openinference` projection when constructing each
+OpenTelemetry subscriber. Use the built-in `observability` plugin when you
+want one plugin component to own standard exporter setup and teardown. Refer to
 [Observability Configuration](/configure-plugins/observability/configuration)
 and [Observability](/configure-plugins/observability/about)
 for the supported export paths.
@@ -59,9 +60,10 @@ Outside operational logging, NeMo Relay does not require application-level
 environment variables for normal runtime use. Configure most behavior through
 API objects, registration calls, or plugin configuration.
 
-`OTEL_*` variables are only relevant when the underlying OpenTelemetry exporter
-reads endpoint settings from the environment. Prefer explicit config objects in
-application code so the active export settings are visible in docs, tests, and
+Every OpenTelemetry config requires an explicit nonblank endpoint. For plugin
+configuration, use an endpoint's `header_env` map when a header value must come
+from an environment variable. Keep endpoint addresses and other export settings
+explicit so the active configuration remains visible in docs, tests, and
 deployment manifests.
 
 ## Adaptive Setup

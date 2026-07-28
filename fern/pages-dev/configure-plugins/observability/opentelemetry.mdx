@@ -1,22 +1,38 @@
 ---
 title: "OpenTelemetry"
-description: "Configure OpenTelemetry Protocol trace export for NeMo Relay events."
+description: "Export NeMo Relay traces through typed OpenTelemetry endpoints."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+Use the `opentelemetry` section to export traces to one or more OpenTelemetry
+Protocol (OTLP) destinations. OpenTelemetry support is always included; no
+Cargo feature enables or disables it.
 
-Use the `opentelemetry` section when you want NeMo Relay lifecycle events
-exported as generic OpenTelemetry Protocol (OTLP) trace spans.
+Each endpoint selects one fixed semantic projection:
 
-OpenTelemetry export is a good fit when your tracing backend already expects
-OTLP spans and you want NeMo Relay scopes, tool calls, LLM calls, and marks to
-appear in the same tracing pipeline as the rest of the application.
+| Type | Projection |
+|---|---|
+| `full` | Complete NeMo Relay projection, including `nemo_relay.*` attributes and native mark handling. |
+| `gen_ai` | OpenTelemetry GenAI semantic conventions only. |
+| `openinference` | OpenInference-compatible spans with the existing default mark handling. |
+
+You can repeat a type or combine types. Each endpoint owns an independent exporter
+and can use a different endpoint.
+
+The `gen_ai` projection targets the
+[OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
+Use that pinned snapshot when comparing emitted operation and attribute names
+with collector or backend schemas.
+
+NeMo Relay uses OpenTelemetry Rust `0.32`. It deterministically derives
+compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
+receive the same event stream use the same identifiers and parentage.
 
 ## `plugins.toml` Example
 
-Add the following OpenTelemetry exporter configuration to `plugins.toml`:
+The following configuration exports the `gen_ai` projection through OTLP/HTTP.
 
 ```toml
 version = 1
@@ -26,376 +42,143 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 3
 
 [components.config.opentelemetry]
 enabled = true
-transport = "http_binary"
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
 endpoint = "http://localhost:4318/v1/traces"
+transport = "http_binary"
 service_name = "agent-service"
-service_namespace = "nemo"
-service_version = "1.0.0"
-instrumentation_scope = "nemo-relay-otel"
-timeout_millis = 3000
 
-[components.config.opentelemetry.headers]
-authorization = "Bearer <token>"
+[components.config.opentelemetry.endpoints.header_env]
+authorization = "OTEL_AUTHORIZATION"
 
-[components.config.opentelemetry.resource_attributes]
-"deployment.environment" = "dev"
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "http://localhost:6006/v1/traces"
+service_name = "agent-service"
 ```
 
-This configuration registers a plugin-owned OpenTelemetry subscriber and sends
-NeMo Relay trace spans to the configured OTLP endpoint.
+When `enabled = true`, configure at least one endpoint. NeMo Relay constructs every
+endpoint before registering the fan-out subscriber. An invalid endpoint prevents
+activation, and a delivery failure from one exporter does not stop application
+work or delivery to the other exporters.
 
-## Fields
-
-The following table describes OpenTelemetry exporter settings:
+## Endpoint Fields
 
 | Field | Default | Notes |
 |---|---|---|
-| `enabled` | `false` | Must be `true` to construct and register the subscriber. |
-| `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration spans, parented as children when context is available, for trace-tree visibility. |
-| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
-| `attribute_mappings` | `[]` | Copies each fully qualified projected `key` to its `alias` without changing the OTLP type. Set both values to nonblank strings, and use each alias only once. |
+| `type` | Required | `full`, `gen_ai`, or `openinference`. |
+| `endpoint` | Required | Nonblank OTLP endpoint. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
-| `endpoint` | Exporter default | OTLP endpoint. |
-| `headers` | `{}` | String-to-string exporter headers. |
-| `resource_attributes` | `{}` | String-to-string OTLP resource attributes. |
-| `service_name` | `nemo-relay` | `service.name` resource attribute. |
+| `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
 | `service_version` | Omitted | Optional `service.version`. |
-| `instrumentation_scope` | Omitted | Optional instrumentation scope name. |
+| `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
 | `timeout_millis` | `3000` | Export timeout. |
+| `headers` | `{}` | String-to-string exporter headers. |
+| `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
+| `resource_attributes` | `{}` | String-to-string resource attributes. |
+| `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 
-## Expected Output
+Use `header_env` for secrets so configuration files contain only environment
+variable names. Each variable contains the complete header value. NeMo Relay
+validates variable names without reading their values, then resolves and
+snapshots the values when the plugin activates. Every referenced variable name
+must be nonblank and have no surrounding whitespace. Its value must be set and
+nonblank, with no surrounding whitespace, when the component activates. A header name
+cannot appear in both `headers` and `header_env`, including names that differ
+only by ASCII case. Reactivate the plugin to pick up a changed environment
+value.
 
-The collector should receive OTLP trace export requests. The tracing backend
-should show spans for NeMo Relay scopes, tools, LLM calls, and marks grouped by
-root scope.
+Process-global `OTEL_EXPORTER_OTLP_HEADERS` and
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` are rejected because they cannot be
+isolated between endpoints. Put non-secret values in each endpoint's `headers`
+map and secret variable references in `header_env`.
 
-For an imported Relay propagation context with both a root and an external
-parent, Relay uses the root UUID as the OTLP trace ID and the lower 64 bits of
-the parent UUID as a remote parent span ID. A rootless import begins a new
-native trace. Relay does not derive W3C sampling flags or `tracestate`; carry
-those separately in an integration when they are required.
+`full` and `openinference` endpoints retain the legacy mark and attribute-alias
+controls shown above. `gen_ai` is standards-only: it ignores those controls and
+does not emit Relay-private attributes. `semantic_selector` and
+`capture_content` are unsupported.
 
-The default `inherit` projection follows exporter-native handling: a mark with
-an active parent span is a span event, while an orphan mark is a standalone
-zero-duration `mark:<name>` span. `mark_projection = "event"` explicitly selects
-that representation. Set `mark_projection = "tool"` only when the target
-backend needs eligible marks represented as visible child spans. Projected
-marks use `SpanKind::Internal`, carry
-`nemo_relay.mark.projection = "tool"`, and retain mark UUID, parentage,
-category/profile, and payload attributes. High-volume `llm.chunk` marks retain
-exporter-native handling by default and when excluded from tool projection.
+## GenAI Projection
 
-Add other event names to `mark_exclude_names` for a backend to keep those
-marks in exporter-native form rather than visible tool children. The exclusion
-list affects only tool projection; it does not remove mark payload or metadata.
-Set `mark_exclude_names = []` to disable the default `llm.chunk` exclusion.
+The `gen_ai` endpoint uses these operation names:
 
-Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
-attributes. These values match ATIF `step.extra.ancestry.function_id` and
-`step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
-the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
-Backend-native `trace_id` and `span_id` values are not written into ATIF.
-
-NeMo Relay projects top-level lifecycle payload fields to typed OTLP attributes
-with dotted names. For example, `metadata = { tenant = "acme" }` becomes
-`nemo_relay.start.metadata.tenant = "acme"`.
-- Start events use the
-`nemo_relay.start.data`, `nemo_relay.start.metadata`, and
-`nemo_relay.start.input` prefixes.
-- End events use `nemo_relay.end.data`,
-`nemo_relay.end.metadata`, and `nemo_relay.end.output`.
-- Handle attributes use
-`nemo_relay.handle_attributes`. Mark data, metadata, attributes, and
-category-profile fields use the corresponding `nemo_relay.mark.*` prefixes.
-
-Scalar strings, booleans, and numbers that fit an OTLP numeric type keep their
-types. NeMo Relay emits larger unsigned integers as strings. When a top-level
-field contains an object or array, NeMo Relay emits its value as a JSON string
-at that field's dotted name. Nested `null` values remain in that string, but a
-top-level field whose value is `null` is omitted. NeMo Relay no longer emits the
-old aggregate `*_json` payload attributes.
-
-Configure an alias when a backend expects a different attribute name:
-
-```toml
-[components.config.opentelemetry]
-attribute_mappings = [
-  { key = "nemo_relay.start.metadata.tenant", alias = "tenant.id" },
-]
-```
-
-The source attribute remains in the span. If the span already contains
-`tenant.id`, NeMo Relay keeps the existing value instead of replacing it with
-the alias.
-
-Coding-agent trace roots also carry these correlation attributes:
-
-| Attribute | Meaning |
+| Relay scope | OpenTelemetry operation |
 |---|---|
-| `session.id` | Logical harness session ID. |
-| `user.id` | Optional top-level string `user_id` from session metadata. |
-| `nemo_relay.session.instance_id` | Relay-owned root scope UUID shared by trace roots from the same runtime session instance. |
+| Agent | `invoke_agent` |
+| LLM | `chat`, `generate_content`, or `text_completion` |
+| Tool | `execute_tool` |
+| Embedder | `embeddings` |
+| Retriever | `retrieval` |
 
-These canonical fields are emitted on trace roots rather than repeated on
-every child span. Filter roots by `session.id`, `user.id`, or
-`nemo_relay.session.instance_id`, then use the backend `trace_id` to select the
-remaining rows in each trace. A `session.start` mark carries the same fields:
-it is a span event when a parent is active and a zero-duration root span when
-it is orphaned.
+Rerankers, marks, and unsupported scope types are omitted. Supported
+descendants remain attached to their nearest exported ancestor. This
+projection never emits `nemo_relay.*` fields and does not export message
+content, tool payloads, or retrieval content.
 
-For LLM end spans, cost is emitted as `nemo_relay.llm.cost.total` and
-`nemo_relay.llm.cost.currency` (any currency). Token counts are not emitted as
-discrete attributes. Refer to
-[Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
-for the full mapping.
-
-Register the plugin before the first instrumented request, use stable service
-identity fields, keep credentials outside source code, and clear the plugin
-during graceful shutdown. Calling subscriber flush delivers queued events to
-the tracing subscriber, but it does not necessarily drain the tracer provider's
-export processor.
-
-## Plugin Configuration
-
-Use plugin configuration when the application should let NeMo Relay own the
-OpenTelemetry subscriber lifecycle. The following examples configure and
-activate the OpenTelemetry exporter through each supported language binding.
-
-`validate()` checks only the supplied in-memory object. `initialize()` also
-layers discovered `plugins.toml` configuration. For effective file-backed
-validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
-and run the gateway with the same configuration path that production uses.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import asyncio
-
-from nemo_relay import plugin
-from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
-
-config = plugin.PluginConfig(
-    components=[
-        ComponentSpec(
-            ObservabilityConfig(
-                opentelemetry=OtlpConfig(
-                    enabled=True,
-                    transport="http_binary",
-                    endpoint="http://localhost:4318/v1/traces",
-                    service_name="agent-service",
-                    service_namespace="nemo",
-                    service_version="1.0.0",
-                    instrumentation_scope="nemo-relay-otel",
-                    resource_attributes={"deployment.environment": "dev"},
-                    headers={"authorization": "Bearer <token>"},
-                )
-            )
-        )
-    ]
-)
-
-report = plugin.validate(config)
-if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
-    raise RuntimeError(report["diagnostics"])
-
-async def main():
-    await plugin.initialize(config)
-    try:
-        # Run instrumented application work here.
-        pass
-    finally:
-        plugin.clear()
-
-asyncio.run(main())
-```
-
-</Tab>
-
-<Tab title="Node.js" language="node">
-```js
-const plugin = require("nemo-relay-node/plugin");
-const observability = require("nemo-relay-node/observability");
-
-void (async () => {
-  await plugin.initialize({
-  version: 1,
-  components: [
-    observability.ComponentSpec({
-      version: 2,
-      opentelemetry: observability.otlpConfig({
-        enabled: true,
-        transport: "http_binary",
-        endpoint: "http://localhost:4318/v1/traces",
-        service_name: "agent-service",
-        service_namespace: "nemo",
-        service_version: "1.0.0",
-        instrumentation_scope: "nemo-relay-otel",
-        resource_attributes: {
-          "deployment.environment": "dev",
-        },
-        headers: {
-          authorization: "Bearer <token>",
-        },
-      }),
-    }),
-  ],
-  });
-
-  try {
-    // Run instrumented application work here.
-  } finally {
-    plugin.clear();
-  }
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
-```
-
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-use nemo_relay::observability::plugin_component::{
-    ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
-};
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
-};
-
-let component = ComponentSpec::new(ObservabilityConfig {
-    opentelemetry: Some(OtlpSectionConfig {
-        enabled: true,
-        transport: "http_binary".into(),
-        endpoint: Some("http://localhost:4318/v1/traces".into()),
-        service_name: "agent-service".into(),
-        service_namespace: Some("nemo".into()),
-        service_version: Some("1.0.0".into()),
-        instrumentation_scope: Some("nemo-relay-otel".into()),
-        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
-        headers: [("authorization".into(), "Bearer <token>".into())].into(),
-        ..OtlpSectionConfig::default()
-    }),
-    ..ObservabilityConfig::default()
-});
-
-let config = PluginConfig {
-    version: 1,
-    components: vec![component.into()],
-    policy: Default::default(),
-};
-
-let report = validate_plugin_config(&config);
-assert!(!report.has_errors());
-
-let _active = initialize_plugins(config).await?;
-
-// Run instrumented application work here.
-
-clear_plugin_configuration()?;
-Ok(())
-}
-```
-
-</Tab>
-
-</Tabs>
-
-## Manual API
-
-Use the manual subscriber API when you need an explicit subscriber name or
-direct control over when spans are exported. `force_flush()` first waits for
-shared subscriber delivery and then asks the tracer provider to export finished
-spans. `shutdown()` waits for shared subscriber work and then shuts down the
-provider. During plugin teardown, `plugin.clear()` or
-`clear_plugin_configuration()` invokes the owned subscriber shutdown path.
+## Direct Subscriber
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
 from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
 
-config = OpenTelemetryConfig()
-config.transport = "http_binary"
-config.endpoint = "http://localhost:4318/v1/traces"
+config = OpenTelemetryConfig(
+    "gen_ai",
+    "http://localhost:4318/v1/traces",
+)
 config.service_name = "agent-service"
-config.set_resource_attribute("deployment.environment", "dev")
-
 subscriber = OpenTelemetrySubscriber(config)
-subscriber.register("otel-exporter")
-
-# Run instrumented application work here.
-
-subscriber.force_flush()
-subscriber.deregister("otel-exporter")
-subscriber.shutdown()
 ```
-
 </Tab>
-
-<Tab title="Node.js" language="node">
-```js
+<Tab title="Node.js" language="javascript">
+```javascript
 const { OpenTelemetrySubscriber } = require("nemo-relay-node");
 
 const subscriber = new OpenTelemetrySubscriber({
-  transport: "http_binary",
+  type: "gen_ai",
   endpoint: "http://localhost:4318/v1/traces",
   serviceName: "agent-service",
-  resourceAttributes: {
-    "deployment.environment": "dev",
-  },
 });
-subscriber.register("otel-exporter");
-
-try {
-  // Run instrumented application work here.
-
-  subscriber.forceFlush();
-} finally {
-  subscriber.deregister("otel-exporter");
-  subscriber.shutdown();
-}
 ```
-
 </Tab>
-
 <Tab title="Rust" language="rust">
 ```rust
+use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = OpenTelemetryConfig::http_binary("agent-service")
-        .with_endpoint("http://localhost:4318/v1/traces")
-        .with_resource_attribute("deployment.environment", "dev");
-    let subscriber = OpenTelemetrySubscriber::new(config)?;
-    subscriber.register("otel-exporter")?;
-
-    // Run instrumented application work here.
-
-    subscriber.force_flush()?;
-    let _ = subscriber.deregister("otel-exporter")?;
-    subscriber.shutdown()?;
-    Ok(())
-}
+let config = OpenTelemetryConfig::new(
+    OpenTelemetryType::GenAi,
+    "http://localhost:4318/v1/traces",
+)
+.with_service_name("agent-service");
+let subscriber = OpenTelemetrySubscriber::new(config)?;
 ```
-
 </Tab>
-
 </Tabs>
 
-## Common Configuration and Runtime Issues
+Direct construction creates one independently managed exporter. Register the
+subscriber before instrumented work. During graceful teardown, deregister it,
+call the binding's force-flush method (`force_flush()` or `forceFlush()`), and
+then call `shutdown()`.
 
-- `transport` is not `http_binary` or `grpc`.
-- Headers or resource attributes are not string-to-string maps.
-- The exporter feature is unavailable in the current build or target.
-- The endpoint is unreachable at runtime.
-- Abrupt termination can discard events that are still in the shared dispatcher
-  or spans that are still in the provider queue. Backend visibility also
-  depends on transport success, timeouts, and backend processing.
+## Version 2 to Version 3
+
+Version 3 replaces the separate version-2 sections:
+
+- Move the old `opentelemetry` fields into one endpoint with `type = "full"`.
+- Move the old `openinference` fields into the same section with
+  `type = "openinference"`.
+- Use `type = "gen_ai"` for standardized GenAI-only output.
+
+Version-2 OTLP section shapes are rejected when `version = 3`; NeMo Relay does
+not silently normalize them. For complete before-and-after configuration and
+binding API changes, refer to
+[Migration Guides](/reference/migration-guides#observability-configuration-version-3).

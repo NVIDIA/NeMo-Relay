@@ -27,7 +27,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 3
 
 [components.config.atof]
 enabled = true
@@ -154,7 +154,7 @@ worker which timed out drained or closed.
 
 ## Migrate From Version 1
 
-Observability component configuration now requires `version = 2`. NeMo Relay
+Observability component configuration now requires `version = 3`. NeMo Relay
 does not translate the removed ATOF fields from version 1.
 
 Make the following changes when you migrate a plugin configuration:
@@ -274,7 +274,7 @@ void (async () => {
     version: 1,
     components: [
       observability.ComponentSpec({
-        version: 2,
+  version: 3,
         atof: observability.atofConfig({
           enabled: true,
           sinks: [

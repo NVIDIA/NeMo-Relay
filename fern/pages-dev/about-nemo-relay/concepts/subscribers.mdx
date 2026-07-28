@@ -207,19 +207,16 @@ event per line.
 ### OpenTelemetry Subscriber
 
 The OpenTelemetry subscriber maps runtime events into OTLP traces for tracing
-backends.
+backends. Each subscriber uses one `full`, `gen_ai`, or `openinference`
+projection. Select `openinference` for model-centric OpenInference semantics;
+there is no separate OpenInference subscriber.
 
-### OpenInference Subscriber
-
-The OpenInference subscriber maps runtime events into OTLP traces using
-OpenInference semantics for model-centric observability.
-
-Detailed setup, configuration, and API shape for these subscribers belongs in
+Detailed setup, configuration, and API shape for this subscriber belongs in
 [Observability](/configure-plugins/observability/about).
 For configuration-driven setup, use the built-in
 [`observability` plugin](/configure-plugins/observability/configuration)
-to install ATOF, ATIF, OpenTelemetry, and OpenInference subscribers from one
-plugin component.
+to install ATOF, ATIF, and typed OpenTelemetry exporters from one plugin
+component.
 
 ## Practical Guidance
 

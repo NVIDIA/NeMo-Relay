@@ -299,6 +299,131 @@ Before deployment:
 7. Remove fixed PII `codec` values from mixed-provider configurations.
 8. Test buffered and streaming calls for every provider and custom codec that
    your deployment uses.
+### Observability Configuration Version 3
+
+Observability configuration version 3 replaces the two version-2 OTLP sections
+with one typed, multi-endpoint `opentelemetry` section. OpenTelemetry and
+OpenInference support is always built in and no longer uses the `otel` or
+`openinference` Cargo features.
+
+<Warning>
+Version 3 does not normalize version-2 OTLP fields. Migrate the complete
+configuration before changing `components.config.version` to `3`.
+</Warning>
+
+The following example shows the version-2 shape:
+
+```toml
+[components.config]
+version = 2
+
+[components.config.opentelemetry]
+enabled = true
+endpoint = "http://localhost:4318/v1/traces"
+transport = "http_binary"
+service_name = "relay-service"
+
+[components.config.opentelemetry.headers]
+x-tenant-id = "demo"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://localhost:6006/v1/traces"
+transport = "http_binary"
+service_name = "relay-service"
+```
+
+Replace it with typed endpoints:
+
+```toml
+[components.config]
+version = 3
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "full"
+endpoint = "http://localhost:4318/v1/traces"
+transport = "http_binary"
+service_name = "relay-service"
+
+[components.config.opentelemetry.endpoints.headers]
+x-tenant-id = "demo"
+
+[components.config.opentelemetry.endpoints.header_env]
+authorization = "OTEL_AUTHORIZATION"
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "http://localhost:6006/v1/traces"
+transport = "http_binary"
+service_name = "relay-service"
+```
+
+Set `OTEL_AUTHORIZATION` to the complete authorization header value before
+activation. Process-global `OTEL_EXPORTER_OTLP_HEADERS` and
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` are no longer accepted because their values
+cannot be isolated between multiple exporters. Move non-sensitive version-2 headers to the
+endpoint's `headers` map. Move `resource_attributes` and all service,
+transport, instrumentation-scope, and timeout settings into the corresponding
+endpoint.
+
+Use the following endpoint type for each projection:
+
+| Version-2 Source | Version-3 Endpoint Type |
+|---|---|
+| `opentelemetry` | `full` |
+| `openinference` | `openinference` |
+| New standardized GenAI-only export | `gen_ai` |
+
+Every endpoint requires a nonblank `endpoint` and explicit `type`. The defaults
+also change:
+
+| Field | Version 2 | Version 3 |
+|---|---|---|
+| `service_name` | `nemo-relay` | `unknown_service` |
+| `instrumentation_scope` | Exporter-specific or omitted | `opentelemetry` |
+| `endpoint` | Exporter or environment default when omitted | Required |
+
+Remove `mark_projection`, `mark_exclude_names`, `attribute_mappings`,
+`semantic_selector`, and `capture_content`. Projection behavior is fixed. The
+`full` and `openinference` types retain their previous default mark behavior.
+The `gen_ai` type omits marks, rerankers, and unsupported scope types, and does
+not emit `nemo_relay.*` or opt-in content attributes. It targets the
+[OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
+
+NeMo Relay also upgrades to OpenTelemetry Rust `0.32`.
+
+Top-level component `config` lists now concatenate across layers, with
+higher-precedence entries first. The observability destination lists
+`atof.sinks`, `opentelemetry.endpoints`, and `atif.storage` follow the same
+rule. Arbitrary lists nested inside structured values continue to use
+replacement semantics. Edit the layer that declares an inherited entry when
+you need to change or remove it.
+
+#### Binding API Changes
+
+The standalone OpenInference config and subscriber APIs are removed. Construct
+one independently managed OpenTelemetry subscriber from one typed endpoint.
+
+| Surface | Version-2 API | Version-3 API |
+|---|---|---|
+| Rust | `OpenInferenceConfig`, `OpenInferenceSubscriber`, or untyped `OpenTelemetryConfig` constructors | `OpenTelemetryConfig::new(OpenTelemetryType::OpenInference, endpoint)` and `OpenTelemetrySubscriber` |
+| Python | `OpenInferenceConfig`, `OpenInferenceSubscriber`, or `OpenTelemetryConfig()` | `OpenTelemetryConfig("openinference", endpoint)` and `OpenTelemetrySubscriber` |
+| Node.js | `OpenInferenceSubscriber` or an OpenTelemetry config without a type | `new OpenTelemetrySubscriber({ type: "openinference", endpoint })` |
+| Go | `NewOpenInferenceConfig`, `NewOpenInferenceSubscriber`, or `NewOpenTelemetryConfig()` | `NewOpenTelemetryConfig(OpenTelemetryTypeOpenInference, endpoint)` and `NewOpenTelemetrySubscriber` |
+| C FFI | `nemo_relay_openinference_subscriber_*`, the untyped `nemo_relay_otel_subscriber_create`, and attribute-mapping constructors | `nemo_relay_otel_subscriber_create(otel_type, ..., endpoint, ...)` and `nemo_relay_otel_subscriber_*` lifecycle functions |
+
+For plugin-owned multi-endpoint configuration, use
+`OpenTelemetryEndpointConfig` and `OpenTelemetrySectionConfig` in Python,
+`openTelemetryEndpoint` and `openTelemetryConfig` in Node.js, or
+`ObservabilityOpenTelemetryEndpointConfig` and
+`ObservabilityOpenTelemetryConfig` in Go.
+
+Direct subscribers still own one tracer provider each. Register the subscriber
+before instrumented work, then deregister, flush, and shut it down during
+graceful teardown.
 
 ## Related Release Information
 

@@ -111,9 +111,9 @@ def to_dict() -> JsonObject
 
 Serialize this ATIF config to the canonical JSON object shape.
 
-### `OtlpConfig`
+### `OpenTelemetryEndpointConfig`
 
-Shared OpenTelemetry/OpenInference OTLP export settings.
+One typed OpenTelemetry OTLP destination.
 
 #### Methods
 
@@ -123,7 +123,21 @@ Shared OpenTelemetry/OpenInference OTLP export settings.
 def to_dict() -> JsonObject
 ```
 
-Serialize this OTLP config to the canonical JSON object shape.
+Serialize this endpoint to the canonical plugin shape.
+
+### `OpenTelemetrySectionConfig`
+
+Multi-endpoint OpenTelemetry plugin settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this section to the canonical plugin shape.
 
 ### `ObservabilityConfig`
 
@@ -156,6 +170,5 @@ Serialize this component to the canonical plugin shape.
 ## Type Aliases And Constants
 
 - `AtofEndpointConfig`
-- `MarkProjection`
 - `OBSERVABILITY_PLUGIN_KIND`
 

@@ -2,7 +2,7 @@
 title: "Module otel"
 sidebar-title: "otel"
 description: "OpenTelemetry subscriber support for NeMo Relay."
-position: 4
+position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,12 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 OpenTelemetry subscriber support for NeMo Relay.
 
-This crate adapts NeMo Relay lifecycle events into OpenTelemetry trace spans:
-
-- scope/tool/LLM `Start` events open spans
-- matching `End` events close spans
-- `Mark` events become span events by default, with an optional visible child-span projection
-- orphan marks fall back to zero-duration spans so they still reach OTLP
+This crate adapts NeMo Relay lifecycle events into the selected `full`, `gen_ai`, or `openinference` OpenTelemetry trace projection. Scope start and end events open and close supported spans. Mark behavior is fixed by the selected projection.
 
 The public API is intentionally small:
 

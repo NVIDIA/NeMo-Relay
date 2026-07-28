@@ -42,6 +42,19 @@ compatibility information applies to the current 0.7 prerelease.
 - Native and worker plugins can resolve invocation-scoped codec capabilities.
   Request sanitizers can decode and encode requests, and response sanitizers
   can decode responses.
+- The Observability plugin now uses one typed, multi-endpoint OpenTelemetry
+  section for `full`, `gen_ai`, and `openinference` trace projections.
+- The `gen_ai` projection implements the pinned
+  [OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
+- OpenTelemetry exporter dependencies, including OpenInference semantic
+  support, are always enabled instead of being controlled by Cargo features.
+- OpenTelemetry Rust is upgraded to `0.32`.
+- Top-level plugin component `config` lists and the observability destination
+  lists `atof.sinks`, `opentelemetry.endpoints`, and `atif.storage`
+  concatenate across configuration layers, with higher-precedence entries
+  first.
+- `object_store` is upgraded to `0.14.1`, which removes the temporary
+  `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` advisory exceptions.
 
 ### Support Matrix and Compatibility Updates
 
@@ -63,6 +76,22 @@ Before upgrading from 0.6, follow the
 [0.7 Migration Guide](/reference/migration-guides#upgrade-to-nemo-relay-07).
 For the new callback contract and codec operations, refer to
 [Codec-Aware LLM Sanitizers](/about-nemo-relay/concepts/middleware#codec-aware-llm-sanitizers).
+
+Observability configuration version 3 is a breaking change. It removes the
+standalone `openinference` section and standalone OpenInference subscriber APIs,
+and requires a type and endpoint for every OpenTelemetry exporter. Legacy mark
+and attribute-alias controls remain available on typed `full` and
+`openinference` endpoints. Refer to
+[Migration Guides](/reference/migration-guides#observability-configuration-version-3)
+for before-and-after configuration and binding API changes.
+
+Each `opentelemetry.endpoints` entry can resolve sensitive header values from
+environment variables through `header_env`. Plugin activation rejects missing
+variables, blank values, and duplicate header names, then snapshots each valid
+value for the endpoint.
+Process-global `OTEL_EXPORTER_OTLP_HEADERS` and
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` now fail construction or activation because
+their values cannot be isolated between endpoints.
 
 ### Fixed Known Issues in 0.7
 
@@ -105,8 +134,8 @@ For the new callback contract and codec operations, refer to
   configured destinations. A failed stream sink does not stop file output or
   other active sinks.
 - ATIF omits point-in-time marks. Use ATOF for the canonical mark stream;
-  OpenTelemetry and OpenInference tool-style mark projection is only a
-  visualization aid.
+  the `gen_ai` OpenTelemetry projection also omits marks. The `full` and
+  `openinference` projections retain their fixed native mark handling.
 - Native dynamic plugins run in the Relay process and are not sandboxed. A
   `grpc-v1` worker runs in a separate process, but that process is not a
   security sandbox.

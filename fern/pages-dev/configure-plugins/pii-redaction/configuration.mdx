@@ -87,8 +87,8 @@ Use either the legacy single-policy fields (`mode`, surface flags, `priority`,
 In profile-array mode, profiles execute by ascending priority and use array
 order to break ties. Relay assigns internal names such as `profile_0`, so
 profiles do not require IDs. Disabled profiles are validated but do not
-register callbacks. The complete array is replaced as one value during config
-layering.
+register callbacks. Profile lists concatenate during config layering, with
+higher-precedence profiles placed before lower-precedence profiles.
 
 ### Mixed-Provider Gateway Example
 

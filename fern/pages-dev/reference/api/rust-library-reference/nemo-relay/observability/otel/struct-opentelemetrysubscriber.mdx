@@ -33,17 +33,11 @@ Builds a subscriber backed by a new OTLP tracer provider.
 
 Builds a subscriber from an already-configured tracer provider.
 
-#### `from_tracer_provider_with_mark_projection`
+#### `from_tracer_provider_with_type`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_type(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    otel_type: <a href=\"../enum-opentelemetrytype\">OpenTelemetryType</a>,\n) -&gt; Self"}} /></pre>
 
-Builds a subscriber from a tracer provider with an explicit mark projection.
-
-#### `from_tracer_provider_with_mark_projection_and_exclusions`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection_and_exclusions&lt;I, S&gt;(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n    mark_exclude_names: I,\n) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
-
-Builds a subscriber with explicit mark projection and exclusion names.
+Builds a typed subscriber from an already-configured tracer provider.
 
 #### `from_tracer_provider_with_attribute_mappings`
 
@@ -56,6 +50,12 @@ Builds a subscriber from a tracer provider with typed attribute copies.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_options(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    options: <a href=\"struct-opentelemetrysubscriberoptions\">OpenTelemetrySubscriberOptions</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 Builds a subscriber from a tracer provider with composable projection options.
+
+#### `from_tracer_provider_with_type_and_options`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_type_and_options(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    otel_type: <a href=\"../enum-opentelemetrytype\">OpenTelemetryType</a>,\n    options: <a href=\"struct-opentelemetrysubscriberoptions\">OpenTelemetrySubscriberOptions</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Builds a typed subscriber from a tracer provider with projection options.
 
 #### `subscriber`
 

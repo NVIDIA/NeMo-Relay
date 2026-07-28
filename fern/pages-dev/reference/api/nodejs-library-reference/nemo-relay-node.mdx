@@ -61,68 +61,32 @@ Mutable configuration object for `OpenTelemetrySubscriber`.
 
 ```ts
 export interface OpenTelemetryConfig {
+  /** `"full"`, `"gen_ai"`, or `"openinference"`. */
+  type: "full" | "gen_ai" | "openinference"
   /** `"http_binary"` (default) or `"grpc"`. */
   transport?: string
   /** OTLP endpoint, such as `http://localhost:4318/v1/traces`. */
-  endpoint?: string
+  endpoint: string
   /** Extra exporter headers/metadata as string key/value pairs. */
   headers?: Json
   /** Extra OpenTelemetry resource attributes as string key/value pairs. */
   resourceAttributes?: Json
-  /** `service.name` resource attribute. Defaults to `"nemo-relay"`. */
+  /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
   serviceName?: string
   /** Optional `service.namespace` resource attribute. */
   serviceNamespace?: string
   /** Optional `service.version` resource attribute. */
   serviceVersion?: string
-  /** Instrumentation scope name. Defaults to `"nemo-relay-otel"`. */
+  /** Instrumentation scope name. Defaults to `"opentelemetry"`. */
   instrumentationScope?: string
   /** Export timeout in milliseconds. Defaults to `3000`. */
   timeoutMillis?: number
-  /** Typed projected attributes copied to aliases. */
-  attributeMappings?: Array<OtlpAttributeMapping>
-}
-```
-
-### `OtlpAttributeMapping`
-
-Typed projected attribute copy configuration.
-
-```ts
-export interface OtlpAttributeMapping {
-  /** Fully-qualified projected attribute to copy. */
-  key: string
-  /** Additional attribute name receiving the copied value. */
-  alias: string
-}
-```
-
-### `OpenInferenceConfig`
-
-Mutable configuration object for `OpenInferenceSubscriber`.
-
-```ts
-export interface OpenInferenceConfig {
-  /** `"http_binary"` (default) or `"grpc"`. */
-  transport?: string
-  /** OTLP endpoint, such as `http://localhost:4318/v1/traces`. */
-  endpoint?: string
-  /** Extra exporter headers/metadata as string key/value pairs. */
-  headers?: Json
-  /** Extra OpenInference resource attributes as string key/value pairs. */
-  resourceAttributes?: Json
-  /** `service.name` resource attribute. Defaults to `"nemo-relay"`. */
-  serviceName?: string
-  /** Optional `service.namespace` resource attribute. */
-  serviceNamespace?: string
-  /** Optional `service.version` resource attribute. */
-  serviceVersion?: string
-  /** Instrumentation scope name. Defaults to `"nemo-relay-openinference"`. */
-  instrumentationScope?: string
-  /** Export timeout in milliseconds. Defaults to `3000`. */
-  timeoutMillis?: number
-  /** Typed projected attributes copied to aliases. */
-  attributeMappings?: Array<OtlpAttributeMapping>
+  /** Mark projection for full and OpenInference exporters. Defaults to `"inherit"`. */
+  markProjection?: "inherit" | "event" | "tool"
+  /** Mark names excluded from full and OpenInference projections. */
+  markExcludeNames?: Array<string>
+  /** Attribute aliases for full and OpenInference projections. */
+  attributeMappings?: Json
 }
 ```
 
@@ -230,26 +194,7 @@ OpenTelemetry-backed event subscriber.
 ```ts
 export declare class OpenTelemetrySubscriber {
   /** Create a new OpenTelemetry subscriber from a config object. */
-  constructor(config?: OpenTelemetryConfig | undefined | null)
-  /** Register this subscriber globally with the given name. */
-  register(name: string): void
-  /** Deregister a subscriber by name. */
-  deregister(name: string): boolean
-  /** Force a flush of finished spans through the exporter. */
-  forceFlush(): void
-  /** Shut down the underlying tracer provider. */
-  shutdown(): void
-}
-```
-
-### `OpenInferenceSubscriber`
-
-OpenInference-backed event subscriber.
-
-```ts
-export declare class OpenInferenceSubscriber {
-  /** Create a new OpenInference subscriber from a config object. */
-  constructor(config?: OpenInferenceConfig | undefined | null)
+  constructor(config: OpenTelemetryConfig)
   /** Register this subscriber globally with the given name. */
   register(name: string): void
   /** Deregister a subscriber by name. */
