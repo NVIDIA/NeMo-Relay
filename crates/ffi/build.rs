@@ -34,9 +34,9 @@ fn main() {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct AsyncPrototype<'a> {
-    name: &'a str,
-    parameters: Vec<&'a str>,
+struct AsyncPrototype {
+    name: String,
+    parameters: Vec<String>,
 }
 
 /// cbindgen does not expand the declarative registration macros. Keep the
@@ -50,27 +50,21 @@ fn validate_async_registration_parity(crate_dir: &str) {
         "src/api/tool_registry.rs",
     ];
 
-    let mut exported = Vec::new();
+    let mut expected = Vec::new();
     for source in REGISTRATION_SOURCES {
         println!("cargo:rerun-if-changed={source}");
         let source_path = format!("{crate_dir}/{source}");
         let contents = std::fs::read_to_string(&source_path)
             .unwrap_or_else(|error| panic!("read {source_path}: {error}"));
-        exported.extend(
-            contents
-                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-                .filter(|token| token.starts_with("nemo_relay_") && token.ends_with("_async"))
-                .map(str::to_owned),
-        );
+        expected.extend(parse_async_macro_invocations(&contents));
     }
-    exported.sort();
-    exported.dedup();
+    expected.sort_by(|left, right| left.name.cmp(&right.name));
 
     let mut declared = ASYNC_REGISTRATIONS
         .lines()
         .filter_map(parse_async_prototype)
         .collect::<Vec<_>>();
-    declared.sort_by(|left, right| left.name.cmp(right.name));
+    declared.sort_by(|left, right| left.name.cmp(&right.name));
     for duplicates in declared.windows(2) {
         assert_ne!(
             duplicates[0].name, duplicates[1].name,
@@ -78,58 +72,73 @@ fn validate_async_registration_parity(crate_dir: &str) {
             duplicates[0].name
         );
     }
-    let declared_names = declared
-        .iter()
-        .map(|prototype| prototype.name.to_owned())
-        .collect::<Vec<_>>();
     assert_eq!(
-        declared_names, exported,
-        "ASYNC_REGISTRATIONS must declare exactly the async Rust FFI exports"
+        declared, expected,
+        "ASYNC_REGISTRATIONS must exactly match the macro-generated Rust FFI exports"
     );
-
-    for prototype in declared {
-        assert!(
-            exported
-                .binary_search_by(|name| name.as_str().cmp(prototype.name))
-                .is_ok(),
-            "async declaration for {} is not a Rust FFI export",
-            prototype.name
-        );
-        assert_eq!(
-            prototype,
-            expected_async_prototype(prototype.name),
-            "async declaration for {} has a mismatched C prototype",
-            prototype.name
-        );
-    }
 }
 
-fn parse_async_prototype(line: &str) -> Option<AsyncPrototype<'_>> {
+fn parse_async_prototype(line: &str) -> Option<AsyncPrototype> {
     let line = line.strip_prefix("NemoRelayStatus ")?;
     let (name, parameters) = line.split_once('(')?;
     let parameters = parameters.strip_suffix(");")?;
     Some(AsyncPrototype {
-        name,
-        parameters: parameters.split(", ").collect(),
+        name: name.to_owned(),
+        parameters: parameters.split(", ").map(str::to_owned).collect(),
     })
 }
 
-fn expected_async_prototype(name: &str) -> AsyncPrototype<'_> {
-    let mut parameters = Vec::new();
-    if name.starts_with("nemo_relay_scope_") {
-        parameters.push("const char *scope_uuid");
+fn parse_async_macro_invocations(source: &str) -> Vec<AsyncPrototype> {
+    const MACROS: &[(&str, bool)] = &[
+        ("global_async_registration!(", false),
+        ("scope_async_registration!(", true),
+        ("global_async_event_registration!(", false),
+        ("scope_async_event_registration!(", true),
+    ];
+
+    let mut prototypes = Vec::new();
+    for (prefix, scope_local) in MACROS {
+        let mut remaining = source;
+        while let Some(start) = remaining.find(prefix) {
+            let invocation = &remaining[start + prefix.len()..];
+            let Some(end) = invocation.find(");") else {
+                break;
+            };
+            let arguments = invocation[..end]
+                .split(',')
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            remaining = &invocation[end + 2..];
+
+            let Some(name) = arguments.first().copied() else {
+                continue;
+            };
+            if !name.starts_with("nemo_relay_") || !name.ends_with("_async") {
+                continue;
+            }
+            let callback_type = arguments
+                .get(1)
+                .unwrap_or_else(|| panic!("{name} macro invocation is missing its callback type"));
+            let mut parameters = Vec::new();
+            if *scope_local {
+                parameters.push("const char *scope_uuid".to_owned());
+            }
+            parameters.extend(["const char *name".to_owned(), "int32_t priority".to_owned()]);
+            if arguments.contains(&"break_chain") {
+                parameters.push("bool break_chain".to_owned());
+            }
+            parameters.extend([
+                format!("{callback_type} cb"),
+                "void *user_data".to_owned(),
+                "NemoRelayFreeFn free_fn".to_owned(),
+            ]);
+            prototypes.push(AsyncPrototype {
+                name: name.to_owned(),
+                parameters,
+            });
+        }
     }
-    parameters.extend(["const char *name", "int32_t priority"]);
-    if name.contains("request_intercept_async") {
-        parameters.push("bool break_chain");
-    }
-    parameters.push(if name.contains("execution_intercept_async") {
-        "NemoRelayAsyncInterceptCb cb"
-    } else {
-        "NemoRelayAsyncJsonCb cb"
-    });
-    parameters.extend(["void *user_data", "NemoRelayFreeFn free_fn"]);
-    AsyncPrototype { name, parameters }
+    prototypes
 }
 
 const ASYNC_REGISTRATIONS: &str = r#"

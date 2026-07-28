@@ -205,50 +205,81 @@ const asyncCancellationPollInterval = 10 * time.Millisecond
 type completionCancellationWatch struct {
 	completion *C.NemoRelayAsyncCompletion
 	cancel     context.CancelFunc
+	probeMu    *sync.Mutex
 }
 
 var (
 	completionCancellationMu      sync.Mutex
 	completionCancellationWatches = make(map[uint64]completionCancellationWatch)
 	completionCancellationNextID  atomic.Uint64
-	completionCancellationOnce    sync.Once
+	completionCancellationRunning bool
 )
 
 func startCompletionCancellationMonitor() {
-	completionCancellationOnce.Do(func() {
-		go func() {
-			ticker := time.NewTicker(asyncCancellationPollInterval)
-			defer ticker.Stop()
-			for range ticker.C {
+	completionCancellationMu.Lock()
+	if completionCancellationRunning {
+		completionCancellationMu.Unlock()
+		return
+	}
+	completionCancellationRunning = true
+	completionCancellationMu.Unlock()
+	go func() {
+		ticker := time.NewTicker(asyncCancellationPollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			completionCancellationMu.Lock()
+			if len(completionCancellationWatches) == 0 {
+				completionCancellationRunning = false
+				completionCancellationMu.Unlock()
+				return
+			}
+			snapshot := make(map[uint64]completionCancellationWatch, len(completionCancellationWatches))
+			for id, watch := range completionCancellationWatches {
+				snapshot[id] = watch
+			}
+			completionCancellationMu.Unlock()
+
+			for id, watch := range snapshot {
+				watch.probeMu.Lock()
 				completionCancellationMu.Lock()
-				for id, watch := range completionCancellationWatches {
-					if bool(C.nemo_relay_async_completion_is_cancelled(watch.completion)) {
+				_, live := completionCancellationWatches[id]
+				completionCancellationMu.Unlock()
+				if live && bool(C.nemo_relay_async_completion_is_cancelled(watch.completion)) {
+					completionCancellationMu.Lock()
+					if _, live = completionCancellationWatches[id]; live {
 						delete(completionCancellationWatches, id)
+					}
+					completionCancellationMu.Unlock()
+					if live {
 						watch.cancel()
 					}
 				}
-				completionCancellationMu.Unlock()
+				watch.probeMu.Unlock()
 			}
-		}()
-	})
+		}
+	}()
 }
 
 func contextForCompletion(completion *C.NemoRelayAsyncCompletion) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
-	startCompletionCancellationMonitor()
 	id := completionCancellationNextID.Add(1)
+	probeMu := &sync.Mutex{}
 	completionCancellationMu.Lock()
 	completionCancellationWatches[id] = completionCancellationWatch{
 		completion: completion,
 		cancel:     cancel,
+		probeMu:    probeMu,
 	}
 	completionCancellationMu.Unlock()
+	startCompletionCancellationMonitor()
 	var doneOnce sync.Once
 	return ctx, func() {
 		doneOnce.Do(func() {
 			completionCancellationMu.Lock()
 			delete(completionCancellationWatches, id)
 			completionCancellationMu.Unlock()
+			probeMu.Lock()
+			probeMu.Unlock()
 			cancel()
 		})
 	}

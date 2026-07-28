@@ -240,9 +240,15 @@ func assertAdaptiveRuntimeClosed(t *testing.T, runtime *AdaptiveRuntime) {
 func TestAdaptiveRuntimeHelpersRejectInvalidInputs(t *testing.T) {
 	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{
 		Provider:  "unsupported",
+		RequestID: "018f13f0-7c1a-7a80-8000-000000000001",
+	}); err == nil || !strings.Contains(err.Error(), "provider") {
+		t.Fatalf("expected unsupported provider rejection, got %v", err)
+	}
+	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{
+		Provider:  "openai",
 		RequestID: "not-a-uuid",
-	}); err == nil {
-		t.Fatal("expected invalid telemetry input to fail")
+	}); err == nil || !strings.Contains(err.Error(), "request_id") {
+		t.Fatalf("expected invalid request ID rejection, got %v", err)
 	}
 
 	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
@@ -251,11 +257,11 @@ func TestAdaptiveRuntimeHelpersRejectInvalidInputs(t *testing.T) {
 	}
 	defer runtime.Shutdown()
 	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{
-		Provider:         "unsupported",
+		Provider:         "openai",
 		RequestID:        "not-a-uuid",
 		AnnotatedRequest: json.RawMessage(`{}`),
-	}); err == nil {
-		t.Fatal("expected invalid cache request facts input to fail")
+	}); err == nil || !strings.Contains(err.Error(), "request_id") {
+		t.Fatalf("expected invalid request ID rejection, got %v", err)
 	}
 	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{
 		AnnotatedRequest: json.RawMessage(`not-json`),
