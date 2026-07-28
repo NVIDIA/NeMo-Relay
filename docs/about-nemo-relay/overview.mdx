@@ -99,11 +99,14 @@ Rust is the source of truth for runtime behavior. The Python and Node.js
 bindings expose the same core model for primary application use. Go and raw C
 FFI are experimental and source-first surfaces.
 
-Developers building integrations should start by identifying who owns the real
-LLM or tool call. If Relay can wrap the real callback, use managed execution. If
-the framework exposes lifecycle hooks but not execution control, use explicit
-lifecycle APIs or hook replay. If provider-shaped payload capture matters,
-consider the gateway/provider path and treat it as production traffic.
+First, identify where the actual LLM or tool function is invoked. If that
+invocation can be routed through NeMo Relay, use managed execution: NeMo Relay
+runs the applicable middleware and then invokes the real function. If the
+framework retains control but provides before-and-after notifications, translate
+those lifecycle hooks into NeMo Relay events. NeMo Relay can then observe the
+call's lifecycle but does not execute or control it. If provider-native requests
+and responses must be intercepted, route the real provider traffic through the
+NeMo Relay gateway and treat NeMo Relay as a production dependency.
 
 <Warning>
 Do not add behavior to one primary binding without checking Rust, Python, and

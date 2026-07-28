@@ -61,6 +61,15 @@ required step for every call.
 
 <MermaidStyles />
 
+<style>{`
+.mermaid-container svg,
+.mermaid-container-expanded svg,
+.mermaid svg {
+  min-width: 72rem;
+  max-width: none;
+}
+`}</style>
+
 ```mermaid
 flowchart LR
   boundary["App or framework boundary"]
