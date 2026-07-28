@@ -15,7 +15,7 @@ use crate::api::runtime::{
 };
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
-use crate::api::tool::ToolAttributes;
+use crate::api::tool::{TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes};
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
@@ -111,6 +111,43 @@ fn optimization_summary_emits_namespaced_otel_attributes() {
     assert_eq!(
         attributes["nemo_relay.llm.optimization.baseline_pricing_source"],
         "test"
+    );
+}
+
+#[test]
+fn tool_result_annotation_is_exported_as_one_opaque_json_attribute() {
+    let annotation = json!({
+        "status": "failed",
+        "nested": {"code": 17},
+        "items": [true, null, "opaque"],
+    });
+    let mut profile = CategoryProfile::builder()
+        .tool_call_id("call-annotation")
+        .build();
+    profile.extra.insert(
+        TOOL_RESULT_ANNOTATION_PROFILE_KEY.to_string(),
+        annotation.clone(),
+    );
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("annotated-tool")
+            .data(json!({"raw": "result"}))
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::tool(),
+        Some(profile),
+    ));
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert_eq!(
+        attributes.get("nemo_relay.tool.result.annotation"),
+        Some(&serde_json::to_string(&annotation).unwrap())
+    );
+    assert!(
+        attributes
+            .keys()
+            .all(|key| !key.starts_with("nemo_relay.tool.result.annotation."))
     );
 }
 

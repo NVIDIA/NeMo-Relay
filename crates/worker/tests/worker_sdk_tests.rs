@@ -20,9 +20,10 @@ use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
     ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
-    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
-    serve_plugin_arc_with_config,
+    PluginContext, PluginRuntime, Result, ScopeType, TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA,
+    TOOL_EXECUTION_FRAME_SCHEMA, ToolExecutionFrame, ToolExecutionFrameOutcome,
+    ToolExecutionInterceptOutcome, ToolFrameNext, ToolNext, WorkerPlugin, WorkerSdkError,
+    WorkerServerConfig, serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -33,8 +34,8 @@ use nemo_relay_worker_proto::v1::{
     DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
     InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
     LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
-    ToolNextRequest, ValidateRequest, WorkerError,
+    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolFrameNextRequest,
+    ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use serde_json::json;
@@ -200,12 +201,13 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 21);
+    assert_eq!(registrations.len(), 22);
     for local_name in [
         "llm-sanitize-request",
         "llm-sanitize-response",
         "llm-sanitize-omit-request",
         "llm-sanitize-omit-response",
+        "tool-exec-frame",
     ] {
         assert_eq!(
             registrations
@@ -615,6 +617,28 @@ async fn worker_service_invokes_every_registration_surface() {
     let tool_exec = tool_outcome.result;
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
+    let frame_outcome = invoke_tool_execution_frame(
+        &mut client,
+        tool_invoke(
+            "tool-exec-frame",
+            RegistrationSurface::ToolExecutionFrameIntercept,
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(frame_outcome.pending_marks.len(), 1);
+    assert_eq!(
+        frame_outcome.pending_marks[0].name,
+        "worker.tool.execution.frame"
+    );
+    assert_json_field(frame_outcome.frame.result, "phase", "tool_exec_frame");
+    assert_eq!(
+        frame_outcome.frame.annotation,
+        Some(json!({
+            "producer": "host",
+            "observed_by": "worker",
+        }))
+    );
     assert!(
         invoke_json(
             &mut client,
@@ -785,6 +809,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"pop:scope-handle-1".into()));
     assert!(calls.contains(&"drop:isolated-stack".into()));
     assert!(calls.contains(&"tool_next:next-1".into()));
+    assert!(calls.contains(&"tool_frame_next:next-1".into()));
     assert!(calls.contains(&"llm_next:next-1".into()));
     assert!(calls.contains(&"llm_stream_next:next-1".into()));
     assert!(calls.contains(&"codec_request_decode:request-capability".into()));
@@ -1493,6 +1518,23 @@ async fn worker_service_propagates_host_runtime_errors() {
     }
 
     host.set_failures(MockHostFailures {
+        tool_frame_next: true,
+        ..Default::default()
+    });
+    assert_worker_error(
+        client
+            .invoke(Request::new(tool_invoke(
+                "tool-exec-frame",
+                RegistrationSurface::ToolExecutionFrameIntercept,
+                json!({}),
+            )))
+            .await
+            .expect("tool frame next failure returns structured error")
+            .into_inner(),
+        "tool frame next failed",
+    );
+
+    host.set_failures(MockHostFailures {
         llm_next: true,
         ..Default::default()
     });
@@ -1823,6 +1865,22 @@ impl WorkerPlugin for SurfacePlugin {
                 ))
             }
         });
+        ctx.register_tool_execution_frame_intercept(
+            "tool-exec-frame",
+            1,
+            |_, value, next: ToolFrameNext| async move {
+                let mut frame = next.call(value).await?;
+                frame.result = set_json_field(frame.result, "phase", "tool_exec_frame");
+                let mut annotation = frame.annotation.unwrap_or_else(|| json!({}));
+                annotation["observed_by"] = json!("worker");
+                frame.annotation = Some(annotation);
+                Ok(ToolExecutionFrameOutcome::new(frame).with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("worker.tool.execution.frame")
+                        .build(),
+                ))
+            },
+        );
         let scope_runtime = runtime.clone();
         ctx.register_tool_execution_intercept("tool-scope-types", 1, move |_, _, _| {
             let runtime = scope_runtime.clone();
@@ -2018,6 +2076,7 @@ struct MockHostFailures {
     pop_scope: HostFailure,
     drop_scope_stack: HostFailure,
     tool_next: bool,
+    tool_frame_next: bool,
     llm_next: bool,
     llm_stream_mode: MockStreamMode,
     codec_request_decode: bool,
@@ -2178,6 +2237,34 @@ impl RelayHostRuntime for MockHost {
         }
         Ok(Response::new(JsonResult {
             value: Some(json_env(json!({"next": "tool"}))),
+            error: None,
+        }))
+    }
+
+    async fn tool_frame_next(
+        &self,
+        request: Request<ToolFrameNextRequest>,
+    ) -> std::result::Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record(format!("tool_frame_next:{}", request.continuation_id));
+        if self.failures().tool_frame_next {
+            return Ok(Response::new(JsonResult {
+                value: None,
+                error: Some(worker_error("tool frame next failed")),
+            }));
+        }
+        Ok(Response::new(JsonResult {
+            value: Some(
+                json_envelope(
+                    TOOL_EXECUTION_FRAME_SCHEMA,
+                    &ToolExecutionFrame::annotated(
+                        json!({"next": "tool_frame"}),
+                        json!({"producer": "host"}),
+                    ),
+                )
+                .expect("encode tool execution frame"),
+            ),
             error: None,
         }))
     }
@@ -2754,6 +2841,25 @@ async fn invoke_tool_execution(
             let outcome = result.outcome.expect("tool execution outcome");
             assert_eq!(outcome.schema, "nemo.relay.ToolExecutionInterceptOutcome@1");
             decode_json_envelope(&outcome).expect("decode tool execution outcome")
+        }
+        other => panic!("unexpected invoke result: {other:?}"),
+    }
+}
+
+async fn invoke_tool_execution_frame(
+    client: &mut PluginWorkerClient<Channel>,
+    request: InvokeRequest,
+) -> ToolExecutionFrameOutcome {
+    let response = client
+        .invoke(Request::new(request))
+        .await
+        .expect("invoke succeeds")
+        .into_inner();
+    match response.result.expect("invoke result") {
+        nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecutionFrame(result) => {
+            let outcome = result.outcome.expect("tool execution frame outcome");
+            assert_eq!(outcome.schema, TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA);
+            decode_json_envelope(&outcome).expect("decode tool execution frame outcome")
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }

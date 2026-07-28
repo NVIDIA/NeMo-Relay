@@ -12,6 +12,7 @@ use super::{
     ScopeAttributes, ScopeHandle, ScopeStackHandle, ToolAttributes, ToolHandle, json_to_py,
     opt_json_to_py, py_to_json,
 };
+use crate::convert::opt_py_to_json;
 use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
@@ -19,7 +20,9 @@ use nemo_relay::api::runtime::{
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
     ThreadScopeStackBinding,
 };
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{
+    ToolExecutionFrame, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 
 /// Structured identity of the codec active during LLM sanitization.
 #[pyclass(name = "LlmCodecIdentity", frozen)]
@@ -942,7 +945,7 @@ impl PyLLMRequestInterceptOutcome {
     }
 }
 
-/// Canonical result returned by Python tool execution intercepts.
+/// Relay-owned wrapper returned by Python raw-result tool execution intercepts.
 #[pyclass(name = "ToolExecutionInterceptOutcome", from_py_object)]
 #[derive(Clone)]
 pub struct PyToolExecutionInterceptOutcome {
@@ -965,6 +968,87 @@ impl PyToolExecutionInterceptOutcome {
     #[getter]
     fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         json_to_py(py, &self.inner.result)
+    }
+
+    #[getter]
+    fn pending_marks(&self) -> Vec<PyPendingMarkSpec> {
+        self.inner
+            .pending_marks
+            .iter()
+            .cloned()
+            .map(|inner| PyPendingMarkSpec { inner })
+            .collect()
+    }
+}
+
+/// Raw tool result plus an optional opaque annotation.
+#[pyclass(name = "ToolExecutionFrame", from_py_object)]
+#[derive(Clone)]
+pub struct PyToolExecutionFrame {
+    pub inner: ToolExecutionFrame,
+}
+
+#[pymethods]
+impl PyToolExecutionFrame {
+    #[new]
+    #[pyo3(signature = (result, annotation=None))]
+    fn new(result: &Bound<'_, PyAny>, annotation: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        Ok(Self {
+            inner: ToolExecutionFrame {
+                result: py_to_json(result)?,
+                annotation: opt_py_to_json(annotation)?,
+            },
+        })
+    }
+
+    #[getter]
+    fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &self.inner.result)
+    }
+
+    #[setter]
+    fn set_result(&mut self, result: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.result = py_to_json(result)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn annotation(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.annotation)
+    }
+
+    #[setter]
+    fn set_annotation(&mut self, annotation: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.inner.annotation = opt_py_to_json(annotation)?;
+        Ok(())
+    }
+}
+
+/// Result returned by annotation-aware Python tool execution intercepts.
+#[pyclass(name = "ToolExecutionFrameOutcome", from_py_object)]
+#[derive(Clone)]
+pub struct PyToolExecutionFrameOutcome {
+    pub inner: ToolExecutionFrameOutcome,
+}
+
+#[pymethods]
+impl PyToolExecutionFrameOutcome {
+    #[new]
+    #[pyo3(signature = (frame, pending_marks=Vec::new()))]
+    fn new(frame: PyToolExecutionFrame, pending_marks: Vec<PyPendingMarkSpec>) -> Self {
+        Self {
+            inner: ToolExecutionFrameOutcome {
+                frame: frame.inner,
+                pending_marks: pending_marks.into_iter().map(|value| value.inner).collect(),
+            },
+        }
+    }
+
+    #[getter]
+    fn frame(&self) -> PyToolExecutionFrame {
+        PyToolExecutionFrame {
+            inner: self.inner.frame.clone(),
+        }
     }
 
     #[getter]

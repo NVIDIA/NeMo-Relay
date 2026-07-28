@@ -176,7 +176,7 @@ export interface LlmRequestInterceptOutcome {
 }
 
 /**
- * Canonical result returned by a tool execution intercept.
+ * Relay-owned wrapper returned by a raw-result tool execution intercept.
  *
  * `result` is passed to the remaining middleware and application. `pendingMarks`
  * are Relay-owned lifecycle metadata emitted after the tool-end event and are
@@ -184,6 +184,18 @@ export interface LlmRequestInterceptOutcome {
  */
 export interface ToolExecutionInterceptOutcome {
   result: Json;
+  pendingMarks?: PendingMarkSpec[];
+}
+
+/** Raw tool result plus an optional annotation that Relay preserves opaquely. */
+export interface ToolExecutionFrame {
+  result: Json;
+  annotation?: Json;
+}
+
+/** Outcome returned by annotation-aware tool execution middleware. */
+export interface ToolExecutionFrameOutcome {
+  frame: ToolExecutionFrame;
   pendingMarks?: PendingMarkSpec[];
 }
 
@@ -281,7 +293,7 @@ export interface PluginContext {
     callback: (name: string, args: Json) => Json | Promise<Json>,
   ): void;
   /**
-   * Register tool execution middleware that returns a canonical outcome.
+   * Register raw-result tool execution middleware that returns Relay's outcome wrapper.
    * The `next` callback resolves to the raw downstream result.
    */
   registerToolExecutionIntercept(
@@ -291,6 +303,15 @@ export interface PluginContext {
       args: Json,
       next: (args: Json) => Json | Promise<Json>,
     ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
+  ): void;
+  /** Register annotation-aware middleware in the same tool execution chain. */
+  registerToolExecutionFrameIntercept(
+    name: string,
+    priority: number,
+    callback: (
+      args: Json,
+      next: (args: Json) => ToolExecutionFrame | Promise<ToolExecutionFrame>,
+    ) => ToolExecutionFrameOutcome | Promise<ToolExecutionFrameOutcome>,
   ): void;
 }
 

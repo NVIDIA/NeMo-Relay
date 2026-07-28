@@ -36,7 +36,9 @@ Public data types:
     LlmOptimizationTokens: Explicit token evidence by category.
     LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
-    ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
+    ToolExecutionInterceptOutcome: Relay wrapper for a raw-result tool execution intercept.
+    ToolExecutionFrame: Raw tool result with optional opaque annotation.
+    ToolExecutionFrameOutcome: Relay wrapper for a frame-aware tool execution intercept.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
     ScopeType: Semantic category for a Relay execution scope.
@@ -49,6 +51,7 @@ Public callback aliases:
     ToolConditionalCallback: Tool execution guardrail callback.
     ToolRequestCallback: Tool request intercept callback.
     ToolExecutionCallback: Tool execution intercept callback.
+    ToolExecutionFrameCallback: Frame-aware tool execution intercept callback.
     LlmSanitizeRequestCallback: LLM request sanitizer callback.
     LlmSanitizeResponseCallback: LLM response sanitizer callback.
     LlmConditionalCallback: LLM execution guardrail callback.
@@ -61,6 +64,7 @@ Public authoring types:
     PluginContext: Component-scoped callback registration context.
     PluginRuntime: Host runtime handle for event and scope operations.
     ToolNext: Continuation for a tool execution intercept.
+    ToolFrameNext: Continuation for a frame-aware tool execution intercept.
     LlmNext: Continuation for a unary LLM execution intercept.
     LlmStreamNext: Continuation for a streaming LLM execution intercept.
 
@@ -103,7 +107,11 @@ from ._api import (
     SubscriberCallback,
     ToolConditionalCallback,
     ToolExecutionCallback,
+    ToolExecutionFrame,
+    ToolExecutionFrameCallback,
+    ToolExecutionFrameOutcome,
     ToolExecutionInterceptOutcome,
+    ToolFrameNext,
     ToolNext,
     ToolRequestCallback,
     ToolSanitizeCallback,
@@ -149,7 +157,11 @@ __all__ = [
     "SubscriberCallback",
     "ToolConditionalCallback",
     "ToolExecutionCallback",
+    "ToolExecutionFrame",
+    "ToolExecutionFrameCallback",
+    "ToolExecutionFrameOutcome",
     "ToolExecutionInterceptOutcome",
+    "ToolFrameNext",
     "ToolNext",
     "ToolRequestCallback",
     "ToolSanitizeCallback",

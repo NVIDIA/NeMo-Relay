@@ -315,6 +315,33 @@ pub struct EventSanitizeFields {
     pub metadata: Option<Json>,
 }
 
+/// Raw tool result plus an optional opaque annotation.
+#[napi(object)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolExecutionFrame {
+    pub result: Json,
+    pub annotation: Option<Json>,
+}
+
+impl From<nemo_relay::api::tool::ToolExecutionFrame> for ToolExecutionFrame {
+    fn from(frame: nemo_relay::api::tool::ToolExecutionFrame) -> Self {
+        Self {
+            result: frame.result,
+            annotation: frame.annotation,
+        }
+    }
+}
+
+impl From<ToolExecutionFrame> for nemo_relay::api::tool::ToolExecutionFrame {
+    fn from(frame: ToolExecutionFrame) -> Self {
+        Self {
+            result: frame.result,
+            annotation: frame.annotation,
+        }
+    }
+}
+
 pub(crate) fn event_sanitize_fields_from_json(
     value: Json,
 ) -> serde_json::Result<EventSanitizeFields> {

@@ -1,13 +1,14 @@
 ---
 title: "Tool Execution Intercept Outcomes"
-description: "Canonical result returned by tool execution intercepts and its managed lifecycle behavior."
+description: "Relay middleware wrappers for tool results, opaque annotations, and managed lifecycle behavior."
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 A tool execution intercept wraps or short-circuits a managed tool callback.
-Every intercept returns one canonical outcome so Relay can keep lifecycle
-control data separate from the application-visible tool result.
+The harness still owns tool dispatch, receipt, and the schema of the tool
+result. Relay wraps that result only to keep Relay-owned lifecycle control data
+separate from the application-visible value.
 
 ```json
 {
@@ -30,11 +31,60 @@ them in effective middleware order, and materializes them only after the final
 outcome succeeds.
 
 Use the existing global, scope-local, or plugin-context tool execution
-registration APIs to produce pending marks, and return the canonical outcome
-from every registered callback. Use a
+registration APIs to produce pending marks, and return the Relay outcome
+wrapper from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Legacy raw
 intercept returns are rejected at public and dynamic-plugin boundaries.
+
+## Opaque Result Annotations
+
+An integration that needs to carry metadata adjacent to a tool result can use
+the frame-aware execution API:
+
+```json
+{
+  "result": {},
+  "annotation": {}
+}
+```
+
+`result` is the harness-owned value. `annotation` is optional and opaque to
+Relay; a missing value or JSON `null` means no annotation. Relay does not
+define fields inside either value, convert one tool-result schema into
+another, or participate in tool dispatch.
+
+For lifecycle emission, Relay places the annotation in the tool event's
+category profile before applying the existing event-sanitizer chain. Tool
+response sanitizers continue to receive only the harness-owned raw result;
+Relay does not infer how a result rewrite should transform opaque annotation
+fields.
+
+Frame-aware callbacks use `ToolExecutionFrame` for `next(args)` and place the
+returned frame inside `ToolExecutionFrameOutcome` so Relay can continue to
+carry pending marks separately. They share the same registry, name namespace,
+priority ordering, and chain as raw-result callbacks. The existing generic
+tool-execution deregistration operation removes either callback form.
+
+Compatibility with raw-result middleware is conservative:
+
+- A raw callback that invokes `next(args)` exactly once and returns the
+  downstream result unchanged preserves the downstream annotation. At this
+  JSON boundary, "unchanged" means structural JSON equality; Relay cannot
+  distinguish a reconstructed equal value from the original allocation.
+- A raw callback that changes or replaces the result drops the annotation so
+  stale metadata cannot become attached to a different result.
+- A raw callback that calls `next` more than once or short-circuits execution
+  also returns without an implicit annotation.
+- A frame-aware callback may explicitly preserve, replace, or remove the
+  annotation.
+
+Frame-aware continuations are invocation-scoped. A frame-aware callback must
+await every `next` call before it returns; Relay rejects frame continuation
+calls that begin after the callback finishes, but it cannot cancel arbitrary
+downstream work that a callback already detached after the continuation
+started. The existing raw callback and continuation API retains its prior
+behavior.
 
 ## Managed Lifecycle
 
@@ -59,20 +109,24 @@ or object shape:
 - Go callbacks return `ToolExecutionInterceptOutcome`.
 - Node.js callbacks return `{ result, pendingMarks? }`, where JavaScript
   pending-mark DTOs use `categoryProfile`.
-- Public C callbacks return canonical JSON with `result` and optional
+- Public C callbacks return Relay outcome JSON with `result` and optional
   `pending_marks`.
 - `grpc-v1` worker SDKs return a `ToolExecutionInterceptOutcome` in a
   `JsonEnvelope` with schema `nemo.relay.ToolExecutionInterceptOutcome@1`.
 
-Canonical JSON uses `pending_marks` and `category_profile` across bindings.
+Relay's outcome JSON uses `pending_marks` and `category_profile` across
+bindings. Frame-aware worker and C envelopes additionally carry the opaque
+`frame.result` and optional `frame.annotation` values without interpreting
+them.
 
 ## Migration
 
 This finalizes the unpublished tool execution intercept contract. Update every
-registered tool execution intercept to return the canonical outcome, while
-leaving the default tool callback and `next(args)` continuation as raw JSON.
-Rebuild development native plugins and workers against the same NeMo Relay
-release that hosts them.
+registered raw-result tool execution intercept to return Relay's outcome
+wrapper, while leaving the default raw tool callback and `next(args)`
+continuation unchanged. Use the frame-aware registration only when an
+integration must carry an adjacent opaque annotation. Rebuild development
+native plugins and workers against the same NeMo Relay release that hosts them.
 
 ## Related Topics
 

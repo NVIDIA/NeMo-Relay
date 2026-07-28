@@ -29,6 +29,7 @@ fn registration_surface_values_are_stable() {
     );
     assert_eq!(RegistrationSurface::ToolRequestIntercept as i32, 13);
     assert_eq!(RegistrationSurface::ToolExecutionIntercept as i32, 14);
+    assert_eq!(RegistrationSurface::ToolExecutionFrameIntercept as i32, 15);
     assert_eq!(RegistrationSurface::LlmSanitizeRequestGuardrail as i32, 20);
     assert_eq!(RegistrationSurface::LlmSanitizeResponseGuardrail as i32, 21);
     assert_eq!(

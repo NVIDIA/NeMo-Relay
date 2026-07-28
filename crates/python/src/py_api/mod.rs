@@ -20,7 +20,8 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     with_task_nested_publication_buffer, with_task_publication_context,
 };
 use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionFrameNextFn,
+    ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
@@ -51,7 +52,7 @@ use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest,
     PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
     PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
-    PyToolAttributes, PyToolHandle,
+    PyToolAttributes, PyToolExecutionFrame, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -658,6 +659,38 @@ fn tool_call_end(
     .map_err(to_py_err)
 }
 
+/// End a manual tool call with an optional opaque result annotation.
+#[pyfunction]
+#[pyo3(signature = (
+    handle: "ToolHandle",
+    frame: "ToolExecutionFrame",
+    *,
+    data: "object | None"=None,
+    metadata: "object | None"=None,
+    timestamp: "datetime.datetime | None"=None
+) -> "None", text_signature = "(handle: ToolHandle, frame: ToolExecutionFrame, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+fn tool_call_end_frame(
+    handle: &PyToolHandle,
+    frame: PyToolExecutionFrame,
+    data: Option<&Bound<'_, PyAny>>,
+    metadata: Option<&Bound<'_, PyAny>>,
+    timestamp: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let data = opt_py_to_json(data)?;
+    let metadata = opt_py_to_json(metadata)?;
+    let timestamp = opt_py_to_timestamp(timestamp)?;
+    core_tool_api::tool_call_end_frame(
+        core_tool_api::ToolCallEndFrameParams::builder()
+            .handle(&handle.inner)
+            .frame(frame.inner)
+            .data_opt(data)
+            .metadata_opt(metadata)
+            .timestamp_opt(timestamp)
+            .build(),
+    )
+    .map_err(to_py_err)
+}
+
 /// Execute a tool call through the full middleware pipeline.
 ///
 /// Runs conditional-execution guardrails (on raw args) → request intercepts →
@@ -740,6 +773,62 @@ fn tool_call_execute<'py>(
             ),
         )
         .await
+    })
+}
+
+/// Execute a tool call while carrying an optional opaque result annotation.
+#[pyfunction]
+#[pyo3(signature = (
+    name: "str",
+    args: "object",
+    func: "object",
+    *,
+    handle: "ScopeHandle | None"=None,
+    attributes: "ToolAttributes | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None
+) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None) -> object")]
+#[allow(clippy::too_many_arguments)]
+fn tool_call_execute_frame<'py>(
+    py: Python<'py>,
+    name: String,
+    args: &Bound<'py, PyAny>,
+    func: Py<PyAny>,
+    handle: Option<PyScopeHandle>,
+    attributes: Option<PyToolAttributes>,
+    data: Option<&Bound<'py, PyAny>>,
+    metadata: Option<&Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let args_json = py_to_json(args)?;
+    let attrs = attributes
+        .map(|a| a.inner)
+        .unwrap_or(ToolAttributes::empty());
+    let data_json = opt_py_to_json(data)?;
+    let metadata_json = opt_py_to_json(metadata)?;
+    let exec_fn = py_callable::wrap_py_tool_exec_frame_fn(func);
+    let default_fn: ToolExecutionFrameNextFn = Arc::new(move |args| exec_fn(args));
+    let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
+
+    let scope_stack = current_scope_stack_handle();
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        TASK_SCOPE_STACK
+            .scope(scope_stack, async move {
+                let frame = core_tool_api::tool_call_execute_frame(
+                    core_tool_api::ToolCallExecuteFrameParams::builder()
+                        .name(name)
+                        .args(args_json)
+                        .func(default_fn)
+                        .parent(parent_handle)
+                        .attributes(attrs)
+                        .data_opt(data_json)
+                        .metadata_opt(metadata_json)
+                        .build(),
+                )
+                .await
+                .map_err(to_py_err)?;
+                Ok(PyToolExecutionFrame { inner: frame })
+            })
+            .await
     })
 }
 
@@ -1274,7 +1363,22 @@ fn register_tool_execution_intercept(
     .map_err(to_py_err)
 }
 
-/// Remove a previously registered tool execution intercept.
+/// Register an annotation-aware callback in the existing tool execution chain.
+#[pyfunction]
+fn register_tool_execution_frame_intercept(
+    name: &str,
+    priority: i32,
+    callable: Py<PyAny>,
+) -> PyResult<()> {
+    core_registry_api::register_tool_execution_frame_intercept(
+        name,
+        priority,
+        py_callable::wrap_py_tool_exec_frame_intercept_fn(callable),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered tool execution intercept of either form.
 #[pyfunction]
 fn deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
     core_registry_api::deregister_tool_execution_intercept(name).map_err(to_py_err)
@@ -1772,7 +1876,25 @@ fn scope_register_tool_execution_intercept(
     .map_err(to_py_err)
 }
 
-/// Remove a previously registered scope-local tool execution intercept.
+/// Register an annotation-aware scope-local callback in the existing chain.
+#[pyfunction]
+fn scope_register_tool_execution_frame_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    callable: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core_registry_api::scope_register_tool_execution_frame_intercept(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_tool_exec_frame_intercept_fn(callable),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local tool execution intercept of either form.
 #[pyfunction]
 fn scope_deregister_tool_execution_intercept(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
@@ -1998,7 +2120,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Tool lifecycle
     m.add_function(wrap_pyfunction!(tool_call, m)?)?;
     m.add_function(wrap_pyfunction!(tool_call_end, m)?)?;
+    m.add_function(wrap_pyfunction!(tool_call_end_frame, m)?)?;
     m.add_function(wrap_pyfunction!(tool_call_execute, m)?)?;
+    m.add_function(wrap_pyfunction!(tool_call_execute_frame, m)?)?;
 
     // LLM lifecycle
     m.add_function(wrap_pyfunction!(llm_call, m)?)?;
@@ -2054,6 +2178,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deregister_tool_request_intercept, m)?)?;
     m.add_function(wrap_pyfunction!(register_tool_execution_intercept, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_tool_execution_intercept, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        register_tool_execution_frame_intercept,
+        m
+    )?)?;
 
     // LLM guardrails
     m.add_function(wrap_pyfunction!(
@@ -2165,6 +2293,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         scope_deregister_tool_execution_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        scope_register_tool_execution_frame_intercept,
         m
     )?)?;
 

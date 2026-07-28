@@ -36,7 +36,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
 };
 use nemo_relay::api::runtime::{
     EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
+    ScopeStackHandle as CoreScopeStackHandle, ToolExecutionFrameNextFn, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
@@ -86,7 +86,7 @@ use crate::convert::{
 use crate::promise_call::PromiseAwareFn;
 use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
-use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
+use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolExecutionFrame, ToolHandle};
 
 fn effective_scope_context(
     env: &Env,
@@ -1186,7 +1186,7 @@ fn build_plugin_context(
     )?;
 
     let tool_regs = registrations.clone();
-    let tool_exec_namespace = namespace_prefix;
+    let tool_exec_namespace = namespace_prefix.clone();
     let register_tool_execution_intercept = env.create_function_from_closure(
         "__nemo_relay_adaptive_register_tool_execution_intercept",
         move |ctx| {
@@ -1222,6 +1222,51 @@ fn build_plugin_context(
     context.set_named_property(
         "registerToolExecutionIntercept",
         register_tool_execution_intercept,
+    )?;
+
+    let tool_frame_regs = registrations.clone();
+    let register_tool_execution_frame_intercept = env.create_function_from_closure(
+        "__nemo_relay_adaptive_register_tool_execution_frame_intercept",
+        move |ctx| {
+            let name = format!("{}{}", namespace_prefix, ctx.get::<String>(0)?);
+            let priority = ctx.get::<i32>(1)?;
+            let callback = ctx.get::<JsFunction>(2)?;
+            let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
+                ctx.env, &callback,
+            )?);
+            core_registry_api::register_tool_execution_frame_intercept(
+                &name,
+                priority,
+                callable::wrap_js_tool_exec_frame_intercept_fn(promise_fn.clone()),
+            )
+            .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            tool_frame_regs
+                .lock()
+                .unwrap()
+                .push(PluginRegistration::new(
+                    "plugin",
+                    name_clone.clone(),
+                    Box::new(move || {
+                        let result =
+                            core_registry_api::deregister_tool_execution_intercept(&name_clone)
+                                .map(|_| ())
+                                .map_err(|e| {
+                                    PluginError::RegistrationFailed(format!(
+                                        "tool execution frame intercept deregistration failed: {e}"
+                                    ))
+                                });
+                        promise_fn.close();
+                        result
+                    }),
+                ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property(
+        "registerToolExecutionFrameIntercept",
+        register_tool_execution_frame_intercept,
     )?;
 
     Ok(context)
@@ -2222,6 +2267,28 @@ pub fn tool_call_end(
     .map_err(to_napi_err)
 }
 
+/// End a manual tool span with an optional opaque result annotation.
+#[napi]
+pub fn tool_call_end_frame(
+    handle: &ToolHandle,
+    frame: ToolExecutionFrame,
+    data: Option<Json>,
+    metadata: Option<Json>,
+    timestamp: Option<f64>,
+) -> Result<()> {
+    let timestamp = parse_timestamp_micros(timestamp)?;
+    core_tool_api::tool_call_end_frame(
+        core_tool_api::ToolCallEndFrameParams::builder()
+            .handle(&handle.inner)
+            .frame(frame.into())
+            .data_opt(opt_json(data))
+            .metadata_opt(opt_json(metadata))
+            .timestamp_opt(timestamp)
+            .build(),
+    )
+    .map_err(to_napi_err)
+}
+
 /// Execute a tool call end-to-end with full lifecycle management.
 ///
 /// Runs conditional-execution guardrails (on raw args) → request intercepts →
@@ -2280,6 +2347,63 @@ pub fn tool_call_execute(
             .await
         },
         |_env, result| Ok(result),
+    )
+}
+
+/// Execute a tool call with an optional opaque result annotation.
+#[allow(clippy::too_many_arguments)]
+#[napi(ts_return_type = "Promise<ToolExecutionFrame>")]
+pub fn tool_call_execute_frame(
+    env: Env,
+    name: String,
+    args: Json,
+    #[napi(ts_arg_type = "(arg: Json) => ToolExecutionFrame")] func: JsFunction,
+    handle: Option<&ScopeHandle>,
+    attributes: Option<u32>,
+    data: Option<Json>,
+    metadata: Option<Json>,
+) -> Result<JsObject> {
+    let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let parent = handle
+        .map(|h| h.inner.clone())
+        .unwrap_or_else(task_scope_top);
+    let callback = callable::safe_execution_callback(&env, &func)?;
+    let exec_fn = callable::wrap_js_tool_exec_fn(json_callback_tsfn(&env, &callback)?);
+    let default_fn: ToolExecutionFrameNextFn = Arc::new(move |args| {
+        let future = exec_fn(args);
+        Box::pin(async move {
+            let value = future.await?;
+            serde_json::from_value(value).map_err(|error| {
+                FlowError::Internal(format!(
+                    "tool frame callback must return ToolExecutionFrame: {error}"
+                ))
+            })
+        })
+    });
+    let scope_stack = current_scope_stack_handle();
+
+    env.execute_tokio_future(
+        async move {
+            TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core_tool_api::tool_call_execute_frame(
+                        core_tool_api::ToolCallExecuteFrameParams::builder()
+                            .name(name)
+                            .args(args)
+                            .func(default_fn)
+                            .parent(parent)
+                            .attributes(attrs)
+                            .data_opt(opt_json(data))
+                            .metadata_opt(opt_json(metadata))
+                            .build(),
+                    )
+                    .await
+                    .map(ToolExecutionFrame::from)
+                    .map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, frame| Ok(frame),
     )
 }
 
@@ -2350,6 +2474,67 @@ pub fn tool_call_execute_async(
             .await
         },
         |_env, result| Ok(result),
+    )
+}
+
+/// Promise-aware form of `toolCallExecuteFrame`.
+#[allow(clippy::too_many_arguments)]
+#[napi(ts_return_type = "Promise<ToolExecutionFrame>")]
+pub fn tool_call_execute_frame_async(
+    env: Env,
+    name: String,
+    args: Json,
+    #[napi(ts_arg_type = "(arg: Json) => ToolExecutionFrame | Promise<ToolExecutionFrame>")]
+    func: JsFunction,
+    handle: Option<&ScopeHandle>,
+    attributes: Option<u32>,
+    data: Option<Json>,
+    metadata: Option<Json>,
+) -> Result<JsObject> {
+    let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let parent = handle
+        .map(|h| h.inner.clone())
+        .unwrap_or_else(task_scope_top);
+    let scope_stack = current_scope_stack_handle();
+    let pa_fn = Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &func).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
+    let default_fn: ToolExecutionFrameNextFn = Arc::new(move |args| {
+        let pa_fn = pa_fn.clone();
+        Box::pin(async move {
+            let value = pa_fn.call(args).await?;
+            serde_json::from_value(value).map_err(|error| {
+                FlowError::Internal(format!(
+                    "tool frame callback must return ToolExecutionFrame: {error}"
+                ))
+            })
+        })
+    });
+
+    env.execute_tokio_future(
+        async move {
+            TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core_tool_api::tool_call_execute_frame(
+                        core_tool_api::ToolCallExecuteFrameParams::builder()
+                            .name(name)
+                            .args(args)
+                            .func(default_fn)
+                            .parent(parent)
+                            .attributes(attrs)
+                            .data_opt(opt_json(data))
+                            .metadata_opt(opt_json(metadata))
+                            .build(),
+                    )
+                    .await
+                    .map(ToolExecutionFrame::from)
+                    .map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, frame| Ok(frame),
     )
 }
 
@@ -3048,12 +3233,37 @@ pub fn register_tool_execution_intercept(
     Ok(())
 }
 
-/// Deregister a tool execution intercept by name.
+/// Deregister a tool execution intercept of either callback form by name.
 ///
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
     core_registry_api::deregister_tool_execution_intercept(&name).map_err(to_napi_err)
+}
+
+/// Register annotation-aware middleware in the existing tool execution chain.
+#[napi]
+pub fn register_tool_execution_frame_intercept(
+    env: Env,
+    name: String,
+    priority: i32,
+    #[napi(
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionFrame | Promise<ToolExecutionFrame>) => { frame: ToolExecutionFrame; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ frame: ToolExecutionFrame; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+    )]
+    callable: JsFunction,
+) -> Result<()> {
+    let pa_fn = Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
+    core_registry_api::register_tool_execution_frame_intercept(
+        &name,
+        priority,
+        callable::wrap_js_tool_exec_frame_intercept_fn(pa_fn.clone()),
+    )
+    .map_err(to_napi_err)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -3625,7 +3835,7 @@ pub fn scope_register_tool_execution_intercept(
     Ok(())
 }
 
-/// Deregister a scope-local tool execution intercept by name.
+/// Deregister a scope-local tool execution intercept of either callback form by name.
 ///
 /// Returns `true` if an intercept with that name was found and removed from the specified scope.
 #[napi]
@@ -3633,6 +3843,35 @@ pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: Strin
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
     core_registry_api::scope_deregister_tool_execution_intercept(&uuid, &name).map_err(to_napi_err)
+}
+
+/// Register annotation-aware scope-local middleware in the existing chain.
+#[napi]
+pub fn scope_register_tool_execution_frame_intercept(
+    env: Env,
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    #[napi(
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionFrame | Promise<ToolExecutionFrame>) => { frame: ToolExecutionFrame; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ frame: ToolExecutionFrame; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+    )]
+    callable: JsFunction,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    let pa_fn = Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
+    core_registry_api::scope_register_tool_execution_frame_intercept(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_tool_exec_frame_intercept_fn(pa_fn.clone()),
+    )
+    .map_err(to_napi_err)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

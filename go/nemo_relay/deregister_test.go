@@ -157,6 +157,25 @@ func TestRegisterDeregisterReregisterToolExecutionIntercept(t *testing.T) {
 	DeregisterToolExecutionIntercept(name)
 }
 
+func TestRegisterDeregisterReregisterToolExecutionFrameIntercept(t *testing.T) {
+	name := "go_reregister_frame_exec_int"
+	fn := func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionFrame, error)) (ToolExecutionFrameOutcome, error) {
+		frame, err := next(args)
+		return ToolExecutionFrameOutcome{Frame: frame}, err
+	}
+
+	if err := RegisterToolExecutionFrameIntercept(name, 1, fn); err != nil {
+		t.Fatalf(firstRegisterFailed, err)
+	}
+	if err := DeregisterToolExecutionIntercept(name); err != nil {
+		t.Fatalf(deregisterFailed, err)
+	}
+	if err := RegisterToolExecutionFrameIntercept(name, 1, fn); err != nil {
+		t.Fatalf(reregisterFailed, err)
+	}
+	DeregisterToolExecutionIntercept(name)
+}
+
 func TestRegisterDeregisterReregisterLlmSanitizeRequestGuardrail(t *testing.T) {
 	name := "go_reregister_llm_san_req"
 	fn := func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {

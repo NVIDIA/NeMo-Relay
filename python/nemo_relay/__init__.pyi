@@ -121,6 +121,12 @@ from nemo_relay._native import (
     ToolAttributes as ToolAttributes,
 )
 from nemo_relay._native import (
+    ToolExecutionFrame as ToolExecutionFrame,
+)
+from nemo_relay._native import (
+    ToolExecutionFrameOutcome as ToolExecutionFrameOutcome,
+)
+from nemo_relay._native import (
     ToolExecutionInterceptOutcome as ToolExecutionInterceptOutcome,
 )
 from nemo_relay._native import (
@@ -257,12 +263,17 @@ Arguments:
     The tool name, current JSON arguments, and next callable.
 
 Return:
-    A canonical tool execution outcome, either directly or as an awaitable.
+    Relay's raw-result execution wrapper, either directly or as an awaitable.
 
 Exceptional flow:
     The callback may short-circuit by not invoking ``next``. Exceptions
     propagate through the managed tool call.
 """
+ToolExecutionFrameIntercept: TypeAlias = Callable[
+    [str, Json, Callable[[Json], Awaitable[ToolExecutionFrame]]],
+    ToolExecutionFrameOutcome | Awaitable[ToolExecutionFrameOutcome],
+]
+"""Annotation-aware execution intercept in the existing tool chain."""
 LlmRequestIntercept: TypeAlias = Callable[
     [str, LLMRequest, AnnotatedLLMRequest | None],
     LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome],

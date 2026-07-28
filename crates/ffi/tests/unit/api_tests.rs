@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::callable::{
     NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
-    NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecNextFn,
+    NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecFrameNextFn, NemoRelayToolExecNextFn,
 };
 use crate::convert::nemo_relay_string_free;
 use crate::error::{NemoRelayStatus, nemo_relay_last_error};

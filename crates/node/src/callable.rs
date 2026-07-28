@@ -21,7 +21,8 @@ use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
     LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFrameFn, ToolExecutionFrameNextFn, ToolExecutionNextFn, ToolInterceptFn,
+    ToolSanitizeFn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -32,7 +33,9 @@ use nemo_relay::api::event::{
     PendingMarkSpec,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{
+    ToolExecutionFrame, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
@@ -1346,6 +1349,46 @@ pub fn wrap_js_tool_exec_intercept_fn(
             })
         })
     })
+}
+
+/// Wrap an annotation-aware JS tool execution intercept.
+///
+/// The callback participates in the existing tool execution chain. Its
+/// `next(args)` promise resolves to a serialized `ToolExecutionFrame`.
+pub fn wrap_js_tool_exec_frame_intercept_fn(func: Arc<PromiseAwareFn>) -> ToolExecutionFrameFn {
+    Arc::new(
+        move |_name: &str, args: Json, next: ToolExecutionFrameNextFn| {
+            let func = func.clone();
+            let next_json: JsonNextFn = Arc::new(move |next_args| {
+                let next = next.clone();
+                Box::pin(async move {
+                    let frame = next(next_args).await?;
+                    serde_json::to_value(frame).map_err(|error| {
+                        FlowError::Internal(format!(
+                            "failed to serialize downstream tool execution frame: {error}"
+                        ))
+                    })
+                })
+            });
+            Box::pin(async move {
+                let result = func.call_with_json_next(args, next_json).await?;
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct JsOutcome {
+                    frame: ToolExecutionFrame,
+                    #[serde(default)]
+                    pending_marks: Vec<JsPendingMarkSpec>,
+                }
+                let outcome: JsOutcome = serde_json::from_value(result).map_err(|error| {
+                    FlowError::Internal(format!("invalid JS tool execution frame outcome: {error}"))
+                })?;
+                Ok(ToolExecutionFrameOutcome {
+                    frame: outcome.frame,
+                    pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+                })
+            })
+        },
+    )
 }
 
 /// Wrap a JS function `(request, next) => result` for LLM execution intercept.

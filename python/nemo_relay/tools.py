@@ -30,7 +30,13 @@ from nemo_relay._native import (
     tool_call_end as _native_tool_call_end,
 )
 from nemo_relay._native import (
+    tool_call_end_frame as _native_tool_call_end_frame,
+)
+from nemo_relay._native import (
     tool_call_execute as _native_tool_call_execute,
+)
+from nemo_relay._native import (
+    tool_call_execute_frame as _native_tool_call_execute_frame,
 )
 from nemo_relay._native import (
     tool_conditional_execution as _native_tool_conditional_execution,
@@ -137,6 +143,17 @@ def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | 
     return _native_tool_call_end(handle, result, data=data, metadata=metadata, timestamp=timestamp)
 
 
+def call_end_frame(handle, frame, *, data=None, metadata=None, timestamp: datetime | None = None):
+    """Finish a manual tool span with an optional opaque result annotation.
+
+    ``frame.result`` follows the existing response-sanitization path. Relay
+    carries ``frame.annotation`` on the lifecycle event without interpreting
+    its schema.
+    """
+    ensure_scope_stack()
+    return _native_tool_call_end_frame(handle, frame, data=data, metadata=metadata, timestamp=timestamp)
+
+
 def execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None):
     """Run a tool through the managed middleware pipeline.
 
@@ -198,6 +215,18 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
     )
 
 
+def execute_frame(name, args, func, *, handle=None, attributes=None, data=None, metadata=None):
+    """Run the managed tool pipeline with an optional opaque annotation.
+
+    ``func`` must return ``ToolExecutionFrame``. Frame-aware and legacy
+    execution intercepts share the same priority-ordered chain.
+    """
+    ensure_scope_stack()
+    return _native_tool_call_execute_frame(
+        name, args, func, handle=handle, attributes=attributes, data=data, metadata=metadata
+    )
+
+
 def request_intercepts(name, args):
     """Apply global tool request intercepts to ``args``.
 
@@ -241,4 +270,12 @@ def conditional_execution(name, args):
     return _native_tool_conditional_execution(name, args)
 
 
-__all__ = ["call", "call_end", "execute", "request_intercepts", "conditional_execution"]
+__all__ = [
+    "call",
+    "call_end",
+    "call_end_frame",
+    "execute",
+    "execute_frame",
+    "request_intercepts",
+    "conditional_execution",
+]

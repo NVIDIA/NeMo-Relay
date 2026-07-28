@@ -32,8 +32,8 @@ use crate::api::runtime::callbacks::{
     LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, LlmStreamInner, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn,
-    ToolSanitizeFn,
+    ToolExecutionCallable, ToolExecutionFrameNextFn, ToolExecutionFrameOutcomeNextFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::continuation_context::{
     MiddlewareContinuationContext, MiddlewareContinuationGuard, MiddlewareContinuationLease,
@@ -43,7 +43,7 @@ use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHand
 use crate::api::shared::snapshot_event_sanitizers;
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{
-    CreateToolHandleParams, EndToolHandleParams, ToolExecutionInterceptOutcome,
+    CreateToolHandleParams, EndToolHandleParams, ToolExecutionFrame, ToolExecutionFrameOutcome,
 };
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
@@ -220,7 +220,7 @@ pub struct NemoRelayContextState {
     /// Global tool request intercepts that can rewrite arguments before execution.
     pub(crate) tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Global tool execution intercepts that wrap or replace callback execution.
-    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
+    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionCallable>>,
     /// Global LLM request sanitizers applied to emitted LLM-start payloads.
     pub(crate) llm_sanitize_request_guardrails: SortedRegistry<Guardrail<LlmSanitizeRequestFn>>,
     /// Global LLM response sanitizers applied to emitted LLM-end payloads.
@@ -1123,73 +1123,147 @@ impl NemoRelayContextState {
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// A composed [`ToolExecutionOutcomeNextFn`] that wraps `default_fn` in
+    /// A composed [`ToolExecutionFrameOutcomeNextFn`] that wraps `default_fn` in
     /// every matching execution intercept.
     pub(crate) fn tool_build_execution_chain(
         &self,
         name: &str,
-        default_fn: ToolExecutionNextFn,
-        scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionFn>>],
-    ) -> ToolExecutionOutcomeNextFn {
+        default_fn: ToolExecutionFrameNextFn,
+        scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionCallable>>],
+    ) -> ToolExecutionFrameOutcomeNextFn {
         let matching =
             merge_execution_intercept_callables(&self.tool_execution_intercepts, scope_locals);
-        let mut next: ToolExecutionOutcomeNextFn = Arc::new(move |args| {
+        let mut next: ToolExecutionFrameOutcomeNextFn = Arc::new(move |args| {
             let default_fn = default_fn.clone();
-            Box::pin(async move {
-                default_fn(args)
-                    .await
-                    .map(ToolExecutionInterceptOutcome::new)
-            })
+            Box::pin(async move { default_fn(args).await.map(ToolExecutionFrameOutcome::new) })
         });
         let name = name.to_string();
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
-            next = Arc::new(move |args| {
-                let callable = callable.clone();
-                let current_name = current_name.clone();
-                let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
-                let next_sequence = Arc::new(AtomicUsize::new(0));
-                let downstream_marks = Arc::new(Mutex::new(Vec::new()));
-                let raw_next: ToolExecutionNextFn = {
-                    let current_next = current_next.clone();
-                    let continuation = continuation.clone();
-                    let next_sequence = next_sequence.clone();
-                    let downstream_marks = downstream_marks.clone();
-                    Arc::new(move |args| {
-                        let sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
+            next = match callable {
+                ToolExecutionCallable::Legacy(callable) => Arc::new(move |args| {
+                    let callable = callable.clone();
+                    let current_name = current_name.clone();
+                    let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
+                    let next_sequence = Arc::new(AtomicUsize::new(0));
+                    let downstream_outcomes = Arc::new(Mutex::new(Vec::new()));
+                    let raw_next: ToolExecutionNextFn = {
                         let current_next = current_next.clone();
-                        let invocation = continuation.begin();
-                        let downstream_marks = downstream_marks.clone();
-                        Box::pin(async move {
-                            let outcome = invocation?.invoke(move || current_next(args)).await?;
-                            downstream_marks
+                        let continuation = continuation.clone();
+                        let next_sequence = next_sequence.clone();
+                        let downstream_outcomes = downstream_outcomes.clone();
+                        Arc::new(move |args| {
+                            let sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
+                            let current_next = current_next.clone();
+                            let invocation = continuation.begin();
+                            let downstream_outcomes = downstream_outcomes.clone();
+                            Box::pin(async move {
+                                let outcome =
+                                    invocation?.invoke(move || current_next(args)).await?;
+                                let ToolExecutionFrameOutcome {
+                                    frame,
+                                    pending_marks,
+                                } = outcome;
+                                let ToolExecutionFrame { result, annotation } = frame;
+                                // Existing raw-only chains should not pay to
+                                // clone potentially large tool results. Retain
+                                // a comparison copy only when there is an
+                                // annotation that might be preserved.
+                                let downstream_result = annotation.as_ref().map(|_| result.clone());
+                                downstream_outcomes
+                                    .lock()
+                                    .expect("tool downstream outcome accumulator lock poisoned")
+                                    .push((sequence, downstream_result, annotation, pending_marks));
+                                Ok(result)
+                            })
+                        })
+                    };
+                    Box::pin(async move {
+                        let callback_result = callable(&current_name, args, raw_next).await;
+                        drop(continuation_guard);
+                        let mut legacy_outcome = callback_result?;
+                        let mut downstream = std::mem::take(
+                            &mut *downstream_outcomes
                                 .lock()
-                                .expect("tool pending mark accumulator lock poisoned")
-                                .push((sequence, outcome.pending_marks));
-                            Ok(outcome.result)
+                                .expect("tool downstream outcome accumulator lock poisoned"),
+                        );
+                        downstream.sort_by_key(|(sequence, _, _, _)| *sequence);
+
+                        // A legacy callback cannot identify which downstream
+                        // annotation belongs to its output after multiple
+                        // continuation calls. Preserve only the unambiguous
+                        // single-call, unchanged-result case.
+                        let annotation = if next_sequence.load(Ordering::Relaxed) == 1
+                            && downstream.len() == 1
+                            && downstream[0].1.as_ref() == Some(&legacy_outcome.result)
+                        {
+                            downstream[0].2.clone()
+                        } else {
+                            None
+                        };
+                        let mut marks = downstream
+                            .into_iter()
+                            .flat_map(|(_, _, _, pending_marks)| pending_marks)
+                            .collect::<Vec<_>>();
+                        marks.append(&mut legacy_outcome.pending_marks);
+                        Ok(ToolExecutionFrameOutcome {
+                            frame: ToolExecutionFrame {
+                                result: legacy_outcome.result,
+                                annotation,
+                            },
+                            pending_marks: marks,
                         })
                     })
-                };
-                Box::pin(async move {
-                    let outcome = callable(&current_name, args, raw_next).await;
-                    drop(continuation_guard);
-                    let mut outcome = outcome?;
-                    let mut downstream_batches = std::mem::take(
-                        &mut *downstream_marks
-                            .lock()
-                            .expect("tool pending mark accumulator lock poisoned"),
-                    );
-                    downstream_batches.sort_by_key(|(sequence, _)| *sequence);
-                    let mut marks = downstream_batches
-                        .into_iter()
-                        .flat_map(|(_, marks)| marks)
-                        .collect::<Vec<_>>();
-                    marks.append(&mut outcome.pending_marks);
-                    outcome.pending_marks = marks;
-                    Ok(outcome)
-                })
-            });
+                }),
+                ToolExecutionCallable::Frame(callable) => Arc::new(move |args| {
+                    let callable = callable.clone();
+                    let current_name = current_name.clone();
+                    let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
+                    let next_sequence = Arc::new(AtomicUsize::new(0));
+                    let downstream_marks = Arc::new(Mutex::new(Vec::new()));
+                    let frame_next: ToolExecutionFrameNextFn = {
+                        let current_next = current_next.clone();
+                        let continuation = continuation.clone();
+                        let next_sequence = next_sequence.clone();
+                        let downstream_marks = downstream_marks.clone();
+                        Arc::new(move |args| {
+                            let sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
+                            let current_next = current_next.clone();
+                            let invocation = continuation.begin();
+                            let downstream_marks = downstream_marks.clone();
+                            Box::pin(async move {
+                                let outcome =
+                                    invocation?.invoke(move || current_next(args)).await?;
+                                downstream_marks
+                                    .lock()
+                                    .expect("tool pending mark accumulator lock poisoned")
+                                    .push((sequence, outcome.pending_marks));
+                                Ok(outcome.frame)
+                            })
+                        })
+                    };
+                    Box::pin(async move {
+                        let callback_result = callable(&current_name, args, frame_next).await;
+                        drop(continuation_guard);
+                        let mut outcome = callback_result?;
+                        outcome.frame = outcome.frame.normalized();
+                        let mut downstream_batches = std::mem::take(
+                            &mut *downstream_marks
+                                .lock()
+                                .expect("tool pending mark accumulator lock poisoned"),
+                        );
+                        downstream_batches.sort_by_key(|(sequence, _)| *sequence);
+                        let mut marks = downstream_batches
+                            .into_iter()
+                            .flat_map(|(_, marks)| marks)
+                            .collect::<Vec<_>>();
+                        marks.append(&mut outcome.pending_marks);
+                        outcome.pending_marks = marks;
+                        Ok(outcome)
+                    })
+                }),
+            };
         }
         next
     }

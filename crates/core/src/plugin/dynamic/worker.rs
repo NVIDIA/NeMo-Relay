@@ -27,8 +27,8 @@ use nemo_relay_worker_proto::v1::{
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
-    ToolNextRequest, ValidateRequest, WorkerError,
+    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    ToolFrameNextRequest, ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use semver::{Version, VersionReq};
@@ -66,13 +66,17 @@ use crate::api::runtime::subscriber_dispatcher::{
 use crate::api::runtime::{
     EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
-    MiddlewareContinuationContext, ToolExecutionNextFn, current_scope_stack, with_scope_stack,
+    MiddlewareContinuationContext, ToolExecutionFrameNextFn, ToolExecutionNextFn,
+    current_scope_stack, with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
     event as emit_scope_mark, pop_scope, push_scope,
 };
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{
+    TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA, TOOL_EXECUTION_FRAME_SCHEMA, ToolExecutionFrameOutcome,
+    ToolExecutionInterceptOutcome,
+};
 use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
@@ -1076,7 +1080,8 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::ToolSanitizeResponseGuardrail
                 | RegistrationSurface::ToolConditionalExecutionGuardrail
                 | RegistrationSurface::ToolRequestIntercept
-                | RegistrationSurface::ToolExecutionIntercept => {
+                | RegistrationSurface::ToolExecutionIntercept
+                | RegistrationSurface::ToolExecutionFrameIntercept => {
                     self.install_tool_registration(ctx, registration, surface)?
                 }
                 RegistrationSurface::LlmSanitizeRequestGuardrail
@@ -1125,9 +1130,11 @@ impl WorkerPluginInstance {
         let instance = Arc::new(self.clone_for_callback());
         let callback_name = name.to_owned();
         let callback: EventSanitizeFn =
-            Arc::new(move |event: Arc<Event>, _fields: EventSanitizeFields| {
+            Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
                 let instance = instance.clone();
                 let callback_name = callback_name.clone();
+                let mut event = (*event).clone();
+                event.apply_sanitize_fields(fields);
                 Box::pin(async move {
                     instance
                         .invoke_event_sanitize(&callback_name, surface, &event)
@@ -1229,6 +1236,26 @@ impl WorkerPluginInstance {
                     })
                 }),
             ),
+            RegistrationSurface::ToolExecutionFrameIntercept => ctx
+                .register_tool_execution_frame_intercept(
+                    name,
+                    priority,
+                    Arc::new(move |tool_name, value, next| {
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        let tool_name = tool_name.to_owned();
+                        Box::pin(async move {
+                            instance
+                                .invoke_tool_execution_frame(
+                                    &callback_name,
+                                    &tool_name,
+                                    value,
+                                    next,
+                                )
+                                .await
+                        })
+                    }),
+                ),
             _ => Err(PluginError::RegistrationFailed(format!(
                 "worker plugin '{}' cannot install registration surface {} as a tool callback",
                 self.plugin_kind,
@@ -1585,6 +1612,46 @@ impl WorkerPluginCallback {
             Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
             _ => Err(FlowError::Internal(
                 "worker tool execution intercept returned unexpected result".into(),
+            )),
+        }
+    }
+
+    async fn invoke_tool_execution_frame(
+        &self,
+        registration_name: &str,
+        tool_name: &str,
+        value: Json,
+        next: ToolExecutionFrameNextFn,
+    ) -> FlowResult<ToolExecutionFrameOutcome> {
+        let continuation_id = self
+            .host_state
+            .insert_continuation(Continuation::tool_frame(next))?;
+        let request = self.base_request(
+            registration_name,
+            RegistrationSurface::ToolExecutionFrameIntercept,
+            Some(continuation_id),
+            Some(invoke_request_payload_tool(tool_name, value)),
+        );
+        let response = self.invoke_async(request).await?;
+        match response.result {
+            Some(invoke_response_result::Result::ToolExecutionFrame(result)) => {
+                let outcome =
+                    required_envelope(result.outcome, "tool execution frame intercept outcome")?;
+                if outcome.schema != TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA {
+                    return Err(FlowError::Internal(format!(
+                        "worker returned unsupported tool execution frame intercept outcome schema: {}",
+                        outcome.schema
+                    )));
+                }
+                decode_json_envelope(&outcome).map_err(|err| {
+                    FlowError::Internal(format!(
+                        "worker returned invalid tool execution frame intercept outcome: {err}"
+                    ))
+                })
+            }
+            Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
+            _ => Err(FlowError::Internal(
+                "worker tool execution frame intercept returned unexpected result".into(),
             )),
         }
     }
@@ -2437,6 +2504,10 @@ enum Continuation {
         next: ToolExecutionNextFn,
         context: MiddlewareContinuationContext,
     },
+    ToolFrame {
+        next: ToolExecutionFrameNextFn,
+        context: MiddlewareContinuationContext,
+    },
     Llm {
         next: LlmExecutionNextFn,
         context: MiddlewareContinuationContext,
@@ -2450,6 +2521,13 @@ enum Continuation {
 impl Continuation {
     fn tool(next: ToolExecutionNextFn) -> Self {
         Self::Tool {
+            next,
+            context: MiddlewareContinuationContext::capture(),
+        }
+    }
+
+    fn tool_frame(next: ToolExecutionFrameNextFn) -> Self {
+        Self::ToolFrame {
             next,
             context: MiddlewareContinuationContext::capture(),
         }
@@ -2654,6 +2732,40 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 )))
             });
         Ok(Response::new(json_result(result)))
+    }
+
+    async fn tool_frame_next(
+        &self,
+        request: Request<ToolFrameNextRequest>,
+    ) -> Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let continuation = self.state.continuation(&request.continuation_id)?;
+        let Continuation::ToolFrame { next, context } = continuation else {
+            return Err(Status::invalid_argument(
+                "continuation is not a tool frame continuation",
+            ));
+        };
+        let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
+        let value =
+            required_envelope(request.value, "tool frame next value").map_err(status_from_flow)?;
+        let value = decode_json_envelope::<Json>(&value).map_err(|err| {
+            Status::invalid_argument(format!("invalid tool frame next JSON: {err}"))
+        })?;
+        let result = AssertUnwindSafe(context.invoke(move || next(value)))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|payload| {
+                Err(FlowError::Internal(format!(
+                    "worker tool frame continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )))
+            });
+        Ok(Response::new(typed_json_result(
+            TOOL_EXECUTION_FRAME_SCHEMA,
+            result,
+        )))
     }
 
     async fn llm_next(

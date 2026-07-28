@@ -35,7 +35,10 @@ from nemo_relay_plugin import (  # noqa: E402
     PluginContext,
     PluginRuntime,
     ScopeType,
+    ToolExecutionFrame,
+    ToolExecutionFrameOutcome,
     ToolExecutionInterceptOutcome,
+    ToolFrameNext,
     ToolNext,
     WorkerPlugin,
     WorkerSdkError,
@@ -48,6 +51,8 @@ from nemo_relay_plugin._api import (  # noqa: E402
     JSON_SCHEMA,
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
+    TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA,
+    TOOL_EXECUTION_FRAME_SCHEMA,
     TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     WORKER_PROTOCOL,
     _announced_worker_endpoint,
@@ -157,6 +162,34 @@ def test_optimization_contribution_drops_known_fields_from_extra():
     }
 
 
+def test_tool_execution_frame_dtos_preserve_opaque_annotation():
+    annotation = {
+        "producer_status": "failed",
+        "representation": {"schema": "example.failure@1"},
+    }
+    frame = ToolExecutionFrame.from_json({"result": {"raw": True}, "annotation": annotation})
+    outcome = ToolExecutionFrameOutcome(
+        frame=frame,
+        pending_marks=[PendingMarkSpec("worker.frame")],
+    )
+
+    assert outcome.to_json() == {
+        "frame": {
+            "result": {"raw": True},
+            "annotation": annotation,
+        },
+        "pending_marks": [
+            {
+                "name": "worker.frame",
+                "category": None,
+                "category_profile": None,
+                "data": None,
+                "metadata": None,
+            }
+        ],
+    }
+
+
 class GrpcAbort(Exception):
     def __init__(self, code: object, details: str) -> None:
         super().__init__(f"{code}: {details}")
@@ -224,6 +257,21 @@ class RecordingHostStub:
             return pb.JsonResult(error=_worker_error("ToolNext failed"))
         value = json.loads(request.value.json.decode("utf-8"))
         return pb.JsonResult(value=_json_envelope(JSON_SCHEMA, {"next_tool": value}))
+
+    async def ToolFrameNext(self, request: Any) -> Any:
+        self.requests.append(request)
+        if self.failures.get("ToolFrameNext") == "error":
+            return pb.JsonResult(error=_worker_error("ToolFrameNext failed"))
+        value = json.loads(request.value.json.decode("utf-8"))
+        return pb.JsonResult(
+            value=_json_envelope(
+                TOOL_EXECUTION_FRAME_SCHEMA,
+                {
+                    "result": {"next_frame": value},
+                    "annotation": {"host_annotation": True},
+                },
+            )
+        )
 
     async def LlmNext(self, request: Any) -> Any:
         self.requests.append(request)
@@ -334,6 +382,21 @@ class AllSurfacesPlugin(WorkerPlugin):
                 pending_marks=[PendingMarkSpec("worker.tool.execution")],
             )
 
+        async def tool_execution_frame(
+            name: str,
+            value: Json,
+            next_call: ToolFrameNext,
+        ) -> ToolExecutionFrameOutcome:
+            frame = await next_call.call(_tag(value, f"execute_frame_{name}"))
+            frame.result = _tag(frame.result, "tool_execution_frame")
+            annotation = dict(frame.annotation or {})
+            annotation["worker_annotation"] = True
+            frame.annotation = annotation
+            return ToolExecutionFrameOutcome(
+                frame=frame,
+                pending_marks=[PendingMarkSpec("worker.tool.execution.frame")],
+            )
+
         def llm_sanitize_request(request: Json, context: LlmSanitizeRequestContext) -> Json:
             del context
             return _tag_llm_request(request, "llm_sanitize_request")
@@ -372,6 +435,11 @@ class AllSurfacesPlugin(WorkerPlugin):
         ctx.register_tool_conditional_execution_guardrail("tool_conditional", tool_block, priority=3)
         ctx.register_tool_request_intercept("tool_request", tool_request, priority=4, break_chain=True)
         ctx.register_tool_execution_intercept("tool_execution", tool_execution, priority=5)
+        ctx.register_tool_execution_frame_intercept(
+            "tool_execution_frame",
+            tool_execution_frame,
+            priority=6,
+        )
         ctx.register_llm_sanitize_request_guardrail("llm_sanitize_request", llm_sanitize_request, priority=6)
         ctx.register_llm_sanitize_response_guardrail("llm_sanitize_response", llm_sanitize_response, priority=7)
         ctx.register_llm_conditional_execution_guardrail("llm_conditional", llm_block, priority=8)
@@ -457,6 +525,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
         ("tool_conditional", pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, 3, False),
         ("tool_request", pb.TOOL_REQUEST_INTERCEPT, 4, True),
         ("tool_execution", pb.TOOL_EXECUTION_INTERCEPT, 5, False),
+        ("tool_execution_frame", pb.TOOL_EXECUTION_FRAME_INTERCEPT, 6, False),
         ("llm_sanitize_request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, 6, False),
         ("llm_sanitize_response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, 7, False),
         ("llm_conditional", pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL, 8, False),
@@ -1364,6 +1433,17 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert tool_execution["result"]["tag"] == "tool_execution"
     assert tool_execution["result"]["next_tool"]["tag"] == "execute_lookup"
     assert tool_execution["pending_marks"][0]["name"] == "worker.tool.execution"
+    tool_execution_frame = await _invoke_tool_execution_frame_async(
+        service,
+        "tool_execution_frame",
+    )
+    assert tool_execution_frame["frame"]["result"]["tag"] == "tool_execution_frame"
+    assert tool_execution_frame["frame"]["result"]["next_frame"]["tag"] == "execute_frame_lookup"
+    assert tool_execution_frame["frame"]["annotation"] == {
+        "host_annotation": True,
+        "worker_annotation": True,
+    }
+    assert tool_execution_frame["pending_marks"][0]["name"] == "worker.tool.execution.frame"
 
     llm_sanitize_request = await _invoke_json_async(
         service,
@@ -1882,6 +1962,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         scope_id = await runtime.push_scope("scope", scope_type=ScopeType.TOOL, input={"in": True})
         await runtime.pop_scope(scope_id, output={"out": True})
         tool_next = await ToolNext(runtime, "tool-next").call({"value": 1})
+        tool_frame_next = await ToolFrameNext(runtime, "tool-frame-next").call({"value": 2})
         llm_next = await _llm_next(runtime, {"content": {"prompt": "hello"}})
         stream_next = [chunk async for chunk in _llm_stream_next(runtime, {"content": {"prompt": "hello"}})]
         with runtime.clear_scope_stack():
@@ -1890,6 +1971,8 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         assert runtime.current_scope_stack_id() == stack_id
     assert runtime.current_scope_stack_id() is None
     assert tool_next["next_tool"]["value"] == 1
+    assert tool_frame_next.result["next_frame"]["value"] == 2
+    assert tool_frame_next.annotation == {"host_annotation": True}
     assert llm_next["next_llm"]["content"]["prompt"] == "hello"
     assert stream_next[0]["next_stream"]["content"]["prompt"] == "hello"
 
@@ -2022,6 +2105,10 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
     host_stub.failures["ToolNext"] = "error"
     with pytest.raises(WorkerSdkError, match="ToolNext failed"):
         await ToolNext(runtime, "tool-next").call({"value": 1})
+
+    host_stub.failures["ToolFrameNext"] = "error"
+    with pytest.raises(WorkerSdkError, match="ToolFrameNext failed"):
+        await ToolFrameNext(runtime, "tool-frame-next").call({"value": 1})
 
     host_stub.failures["LlmNext"] = "error"
     with pytest.raises(WorkerSdkError, match="LlmNext failed"):
@@ -2784,6 +2871,23 @@ async def _invoke_tool_execution_async(
     return _envelope_value(response.tool_execution.outcome)
 
 
+async def _invoke_tool_execution_frame_async(
+    service: _WorkerService,
+    registration_name: str,
+) -> Json:
+    response = await service.Invoke(
+        _tool_request(
+            registration_name,
+            pb.TOOL_EXECUTION_FRAME_INTERCEPT,
+            {"query": "relay"},
+        ),
+        AbortContext(),
+    )
+    assert response.WhichOneof("result") == "tool_execution_frame", response
+    assert response.tool_execution_frame.outcome.schema == TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA
+    return _envelope_value(response.tool_execution_frame.outcome)
+
+
 def _envelope_value(envelope: Any) -> Json:
     return json.loads(envelope.json.decode("utf-8"))
 
@@ -2820,6 +2924,7 @@ def _all_expected_surfaces() -> list[int]:
         pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,
         pb.TOOL_REQUEST_INTERCEPT,
         pb.TOOL_EXECUTION_INTERCEPT,
+        pb.TOOL_EXECUTION_FRAME_INTERCEPT,
         pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
         pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
         pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,

@@ -54,12 +54,20 @@ extern int32_t nemo_relay_event(const char* name, const FfiScopeHandle* parent, 
 // Tool lifecycle
 extern int32_t nemo_relay_tool_call(const char* name, const char* args_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* tool_call_id, const int64_t* timestamp_unix_micros, FfiToolHandle** out);
 extern int32_t nemo_relay_tool_call_end(const FfiToolHandle* handle, const char* result_json, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_tool_call_end_frame(const FfiToolHandle* handle, const char* frame_json, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 
 // Tool call execute (with C function pointer callbacks)
 typedef char* (*NemoRelayToolExecFn)(void* user_data, const char* args_json);
+typedef char* (*NemoRelayToolExecFrameFn)(void* user_data, const char* args_json);
 extern int32_t nemo_relay_tool_call_execute(
 	const char* name, const char* args_json,
 	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
+	const FfiScopeHandle* parent, uint32_t attributes,
+	const char* data_json, const char* metadata_json,
+	char** out);
+extern int32_t nemo_relay_tool_call_execute_frame(
+	const char* name, const char* args_json,
+	NemoRelayToolExecFrameFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	char** out);
@@ -135,7 +143,10 @@ extern int32_t nemo_relay_deregister_tool_request_intercept(const char* name);
 // Middleware chain intercept callback types (must be declared before use in externs)
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayToolExecFrameNextFn)(const char* args_json, void* next_ctx);
+typedef char* (*NemoRelayToolExecFrameInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecFrameNextFn next_fn, void* next_ctx);
 extern int32_t nemo_relay_register_tool_execution_intercept(const char* name, int32_t priority, NemoRelayToolExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_register_tool_execution_frame_intercept(const char* name, int32_t priority, NemoRelayToolExecFrameInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
@@ -194,6 +205,7 @@ extern int32_t nemo_relay_scope_deregister_tool_conditional_execution_guardrail(
 extern int32_t nemo_relay_scope_register_tool_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_tool_request_intercept(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_tool_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_scope_register_tool_execution_frame_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolExecFrameInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_scope_deregister_tool_execution_intercept(const char* scope_uuid, const char* name);
 
 // Scope-local LLM guardrails
@@ -270,6 +282,7 @@ extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern char* goEventSanitizeTrampoline(void*, const FfiEvent*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
+extern char* goToolExecFrameTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
 extern void goFreeTrampoline(void*);
 extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*, NemoRelayLlmSanitizeRequestContext);
@@ -277,6 +290,7 @@ extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeRes
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
+extern char* goToolExecFrameInterceptTrampoline(void*, const char*, NemoRelayToolExecFrameNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
 
 // Codec trampolines (used at execute time, not registration)
@@ -779,6 +793,26 @@ func ToolCallEnd(handle *ToolHandle, result json.RawMessage, opts ...ToolCallOpt
 	return checkStatus(C.nemo_relay_tool_call_end(handle.ptr, cResult, o.data, o.metadata, o.timestamp))
 }
 
+// ToolCallEndFrame completes a manually started tool call with a raw result
+// and an optional opaque annotation. The annotation is carried on Relay's
+// lifecycle event; Relay does not interpret it.
+func ToolCallEndFrame(handle *ToolHandle, frame ToolExecutionFrame, opts ...ToolCallOption) error {
+	o := &toolCallOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	defer freeToolOpts(o)
+
+	frameJSON, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	cFrame := C.CString(string(frameJSON))
+	defer C.free(unsafe.Pointer(cFrame))
+
+	return checkStatus(C.nemo_relay_tool_call_end_frame(handle.ptr, cFrame, o.data, o.metadata, o.timestamp))
+}
+
 // ToolCallExecute runs a complete tool call lifecycle through the full
 // middleware pipeline: conditional-execution guardrails (on raw args),
 // request intercepts, sanitize-request guardrails for the emitted Start event
@@ -818,6 +852,45 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	result := json.RawMessage(C.GoString(out))
 	C.nemo_relay_string_free(out)
 	return result, nil
+}
+
+// ToolCallExecuteFrame runs the existing tool middleware and lifecycle
+// pipeline while allowing the producer and frame-aware intercepts to carry an
+// optional opaque annotation beside the raw result.
+func ToolCallExecuteFrame(name string, args json.RawMessage, fn ToolExecutionFrameFunc, opts ...ToolCallOption) (ToolExecutionFrame, error) {
+	o := &toolCallOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	defer freeToolOpts(o)
+
+	id := registerClosure(fn)
+
+	cName := C.CString(name)
+	cArgs := C.CString(string(args))
+	defer C.free(unsafe.Pointer(cName))
+	defer C.free(unsafe.Pointer(cArgs))
+
+	var out *C.char
+	status := C.nemo_relay_tool_call_execute_frame(
+		cName, cArgs,
+		C.NemoRelayToolExecFrameFn(C.goToolExecFrameTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+		o.parent, C.uint32_t(o.attributes),
+		o.data, o.metadata,
+		&out,
+	)
+	if err := checkStatus(status); err != nil {
+		return ToolExecutionFrame{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+
+	var frame ToolExecutionFrame
+	if err := json.Unmarshal([]byte(C.GoString(out)), &frame); err != nil {
+		return ToolExecutionFrame{}, err
+	}
+	return frame, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1354,8 +1427,22 @@ func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExec
 	))
 }
 
-// DeregisterToolExecutionIntercept removes a previously registered tool
-// execution intercept by name.
+// RegisterToolExecutionFrameIntercept registers an annotation-aware callback
+// in the existing tool execution registry and priority order.
+func RegisterToolExecutionFrameIntercept(name string, priority int32, execFn ToolExecutionFrameInterceptFunc) error {
+	execID := registerClosure(execFn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_tool_execution_frame_intercept(
+		cName, C.int32_t(priority),
+		C.NemoRelayToolExecFrameInterceptCb(C.goToolExecFrameInterceptTrampoline),
+		execID,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// DeregisterToolExecutionIntercept removes a previously registered raw or
+// frame-aware tool execution intercept by name.
 func DeregisterToolExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
@@ -2345,6 +2432,23 @@ func ScopeRegisterToolExecutionIntercept(scopeUUID, name string, priority int32,
 	return checkStatus(C.nemo_relay_scope_register_tool_execution_intercept(
 		cScopeUUID, cName, C.int32_t(priority),
 		C.NemoRelayToolExecInterceptCb(C.goToolExecInterceptTrampoline),
+		execID,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeRegisterToolExecutionFrameIntercept registers an annotation-aware
+// scope-local callback in the existing tool execution registry and priority
+// order.
+func ScopeRegisterToolExecutionFrameIntercept(scopeUUID, name string, priority int32, execFn ToolExecutionFrameInterceptFunc) error {
+	execID := registerClosure(execFn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_register_tool_execution_frame_intercept(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NemoRelayToolExecFrameInterceptCb(C.goToolExecFrameInterceptTrampoline),
 		execID,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
 	))
