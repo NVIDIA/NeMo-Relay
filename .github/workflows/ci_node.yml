@@ -172,7 +172,7 @@ jobs:
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
-      - uses: actions/setup-python@a309852fecd2e0c80e1b1b2ac6f4e6c2e1274d26 # v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
