@@ -118,6 +118,18 @@ pub fn analyze_stability(
     }
 }
 
+/// Fingerprint the leading `prefix_length` blocks of a single observation.
+///
+/// The digest covers each block's span id, role, content type, and normalized
+/// content, so any reordering or edit inside the prefix changes the result.
+///
+/// # Parameters
+/// - `observation`: Normalized prompt IR to fingerprint.
+/// - `prefix_length`: Number of leading blocks to include.
+///
+/// # Returns
+/// The prefix digest, or [`None`] when `prefix_length` is zero or exceeds the
+/// number of blocks in the observation.
 pub(crate) fn prompt_prefix_fingerprint(
     observation: &PromptIR,
     prefix_length: usize,
@@ -144,6 +156,25 @@ pub(crate) fn prompt_prefix_fingerprint(
     Some(sha256_hex(&prefix))
 }
 
+/// Fingerprint an observation's stable prefix as stored against a learning key.
+///
+/// The digest binds the prefix to its learning key so one profile's stable
+/// scaffold can never satisfy the reuse gate for another. A prefix that stops
+/// inside the leading scaffold (system, tool-schema, and structured-output
+/// blocks) is bound only to that scaffold and therefore stays reusable across
+/// turns. A prefix that extends past the scaffold is bound to the complete
+/// source request instead, because the normalized IR does not retain a lossless
+/// provider-prefix representation and a looser binding could admit a request
+/// whose real provider prefix differs.
+///
+/// # Parameters
+/// - `observation`: Normalized prompt IR to fingerprint.
+/// - `prefix_length`: Stable prefix length reported by stability analysis.
+/// - `learning_key`: Learning key the observation is bucketed under.
+///
+/// # Returns
+/// The bound digest, or [`None`] when the prefix cannot be fingerprinted or
+/// when a beyond-scaffold prefix has no recorded source request hash.
 pub(crate) fn profile_prefix_fingerprint(
     observation: &PromptIR,
     prefix_length: usize,
@@ -175,6 +206,18 @@ pub(crate) fn profile_prefix_fingerprint(
     ))
 }
 
+/// Pick the most frequent profile prefix fingerprint across an observation window.
+///
+/// Ties break on the lexicographically smallest digest so the same window always
+/// yields the same fingerprint regardless of iteration order.
+///
+/// # Parameters
+/// - `observations`: Observation window persisted for the learning key.
+/// - `prefix_length`: Stable prefix length reported by stability analysis.
+/// - `learning_key`: Learning key the window is bucketed under.
+///
+/// # Returns
+/// The dominant digest, or [`None`] when no observation can be fingerprinted.
 pub(crate) fn dominant_profile_prefix_fingerprint(
     observations: &[PromptIR],
     prefix_length: usize,

@@ -75,6 +75,19 @@ pub(crate) fn derive_acg_profile_key(
     )
 }
 
+/// Derive the shared components behind both the learning key and the profile key.
+///
+/// A request has a stable scaffold when it carries a system prompt, at least one
+/// tool, or a structured-output contract. Scaffolded requests keep the full
+/// system and tool digests so distinct scaffolds can never collide, while
+/// scaffold-free requests fall back to short digests because their key is
+/// already dominated by the per-turn seed.
+///
+/// # Parameters
+/// - `annotated_request`: Request to derive key components from.
+///
+/// # Returns
+/// The borrowed key components plus whether a stable scaffold was found.
 fn derive_key_parts(annotated_request: &AnnotatedLlmRequest) -> AcgKeyParts<'_> {
     let system_fingerprint = system_prompt_fingerprint(annotated_request);
     let tool_fingerprint = tool_schema_fingerprint(annotated_request.tools.as_deref());
@@ -270,6 +283,16 @@ fn tool_schema_fingerprint(tools: Option<&[ToolDefinition]>) -> String {
     }
 }
 
+/// Fingerprint the request's structured-output contract.
+///
+/// A null `response_format` is treated as absent so requests that explicitly
+/// clear the contract bucket together with requests that never set one.
+///
+/// # Parameters
+/// - `annotated_request`: Request whose `response_format` extra is inspected.
+///
+/// # Returns
+/// The canonical digest of the contract, or [`None`] when no contract is set.
 fn response_format_fingerprint(annotated_request: &AnnotatedLlmRequest) -> Option<String> {
     annotated_request
         .extra

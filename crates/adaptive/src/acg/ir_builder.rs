@@ -331,6 +331,15 @@ fn append_tool_schema_blocks(
     Ok(())
 }
 
+/// Append the canonicalized structured-output contract as a scaffold block.
+///
+/// The block sits with the tool schemas ahead of the first non-system message so
+/// an output contract that never changes stays inside the stable prefix.
+///
+/// # Parameters
+/// - `blocks`: Block list being built.
+/// - `seq`: Running sequence index shared by every block builder.
+/// - `response_format`: Canonicalized `response_format` value, if the request set one.
 fn append_structured_output_block(
     blocks: &mut Vec<PromptBlock>,
     seq: &mut u32,

@@ -398,6 +398,7 @@ struct InterleavingBackend {
 }
 
 impl InterleavingBackend {
+    /// Wrap a fresh in-memory backend with yields around observation and stability writes.
     fn new() -> Self {
         Self {
             inner: crate::storage::memory::InMemoryBackend::new(),
