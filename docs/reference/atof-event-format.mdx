@@ -79,28 +79,49 @@ Beyond the base envelope (`kind`, `uuid`, `parent_uuid`, `timestamp`, `name`, `a
 Every event carries the envelope fields below. The first six (`kind`, `atof_version`, `uuid`, `parent_uuid`, `timestamp`, `name`) are the structural identity of the event; `data`, `data_schema`, and `metadata` are common optional fields that MAY appear on any event. `scope` events add scope fields on top; `mark` events MAY carry `category` + `category_profile` (§3.2) and nothing else beyond this envelope.
 
 
-| Field          | Type                                    | Required | Description                                                                                                                                           |
-| -------------- | --------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`         | string                                  | Yes      | Event kind discriminator. One of: `"scope"`, `"mark"`.                                                                                                |
-| `atof_version` | string                                  | Yes      | ATOF protocol version, `"MAJOR.MINOR"` (e.g., `"0.1"`). See §5.6.                                                                                     |
-| `uuid`         | string (UUID)                           | Yes      | Unique identifier for this event or span. For `scope` start and end pairs, the two events share a `uuid`.                                                 |
-| `parent_uuid`  | string (UUID) or null                   | No       | UUID of the containing scope when this event was emitted. Null only for root scope events and `mark` events without parents.                          |
-| `timestamp`    | string (RFC 3339) or integer (epoch µs) | Yes      | Wall-clock time the event was emitted. See §5.1.                                                                                                      |
-| `name`         | string                                  | Yes      | Human-readable label — e.g., `"my_agent"`, `"calculator__add"`, `"gpt-4.1"`.                                                                          |
-| `data`         | object or null                          | No       | Application-defined payload. Opaque to ATOF.                                                                                                          |
-| `data_schema`  | object or null                          | No       | Schema identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; validation is the consumer's responsibility. |
-| `metadata`     | object or null                          | No       | Tracing and correlation envelope — e.g., `{"trace_id": "...", "span_id": "..."}`.                                                                         |
+<ParamField path="kind" type="'scope' | 'mark'" required={true}>
+  Event kind discriminator.
+</ParamField>
 
+<ParamField path="atof_version" type="string" required={true}>
+  ATOF protocol version in `"MAJOR.MINOR"` form, such as `"0.1"`. Refer to §5.6.
+</ParamField>
+
+<ParamField path="uuid" type="UUID string" required={true}>
+  Unique identifier for this event or span. The start and end events for a `scope` share a `uuid`.
+</ParamField>
+
+<ParamField path="parent_uuid" type="UUID string | null">
+  UUID of the containing scope when this event was emitted. Null only for root scope events and `mark` events without parents.
+</ParamField>
+
+<ParamField path="timestamp" type="RFC 3339 string | epoch microseconds integer" required={true}>
+  Wall-clock time when the event was emitted. Refer to §5.1.
+</ParamField>
+
+<ParamField path="name" type="string" required={true}>
+  Human-readable label, such as `"my_agent"`, `"calculator__add"`, or `"gpt-4.1"`.
+</ParamField>
+
+<ParamField path="data" type="object | null">
+  Application-defined payload. ATOF treats this field as opaque.
+</ParamField>
+
+<ParamField path="data_schema" type="object | null">
+  Schema identifier `{name: string, version: string}` that describes the shape of `data`. ATOF Core treats the identifier as opaque; the consumer is responsible for validation.
+</ParamField>
+
+<ParamField path="metadata" type="object | null">
+  Tracing and correlation envelope, such as `{"trace_id": "...", "span_id": "..."}`.
+</ParamField>
 
 ### 2.1 `attributes` — behavioral flag array
 
 `attributes` is a cross-cutting field on `scope` events. `mark` does NOT carry `attributes`.
 
-
-| Field        | Type             | Required | Description                                                                                    |
-| ------------ | ---------------- | -------- | ---------------------------------------------------------------------------------------------- |
-| `attributes` | array of strings | Yes      | Canonical lowercase flag names (sorted, deduplicated). Empty array `[]` when no flags are set. |
-
+<ParamField path="attributes" type="string[]" required={true}>
+  Canonical lowercase flag names, sorted and deduplicated. Emit an empty array (`[]`) when no flags are set.
+</ParamField>
 
 Producers MUST emit `attributes` in lexicographic order with no duplicates. Consumers SHOULD treat the array as an unordered set and MUST preserve unknown flag names when re-emitting. Unknown flags SHOULD NOT be treated as errors.
 
@@ -129,42 +150,105 @@ Producers MUST emit `attributes` in lexicographic order with no duplicates. Cons
 Emitted at scope lifecycle transitions. A single scope span produces two `scope` events sharing the same `uuid`: one with `scope_category: "start"` when the scope is pushed onto the active scope stack, and one with `scope_category: "end"` when the scope is popped.
 
 
-| Field              | Type                  | Required | Description                                                                                                                                                                                                                                                |
-| ------------------ | --------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`             | string                | Yes      | Literal `"scope"`.                                                                                                                                                                                                                                         |
-| `scope_category`   | string (`enum`)         | Yes      | Lifecycle phase. One of: `"start"`, `"end"`.                                                                                                                                                                                                               |
-| `atof_version`     | string                | Yes      | See §2.                                                                                                                                                                                                                                                    |
-| `uuid`             | string (UUID)         | Yes      | Shared between the start and end events for the same scope span.                                                                                                                                                                                           |
-| `parent_uuid`      | string (UUID) or null | No       | See §2. Null on the root scope. Same on both start and end.                                                                                                                                                                                                |
-| `timestamp`        | string or integer     | Yes      | See §2. The end event's timestamp is always strictly later than the start event's (see §5.3).                                                                                                                                                              |
-| `name`             | string                | Yes      | See §2. Same on both start and end.                                                                                                                                                                                                                        |
-| `attributes`       | array of strings      | Yes      | See §2.1. Same on both start and end.                                                                                                                                                                                                                      |
-| `category`         | string                | Yes      | Semantic category. See §4. Same on both start and end.                                                                                                                                                                                                     |
-| `category_profile` | object or null        | No       | Category-specific typed fields. Keys depend on `category`. See §4.4. On `scope_category: "end"`, `model_name` MAY reflect the actually-used model if different from the requested one (e.g., after provider routing).                                      |
-| `data`             | object or null        | No       | See §2. Typically carries the scope's input on `scope_category: "start"` and the scope's output on `scope_category: "end"`, but producers MAY populate it on either phase.                                                                                 |
-| `data_schema`      | object or null        | No       | See §2.                                                                                                                                                                                                                                                    |
-| `metadata`         | object or null        | No       | See §2.                                                                                                                                                                                                                                                    |
+<ParamField path="kind" type="'scope'" required={true}>
+  Scope event discriminator.
+</ParamField>
 
+<ParamField path="scope_category" type="'start' | 'end'" required={true}>
+  Lifecycle phase.
+</ParamField>
+
+<ParamField path="atof_version" type="string" required={true}>
+  ATOF protocol version. Refer to §2.
+</ParamField>
+
+<ParamField path="uuid" type="UUID string" required={true}>
+  Identifier shared by the start and end events for the same scope span.
+</ParamField>
+
+<ParamField path="parent_uuid" type="UUID string | null">
+  Parent identifier from §2. Null on the root scope and identical on both events in a pair.
+</ParamField>
+
+<ParamField path="timestamp" type="RFC 3339 string | epoch microseconds integer" required={true}>
+  Timestamp from §2. The end timestamp is always strictly later than the start timestamp. Refer to §5.3.
+</ParamField>
+
+<ParamField path="name" type="string" required={true}>
+  Human-readable label from §2. Identical on both events in a pair.
+</ParamField>
+
+<ParamField path="attributes" type="string[]" required={true}>
+  Behavioral flags from §2.1. Identical on both events in a pair.
+</ParamField>
+
+<ParamField path="category" type="string" required={true}>
+  Semantic category from §4. Identical on both events in a pair.
+</ParamField>
+
+<ParamField path="category_profile" type="object | null">
+  Category-specific typed fields from §4.4. On an end event, `model_name` MAY identify the model that was actually used when it differs from the requested model, such as after provider routing.
+</ParamField>
+
+<ParamField path="data" type="object | null">
+  Application-defined payload from §2. Typically contains the scope input on a start event and the scope output on an end event, but producers MAY populate it on either phase.
+</ParamField>
+
+<ParamField path="data_schema" type="object | null">
+  Schema identifier from §2.
+</ParamField>
+
+<ParamField path="metadata" type="object | null">
+  Tracing and correlation metadata from §2.
+</ParamField>
 
 ### 3.2 `mark` event
 
 Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A `mark` MAY carry `category` + `category_profile` to indicate the kind of work the checkpoint relates to; when both are absent, the mark is a generic named timestamp.
 
+<ParamField path="kind" type="'mark'" required={true}>
+  Mark event discriminator.
+</ParamField>
 
-| Field              | Type                  | Required | Description                                                                                                                                           |
-| ------------------ | --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`             | string                | Yes      | Literal `"mark"`.                                                                                                                                     |
-| `atof_version`     | string                | Yes      | See §2.                                                                                                                                               |
-| `uuid`             | string (UUID)         | Yes      | See §2.                                                                                                                                               |
-| `parent_uuid`      | string (UUID) or null | No       | See §2.                                                                                                                                               |
-| `timestamp`        | string or integer     | Yes      | See §2.                                                                                                                                               |
-| `name`             | string                | Yes      | Label for the checkpoint — e.g., `"workflow_start"`, `"retry_attempt_2"`.                                                                             |
-| `category`         | string or null        | No       | Semantic category. See §4. Null or absent means the mark is a generic checkpoint.                                                                     |
-| `category_profile` | object or null        | No       | Category-specific typed fields. Keys depend on `category`. See §4.4. REQUIRED when `category == "custom"` (must carry `category_profile.subtype`).    |
-| `data`             | object or null        | No       | Optional checkpoint payload.                                                                                                                          |
-| `data_schema`      | object or null        | No       | Schema identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; validation is the consumer's responsibility. |
-| `metadata`         | object or null        | No       | See §2.                                                                                                                                               |
+<ParamField path="atof_version" type="string" required={true}>
+  ATOF protocol version from §2.
+</ParamField>
 
+<ParamField path="uuid" type="UUID string" required={true}>
+  Unique identifier from §2.
+</ParamField>
+
+<ParamField path="parent_uuid" type="UUID string | null">
+  Parent identifier from §2.
+</ParamField>
+
+<ParamField path="timestamp" type="RFC 3339 string | epoch microseconds integer" required={true}>
+  Event timestamp from §2.
+</ParamField>
+
+<ParamField path="name" type="string" required={true}>
+  Checkpoint label, such as `"workflow_start"` or `"retry_attempt_2"`.
+</ParamField>
+
+<ParamField path="category" type="string | null">
+  Semantic category from §4. Null or absent means that the mark is a generic checkpoint.
+</ParamField>
+
+<ParamField path="category_profile" type="object | null">
+  Category-specific typed fields from §4.4. REQUIRED when `category == "custom"` and must contain `category_profile.subtype`.
+</ParamField>
+
+<ParamField path="data" type="object | null">
+  Optional checkpoint payload.
+</ParamField>
+
+<ParamField path="data_schema" type="object | null">
+  Schema identifier `{name: string, version: string}` that describes the shape of `data`. ATOF Core treats the identifier as opaque; the consumer is responsible for validation.
+</ParamField>
+
+<ParamField path="metadata" type="object | null">
+  Tracing and correlation metadata from §2.
+</ParamField>
 
 `mark` does NOT carry `scope_category` or `attributes`.
 
@@ -173,7 +257,6 @@ Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A 
 ## 4. `category` Vocabulary
 
 `category` classifies the kind of work an event represents. The canonical vocabulary is a closed set of lowercase strings:
-
 
 | `category` value | Meaning                                                                                          |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
@@ -188,7 +271,6 @@ Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A 
 | `"evaluator"`    | Evaluation or scoring step.                                                                      |
 | `"custom"`       | Vendor-defined custom category. REQUIRES `category_profile.subtype` to name the vendor category. |
 | `"unknown"`      | Producer does not know or cannot classify the work.                                              |
-
 
 `category` is REQUIRED on `scope` events. On `mark` events it is OPTIONAL — producers MAY omit it to emit a generic checkpoint, or populate it to tag the mark with the kind of work it relates to.
 
@@ -220,7 +302,6 @@ The `category` `enum` is closed but `"custom"` + `category_profile.subtype` prov
 
 Per-category keys defined in v0.1:
 
-
 | `category`                                                                                  | `category_profile` shape                                                                                                 |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `"llm"`                                                                                     | `{"model_name": "gpt-4.1"}` — LLM model identifier; null if not known.                                                   |
@@ -228,7 +309,6 @@ Per-category keys defined in v0.1:
 | `"custom"`                                                                                  | `{"subtype": "nvidia.speculative_decode"}` — REQUIRED per §4.2.                                                          |
 | `"unknown"`                                                                                 | `null` — tier-1 pass-through carries no profile information.                                                             |
 | others (`agent`, `function`, `retriever`, `embedder`, `reranker`, `guardrail`, `evaluator`) | Reserved. No keys defined in v0.1; producers MAY emit `null` or `{}`. Future MINOR versions MAY define keys.             |
-
 
 Unknown `category_profile` keys MUST be preserved verbatim by consumers. Adding new keys to an existing profile shape is a backward-compatible MINOR bump per §5.6.
 
