@@ -1007,7 +1007,7 @@ impl NemoRelayContextState {
                             target: "nemo_relay.runtime",
                             event = "llm_request_sanitizer_failed",
                             sanitizer = entry.name.as_str(),
-                            preserved_payload = "unsanitized_request";
+                            preserved_value = "unsanitized_request";
                             "LLM request sanitizer failed; preserving the last valid unsanitized request: {error}"
                         );
                         value = Some(current);
@@ -1060,7 +1060,7 @@ impl NemoRelayContextState {
                             target: "nemo_relay.runtime",
                             event = "llm_response_sanitizer_failed",
                             sanitizer = entry.name.as_str(),
-                            preserved_payload = "unsanitized_response";
+                            preserved_value = "unsanitized_response";
                             "LLM response sanitizer failed; preserving the last valid unsanitized response: {error}"
                         );
                         value = Some(current);

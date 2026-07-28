@@ -285,8 +285,10 @@ class TestLLMGuardrails:
             lambda request, context: raise_runtime_error("boom"),
         )
         try:
-            request = make_request()
-            request.headers = {"authorization": "secret", "x-request-id": "safe"}
+            request = LLMRequest(
+                {"authorization": "secret", "x-request-id": "safe"},
+                make_request().content,
+            )
             handle = llm.call("llm_sanitize_req_fail", request)
             llm.call_end(handle, {"ok": True})
         finally:
@@ -309,8 +311,10 @@ class TestLLMGuardrails:
             cast(guardrails.LlmSanitizeRequestGuardrail, lambda request, context: object()),
         )
         try:
-            request = make_request()
-            request.headers = {"authorization": "secret", "x-request-id": "safe"}
+            request = LLMRequest(
+                {"authorization": "secret", "x-request-id": "safe"},
+                make_request().content,
+            )
             handle = llm.call("llm_sanitize_req_bad", request)
             llm.call_end(handle, {"ok": True})
         finally:
