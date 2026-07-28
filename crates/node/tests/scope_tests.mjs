@@ -30,14 +30,15 @@ function rejectWithPrimitive(value) {
 }
 
 async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  flushSubscribers();
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
+    await flushSubscribers();
     if (Date.now() >= deadline) {
       throw new Error('timed out waiting for subscriber callbacks');
     }
     await new Promise((resolve) => setImmediate(resolve));
   }
+  await flushSubscribers();
 }
 
 // ===========================================================================
@@ -277,14 +278,14 @@ describe('withScope', () => {
     }
   });
 
-  it('surfaces primitive rejection values as unknown error and still pops the scope', async () => {
+  it('surfaces primitive rejection values and still pops the scope', async () => {
     const before = getHandle();
     await assert.rejects(
       () =>
         withScope('primitive_reject_test', ScopeType.Tool, async () => {
           return rejectWithPrimitive(123);
         }),
-      /unknown error/i,
+      /internal error: 123/i,
     );
     const after = getHandle();
     assert.equal(after.uuid, before.uuid, 'scope should be popped after primitive rejection');

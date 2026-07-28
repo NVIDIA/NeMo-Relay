@@ -1120,7 +1120,7 @@ impl WorkerPluginInstance {
         let instance = Arc::new(self.clone_for_callback());
         let callback_name = name.to_owned();
         let callback: EventSanitizeFn =
-            Arc::new(move |event: Event, _fields: EventSanitizeFields| {
+            Arc::new(move |event: Arc<Event>, _fields: EventSanitizeFields| {
                 let instance = instance.clone();
                 let callback_name = callback_name.clone();
                 Box::pin(async move {
@@ -1875,12 +1875,15 @@ impl WorkerPluginCallback {
             .invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
             .await;
         if let Err(error) = &result {
+            let surface_name = RegistrationSurface::try_from(surface)
+                .map(|surface| surface.as_str_name())
+                .unwrap_or("UNKNOWN");
             log::warn!(
                 target: "nemo_relay.worker",
                 event = "worker_callback_failed",
                 plugin_id = self.plugin_kind.as_str(),
                 callback = callback_name.as_str(),
-                surface;
+                surface = surface_name;
                 "Worker plugin callback failed: {error}"
             );
         }

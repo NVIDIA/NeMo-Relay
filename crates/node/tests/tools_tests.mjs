@@ -48,18 +48,20 @@ function sparseArray() {
 }
 
 async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  flushSubscribers();
+  await flushSubscribers();
   // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
   // subscriber callbacks are queued onto Node's event loop through N-API
   // ThreadsafeFunction. Yield event-loop turns until the observed JS-side
   // callback state is ready, with a timeout to avoid hanging the test forever.
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
+    await flushSubscribers();
     if (Date.now() >= deadline) {
       throw new Error('timed out waiting for subscriber callbacks');
     }
     await new Promise((resolve) => setImmediate(resolve));
   }
+  await flushSubscribers();
 }
 
 // ===========================================================================
@@ -996,7 +998,7 @@ describe('Tool intercepts', () => {
     }
   });
 
-  it('async execute falls back to unknown error for primitive rejections', async () => {
+  it('async execute preserves primitive rejection values', async () => {
     await assert.rejects(
       () =>
         toolCallExecuteAsync(
@@ -1010,7 +1012,7 @@ describe('Tool intercepts', () => {
           null,
           null,
         ),
-      /unknown error/i,
+      /internal error: 42/i,
     );
   });
 

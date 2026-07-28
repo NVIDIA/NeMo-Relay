@@ -3205,7 +3205,10 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
 #[napi]
 pub async fn flush_subscribers() -> Result<()> {
-    core_subscriber_api::flush_subscribers().map_err(to_napi_err)
+    tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
+        .await
+        .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
+        .map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------

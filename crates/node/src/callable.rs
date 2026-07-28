@@ -300,7 +300,13 @@ pub fn wrap_js_llm_sanitize_request_promise_fn(func: Arc<PromiseAwareFn>) -> Llm
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
             let func = func.clone();
             Box::pin(async move {
-                let request = serde_json::to_value(request).unwrap_or(Json::Null);
+                let request = serde_json::to_value(request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM sanitize request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
                 let context = js_llm_sanitize_request_context(&context);
                 let value = func
                     .call_spread_with_arg0(Box::new(move |env| {
@@ -375,8 +381,15 @@ pub fn wrap_js_llm_conditional_promise_fn(func: Arc<PromiseAwareFn>) -> LlmCondi
     Arc::new(move |request: LlmRequest| {
         let func = func.clone();
         Box::pin(async move {
+            let request = serde_json::to_value(request).map_err(|error| {
+                let error = FlowError::Internal(format!(
+                    "failed to serialize JS LLM conditional request: {error}"
+                ));
+                record_callback_error(error.to_string());
+                error
+            })?;
             let value = func
-                .call(serde_json::to_value(request).unwrap_or(Json::Null))
+                .call(request)
                 .await
                 .inspect_err(|error| record_callback_error(error.to_string()))?;
             match value {
@@ -402,16 +415,28 @@ pub fn wrap_js_llm_request_intercept_promise_fn(
         move |name: String, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
             let func = func.clone();
             Box::pin(async move {
-                let value = func
-                    .call(serde_json::json!({
-                        "name": name,
-                        "request": request,
-                        "annotated": annotated,
-                    }))
-                    .await
-                    .inspect_err(|error| {
-                        record_callback_error(error.to_string());
-                    })?;
+                let request = serde_json::to_value(request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let annotated = serde_json::to_value(annotated).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept annotation: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let value = serde_json::json!({
+                    "name": name,
+                    "request": request,
+                    "annotated": annotated,
+                });
+                let value = func.call(value).await.inspect_err(|error| {
+                    record_callback_error(error.to_string());
+                })?;
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct JsOutcome {
@@ -448,7 +473,7 @@ pub fn wrap_js_llm_request_intercept_promise_fn(
 /// scope/mark APIs while allowing the JavaScript callback to settle a Promise
 /// on the Node event loop.
 pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSanitizeFn {
-    Arc::new(move |event: Event, fields: CoreEventSanitizeFields| {
+    Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
         let func = func.clone();
         Box::pin(async move {
             let event_json = JsEvent::try_from_event(&event)
@@ -753,7 +778,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
                 })?;
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if func.call_with_return_value(
-                    (request.clone(), context),
+                    (request, context),
                     ThreadsafeFunctionCallMode::Blocking,
                     move |value: Option<Json>| {
                         let _ = tx.send(callback_json(value));
@@ -1112,7 +1137,7 @@ pub fn wrap_js_event_sanitize_fn(
     func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
 ) -> EventSanitizeFn {
     let func = Arc::new(func);
-    Arc::new(move |event: Event, fields: CoreEventSanitizeFields| {
+    Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
         let func = func.clone();
         Box::pin(async move {
             let event_json = match JsEvent::try_from_event(&event) {
@@ -1125,7 +1150,7 @@ pub fn wrap_js_event_sanitize_fn(
                 }
             };
             let js_fields = EventSanitizeFields {
-                data: fields.data.clone(),
+                data: fields.data,
                 category_profile: fields
                     .category_profile
                     .as_ref()
@@ -1138,7 +1163,7 @@ pub fn wrap_js_event_sanitize_fn(
                         record_callback_error(error.to_string());
                         error
                     })?,
-                metadata: fields.metadata.clone(),
+                metadata: fields.metadata,
             };
             let js_fields = serde_json::to_value(js_fields).map_err(|error| {
                 let error = FlowError::Internal(format!(

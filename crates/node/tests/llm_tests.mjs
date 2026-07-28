@@ -51,21 +51,22 @@ function rejectWith(value) {
 }
 
 async function flushSubscriberCallbacks() {
-  flushSubscribers();
+  await flushSubscribers();
   for (let i = 0; i < 10; i += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
 }
 
 async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  flushSubscribers();
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
+    await flushSubscribers();
     if (Date.now() >= deadline) {
       throw new Error('timed out waiting for subscriber callbacks');
     }
     await new Promise((resolve) => setImmediate(resolve));
   }
+  await flushSubscribers();
 }
 
 function makeNative() {
@@ -764,7 +765,7 @@ describe('LLM guardrails', () => {
           event.scope_category === 'start',
       );
       assert.deepEqual(start.data, { headers: request.headers, content: request.content });
-      assert.match(getLastCallbackError() ?? '', /(unknown error|callback)/i);
+      assert.equal(getLastCallbackError(), 'internal error: unknown error');
 
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_throw');
       const result = await llmCallExecute(
@@ -1197,7 +1198,7 @@ describe('LLM intercepts', () => {
     deregisterLlmExecutionIntercept('node_llm_exec_invalid_next');
   });
 
-  it('execution intercept propagates primitive rejection values as unknown error', async () => {
+  it('execution intercept preserves primitive rejection values', async () => {
     registerLlmExecutionIntercept('node_llm_exec_unknown_err', 10, async () => {
       return rejectWith(42);
     });
@@ -1216,14 +1217,14 @@ describe('LLM intercepts', () => {
             null,
             null,
           ),
-        /unknown error/i,
+        /internal error: 42/i,
       );
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_unknown_err');
     }
   });
 
-  it('async execute falls back to unknown error for primitive rejections', async () => {
+  it('async execute preserves primitive rejection values', async () => {
     await assert.rejects(
       () =>
         llmCallExecuteAsync(
@@ -1236,7 +1237,7 @@ describe('LLM intercepts', () => {
           null,
           null,
         ),
-      /unknown error/i,
+      /internal error: 42/i,
     );
   });
 

@@ -185,6 +185,9 @@ def tool_sanitize_response(name, result):
 def tool_conditional(name, args):
     return None if args["value"] >= 0 else "blocked"
 
+async def async_tool_conditional(name, args):
+    return None
+
 def tool_request_intercept(name, args):
     updated = dict(args)
     updated["value"] = updated["value"] + 2
@@ -322,6 +325,16 @@ async def run_llm(api, request, func, handle, attributes, codec, response_codec)
         codec=codec,
         response_codec=response_codec,
     )
+
+async def run_standalone(api, request):
+    tool_args = await api.tool_request_intercepts("demo-tool", {"value": 1})
+    await api.tool_conditional_execution("demo-tool", tool_args)
+    llm_outcome = await api.llm_request_intercepts("demo-llm", request)
+    await api.llm_conditional_execution(llm_outcome.request)
+    return {
+        "tool_value": tool_args["value"],
+        "llm_header": llm_outcome.request.headers["x-intercepted"],
+    }
 
 async def run_stream(api, request, func, collector, finalizer, handle, attributes, codec, response_codec):
     stream = await api.llm_stream_call_execute(
@@ -498,6 +511,26 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
             .to_string()
             .contains("blocked")
         );
+        let async_sync_rejection_name = format!("async-sync-{}", Uuid::now_v7());
+        register_tool_conditional_execution_guardrail(
+            &async_sync_rejection_name,
+            20,
+            helpers.getattr("async_tool_conditional").unwrap().unbind(),
+        )
+        .unwrap();
+        assert!(
+            tool_conditional_execution(
+                py,
+                "demo-tool".to_string(),
+                &py_dict(py, json!({"value": 1})),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("requires an async caller")
+        );
+        assert!(
+            deregister_tool_conditional_execution_guardrail(&async_sync_rejection_name).unwrap()
+        );
 
         let llm_request = PyLLMRequest {
             inner: nemo_relay::api::llm::LlmRequest {
@@ -534,6 +567,21 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         );
 
         with_event_loop(py, |event_loop| {
+            let standalone = event_loop
+                .call_method1(
+                    "run_until_complete",
+                    (runner
+                        .getattr("run_standalone")
+                        .unwrap()
+                        .call1((api_module.clone(), llm_request.clone()))
+                        .unwrap(),),
+                )
+                .unwrap();
+            assert_eq!(
+                crate::convert::py_to_json(&standalone).unwrap(),
+                json!({"tool_value": 3, "llm_header": "1"})
+            );
+
             let tool_result = event_loop
                 .call_method1(
                     "run_until_complete",

@@ -668,7 +668,7 @@ async def collect_stream(awaitable):
 }
 
 #[test]
-fn event_sanitize_wrapper_covers_conversion_success_and_fail_closed_paths() {
+fn event_sanitize_wrapper_covers_conversion_success_and_error_propagation() {
     use nemo_relay::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
@@ -704,7 +704,7 @@ def invalid(event, fields):
         let sanitized = runtime
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("sanitize").unwrap().unbind(),
-            )(event.clone(), fields.clone()))
+            )(Arc::new(event.clone()), fields.clone()))
             .unwrap();
         assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
         assert_eq!(sanitized.metadata, None);
@@ -712,19 +712,72 @@ def invalid(event, fields):
         let raised = runtime
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("raises").unwrap().unbind(),
-            )(event.clone(), fields.clone()))
+            )(Arc::new(event.clone()), fields.clone()))
             .unwrap_err();
         assert!(raised.to_string().contains("sanitize boom"));
 
         let invalid = runtime
             .block_on(wrap_py_event_sanitize_fn(
                 module.getattr("invalid").unwrap().unbind(),
-            )(event, fields.clone()))
+            )(Arc::new(event), fields.clone()))
             .unwrap_err();
         assert!(
             invalid
                 .to_string()
                 .contains("invalid event sanitizer result")
         );
+    });
+}
+
+#[test]
+fn awaitable_middleware_wrappers_cover_success_and_failure() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let module = load_module(
+            py,
+            r#"
+async def tool_ok(name, args):
+    return {"name": name, "value": args["value"] + 1}
+
+async def tool_fail(name, args):
+    raise RuntimeError("async tool boom")
+
+async def llm_ok(request):
+    return None
+
+async def llm_fail(request):
+    raise RuntimeError("async llm boom")
+"#,
+        );
+        let tool_ok = wrap_py_tool_fn(module.getattr("tool_ok").unwrap().unbind());
+        let tool_fail = wrap_py_tool_fn(module.getattr("tool_fail").unwrap().unbind());
+        let llm_ok = wrap_py_llm_conditional_fn(module.getattr("llm_ok").unwrap().unbind());
+        let llm_fail = wrap_py_llm_conditional_fn(module.getattr("llm_fail").unwrap().unbind());
+
+        with_event_loop(py, |event_loop| {
+            pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
+                assert_eq!(
+                    tool_ok("demo".into(), json!({"value": 1})).await.unwrap(),
+                    json!({"name": "demo", "value": 2})
+                );
+                assert!(
+                    tool_fail("demo".into(), json!({"value": 1}))
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("async tool boom")
+                );
+                assert_eq!(llm_ok(make_request()).await.unwrap(), None);
+                assert!(
+                    llm_fail(make_request())
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("async llm boom")
+                );
+                Ok(())
+            })
+            .unwrap();
+        });
     });
 }

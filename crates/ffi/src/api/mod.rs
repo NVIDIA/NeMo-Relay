@@ -100,6 +100,8 @@ fn tokio_runtime() -> &'static Runtime {
 }
 
 fn block_on_sync_ffi<T>(future: impl Future<Output = FlowResult<T>>) -> FlowResult<T> {
+    // Embedded hosts must not call synchronous middleware helpers from a Tokio
+    // runtime thread. Use the completion-based async registration API there.
     if tokio::runtime::Handle::try_current().is_ok() {
         return Err(nemo_relay::error::FlowError::Internal(
             "synchronous FFI middleware helpers cannot run on a Tokio runtime thread; use the completion-based async registration API".into(),

@@ -4,18 +4,11 @@
 //! Integration tests for callable extra in the NeMo Relay FFI crate.
 
 use super::*;
-use std::future::Future;
 use std::ptr;
 
 use tokio_stream::StreamExt;
 
-fn resolve<T>(future: impl Future<Output = T>) -> T {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future)
-}
+use super::test_support::resolve;
 
 unsafe extern "C" fn tool_conditional_error_cb(
     _user_data: *mut libc::c_void,

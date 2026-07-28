@@ -217,8 +217,8 @@ pub fn get_handle() -> Result<ScopeHandle> {
 /// cannot be read safely.
 ///
 /// # Notes
-/// Scope-local subscribers attached to ancestor scopes observe the emitted
-/// start event before the function returns.
+/// The start event is queued with subscriber and sanitizer snapshots captured
+/// while the new scope is active.
 pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
@@ -348,8 +348,8 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 /// cannot be read safely.
 ///
 /// # Notes
-/// Scope-local subscribers attached to ancestor scopes observe the emitted
-/// mark event just like scope, tool, and LLM lifecycle events.
+/// The mark event is queued with subscriber and sanitizer snapshots captured
+/// from the active scope stack.
 pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);

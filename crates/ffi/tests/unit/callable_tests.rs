@@ -4,13 +4,14 @@
 //! Unit tests for callable in the NeMo Relay FFI crate.
 
 use super::*;
-use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
 use serde_json::json;
 use tokio_stream::StreamExt;
+
+use super::test_support::resolve;
 
 extern "C" fn free_arc_counter(user_data: *mut libc::c_void) {
     let counter = unsafe { Box::from_raw(user_data as *mut Arc<AtomicUsize>) };
@@ -21,14 +22,6 @@ fn user_data_counter() -> (*mut libc::c_void, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let ptr = Box::into_raw(Box::new(counter.clone())) as *mut libc::c_void;
     (ptr, counter)
-}
-
-fn resolve<T>(future: impl Future<Output = T>) -> T {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future)
 }
 
 unsafe extern "C" fn tool_sanitize_cb(
@@ -668,7 +661,7 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         .build();
     let (user_data, sanitize_calls) = user_data_counter();
     let sanitizer = wrap_event_sanitize_fn(event_sanitize_cb, user_data, Some(free_arc_counter));
-    let sanitized = resolve(sanitizer(event.clone(), original_fields.clone())).unwrap();
+    let sanitized = resolve(sanitizer(Arc::new(event.clone()), original_fields.clone())).unwrap();
     assert_eq!(sanitized.data, Some(json!({"safe": true})));
     assert_eq!(
         sanitized
@@ -684,12 +677,12 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
 
     let invalid = wrap_event_sanitize_fn(invalid_event_sanitize_cb, std::ptr::null_mut(), None);
     assert_eq!(
-        resolve(invalid(event.clone(), original_fields.clone())).unwrap(),
+        resolve(invalid(Arc::new(event.clone()), original_fields.clone())).unwrap(),
         EventSanitizeFields::default()
     );
     let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
     assert_eq!(
-        resolve(null(event, original_fields.clone())).unwrap(),
+        resolve(null(Arc::new(event), original_fields.clone())).unwrap(),
         EventSanitizeFields::default()
     );
 
