@@ -279,6 +279,11 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
 ///
 /// # Notes
 /// The implicit root scope cannot be removed.
+///
+/// Scope-end emission snapshots the visible scope-local sanitizers before
+/// removing the scope. Publication is then queued after removal using that
+/// snapshot, so cleanup does not change the middleware applied to the emitted
+/// event.
 pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
