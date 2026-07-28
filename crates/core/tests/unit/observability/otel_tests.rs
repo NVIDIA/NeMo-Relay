@@ -1390,7 +1390,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
     );
     assert_eq!(
         attributes.get("gen_ai.usage.input_tokens"),
-        Some(&"21".to_string())
+        Some(&"13".to_string())
     );
     assert_eq!(
         attributes.get("gen_ai.usage.output_tokens"),

@@ -280,15 +280,13 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         ));
     }
     if let Some(usage) = response.usage.as_ref() {
-        let input_tokens = usage
-            .prompt_tokens
-            .unwrap_or_default()
-            .saturating_add(usage.cache_read_tokens.unwrap_or_default())
-            .saturating_add(usage.cache_write_tokens.unwrap_or_default());
-        if input_tokens > 0 {
+        // `prompt_tokens` is the canonical input count. Cache counts remain
+        // separate diagnostic attributes; adding them here would double-count
+        // providers such as OpenAI that include cache reads in prompt tokens.
+        if let Some(input_tokens) = usage.prompt_tokens.and_then(to_i64) {
             attributes.push(KeyValue::new(
                 semconv::GEN_AI_USAGE_INPUT_TOKENS,
-                input_tokens as i64,
+                input_tokens,
             ));
         }
         if let Some(value) = usage.completion_tokens.and_then(to_i64) {
