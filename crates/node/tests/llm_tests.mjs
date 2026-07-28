@@ -400,7 +400,11 @@ describe('LLM guardrails', () => {
       assert.deepEqual(result, { ok: true });
       assert.equal(requestContextChecked, true);
       assert.equal(responseContextChecked, true);
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start') &&
+          events.some((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'end'),
+      );
       const start = events.find(
         (event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start',
       );
