@@ -34,6 +34,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyo3_async_runtimes::TaskLocals;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
@@ -127,15 +128,35 @@ fn split_py_object_or_future(
     py: Python<'_>,
     result: Py<PyAny>,
 ) -> FlowResult<Result<Py<PyAny>, PyValueFuture>> {
+    split_py_object_or_future_with_locals(py, result, None)
+}
+
+fn split_py_object_or_future_with_locals(
+    py: Python<'_>,
+    result: Py<PyAny>,
+    task_locals: Option<&TaskLocals>,
+) -> FlowResult<Result<Py<PyAny>, PyValueFuture>> {
     let bound = result.bind(py);
     if bound.getattr("__await__").is_ok() {
         reject_awaitable_from_sync_caller(bound)?;
-        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-            .map_err(|e| FlowError::Internal(e.to_string()))?;
-        Ok(Err(Box::pin(future) as PyValueFuture))
+        let future: PyValueFuture = match task_locals {
+            Some(locals) => Box::pin(
+                pyo3_async_runtimes::into_future_with_locals(locals, result.into_bound(py))
+                    .map_err(|e| FlowError::Internal(e.to_string()))?,
+            ),
+            None => Box::pin(
+                pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
+                    .map_err(|e| FlowError::Internal(e.to_string()))?,
+            ),
+        };
+        Ok(Err(future))
     } else {
         Ok(Ok(result))
     }
+}
+
+fn capture_python_task_locals() -> Option<TaskLocals> {
+    Python::attach(|py| pyo3_async_runtimes::tokio::get_current_locals(py).ok())
 }
 
 async fn resolve_py_object_or_future(
@@ -1048,8 +1069,10 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
 /// Wrap a Python callable `(Json, LlmSanitizeResponseContext) -> Optional[Json]`.
 fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeResponseFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         let py_fn = py_fn.clone();
+        let task_locals = task_locals.clone();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let py_context = PyLlmSanitizeResponseContext { inner: context };
@@ -1058,7 +1081,7 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
                 let result = py_fn
                     .call1(py, (py_response, py_context))
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
-                split_py_object_or_future(py, result)
+                split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
             }))
             .await?;
             Python::attach(|py| {
@@ -1114,8 +1137,10 @@ pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> EventSubscriberFn {
 /// Wrap a Python callable ``(Event, EventSanitizeFields) -> EventSanitizeFields``.
 pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let py_fn = py_fn.clone();
+        let task_locals = task_locals.clone();
         Box::pin(async move {
             let result = Python::attach(
                 |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
@@ -1156,7 +1181,7 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                     let result = py_fn
                         .call1(py, (py_event, py_fields))
                         .map_err(|error| FlowError::Internal(error.to_string()))?;
-                    split_py_object_or_future(py, result)
+                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
                 },
             );
             let result = resolve_py_object_or_future(result).await?;
