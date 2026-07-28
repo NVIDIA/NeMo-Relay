@@ -16,19 +16,11 @@ SPDX-License-Identifier: Apache-2.0 */}
 - [ATOF Export](/configure-plugins/observability/atof) — JSONL file and stream export configuration.
 - [ATOF to ATIF Examples](https://github.com/NVIDIA/NeMo-Agent-Toolkit/tree/develop/packages/nvidia_nat_atif/examples/atof_to_atif) — conversion reference, mapping table, and runnable examples.
 
-> **NeMo Relay implementation status:** NeMo Relay currently emits
-> `atof_version: "0.1"`. Its optional
-> `category_profile.annotated_request` and
-> `category_profile.annotated_response` fields are implementation extensions,
-> not ATOF 0.1 Core fields. Standardizing them requires a minor ATOF version
-> update under §5.6. The NeMo Relay native plugin ABI is versioned separately
-> and does not determine the ATOF protocol version.
-
 ---
 
 ## 1. Overview
 
-ATOF (Agent Trajectory Observability Format) is the wire format for agent runtime subscriber callbacks. Events represent the lifecycle of scopes — composable units of agent work — within the runtime. Subscribers receive events in real time as the runtime executes agent workflows.
+ATOF (Agentic Trajectory Observability Format) is the wire format for agent runtime subscriber callbacks. Events represent the lifecycle of scopes — composable units of agent work — within the runtime. Subscribers receive events in real time as the runtime executes agent workflows.
 
 **Primary purpose:** lossless replay for inspection and evaluation. An ATOF event stream MUST carry enough information to reconstruct what happened in an agent run — identity, call graph, LLM messages in/out, tool calls and results — so that humans and tools can debug, audit, and evaluate the run post-hoc.
 
@@ -53,10 +45,12 @@ What *kind of work* an event represents — an LLM call, a tool invocation, an a
 
 ATOF is designed for progressive enrichment at the producer's discretion. A producer emits what it knows; absent fields are legal everywhere except where noted.
 
+
 | Tier                    | Producer knows                                  | Wire shape                                                                                                                                                | Use case                                                                                               |
 | ----------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **1. Raw pass-through** | nothing semantic — just a payload               | event kind + envelope + opaque `data` JSON; `category: "unknown"` (scope) or absent (mark); `category_profile: null`                                      | runtime wrapping third-party frameworks where the callback provides a blob, not a classification       |
+| **1. Raw pass-through** | nothing semantic — just a payload               | event kind + envelope + opaque `data` JSON; `category: "unknown"` (scope) or absent (mark); `category_profile: null`                                      | runtime wrapping third-party frameworks where the callback provides a blob, not a classification           |
 | **2. Semantic-tagged**  | the kind of work (LLM, tool, specific category) | typed event kind + populated `category` + kind-appropriate `category_profile` keys (`model_name`, `tool_call_id`, `subtype`, …) + `attributes` (on scope) | native agent runtimes emitting their own events; framework wrappers that can classify at the hook site |
+
 
 **Design principle:** Tier 1 must always work. A consumer that doesn't understand tier-2 enrichment MUST still preserve the event verbatim. Consumers SHOULD NOT reject events whose `category` they don't recognize — unknown values are forward-compat extensions, not errors.
 
@@ -64,16 +58,18 @@ ATOF is designed for progressive enrichment at the producer's discretion. A prod
 
 Beyond the base envelope (`kind`, `uuid`, `parent_uuid`, `timestamp`, `name`, `atof_version`), ATOF events carry these structured fields:
 
+
 | Spec-governed shape                                                                                        | Opaque to ATOF                    |
 | ---------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | `scope_category` (scope), `attributes` (scope), `category` (scope, mark), `category_profile` (scope, mark) | `data`, `data_schema`, `metadata` |
+
 
 - `scope_category` — lifecycle phase of a `scope` event. Closed `enum`: `"start"` or `"end"`.
 - `attributes` — behavioral flag array. Vocabulary is shared across categories (see §2.1); per-flag applicability is documented with each flag. Carried by `scope` events only.
 - `category` — semantic category of the work. Closed `enum` (see §4). Required on `scope`, optional on `mark`.
 - `category_profile` — category-specific typed fields packaged as a sub-object. Keys vary by `category` — `subtype` for `custom`, `model_name` for `llm`, `tool_call_id` for `tool`, additional keys reserved for future categories (see §4.4). Null for tier-1 opaque events and for categories with no kind-specific fields.
 - `data` — application-defined payload. Opaque to ATOF. On `scope` events, typically carries the scope's input on `scope_category: "start"` and the scope's output on `scope_category: "end"`. Consumers MUST NOT dispatch on `data` contents.
-- `data_schema` — optional identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; the producer declares it, and validation of `data` against the named schema is the consumer's responsibility.
+- `data_schema` — optional identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; the producer declares it, and validation of `data` against the named schema is the consumer's responsibility. The reference ATOF→ATIF converter provides two registries keyed on this identifier: `nat.atof.schemas` for JSON Schema validators and `nat.atof.extractors` for payload parsers. See [examples/atof_to_atif/README.md](examples/atof_to_atif/README.md#extending-the-converter) for registration guidance.
 - `metadata` — tracing and correlation envelope (`trace_id`, `span_id`, etc.).
 
 ---
@@ -82,29 +78,34 @@ Beyond the base envelope (`kind`, `uuid`, `parent_uuid`, `timestamp`, `name`, `a
 
 Every event carries the envelope fields below. The first six (`kind`, `atof_version`, `uuid`, `parent_uuid`, `timestamp`, `name`) are the structural identity of the event; `data`, `data_schema`, and `metadata` are common optional fields that MAY appear on any event. `scope` events add scope fields on top; `mark` events MAY carry `category` + `category_profile` (§3.2) and nothing else beyond this envelope.
 
+
 | Field          | Type                                    | Required | Description                                                                                                                                           |
 | -------------- | --------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `kind`         | string                                  | Yes      | Event kind discriminator. One of: `"scope"`, `"mark"`.                                                                                                |
 | `atof_version` | string                                  | Yes      | ATOF protocol version, `"MAJOR.MINOR"` (e.g., `"0.1"`). See §5.6.                                                                                     |
-| `uuid`         | string (UUID)                           | Yes      | Unique identifier for this event or span. For `scope` start and end pairs, the two events share a `uuid`.                                             |
+| `uuid`         | string (UUID)                           | Yes      | Unique identifier for this event or span. For `scope` start and end pairs, the two events share a `uuid`.                                                 |
 | `parent_uuid`  | string (UUID) or null                   | No       | UUID of the containing scope when this event was emitted. Null only for root scope events and `mark` events without parents.                          |
 | `timestamp`    | string (RFC 3339) or integer (epoch µs) | Yes      | Wall-clock time the event was emitted. See §5.1.                                                                                                      |
 | `name`         | string                                  | Yes      | Human-readable label — e.g., `"my_agent"`, `"calculator__add"`, `"gpt-4.1"`.                                                                          |
 | `data`         | object or null                          | No       | Application-defined payload. Opaque to ATOF.                                                                                                          |
 | `data_schema`  | object or null                          | No       | Schema identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; validation is the consumer's responsibility. |
-| `metadata`     | object or null                          | No       | Tracing and correlation envelope — e.g., `{"trace_id": "...", "span_id": "..."}`.                                                                     |
+| `metadata`     | object or null                          | No       | Tracing and correlation envelope — e.g., `{"trace_id": "...", "span_id": "..."}`.                                                                         |
+
 
 ### 2.1 `attributes` — behavioral flag array
 
 `attributes` is a cross-cutting field on `scope` events. `mark` does NOT carry `attributes`.
 
+
 | Field        | Type             | Required | Description                                                                                    |
 | ------------ | ---------------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `attributes` | array of strings | Yes      | Canonical lowercase flag names (sorted, deduplicated). Empty array `[]` when no flags are set. |
 
+
 Producers MUST emit `attributes` in lexicographic order with no duplicates. Consumers SHOULD treat the array as an unordered set and MUST preserve unknown flag names when re-emitting. Unknown flags SHOULD NOT be treated as errors.
 
 **Canonical flag vocabulary** (shared across all categories; individual flag applicability noted):
+
 
 | Flag            | Applies when                                      | Meaning (when present)                                                                                         |
 | --------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -113,6 +114,7 @@ Producers MUST emit `attributes` in lexicographic order with no duplicates. Cons
 | `"stateful"`    | `category == "llm"` primarily, but not exclusive  | Scope maintains state between invocations — server-side memory, session history, or accumulated scratchpad.    |
 | `"streaming"`   | `category == "llm"` primarily, but not exclusive  | Scope produces its output incrementally as chunks, rather than as a single payload at exit.                    |
 | `"remote"`      | `category == "tool"` primarily, but not exclusive | Tool executes out-of-process — dispatched to a remote service (HTTP, MCP server, subprocess), not in-process.  |
+
 
 **Why defaults are "absence":** Each flag describes the exceptional case. Absence means the default applies — serial (not parallel), pinned (not relocatable), stateless (not stateful), single-payload (not streaming), local (not remote).
 
@@ -126,25 +128,28 @@ Producers MUST emit `attributes` in lexicographic order with no duplicates. Cons
 
 Emitted at scope lifecycle transitions. A single scope span produces two `scope` events sharing the same `uuid`: one with `scope_category: "start"` when the scope is pushed onto the active scope stack, and one with `scope_category: "end"` when the scope is popped.
 
-| Field              | Type                  | Required | Description                                                                                                                                                                                                                                           |
-| ------------------ | --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`             | string                | Yes      | Literal `"scope"`.                                                                                                                                                                                                                                    |
-| `scope_category`   | string (`enum`)       | Yes      | Lifecycle phase. One of: `"start"`, `"end"`.                                                                                                                                                                                                          |
-| `atof_version`     | string                | Yes      | See §2.                                                                                                                                                                                                                                               |
-| `uuid`             | string (UUID)         | Yes      | Shared between the start and end events for the same scope span.                                                                                                                                                                                      |
-| `parent_uuid`      | string (UUID) or null | No       | See §2. Null on the root scope. Same on both start and end.                                                                                                                                                                                           |
-| `timestamp`        | string or integer     | Yes      | See §2. The end event's timestamp is always strictly later than the start event's (see §5.3).                                                                                                                                                |
-| `name`             | string                | Yes      | See §2. Same on both start and end.                                                                                                                                                                                                                   |
-| `attributes`       | array of strings      | Yes      | See §2.1. Same on both start and end.                                                                                                                                                                                                                 |
-| `category`         | string                | Yes      | Semantic category. See §4. Same on both start and end.                                                                                                                                                                                                |
-| `category_profile` | object or null        | No       | Category-specific typed fields. Keys depend on `category`. See §4.4. On `scope_category: "end"`, `model_name` MAY reflect the actually-used model if different from the requested one (e.g., after provider routing). |
-| `data`             | object or null        | No       | See §2. Typically carries the scope's input on `scope_category: "start"` and the scope's output on `scope_category: "end"`, but producers MAY populate it on either phase.                                                                            |
-| `data_schema`      | object or null        | No       | See §2.                                                                                                                                                                                                                                               |
-| `metadata`         | object or null        | No       | See §2.                                                                                                                                                                                                                                               |
+
+| Field              | Type                  | Required | Description                                                                                                                                                                                                                                                |
+| ------------------ | --------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`             | string                | Yes      | Literal `"scope"`.                                                                                                                                                                                                                                         |
+| `scope_category`   | string (`enum`)         | Yes      | Lifecycle phase. One of: `"start"`, `"end"`.                                                                                                                                                                                                               |
+| `atof_version`     | string                | Yes      | See §2.                                                                                                                                                                                                                                                    |
+| `uuid`             | string (UUID)         | Yes      | Shared between the start and end events for the same scope span.                                                                                                                                                                                           |
+| `parent_uuid`      | string (UUID) or null | No       | See §2. Null on the root scope. Same on both start and end.                                                                                                                                                                                                |
+| `timestamp`        | string or integer     | Yes      | See §2. The end event's timestamp is always strictly later than the start event's (see §5.3).                                                                                                                                                              |
+| `name`             | string                | Yes      | See §2. Same on both start and end.                                                                                                                                                                                                                        |
+| `attributes`       | array of strings      | Yes      | See §2.1. Same on both start and end.                                                                                                                                                                                                                      |
+| `category`         | string                | Yes      | Semantic category. See §4. Same on both start and end.                                                                                                                                                                                                     |
+| `category_profile` | object or null        | No       | Category-specific typed fields. Keys depend on `category`. See §4.4. On `scope_category: "end"`, `model_name` MAY reflect the actually-used model if different from the requested one (e.g., after provider routing).                                      |
+| `data`             | object or null        | No       | See §2. Typically carries the scope's input on `scope_category: "start"` and the scope's output on `scope_category: "end"`, but producers MAY populate it on either phase.                                                                                 |
+| `data_schema`      | object or null        | No       | See §2.                                                                                                                                                                                                                                                    |
+| `metadata`         | object or null        | No       | See §2.                                                                                                                                                                                                                                                    |
+
 
 ### 3.2 `mark` event
 
 Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A `mark` MAY carry `category` + `category_profile` to indicate the kind of work the checkpoint relates to; when both are absent, the mark is a generic named timestamp.
+
 
 | Field              | Type                  | Required | Description                                                                                                                                           |
 | ------------------ | --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -160,6 +165,7 @@ Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A 
 | `data_schema`      | object or null        | No       | Schema identifier `{name: string, version: string}` describing the shape of `data`. Opaque to ATOF core; validation is the consumer's responsibility. |
 | `metadata`         | object or null        | No       | See §2.                                                                                                                                               |
 
+
 `mark` does NOT carry `scope_category` or `attributes`.
 
 ---
@@ -167,6 +173,7 @@ Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A 
 ## 4. `category` Vocabulary
 
 `category` classifies the kind of work an event represents. The canonical vocabulary is a closed set of lowercase strings:
+
 
 | `category` value | Meaning                                                                                          |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
@@ -181,6 +188,7 @@ Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A 
 | `"evaluator"`    | Evaluation or scoring step.                                                                      |
 | `"custom"`       | Vendor-defined custom category. REQUIRES `category_profile.subtype` to name the vendor category. |
 | `"unknown"`      | Producer does not know or cannot classify the work.                                              |
+
 
 `category` is REQUIRED on `scope` events. On `mark` events it is OPTIONAL — producers MAY omit it to emit a generic checkpoint, or populate it to tag the mark with the kind of work it relates to.
 
@@ -212,6 +220,7 @@ The `category` `enum` is closed but `"custom"` + `category_profile.subtype` prov
 
 Per-category keys defined in v0.1:
 
+
 | `category`                                                                                  | `category_profile` shape                                                                                                 |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `"llm"`                                                                                     | `{"model_name": "gpt-4.1"}` — LLM model identifier; null if not known.                                                   |
@@ -219,6 +228,7 @@ Per-category keys defined in v0.1:
 | `"custom"`                                                                                  | `{"subtype": "nvidia.speculative_decode"}` — REQUIRED per §4.2.                                                          |
 | `"unknown"`                                                                                 | `null` — tier-1 pass-through carries no profile information.                                                             |
 | others (`agent`, `function`, `retriever`, `embedder`, `reranker`, `guardrail`, `evaluator`) | Reserved. No keys defined in v0.1; producers MAY emit `null` or `{}`. Future MINOR versions MAY define keys.             |
+
 
 Unknown `category_profile` keys MUST be preserved verbatim by consumers. Adding new keys to an existing profile shape is a backward-compatible MINOR bump per §5.6.
 
@@ -245,7 +255,7 @@ Emitters choose per event. A single stream MAY contain events in both forms.
 
 The runtime maintains a scope stack per async task. The `parent_uuid` of any event is the UUID of the scope that was on top of the stack when the handle was created. Following `parent_uuid` links upward reconstructs the full call graph.
 
-The root scope has `parent_uuid = null`. The root scope's events (both `scope_category: "start"` and `scope_category: "end"`) are the only `scope` events in a well-formed stream that may carry a null `parent_uuid` (after the root scope is established). `mark` events MAY carry `parent_uuid = null` when emitted outside any scope.
+The root scope has `parent_uuid = null`. The root scope's events (both `scope_category: "start"` and `scope_category: "end"`) are the only `scope` events in a well-formed stream that may carry a null `parent_uuid` (once the root scope is established). `mark` events MAY carry `parent_uuid = null` when emitted outside any scope.
 
 ### 5.3 Start/End Pairing
 
@@ -283,7 +293,7 @@ Every event carries a required `atof_version` field, formatted `"MAJOR.MINOR"` �
 
 ## 6. What ATOF Is Not
 
-- **Not ATIF.** ATIF is a higher-level trajectory format with computed ancestry, merged observations, sequenced `step_ids`, and turn-based structure. ATOF events are the raw observations ATIF is built from. Refer to [ATIF Export](/configure-plugins/observability/atif) for NeMo Relay's projection.
+- **Not ATIF.** ATIF is a higher-level trajectory format with computed ancestry, merged observations, sequenced `step_ids`, and turn-based structure. ATOF events are the raw observations ATIF is built from. See `examples/atof_to_atif/README.md` for the conversion reference.
 - **Not a metrics format.** Token counts, latency budgets, cost attribution — those live in `data` payloads or in downstream aggregation. ATOF does not normalize or roll up metrics.
 - **Not a trace format.** ATOF is compatible with distributed tracing (subscribers can export to OpenTelemetry via `metadata.trace_id`/`metadata.span_id`) but is not itself an OTLP-equivalent wire format.
 - **Not a replay executor.** An ATOF stream lets you reconstruct what happened. It does not provide the mechanism to re-run it — that's a separate layer built on top.
@@ -292,12 +302,11 @@ Every event carries a required `atof_version` field, formatted `"MAJOR.MINOR"` �
 
 ## 7. Reference Implementations
 
-- **Rust producer:** [`crates/types/src/api/event.rs`](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/types/src/api/event.rs) in NVIDIA NeMo Relay defines the event model emitted by the runtime.
-- **Python consumer and test producer:** [`nat.atof`](https://github.com/NVIDIA/NeMo-Agent-Toolkit/tree/develop/packages/nvidia_nat_atif/src/nat/atof) in NVIDIA NeMo Agent Toolkit provides Pydantic models with `model_config = ConfigDict(extra="allow")` for lossless pass-through.
+- **Python (consumer + test-producer):** `src/nat/atof/` in `nvidia_nat_atif`. Pydantic models per event kind with `model_config = ConfigDict(extra="allow")` for lossless pass-through.
 - **Producer runtimes:** Agent runtimes emitting ATOF MAY use more granular internal types (e.g., separate `LlmStartEvent`/`ToolStartEvent` structs in typed languages) for type-safe construction, but MUST serialize to ATOF's two-kind wire format on emission.
 - **Language bindings:** Where a producer runtime exposes bindings to additional languages, those bindings SHOULD re-export the runtime's event types via language-idiomatic wrappers while preserving the wire format on serialization.
 
-Refer to the [ATOF to ATIF examples](https://github.com/NVIDIA/NeMo-Agent-Toolkit/tree/develop/packages/nvidia_nat_atif/examples/atof_to_atif) for the conversion reference.
+See `examples/atof_to_atif/README.md` for the normative ATOF → ATIF conversion reference.
 
 ---
 
