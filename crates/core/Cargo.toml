@@ -19,7 +19,6 @@ default = [
     "object-store",
 ]
 atof-streaming = [
-    "dep:futures-util",
     "dep:tokio-tungstenite",
     "tokio/io-util",
     "tokio/net",
@@ -63,7 +62,7 @@ strum = { version = "0.27", features = ["derive"] }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 typed-builder = "0.23.2"
-futures-util = { version = "0.3", optional = true }
+futures-util = "0.3"
 opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["trace"] }

@@ -339,24 +339,11 @@ mod native {
         if sanitizers.is_empty() {
             return Some(transformed);
         }
-        let original = transformed.clone();
         Some(
-            match catch_unwind(AssertUnwindSafe(|| {
-                runtime.block_on(NemoRelayContextState::event_sanitize_snapshot_chain(
-                    transformed,
-                    &sanitizers,
-                ))
-            })) {
-                Ok(event) => event,
-                Err(_) => {
-                    log::error!(
-                        target: "nemo_relay.runtime",
-                        event = "event_sanitizer_panicked";
-                        "Event sanitizer panicked; publishing the transformed event snapshot"
-                    );
-                    original
-                }
-            },
+            runtime.block_on(NemoRelayContextState::event_sanitize_snapshot_chain(
+                transformed,
+                &sanitizers,
+            )),
         )
     }
 }

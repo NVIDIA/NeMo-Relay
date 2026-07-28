@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use nemo_relay::api::event::Event;
 use nemo_relay::api::registry::{
     deregister_mark_sanitize_guardrail, register_mark_sanitize_guardrail,
 };
@@ -16,6 +17,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::scope::{EmitMarkEventParams, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::error::FlowError;
+use serde_json::json;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -208,15 +210,21 @@ fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_panics() {
     reset_global();
     setup_isolated_thread();
 
-    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::new(Mutex::new(Vec::<Event>::new()));
     let observed_events = Arc::clone(&observed);
     register_subscriber(
         "panic-sanitizer-subscriber",
-        Arc::new(move |event| {
-            observed_events
-                .lock()
-                .unwrap()
-                .push(event.name().to_string())
+        Arc::new(move |event| observed_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_mark_sanitize_guardrail(
+        "successful-mark-sanitizer",
+        0,
+        Arc::new(|_, mut fields| {
+            Box::pin(async move {
+                fields.data = Some(json!({"redacted": true}));
+                Ok(fields)
+            })
         }),
     )
     .unwrap();
@@ -230,7 +238,15 @@ fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_panics() {
     emit_mark("panic-fallback");
     flush_subscribers().unwrap();
 
-    assert_eq!(observed.lock().unwrap().as_slice(), ["panic-fallback"]);
+    let events = observed.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].name(), "panic-fallback");
+    assert_eq!(
+        events[0].sanitize_fields().data,
+        Some(json!({"redacted": true}))
+    );
+    drop(events);
+    deregister_mark_sanitize_guardrail("successful-mark-sanitizer").unwrap();
     deregister_mark_sanitize_guardrail("panic-mark-sanitizer").unwrap();
     deregister_subscriber("panic-sanitizer-subscriber").unwrap();
 }

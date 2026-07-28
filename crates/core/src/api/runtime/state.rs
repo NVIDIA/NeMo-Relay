@@ -10,8 +10,11 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
+use futures_util::FutureExt;
 
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
@@ -640,14 +643,26 @@ impl NemoRelayContextState {
         let event_context = Arc::new(event.clone());
         for entry in entries {
             let fields = event.sanitize_fields();
-            match (entry.payload)(Arc::clone(&event_context), fields).await {
-                Ok(fields) => event.apply_sanitize_fields(fields),
-                Err(error) => log::error!(
+            let callback = Arc::clone(&entry.payload);
+            let context = Arc::clone(&event_context);
+            match AssertUnwindSafe(async move { callback(context, fields).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(fields)) => event.apply_sanitize_fields(fields),
+                Ok(Err(error)) => log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_failed",
                     sanitizer = entry.name.as_str(),
                     event_name = event.name();
                     "Event sanitizer failed; preserving the last valid event snapshot: {error}"
+                ),
+                Err(_) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_panicked",
+                    sanitizer = entry.name.as_str(),
+                    event_name = event.name();
+                    "Event sanitizer panicked; publishing the latest valid event snapshot"
                 ),
             }
         }
