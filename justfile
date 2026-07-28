@@ -562,6 +562,7 @@ set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
+    set_npm_package_version packages/cli-bin/package.json package-lock.json "$version" packages/cli-bin
     set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
 }
 
@@ -689,6 +690,35 @@ else:
 if updated != text:
     path.write_text(updated)
 print("crates/python/Cargo.toml uses the workspace version")
+
+path = Path("python/cli-bin/pyproject.toml")
+text = path.read_text()
+updated, count = re.subn(
+    r'^version = "(.*)"$',
+    f'version = "{version}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count != 1:
+    raise SystemExit("Failed to update version in python/cli-bin/pyproject.toml")
+if updated != text:
+    path.write_text(updated)
+print(f"python/cli-bin/pyproject.toml version updated to {version}")
+
+path = Path("pyproject.toml")
+text = path.read_text()
+updated, count = re.subn(
+    r'("nemo-relay-cli-bin==)[^"]+(")',
+    rf'\g<1>{version}\g<2>',
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("Failed to update the nemo-relay CLI extra version")
+if updated != text:
+    path.write_text(updated)
+print(f"nemo-relay CLI extra updated to {version}")
 PY
 }
 
@@ -1674,3 +1704,19 @@ package-python-plugin:
         echo "Error: No Python plugin wheels found in $package_dir"
         exit 1
     fi
+
+# Package a prebuilt CLI binary for PyPI and npm.
+package-cli-bin binary target version package_dir npm_launcher="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$NEMO_RELAY_REPO_ROOT"
+    args=(
+        --binary "{{ binary }}"
+        --target "{{ target }}"
+        --version "{{ version }}"
+        --output-dir "{{ package_dir }}"
+    )
+    if [[ "{{ npm_launcher }}" == "true" ]]; then
+        args+=(--npm-launcher)
+    fi
+    uv run --no-project python scripts/package-cli-bin.py "${args[@]}"

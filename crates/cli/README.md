@@ -62,6 +62,24 @@ The CLI provides these capabilities:
 
 ## Installation Options
 
+PyPI:
+
+```bash
+pip install nemo-relay-cli-bin
+```
+
+npm:
+
+```bash
+npm install --global nemo-relay-cli-bin
+```
+
+Python API package extra:
+
+```bash
+pip install "nemo-relay[cli]"
+```
+
 Cargo:
 
 ```bash

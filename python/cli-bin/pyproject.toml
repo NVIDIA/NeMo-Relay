@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["uv_build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "nemo-relay-cli-bin"
+version = "0.7.0"
+description = "Prebuilt NeMo Relay command-line interface."
+requires-python = ">=3.11"
+license = "Apache-2.0"
+
+[tool.uv.build-backend]
+module-name = "nemo_relay_cli_bin"
+module-root = "src"

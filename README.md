@@ -52,7 +52,23 @@ trajectories.
 
 #### 1. Install the CLI
 
-Run the installer for your platform:
+Install the prebuilt CLI with Python or npm:
+
+```bash
+pip install nemo-relay-cli-bin
+```
+
+```bash
+npm install --global nemo-relay-cli-bin
+```
+
+Python API users can install the matching CLI through the optional extra:
+
+```bash
+pip install "nemo-relay[cli]"
+```
+
+Alternatively, run the installer for your platform:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
