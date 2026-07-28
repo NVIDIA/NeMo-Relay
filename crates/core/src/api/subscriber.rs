@@ -85,13 +85,6 @@ pub fn flush_subscribers() -> Result<()> {
     flush_runtime_subscribers()
 }
 
-/// Binding-specific subscriber barrier that avoids cycles across asynchronous callback handoffs.
-#[doc(hidden)]
-pub fn flush_subscribers_from_binding() -> Result<()> {
-    ensure_runtime_owner()?;
-    crate::api::runtime::flush_subscribers_from_binding()
-}
-
 /// Register a scope-local lifecycle event subscriber.
 ///
 /// The subscriber remains active only while the target scope is still present

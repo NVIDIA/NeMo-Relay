@@ -23,6 +23,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use nemo_relay::api::runtime::{
@@ -43,6 +44,27 @@ use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+
+static ACTIVE_EVENT_SANITIZER_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+
+struct ActiveEventSanitizerCallback;
+
+impl ActiveEventSanitizerCallback {
+    fn enter() -> Self {
+        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for ActiveEventSanitizerCallback {
+    fn drop(&mut self) {
+        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn event_sanitizer_callback_active() -> bool {
+    ACTIVE_EVENT_SANITIZER_CALLBACKS.load(Ordering::Acquire) != 0
+}
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
@@ -1142,6 +1164,7 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
         let py_fn = py_fn.clone();
         let task_locals = task_locals.clone();
         Box::pin(async move {
+            let _active_callback = ActiveEventSanitizerCallback::enter();
             let result = Python::attach(
                 |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
                     let py_event = match event.as_ref() {

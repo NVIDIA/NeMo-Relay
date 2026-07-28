@@ -27,4 +27,4 @@ pub use scope_stack::{
     task_scope_top, with_active_event_uuid, with_scope_stack,
 };
 pub use state::NemoRelayContextState;
-pub use subscriber_dispatcher::{flush_subscribers, flush_subscribers_from_binding};
+pub use subscriber_dispatcher::flush_subscribers;
