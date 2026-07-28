@@ -189,12 +189,21 @@ fn mark_emission_skips_sanitizers_without_subscribers() {
 }
 
 #[test]
-fn sanitizer_panic_publishes_the_original_event() {
+fn sanitizer_panic_publishes_the_latest_valid_event() {
     let _lock = TEST_MUTEX.lock().unwrap();
     flush_subscribers().unwrap();
     reset_global();
     setup_isolated_thread();
 
+    register_mark_sanitize_guardrail(
+        "successful-mark-sanitizer",
+        0,
+        Arc::new(move |_, mut fields| {
+            fields.data = Some(json!({"redacted": true}));
+            fields
+        }),
+    )
+    .unwrap();
     register_mark_sanitize_guardrail(
         "panicking-mark-sanitizer",
         10,
@@ -219,6 +228,7 @@ fn sanitizer_panic_publishes_the_original_event() {
     .unwrap();
     flush_subscribers().unwrap();
 
+    deregister_mark_sanitize_guardrail("successful-mark-sanitizer").unwrap();
     deregister_mark_sanitize_guardrail("panicking-mark-sanitizer").unwrap();
     deregister_subscriber("panic-fallback-subscriber").unwrap();
 
@@ -227,7 +237,7 @@ fn sanitizer_panic_publishes_the_original_event() {
     assert_eq!(events[0].name(), "panic-fallback");
     assert_eq!(
         events[0].sanitize_fields().data,
-        Some(json!({"original": true}))
+        Some(json!({"redacted": true}))
     );
 }
 
