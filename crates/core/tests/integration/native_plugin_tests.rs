@@ -673,6 +673,15 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
     }])
     .expect("v3 async native fixture should load");
+    let fixture_library = unsafe { libloading::Library::new(&fixture.library_path) }
+        .expect("loaded v3 async native fixture should open for synchronization");
+    let pending_entered = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(b"nemo_relay_fixture_async_pending_entered\0")
+            .expect("v3 async native fixture should export its pending-entry signal")
+    };
+    assert!(!unsafe { pending_entered() });
+    drop(fixture_library);
     let mut cleanup = NativePluginTestCleanup::new();
     let mut config = PluginConfig::default();
     config.components.push(PluginComponentSpec {
@@ -766,7 +775,13 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     let pending = tokio::spawn(async {
         tool_request_intercepts("async-pending", json!({"input": true})).await
     });
-    tokio::task::yield_now().await;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !unsafe { pending_entered() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("native async callback should enter before plugin clear");
     clear_plugin_configuration().expect("v3 async native fixture should clear while pending");
     cleanup.plugin_configuration_active = false;
     let pending = pending

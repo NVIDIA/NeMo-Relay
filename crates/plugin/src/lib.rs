@@ -800,6 +800,30 @@ pub enum NemoRelayNativeAsyncMiddlewareKind {
     ScopeSanitizeEnd = 13,
 }
 
+impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
+    type Error = ();
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::ToolSanitizeRequest),
+            1 => Ok(Self::ToolSanitizeResponse),
+            2 => Ok(Self::ToolConditionalExecution),
+            3 => Ok(Self::ToolRequestIntercept),
+            4 => Ok(Self::ToolExecutionIntercept),
+            5 => Ok(Self::LlmSanitizeRequest),
+            6 => Ok(Self::LlmSanitizeResponse),
+            7 => Ok(Self::LlmConditionalExecution),
+            8 => Ok(Self::LlmRequestIntercept),
+            9 => Ok(Self::LlmExecutionIntercept),
+            10 => Ok(Self::LlmStreamExecutionIntercept),
+            11 => Ok(Self::MarkSanitize),
+            12 => Ok(Self::ScopeSanitizeStart),
+            13 => Ok(Self::ScopeSanitizeEnd),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Indicates whether an asynchronous native callback settled before returning.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -808,6 +832,18 @@ pub enum NemoRelayNativeAsyncCallbackState {
     Complete = 0,
     /// The callback retained its completion for later settlement.
     Pending = 1,
+}
+
+impl TryFrom<u32> for NemoRelayNativeAsyncCallbackState {
+    type Error = ();
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Complete),
+            1 => Ok(Self::Pending),
+            _ => Err(()),
+        }
+    }
 }
 
 /// Opaque one-shot completion retained by a pending native callback.
@@ -827,18 +863,18 @@ pub struct NemoRelayNativeAsyncNext {
 /// Completion-based native middleware callback.
 ///
 /// `invocation_json` is borrowed for the call. A callback that returns
-/// [`NemoRelayNativeAsyncCallbackState::Pending`] owns one completion
-/// reference and must settle it then call the v3 `async_completion_release`
-/// hook. When `next` is non-null, the callback owns that handle for the
-/// invocation and must call `async_next_release` after its final use. `next`
-/// is null for non-execution middleware.
-pub type NemoRelayNativeAsyncMiddlewareCb =
-    unsafe extern "C" fn(
-        user_data: *mut c_void,
-        invocation_json: *const NemoRelayNativeString,
-        next: *const NemoRelayNativeAsyncNext,
-        completion: *const NemoRelayNativeAsyncCompletion,
-    ) -> NemoRelayNativeAsyncCallbackState;
+/// [`NemoRelayNativeAsyncCallbackState::Pending`] as a `u32` owns one
+/// completion reference and must settle it then call the v3
+/// `async_completion_release` hook. The host validates the returned
+/// discriminant. When `next` is non-null, the callback owns that handle for
+/// the invocation and must call `async_next_release` after its final use.
+/// `next` is null for non-execution middleware.
+pub type NemoRelayNativeAsyncMiddlewareCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32;
 
 /// ABI-v3 host extension appended to [`NemoRelayNativeHostApiV1`].
 ///
@@ -874,9 +910,12 @@ pub struct NemoRelayNativeHostApiV3 {
     /// Releases the callback-owned continuation reference for a pending callback.
     pub async_next_release: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext),
     /// Registers any completion-based asynchronous middleware surface.
+    ///
+    /// `kind` must be a valid [`NemoRelayNativeAsyncMiddlewareKind`]
+    /// discriminant. The host rejects unknown `u32` values.
     pub plugin_context_register_async_middleware: unsafe extern "C" fn(
         ctx: *mut NemoRelayNativePluginContext,
-        kind: NemoRelayNativeAsyncMiddlewareKind,
+        kind: u32,
         name: *const NemoRelayNativeString,
         priority: i32,
         break_chain: bool,
@@ -2396,7 +2435,7 @@ impl<'a> PluginContext<'a> {
         self.with_name(name, |_, name| unsafe {
             (host.plugin_context_register_async_middleware)(
                 self.raw,
-                kind,
+                kind as u32,
                 name,
                 priority,
                 break_chain,

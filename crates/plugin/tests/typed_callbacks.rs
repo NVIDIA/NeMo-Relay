@@ -16,7 +16,8 @@ use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
     Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonStream, LlmNext,
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSanitizeCb,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
     NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
@@ -31,6 +32,20 @@ use nemo_relay_plugin::{
     PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
+
+#[test]
+fn async_abi_discriminants_reject_unknown_values() {
+    assert_eq!(
+        NemoRelayNativeAsyncMiddlewareKind::try_from(13),
+        Ok(NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd)
+    );
+    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(14).is_err());
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(1),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    assert!(NemoRelayNativeAsyncCallbackState::try_from(2).is_err());
+}
 
 struct TestString(Vec<u8>);
 

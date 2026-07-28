@@ -1465,6 +1465,22 @@ async fn invoke_native_async_callback(
         }
     };
     unsafe { native_string_free(invocation as *mut NemoRelayNativeString) };
+    let state = match NemoRelayNativeAsyncCallbackState::try_from(state) {
+        Ok(state) => state,
+        Err(()) => {
+            unsafe {
+                drop(Arc::from_raw(
+                    completion_ref as *const NativeAsyncCompletion,
+                ));
+                if let Some(next_ref) = next_ref {
+                    drop(Arc::from_raw(next_ref as *const NativeAsyncNext));
+                }
+            }
+            return Err(FlowError::Internal(
+                "native async callback returned an invalid state".into(),
+            ));
+        }
+    };
     if state == NemoRelayNativeAsyncCallbackState::Complete {
         unsafe {
             drop(Arc::from_raw(
@@ -1935,7 +1951,7 @@ fn wrap_native_async_llm_stream_execution(
 
 unsafe extern "C" fn native_plugin_context_register_async_middleware(
     ctx: *mut NemoRelayNativePluginContext,
-    kind: NemoRelayNativeAsyncMiddlewareKind,
+    kind: u32,
     name: *const NemoRelayNativeString,
     priority: i32,
     break_chain: bool,
@@ -1952,6 +1968,13 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
     let name = match read_name(name) {
         Ok(name) => name,
         Err(status) => return status,
+    };
+    let kind = match NemoRelayNativeAsyncMiddlewareKind::try_from(kind) {
+        Ok(kind) => kind,
+        Err(()) => {
+            set_native_last_error("invalid native async middleware kind");
+            return NemoRelayStatus::InvalidArg;
+        }
     };
     let context = unsafe { &mut *host_ctx.ctx };
     let registration = match kind {

@@ -389,9 +389,9 @@ impl LlmStreamWrapper {
                 Err(_) => None,
             }
         };
-        if let Some(event) = event_snapshot
-            && let Some(sanitizers) = snapshot_event_sanitizers(&event, &self.scope_stack)
-        {
+        if let Some(event) = event_snapshot {
+            let sanitizers =
+                snapshot_event_sanitizers(&event, &self.scope_stack).unwrap_or_default();
             let _ = subscriber_dispatcher::dispatch_sanitized_event(
                 event,
                 sanitizers,

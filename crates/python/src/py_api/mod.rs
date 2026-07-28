@@ -1327,13 +1327,17 @@ fn tool_request_intercepts<'py>(
         .is_err()
     {
         let scope_stack = current_scope_stack_handle();
-        let result = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(py_callable::PY_AWAITABLES_ALLOWED.scope(
-                false,
-                TASK_SCOPE_STACK.scope(scope_stack, async move {
-                    core_tool_api::tool_request_intercepts(&name, args_json).await
-                }),
-            ))
+        let result = py
+            .detach(|| {
+                pyo3_async_runtimes::tokio::get_runtime().block_on(
+                    py_callable::PY_AWAITABLES_ALLOWED.scope(
+                        false,
+                        TASK_SCOPE_STACK.scope(scope_stack, async move {
+                            core_tool_api::tool_request_intercepts(&name, args_json).await
+                        }),
+                    ),
+                )
+            })
             .map_err(to_py_err)?;
         return json_to_py(py, &result).map(|value| value.into_bound(py));
     }
@@ -1370,14 +1374,17 @@ fn tool_conditional_execution<'py>(
         .is_err()
     {
         let scope_stack = current_scope_stack_handle();
-        pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(py_callable::PY_AWAITABLES_ALLOWED.scope(
-                false,
-                TASK_SCOPE_STACK.scope(scope_stack, async move {
-                    core_tool_api::tool_conditional_execution(&name, &args_json).await
-                }),
-            ))
-            .map_err(to_py_err)?;
+        py.detach(|| {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(
+                py_callable::PY_AWAITABLES_ALLOWED.scope(
+                    false,
+                    TASK_SCOPE_STACK.scope(scope_stack, async move {
+                        core_tool_api::tool_conditional_execution(&name, &args_json).await
+                    }),
+                ),
+            )
+        })
+        .map_err(to_py_err)?;
         return Ok(py.None().into_bound(py));
     }
     let scope_stack = current_scope_stack_handle();
@@ -1413,13 +1420,17 @@ fn llm_request_intercepts<'py>(
         .is_err()
     {
         let scope_stack = current_scope_stack_handle();
-        let result = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(py_callable::PY_AWAITABLES_ALLOWED.scope(
-                false,
-                TASK_SCOPE_STACK.scope(scope_stack, async move {
-                    core_llm_api::llm_request_intercepts(&name, request.inner).await
-                }),
-            ))
+        let result = py
+            .detach(|| {
+                pyo3_async_runtimes::tokio::get_runtime().block_on(
+                    py_callable::PY_AWAITABLES_ALLOWED.scope(
+                        false,
+                        TASK_SCOPE_STACK.scope(scope_stack, async move {
+                            core_llm_api::llm_request_intercepts(&name, request.inner).await
+                        }),
+                    ),
+                )
+            })
             .map_err(to_py_err)?;
         return Py::new(
             py,
@@ -1457,14 +1468,17 @@ fn llm_conditional_execution<'py>(
         .is_err()
     {
         let scope_stack = current_scope_stack_handle();
-        pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(py_callable::PY_AWAITABLES_ALLOWED.scope(
-                false,
-                TASK_SCOPE_STACK.scope(scope_stack, async move {
-                    core_llm_api::llm_conditional_execution(&request.inner).await
-                }),
-            ))
-            .map_err(to_py_err)?;
+        py.detach(|| {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(
+                py_callable::PY_AWAITABLES_ALLOWED.scope(
+                    false,
+                    TASK_SCOPE_STACK.scope(scope_stack, async move {
+                        core_llm_api::llm_conditional_execution(&request.inner).await
+                    }),
+                ),
+            )
+        })
+        .map_err(to_py_err)?;
         return Ok(py.None().into_bound(py));
     }
     let scope_stack = current_scope_stack_handle();
