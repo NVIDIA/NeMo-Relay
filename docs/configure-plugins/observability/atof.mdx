@@ -174,8 +174,11 @@ one file or stream sink.
 
 Each file sink writes a scope, tool, LLM, middleware, or mark event delivered to
 the exporter as one ATOF JSON object per line. Stream sinks encode the delivered
-event as described in [Stream Sinks](#stream-sinks). For event field semantics,
-refer to [Events](/about-nemo-relay/concepts/events).
+event as described in [Stream Sinks](#stream-sinks). For the normative event
+wire format, refer to the
+[ATOF Core Specification](/reference/atof-event-format). For Relay-specific
+event production semantics, refer to
+[Events](/about-nemo-relay/concepts/events).
 
 Coding-agent sessions emit a `session.start` mark with the logical
 `metadata.session_id`, a Relay-owned UUIDv7 `metadata.session_instance_id`, and
