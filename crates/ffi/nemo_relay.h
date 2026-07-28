@@ -465,18 +465,6 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 
 /**
- * Generic completion-based middleware callback.
- *
- * `invocation_json` is borrowed for the duration of the call. The completion
- * has one callback-owned reference. A callback returning `Complete` need not
- * release it; a callback returning `Pending` must eventually settle and call
- * `nemo_relay_async_completion_release`.
- */
-typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncJsonCb)(void *user_data,
-                                                            const char *invocation_json,
-                                                            const struct NemoRelayAsyncCompletion *completion);
-
-/**
  * Completion-based execution-intercept callback.
  */
 typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncInterceptCb)(void *user_data,
@@ -2604,33 +2592,6 @@ NemoRelayStatus nemo_relay_tool_call_execute(const char *name,
                                              const char *data_json,
                                              const char *metadata_json,
                                              char **out);
-
-/**
- * Register a completion-based asynchronous tool request sanitizer.
- */
-NemoRelayStatus nemo_relay_register_tool_sanitize_request_guardrail_async(const char *name,
-                                                                          int32_t priority,
-                                                                          NemoRelayAsyncJsonCb cb,
-                                                                          void *user_data,
-                                                                          NemoRelayFreeFn free_fn);
-
-/**
- * Register a completion-based asynchronous tool response sanitizer.
- */
-NemoRelayStatus nemo_relay_register_tool_sanitize_response_guardrail_async(const char *name,
-                                                                           int32_t priority,
-                                                                           NemoRelayAsyncJsonCb cb,
-                                                                           void *user_data,
-                                                                           NemoRelayFreeFn free_fn);
-
-/**
- * Register a completion-based asynchronous tool conditional guardrail.
- */
-NemoRelayStatus nemo_relay_register_tool_conditional_execution_guardrail_async(const char *name,
-                                                                               int32_t priority,
-                                                                               NemoRelayAsyncJsonCb cb,
-                                                                               void *user_data,
-                                                                               NemoRelayFreeFn free_fn);
 
 /**
  * Register a completion-based asynchronous tool execution intercept.

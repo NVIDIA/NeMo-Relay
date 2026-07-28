@@ -2493,7 +2493,7 @@ func (s *OpenInferenceSubscriber) Close() {
 // Scope-local guardrail/intercept registration (Tool)
 // ---------------------------------------------------------------------------
 
-func withScopeAsyncMiddleware(scopeUUID, name string, priority int32, fn AsyncMiddlewareFunc, call func(*C.char, *C.char, C.int32_t, unsafe.Pointer) C.int32_t) error {
+func withScopeAsyncMiddleware(scopeUUID, name string, priority int32, fn any, call func(*C.char, *C.char, C.int32_t, unsafe.Pointer) C.int32_t) error {
 	id := registerClosure(fn)
 	cScopeUUID := C.CString(scopeUUID)
 	defer C.free(unsafe.Pointer(cScopeUUID))
@@ -2546,20 +2546,16 @@ func ScopeRegisterToolConditionalExecutionGuardrailAsync(scopeUUID, name string,
 
 // ScopeRegisterToolRequestInterceptAsync registers an asynchronous scope-local tool request intercept.
 func ScopeRegisterToolRequestInterceptAsync(scopeUUID, name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cScopeUUID, cName := C.CString(scopeUUID), C.CString(name)
-	defer C.free(unsafe.Pointer(cScopeUUID))
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_tool_request_intercept_async(cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline)))
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_tool_request_intercept_async(scope, name, priority, C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // ScopeRegisterToolExecutionInterceptAsync registers an asynchronous scope-local tool execution intercept.
 func ScopeRegisterToolExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncExecutionInterceptFunc) error {
-	id := registerClosure(fn)
-	cScopeUUID, cName := C.CString(scopeUUID), C.CString(name)
-	defer C.free(unsafe.Pointer(cScopeUUID))
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_tool_execution_intercept_async(cScopeUUID, cName, C.int32_t(priority), C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline)))
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_tool_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 func registerScopeEventSanitizer(scopeUUID, name string, priority int32, fn EventSanitizeFunc, kind int) error {
@@ -2783,29 +2779,23 @@ func ScopeRegisterLlmConditionalExecutionGuardrailAsync(scopeUUID, name string, 
 
 // ScopeRegisterLlmRequestInterceptAsync registers an asynchronous scope-local LLM request intercept.
 func ScopeRegisterLlmRequestInterceptAsync(scopeUUID, name string, priority int32, breakChain bool, fn AsyncMiddlewareFunc) error {
-	id := registerClosure(fn)
-	cScopeUUID, cName := C.CString(scopeUUID), C.CString(name)
-	defer C.free(unsafe.Pointer(cScopeUUID))
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_request_intercept_async(cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline)))
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_request_intercept_async(scope, name, priority, C._Bool(breakChain), C.NemoRelayAsyncJsonCb(C.goAsyncMiddlewareTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // ScopeRegisterLlmExecutionInterceptAsync registers an asynchronous scope-local LLM execution intercept.
 func ScopeRegisterLlmExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncExecutionInterceptFunc) error {
-	id := registerClosure(fn)
-	cScopeUUID, cName := C.CString(scopeUUID), C.CString(name)
-	defer C.free(unsafe.Pointer(cScopeUUID))
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_execution_intercept_async(cScopeUUID, cName, C.int32_t(priority), C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline)))
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // ScopeRegisterLlmStreamExecutionInterceptAsync registers an asynchronous scope-local streaming LLM intercept.
 func ScopeRegisterLlmStreamExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncExecutionInterceptFunc) error {
-	id := registerClosure(fn)
-	cScopeUUID, cName := C.CString(scopeUUID), C.CString(name)
-	defer C.free(unsafe.Pointer(cScopeUUID))
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_stream_execution_intercept_async(cScopeUUID, cName, C.int32_t(priority), C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline)))
+	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
+		return C.nemo_relay_scope_register_llm_stream_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	})
 }
 
 // ScopeRegisterLlmSanitizeRequestGuardrail registers a scope-local guardrail
