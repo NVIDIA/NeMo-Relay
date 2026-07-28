@@ -641,15 +641,16 @@ impl NemoRelayContextState {
         mut event: Event,
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
-        let context = Arc::new(event.clone());
         for entry in entries {
             let fields = event.sanitize_fields();
             let callback = Arc::clone(&entry.payload);
-            let context = Arc::clone(&context);
-            match AssertUnwindSafe(async move { callback(context, fields).await })
+            let context = Arc::new(event);
+            let callback_context = Arc::clone(&context);
+            let outcome = AssertUnwindSafe(async move { callback(callback_context, fields).await })
                 .catch_unwind()
-                .await
-            {
+                .await;
+            event = Arc::try_unwrap(context).unwrap_or_else(|context| (*context).clone());
+            match outcome {
                 Ok(Ok(fields)) => event.apply_sanitize_fields(fields),
                 Ok(Err(error)) => log::error!(
                     target: "nemo_relay.runtime",
