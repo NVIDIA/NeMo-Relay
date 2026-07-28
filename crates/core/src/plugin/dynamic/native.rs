@@ -1344,6 +1344,10 @@ fn make_user_data(
 struct NativeAsyncCompletion {
     sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>,
     cancelled: AtomicBool,
+    // A pending native callback can continue running after its completion
+    // wakes the awaiting task. Keep the callback's dynamic-library instance
+    // alive until native code explicitly releases this handle.
+    _callback_user_data: Option<Arc<NativeCallbackUserData>>,
 }
 
 struct NativeAsyncWait {
@@ -1366,6 +1370,9 @@ enum NativeAsyncNextInner {
 struct NativeAsyncNext {
     inner: NativeAsyncNextInner,
     runtime: tokio::runtime::Handle,
+    // The native callback owns this handle independently of its completion.
+    // Retaining the library here prevents an unload while it still uses `next`.
+    _callback_user_data: Option<Arc<NativeCallbackUserData>>,
 }
 
 async fn invoke_native_async_callback(
@@ -1390,12 +1397,15 @@ async fn invoke_native_async_callback(
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        _callback_user_data: Some(user_data.clone()),
     });
     let completion_ref = Arc::into_raw(completion.clone()) as usize;
     let next_ref = match (next, runtime) {
-        (Some(inner), Some(runtime)) => {
-            Some(Arc::into_raw(Arc::new(NativeAsyncNext { inner, runtime })) as usize)
-        }
+        (Some(inner), Some(runtime)) => Some(Arc::into_raw(Arc::new(NativeAsyncNext {
+            inner,
+            runtime,
+            _callback_user_data: Some(user_data.clone()),
+        })) as usize),
         (None, None) => None,
         _ => unreachable!("runtime is present exactly for native async intercepts"),
     };

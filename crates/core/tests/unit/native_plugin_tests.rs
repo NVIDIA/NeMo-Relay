@@ -306,12 +306,14 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
         let next = Arc::new(NativeAsyncNext {
             inner,
             runtime: runtime.handle().clone(),
+            _callback_user_data: None,
         });
         let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let completion = Arc::new(NativeAsyncCompletion {
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
+            _callback_user_data: None,
         });
         let completion_ref =
             Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
@@ -339,6 +341,7 @@ fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlemen
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        _callback_user_data: None,
     });
     let completion_ref =
         Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
@@ -370,6 +373,7 @@ fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlemen
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(true),
+        _callback_user_data: None,
     });
     let completion_ref =
         Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
