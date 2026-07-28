@@ -796,7 +796,8 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 			nextMu.Unlock()
 			C.nemo_relay_async_next_release(next)
 		}()
-		nextFn := func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+		outerCtx := ctx
+		nextFn := func(nextCtx context.Context, payload json.RawMessage) (json.RawMessage, error) {
 			nextMu.RLock()
 			defer nextMu.RUnlock()
 			if !nextOpen {
@@ -804,7 +805,6 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 			}
 			ch := make(chan asyncNextResult, 1)
 			token := registerClosure(ch)
-			defer unregisterClosure(token)
 			cPayload := C.CString(string(payload))
 			status := C.nemo_relay_async_next_invoke_callback(
 				next, cPayload,
@@ -812,13 +812,19 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 			)
 			C.free(unsafe.Pointer(cPayload))
 			if err := checkStatus(status); err != nil {
+				// Rust did not retain user_data when invocation was rejected.
+				unregisterClosure(token)
 				return nil, err
 			}
+			// Successful invocation transfers token ownership to the one-shot
+			// result trampoline, even if this waiter is cancelled first.
 			select {
 			case result := <-ch:
 				return result.value, result.err
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			case <-nextCtx.Done():
+				return nil, nextCtx.Err()
+			case <-outerCtx.Done():
+				return nil, outerCtx.Err()
 			}
 		}
 		value, err := fn(ctx, invocation, nextFn)
