@@ -12,11 +12,20 @@ const RAMPART_MODEL_REVISION = 'b1993e4e68b082835b80ffc65acc03325ea2e501';
 /**
  * Create Rampart PII settings with runtime defaults applied.
  *
+ * At least one exact path or path pattern is required because Relay does not
+ * send unselected observability fields to the model.
+ *
  * @param {string} modelPath - Absolute path to the pinned Rampart snapshot.
- * @param {object} [config={}] - Partial settings to override.
+ * @param {object} config - Partial settings including explicit target selectors.
  * @returns {object} A normalized Rampart PII config object.
  */
-function defaultConfig(modelPath, config = {}) {
+function defaultConfig(modelPath, config) {
+  const hasTargetPaths = Array.isArray(config?.target_paths) && config.target_paths.length > 0;
+  const hasTargetPathPatterns =
+    Array.isArray(config?.target_path_patterns) && config.target_path_patterns.length > 0;
+  if (!hasTargetPaths && !hasTargetPathPatterns) {
+    throw new TypeError('Rampart PII config requires target_paths or target_path_patterns');
+  }
   return {
     version: 1,
     model_path: modelPath,

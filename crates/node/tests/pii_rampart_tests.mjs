@@ -21,6 +21,31 @@ describe('pii_rampart plugin helpers', () => {
     const component = rampart.ComponentSpec(config);
     assert.equal(component.kind, rampart.RAMPART_PII_PLUGIN_KIND);
     assert.equal(component.enabled, true);
+    assert.deepEqual(rampart.validateConfig(config).diagnostics, []);
+  });
+
+  it('requires explicit selectors in the config helper', () => {
+    const exact = rampart.defaultConfig('/models/rampart', {
+      target_paths: ['/message'],
+    });
+    assert.deepEqual(rampart.validateConfig(exact).diagnostics, []);
+
+    assert.throws(
+      () => rampart.defaultConfig('/models/rampart'),
+      /requires target_paths or target_path_patterns/,
+    );
+    assert.throws(
+      () => rampart.defaultConfig('/models/rampart', {}),
+      /requires target_paths or target_path_patterns/,
+    );
+    assert.throws(
+      () =>
+        rampart.defaultConfig('/models/rampart', {
+          target_paths: [],
+          target_path_patterns: [],
+        }),
+      /requires target_paths or target_path_patterns/,
+    );
   });
 
   it('is registered and validates malformed paths', () => {
