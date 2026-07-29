@@ -54,7 +54,7 @@ pub(crate) async fn sanitize_event_with_scope_stack(
     event: Event,
     scope_stack: &ScopeStackHandle,
 ) -> Option<Event> {
-    let entries = snapshot_event_sanitizers(&event, scope_stack)?;
+    let entries = snapshot_event_sanitizers(&event, scope_stack).unwrap_or_default();
     Some(NemoRelayContextState::event_sanitize_snapshot_chain(event, &entries).await)
 }
 

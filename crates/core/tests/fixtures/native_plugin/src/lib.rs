@@ -9,10 +9,11 @@ use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
     Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NativePlugin,
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
-    NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString,
-    NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime,
-    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
+    NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
+    PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
+    ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 
@@ -627,7 +628,7 @@ unsafe extern "C" fn raw_register_async_tool_request(
         NemoRelayNativeAsyncMiddlewareKind,
         &str,
         NemoRelayNativeAsyncMiddlewareCb,
-    ); 14] = [
+    ); 13] = [
         (
             NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest,
             "fixture_async_tool_sanitize_request",
@@ -679,11 +680,6 @@ unsafe extern "C" fn raw_register_async_tool_request(
             raw_async_tool_execution_callback,
         ),
         (
-            NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept,
-            "fixture_async_llm_stream",
-            raw_async_tool_execution_callback,
-        ),
-        (
             NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
             "fixture_async_mark",
             raw_async_passthrough_callback,
@@ -721,7 +717,104 @@ unsafe extern "C" fn raw_register_async_tool_request(
             return status;
         }
     }
+    let name = unsafe { raw_host_string(&host.v1, "fixture_async_llm_stream") };
+    if name.is_null() {
+        return NemoRelayStatus::Internal;
+    }
+    let status = unsafe {
+        (host.plugin_context_register_async_stream_middleware)(
+            ctx,
+            name,
+            0,
+            raw_async_stream_callback,
+            user_data,
+            None,
+        )
+    };
+    unsafe { (host.v1.string_free)(name) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
     NemoRelayStatus::Ok
+}
+
+struct AsyncStreamForward {
+    host: NemoRelayNativeHostApiV3,
+    stream: *const NemoRelayNativeAsyncStream,
+}
+
+unsafe extern "C" fn raw_async_stream_forward(
+    user_data: *mut c_void,
+    chunk: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+    done: bool,
+) -> bool {
+    let state = unsafe { &*(user_data as *const AsyncStreamForward) };
+    if !chunk.is_null() {
+        return unsafe { (state.host.async_stream_push_json)(state.stream, chunk) }
+            == NemoRelayStatus::Ok;
+    }
+    if !error.is_null() {
+        unsafe { (state.host.async_stream_reject)(state.stream, error) };
+    } else if done {
+        unsafe { (state.host.async_stream_finish)(state.stream) };
+    } else {
+        return true;
+    }
+    unsafe {
+        (state.host.async_stream_release)(state.stream);
+        drop(Box::from_raw(user_data as *mut AsyncStreamForward));
+    }
+    false
+}
+
+unsafe extern "C" fn raw_async_stream_callback(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    stream: *const NemoRelayNativeAsyncStream,
+) -> u32 {
+    let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let request = unsafe { raw_host_string_value(&host.v1, invocation_json) }
+        .and_then(|json| serde_json::from_str::<Json>(&json).ok())
+        .and_then(|invocation| invocation.get("request").cloned())
+        .and_then(|request| serde_json::to_string(&request).ok())
+        .map(|request| unsafe { raw_host_string(&host.v1, &request) });
+    let Some(request) = request.filter(|request| !request.is_null()) else {
+        unsafe {
+            (host.async_next_release)(next);
+            (host.async_stream_release)(stream);
+        }
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let state = Box::into_raw(Box::new(AsyncStreamForward {
+        host: *host,
+        stream,
+    }));
+    let status = unsafe {
+        (host.async_next_invoke_stream)(
+            next,
+            request,
+            stream,
+            raw_async_stream_forward,
+            state.cast(),
+        )
+    };
+    unsafe {
+        (host.v1.string_free)(request);
+        (host.async_next_release)(next);
+    }
+    if status == NemoRelayStatus::Ok {
+        NemoRelayNativeAsyncCallbackState::Pending as u32
+    } else {
+        unsafe {
+            drop(Box::from_raw(state));
+            (host.async_stream_release)(stream);
+        }
+        NemoRelayNativeAsyncCallbackState::Complete as u32
+    }
 }
 
 unsafe extern "C" fn raw_async_allow_callback(

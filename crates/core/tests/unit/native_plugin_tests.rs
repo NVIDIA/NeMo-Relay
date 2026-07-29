@@ -290,6 +290,7 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
         let next = Arc::new(NativeAsyncNext {
             inner,
             runtime: runtime.handle().clone(),
+            scope_stack: current_scope_stack(),
             _callback_user_data: None,
         });
         let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
@@ -324,6 +325,7 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
             })
         })),
         runtime: runtime.handle().clone(),
+        scope_stack: current_scope_stack(),
         _callback_user_data: None,
     });
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
@@ -415,6 +417,50 @@ fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlemen
         NemoRelayStatus::InvalidArg
     );
     unsafe { native_async_completion_release(completion_ref) };
+}
+
+#[test]
+fn native_async_stream_push_finish_and_consumer_cancellation_are_incremental() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let stream = Arc::new(NativeAsyncStream {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        downstream_abort: Mutex::new(None),
+        _callback_user_data: None,
+    });
+    let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
+    let chunk = native_string(r#"{"chunk":1}"#);
+    assert_eq!(
+        unsafe { native_async_stream_push_json(stream_ref, chunk) },
+        NemoRelayStatus::Ok
+    );
+    let mut receiver = NativeAsyncStreamReceiver {
+        receiver,
+        stream: Arc::clone(&stream),
+    };
+    assert_eq!(
+        runtime.block_on(receiver.next()).unwrap().unwrap(),
+        json!({"chunk": 1})
+    );
+    assert_eq!(
+        unsafe { native_async_stream_finish(stream_ref) },
+        NemoRelayStatus::Ok
+    );
+    assert!(runtime.block_on(receiver.next()).is_none());
+    drop(receiver);
+    assert!(unsafe { native_async_stream_is_cancelled(stream_ref) });
+    assert_eq!(
+        unsafe { native_async_stream_push_json(stream_ref, chunk) },
+        NemoRelayStatus::InvalidArg
+    );
+    unsafe {
+        native_string_free(chunk);
+        native_async_stream_release(stream_ref);
+    }
 }
 
 #[test]
@@ -1383,6 +1429,52 @@ fn native_llm_sanitize_context_preserves_all_codec_identity_states() {
             unsafe { native_string_free(context_id) };
         }
     }
+}
+
+#[test]
+fn native_async_llm_sanitize_context_uses_stable_codec_envelope() {
+    assert_eq!(
+        native_async_codec_identity(&LlmCodecIdentity::None),
+        json!({"codec_kind": "none", "codec_id": null})
+    );
+    assert_eq!(
+        native_async_codec_identity(&LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)),
+        json!({"codec_kind": "builtin", "codec_id": "openai_chat"})
+    );
+    assert_eq!(
+        native_async_codec_identity(&LlmCodecIdentity::Runtime("com.example.chat.v1".into())),
+        json!({"codec_kind": "runtime", "codec_id": "com.example.chat.v1"})
+    );
+    assert_eq!(
+        native_async_codec_identity(&LlmCodecIdentity::Opaque),
+        json!({"codec_kind": "opaque", "codec_id": null})
+    );
+}
+
+unsafe extern "C" fn count_user_data_free(user_data: *mut c_void) {
+    let count = unsafe { &*(user_data as *const AtomicUsize) };
+    count.fetch_add(1, Ordering::SeqCst);
+}
+
+#[test]
+fn native_async_registration_user_data_guard_frees_or_transfers_exactly_once() {
+    let frees = AtomicUsize::new(0);
+    {
+        let _guard = NativeCallbackUserDataGuard::new(
+            (&frees as *const AtomicUsize).cast_mut().cast(),
+            Some(count_user_data_free),
+        );
+    }
+    assert_eq!(frees.load(Ordering::SeqCst), 1);
+
+    let transferred = NativeCallbackUserDataGuard::new(
+        (&frees as *const AtomicUsize).cast_mut().cast(),
+        Some(count_user_data_free),
+    )
+    .transfer();
+    assert_eq!(frees.load(Ordering::SeqCst), 1);
+    unsafe { transferred.1.unwrap()(transferred.0) };
+    assert_eq!(frees.load(Ordering::SeqCst), 2);
 }
 
 #[test]

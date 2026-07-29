@@ -8,6 +8,8 @@
 //! The Python wrapper modules (`nemo_relay.scope`, `nemo_relay.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
+use std::future::Future;
+use std::panic::resume_unwind;
 use std::sync::Arc;
 
 use nemo_relay::api::llm as core_llm_api;
@@ -53,6 +55,63 @@ pub(crate) type RustJsonStream = LlmJsonStream;
 /// Convert an [`FlowError`] into a Python `RuntimeError`.
 fn to_py_err(e: FlowError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+}
+
+fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
+    match py.import("asyncio")?.call_method0("get_running_loop") {
+        Ok(_) => Ok(true),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn block_on_sync_middleware<F, T>(future: F) -> FlowResult<T>
+where
+    F: Future<Output = FlowResult<T>> + Send,
+    T: Send,
+{
+    let runtime = pyo3_async_runtimes::tokio::get_runtime();
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(move || runtime.block_on(future))
+                .join()
+                .unwrap_or_else(|panic| resume_unwind(panic))
+        })
+    } else {
+        runtime.block_on(future)
+    }
+}
+
+fn run_standalone_middleware<'py, F, T, C>(
+    py: Python<'py>,
+    future: F,
+    convert: C,
+) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = FlowResult<T>> + Send + 'static,
+    T: Send + 'static,
+    C: Fn(Python<'_>, T) -> PyResult<Py<PyAny>> + Send + 'static,
+{
+    let scope_stack = current_scope_stack_handle();
+    if !python_event_loop_running(py)? {
+        let result = py
+            .detach(|| {
+                block_on_sync_middleware(
+                    py_callable::PY_AWAITABLES_ALLOWED
+                        .scope(false, TASK_SCOPE_STACK.scope(scope_stack, future)),
+                )
+            })
+            .map_err(to_py_err)?;
+        return convert(py, result).map(|value| value.into_bound(py));
+    }
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let result = TASK_SCOPE_STACK
+            .scope(scope_stack, future)
+            .await
+            .map_err(to_py_err)?;
+        Python::attach(|py| convert(py, result))
+    })
 }
 
 fn py_llm_response_codec(
@@ -1317,41 +1376,11 @@ fn tool_request_intercepts<'py>(
     args: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let args_json = py_to_json(args)?;
-    // Preserve the established synchronous helper behavior when no Python
-    // event loop is active. Awaitable middleware is supported from async
-    // callers below; a synchronous caller can continue using direct
-    // callbacks without manufacturing an asyncio loop.
-    if py
-        .import("asyncio")?
-        .call_method0("get_running_loop")
-        .is_err()
-    {
-        let scope_stack = current_scope_stack_handle();
-        let result = py
-            .detach(|| {
-                pyo3_async_runtimes::tokio::get_runtime().block_on(
-                    py_callable::PY_AWAITABLES_ALLOWED.scope(
-                        false,
-                        TASK_SCOPE_STACK.scope(scope_stack, async move {
-                            core_tool_api::tool_request_intercepts(&name, args_json).await
-                        }),
-                    ),
-                )
-            })
-            .map_err(to_py_err)?;
-        return json_to_py(py, &result).map(|value| value.into_bound(py));
-    }
-    let scope_stack = current_scope_stack_handle();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
-                let result = core_tool_api::tool_request_intercepts(&name, args_json)
-                    .await
-                    .map_err(to_py_err)?;
-                Python::attach(|py| json_to_py(py, &result))
-            })
-            .await
-    })
+    run_standalone_middleware(
+        py,
+        async move { core_tool_api::tool_request_intercepts(&name, args_json).await },
+        |py, result| json_to_py(py, &result),
+    )
 }
 
 /// Run the registered tool conditional execution guardrail chain.
@@ -1368,35 +1397,11 @@ fn tool_conditional_execution<'py>(
     args: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let args_json = py_to_json(args)?;
-    if py
-        .import("asyncio")?
-        .call_method0("get_running_loop")
-        .is_err()
-    {
-        let scope_stack = current_scope_stack_handle();
-        py.detach(|| {
-            pyo3_async_runtimes::tokio::get_runtime().block_on(
-                py_callable::PY_AWAITABLES_ALLOWED.scope(
-                    false,
-                    TASK_SCOPE_STACK.scope(scope_stack, async move {
-                        core_tool_api::tool_conditional_execution(&name, &args_json).await
-                    }),
-                ),
-            )
-        })
-        .map_err(to_py_err)?;
-        return Ok(py.None().into_bound(py));
-    }
-    let scope_stack = current_scope_stack_handle();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
-                core_tool_api::tool_conditional_execution(&name, &args_json)
-                    .await
-                    .map_err(to_py_err)
-            })
-            .await
-    })
+    run_standalone_middleware(
+        py,
+        async move { core_tool_api::tool_conditional_execution(&name, &args_json).await },
+        |py, ()| Ok(py.None()),
+    )
 }
 
 /// Run the registered LLM request intercept chain on the given request.
@@ -1414,41 +1419,17 @@ fn llm_request_intercepts<'py>(
     name: String,
     request: PyLLMRequest,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if py
-        .import("asyncio")?
-        .call_method0("get_running_loop")
-        .is_err()
-    {
-        let scope_stack = current_scope_stack_handle();
-        let result = py
-            .detach(|| {
-                pyo3_async_runtimes::tokio::get_runtime().block_on(
-                    py_callable::PY_AWAITABLES_ALLOWED.scope(
-                        false,
-                        TASK_SCOPE_STACK.scope(scope_stack, async move {
-                            core_llm_api::llm_request_intercepts(&name, request.inner).await
-                        }),
-                    ),
-                )
-            })
-            .map_err(to_py_err)?;
-        return Py::new(
-            py,
-            crate::py_types::PyLLMRequestInterceptOutcome { inner: result },
-        )
-        .map(|value| value.into_bound(py).into_any());
-    }
-    let scope_stack = current_scope_stack_handle();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
-                let result = core_llm_api::llm_request_intercepts(&name, request.inner)
-                    .await
-                    .map_err(to_py_err)?;
-                Ok(crate::py_types::PyLLMRequestInterceptOutcome { inner: result })
-            })
-            .await
-    })
+    run_standalone_middleware(
+        py,
+        async move { core_llm_api::llm_request_intercepts(&name, request.inner).await },
+        |py, result| {
+            Py::new(
+                py,
+                crate::py_types::PyLLMRequestInterceptOutcome { inner: result },
+            )
+            .map(Py::into_any)
+        },
+    )
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
@@ -1462,35 +1443,11 @@ fn llm_conditional_execution<'py>(
     py: Python<'py>,
     request: PyLLMRequest,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if py
-        .import("asyncio")?
-        .call_method0("get_running_loop")
-        .is_err()
-    {
-        let scope_stack = current_scope_stack_handle();
-        py.detach(|| {
-            pyo3_async_runtimes::tokio::get_runtime().block_on(
-                py_callable::PY_AWAITABLES_ALLOWED.scope(
-                    false,
-                    TASK_SCOPE_STACK.scope(scope_stack, async move {
-                        core_llm_api::llm_conditional_execution(&request.inner).await
-                    }),
-                ),
-            )
-        })
-        .map_err(to_py_err)?;
-        return Ok(py.None().into_bound(py));
-    }
-    let scope_stack = current_scope_stack_handle();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
-                core_llm_api::llm_conditional_execution(&request.inner)
-                    .await
-                    .map_err(to_py_err)
-            })
-            .await
-    })
+    run_standalone_middleware(
+        py,
+        async move { core_llm_api::llm_conditional_execution(&request.inner).await },
+        |py, ()| Ok(py.None()),
+    )
 }
 
 // ---------------------------------------------------------------------------

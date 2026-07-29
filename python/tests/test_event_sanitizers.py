@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 import pytest
@@ -90,7 +91,7 @@ async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
     guardrails.register_mark_sanitize("python-async-mark", 0, sanitize)
     try:
         scope.event("async-checkpoint", data={"raw": True})
-        await asyncio.to_thread(subscribers.flush)
+        await subscribers.flush_async()
     finally:
         guardrails.deregister_mark_sanitize("python-async-mark")
 
@@ -118,6 +119,28 @@ async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_even
         guardrails.deregister_mark_sanitize("python-async-flush")
 
     assert events[-1].data == {"async_flush": True}
+
+
+async def test_async_flush_does_not_consume_default_executor(capture_events):
+    _capture_name, events = capture_events
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+
+    async def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        await asyncio.to_thread(lambda: None)
+        return {
+            "data": {"default_executor": True},
+            "category_profile": fields["category_profile"],
+            "metadata": fields["metadata"],
+        }
+
+    guardrails.register_mark_sanitize("python-async-flush-executor", 0, sanitize)
+    try:
+        scope.event("async-flush-executor-checkpoint", data={"raw": True})
+        await asyncio.wait_for(subscribers.flush_async(), timeout=2)
+    finally:
+        guardrails.deregister_mark_sanitize("python-async-flush-executor")
+
+    assert events[-1].data == {"default_executor": True}
 
 
 def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events):
@@ -166,7 +189,7 @@ async def test_event_sanitizer_flush_is_reentrant(capture_events, asynchronous):
     )
     try:
         scope.event("reentrant-checkpoint", data={"raw": True})
-        await asyncio.to_thread(subscribers.flush)
+        await subscribers.flush_async()
     finally:
         guardrails.deregister_mark_sanitize("python-reentrant-mark")
 
@@ -256,10 +279,10 @@ async def test_in_process_plugin_event_sanitizers_are_removed_on_clear(capture_e
     try:
         await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
         scope.event("configured", data={"raw": True})
-        subscribers.flush()
+        await subscribers.flush_async()
         plugin.clear()
         scope.event("cleared", data={"raw": True})
-        subscribers.flush()
+        await subscribers.flush_async()
     finally:
         plugin.clear()
         plugin.deregister(kind)
@@ -292,7 +315,7 @@ async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fa
         with pytest.raises(RuntimeError, match="registration failed"):
             await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
         scope.event("after-failure", data={"raw": True})
-        subscribers.flush()
+        await subscribers.flush_async()
         assert events[-1].data == {"raw": True}
     finally:
         plugin.clear()

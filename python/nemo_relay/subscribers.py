@@ -24,6 +24,7 @@ Example::
 
 import asyncio
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from nemo_relay._event_sanitizer_context import callback_active as _event_sanitizer_callback_active
@@ -39,6 +40,8 @@ from nemo_relay._native import (
 
 if TYPE_CHECKING:
     from nemo_relay import Event
+
+_FLUSH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nemo-relay-flush")
 
 
 def register(name: str, callback: "Callable[[Event], None]") -> None:
@@ -122,12 +125,13 @@ async def flush_async() -> None:
     """Wait asynchronously for subscriber callbacks already queued by Relay.
 
     Use this barrier from an ``asyncio`` task. The blocking native wait runs on
-    a worker thread so an event sanitizer scheduled on the caller's event loop
-    can continue to make progress.
+    Relay's dedicated flush thread so an event sanitizer scheduled on the
+    caller's event loop or default executor can continue to make progress.
     """
     if _event_sanitizer_callback_active():
         return None
-    await asyncio.to_thread(_native_flush)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(_FLUSH_EXECUTOR, _native_flush)
 
 
 __all__ = ["deregister", "flush", "flush_async", "register"]

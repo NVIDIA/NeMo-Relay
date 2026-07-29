@@ -188,11 +188,12 @@ impl LlmStreamWrapper {
             "ERROR",
             Some("stream dropped before clean completion".to_string()),
         );
-        // Drop cannot await the async finalizer. Close the recorder before
-        // spawning it so late optimization evidence is rejected immediately.
+        // Drop cannot await the async finalizer. Seal contribution acceptance
+        // immediately, but let the finalizer decide whether authoritative
+        // terminal usage means the stream should be marked interrupted.
         self.handle
             .optimization_recorder
-            .close_for_finalization(Some("stream_interrupted"));
+            .close_for_finalization(None);
         self.finalization = self.emit_end_event(metadata, true, background_thread);
     }
 

@@ -739,7 +739,13 @@ fn test_manual_llm_end_queues_optimization_marks_before_end_event() {
     )
     .unwrap();
 
-    let names = captured_events_snapshot(&events)
+    let captured = captured_events_snapshot(&events);
+    let optimization = captured
+        .iter()
+        .find(|event| event.name() == "nemo_relay.llm.optimization")
+        .expect("manual LLM optimization mark");
+    assert_eq!(optimization.parent_uuid(), Some(handle.uuid));
+    let names = captured
         .into_iter()
         .filter(|event| {
             event.name() == "manual-optimized-llm" || event.name() == "nemo_relay.llm.optimization"

@@ -59,6 +59,27 @@ struct CallArgs {
     completion: CallCompletion,
 }
 
+#[derive(Clone, Copy)]
+struct CallMode {
+    spread: bool,
+    publication: bool,
+}
+
+impl CallMode {
+    const DIRECT: Self = Self {
+        spread: false,
+        publication: false,
+    };
+    const SPREAD: Self = Self {
+        spread: true,
+        publication: false,
+    };
+    const SPREAD_PUBLICATION: Self = Self {
+        spread: true,
+        publication: true,
+    };
+}
+
 #[derive(Clone)]
 struct CallCompletion {
     sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>>,
@@ -234,7 +255,7 @@ impl PromiseAwareFn {
 
     /// Call the JS function with the given args and await the result.
     pub async fn call(&self, args: Json) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(args), false, None, false)
+        self.call_inner(PrimaryArg::Json(args), CallMode::DIRECT, None)
             .await
     }
 
@@ -244,14 +265,18 @@ impl PromiseAwareFn {
     /// guardrails, whose public contract is `(name, payload)` rather than a
     /// single envelope object.
     pub async fn call_spread(&self, args: Vec<Json>) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(Json::Array(args)), true, None, false)
+        self.call_inner(PrimaryArg::Json(Json::Array(args)), CallMode::SPREAD, None)
             .await
     }
 
     /// Call a spread callback from queued event publication.
     pub async fn call_spread_for_publication(&self, args: Vec<Json>) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(Json::Array(args)), true, None, true)
-            .await
+        self.call_inner(
+            PrimaryArg::Json(Json::Array(args)),
+            CallMode::SPREAD_PUBLICATION,
+            None,
+        )
+        .await
     }
 
     /// Call the JS function with a builder-constructed first argument and await
@@ -261,13 +286,13 @@ impl PromiseAwareFn {
     /// cannot cross the threadsafe-function boundary as plain JSON, such as a
     /// `#[napi]` class instance.
     pub async fn call_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Build(build_arg0), false, None, false)
+        self.call_inner(PrimaryArg::Build(build_arg0), CallMode::DIRECT, None)
             .await
     }
 
     /// Call a JavaScript callback with builder-constructed spread arguments.
     pub async fn call_spread_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Build(build_arg0), true, None, false)
+        self.call_inner(PrimaryArg::Build(build_arg0), CallMode::SPREAD, None)
             .await
     }
 
@@ -276,8 +301,12 @@ impl PromiseAwareFn {
         &self,
         build_arg0: Arg0Builder,
     ) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Build(build_arg0), true, None, true)
-            .await
+        self.call_inner(
+            PrimaryArg::Build(build_arg0),
+            CallMode::SPREAD_PUBLICATION,
+            None,
+        )
+        .await
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
@@ -285,9 +314,8 @@ impl PromiseAwareFn {
     pub async fn call_with_json_next(&self, args: Json, next: JsonNextFn) -> FlowResult<Json> {
         self.call_inner(
             PrimaryArg::Json(args),
-            false,
+            CallMode::DIRECT,
             Some(NextFn::Json(next)),
-            false,
         )
         .await
     }
@@ -301,9 +329,8 @@ impl PromiseAwareFn {
     ) -> FlowResult<Json> {
         self.call_inner(
             PrimaryArg::Json(args),
-            false,
+            CallMode::DIRECT,
             Some(NextFn::Stream(next)),
-            false,
         )
         .await
     }
@@ -318,9 +345,8 @@ impl PromiseAwareFn {
     async fn call_inner(
         &self,
         arg0: PrimaryArg,
-        spread: bool,
+        mode: CallMode,
         next: Option<NextFn>,
-        publication: bool,
     ) -> FlowResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let tsfn = self
@@ -333,9 +359,9 @@ impl PromiseAwareFn {
         let status = tsfn.call(
             Ok(CallArgs {
                 arg0,
-                spread,
+                spread: mode.spread,
                 next,
-                publication,
+                publication: mode.publication,
                 completion: CallCompletion::new(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,

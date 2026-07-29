@@ -165,8 +165,8 @@ class EventSanitizeFields(TypedDict):
 
 #: Guardrail callback that sanitizes emitted tool request or response payloads.
 #: Arguments are the tool name and JSON payload. The return value is the JSON
-#: payload recorded on the emitted event. Exceptions propagate through the
-#: lifecycle call that invoked the guardrail.
+#: payload recorded on the emitted event. Exceptions fail open and preserve the
+#: last valid observability payload.
 ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 EventSanitizeGuardrail: TypeAlias = Callable[
     ["Event", EventSanitizeFields], EventSanitizeFields | Awaitable[EventSanitizeFields]

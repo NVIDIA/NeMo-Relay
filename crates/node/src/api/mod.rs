@@ -458,69 +458,6 @@ pub fn end_stream(stream_id: f64) {
     finish_stream_channel(id, Ok(()));
 }
 
-#[allow(clippy::enum_variant_names)]
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum PromiseAwareKey {
-    GlobalToolExecution(String),
-    GlobalLlmExecution(String),
-    GlobalLlmStreamExecution(String),
-    ScopeToolExecution { scope_uuid: String, name: String },
-    ScopeLlmExecution { scope_uuid: String, name: String },
-    ScopeLlmStreamExecution { scope_uuid: String, name: String },
-}
-
-impl PromiseAwareKey {
-    fn scope_uuid(&self) -> Option<&str> {
-        match self {
-            Self::ScopeToolExecution { scope_uuid, .. }
-            | Self::ScopeLlmExecution { scope_uuid, .. }
-            | Self::ScopeLlmStreamExecution { scope_uuid, .. } => Some(scope_uuid),
-            Self::GlobalToolExecution(_)
-            | Self::GlobalLlmExecution(_)
-            | Self::GlobalLlmStreamExecution(_) => None,
-        }
-    }
-}
-
-static PROMISE_AWARE_REGISTRATIONS: std::sync::LazyLock<
-    StdMutex<HashMap<PromiseAwareKey, std::sync::Arc<crate::promise_call::PromiseAwareFn>>>,
-> = std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
-
-fn remember_promise_aware(
-    key: PromiseAwareKey,
-    pa_fn: std::sync::Arc<crate::promise_call::PromiseAwareFn>,
-) {
-    if let Some(previous) = PROMISE_AWARE_REGISTRATIONS
-        .lock()
-        .unwrap()
-        .insert(key, pa_fn)
-    {
-        previous.close();
-    }
-}
-
-fn forget_promise_aware(key: &PromiseAwareKey) {
-    if let Some(pa_fn) = PROMISE_AWARE_REGISTRATIONS.lock().unwrap().remove(key) {
-        pa_fn.close();
-    }
-}
-
-fn forget_scope_local_promise_aware(scope_uuid: &str) {
-    let mut registrations = PROMISE_AWARE_REGISTRATIONS.lock().unwrap();
-    let keys = registrations
-        .keys()
-        .filter(|key| key.scope_uuid() == Some(scope_uuid))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    for key in keys {
-        let registration = registrations.remove(&key);
-        if let Some(pa_fn) = registration {
-            pa_fn.close();
-        }
-    }
-}
-
 /// # Safety
 /// Both `env` and `value` must contain valid N-API handles that point to live
 /// JavaScript objects in the same environment. The caller must also ensure the
@@ -1060,13 +997,12 @@ fn build_plugin_context(
             let name = format!("{}{}", llm_exec_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let callback = ctx.get::<JsFunction>(2)?;
-            let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
-                ctx.env, &callback,
-            )?);
             core_registry_api::register_llm_execution_intercept(
                 &name,
                 priority,
-                callable::wrap_js_llm_exec_intercept_fn(promise_fn.clone()),
+                callable::wrap_js_llm_exec_intercept_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -1075,15 +1011,13 @@ fn build_plugin_context(
                 "plugin",
                 name_clone.clone(),
                 Box::new(move || {
-                    let result = core_registry_api::deregister_llm_execution_intercept(&name_clone)
+                    core_registry_api::deregister_llm_execution_intercept(&name_clone)
                         .map(|_| ())
                         .map_err(|e| {
                             PluginError::RegistrationFailed(format!(
                                 "llm execution intercept deregistration failed: {e}"
                             ))
-                        });
-                    promise_fn.close();
-                    result
+                        })
                 }),
             ));
             ctx.env.get_undefined()
@@ -1102,13 +1036,12 @@ fn build_plugin_context(
             let name = format!("{}{}", llm_stream_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let callback = ctx.get::<JsFunction>(2)?;
-            let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
-                ctx.env, &callback,
-            )?);
             core_registry_api::register_llm_stream_execution_intercept(
                 &name,
                 priority,
-                callable::wrap_js_llm_stream_exec_intercept_fn(promise_fn.clone()),
+                callable::wrap_js_llm_stream_exec_intercept_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -1120,17 +1053,13 @@ fn build_plugin_context(
                     "plugin",
                     name_clone.clone(),
                     Box::new(move || {
-                        let result = core_registry_api::deregister_llm_stream_execution_intercept(
-                            &name_clone,
-                        )
-                        .map(|_| ())
-                        .map_err(|e| {
-                            PluginError::RegistrationFailed(format!(
-                                "llm stream execution intercept deregistration failed: {e}"
-                            ))
-                        });
-                        promise_fn.close();
-                        result
+                        core_registry_api::deregister_llm_stream_execution_intercept(&name_clone)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                PluginError::RegistrationFailed(format!(
+                                    "llm stream execution intercept deregistration failed: {e}"
+                                ))
+                            })
                     }),
                 ));
             ctx.env.get_undefined()
@@ -1193,13 +1122,12 @@ fn build_plugin_context(
             let name = format!("{}{}", tool_exec_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let callback = ctx.get::<JsFunction>(2)?;
-            let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
-                ctx.env, &callback,
-            )?);
             core_registry_api::register_tool_execution_intercept(
                 &name,
                 priority,
-                callable::wrap_js_tool_exec_intercept_fn(promise_fn.clone()),
+                callable::wrap_js_tool_exec_intercept_fn(Arc::new(PromiseAwareFn::new(
+                    ctx.env, &callback,
+                )?)),
             )
             .map_err(to_napi_err)?;
 
@@ -1208,16 +1136,13 @@ fn build_plugin_context(
                 "plugin",
                 name_clone.clone(),
                 Box::new(move || {
-                    let result =
-                        core_registry_api::deregister_tool_execution_intercept(&name_clone)
-                            .map(|_| ())
-                            .map_err(|e| {
-                                PluginError::RegistrationFailed(format!(
-                                    "tool execution intercept deregistration failed: {e}"
-                                ))
-                            });
-                    promise_fn.close();
-                    result
+                    core_registry_api::deregister_tool_execution_intercept(&name_clone)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            PluginError::RegistrationFailed(format!(
+                                "tool execution intercept deregistration failed: {e}"
+                            ))
+                        })
                 }),
             ));
             ctx.env.get_undefined()
@@ -1923,7 +1848,6 @@ pub fn pop_scope(
             .build(),
     )
     .map_err(to_napi_err)?;
-    forget_scope_local_promise_aware(&handle.inner.uuid.to_string());
     Ok(())
 }
 
@@ -2015,16 +1939,12 @@ pub fn with_scope(
                         Err(error) => otel_status_metadata("ERROR", Some(error.to_string())),
                     };
                     // Always pop the scope, even on error.
-                    if core_scope_api::pop_scope(
+                    let _ = core_scope_api::pop_scope(
                         core_scope_api::PopScopeParams::builder()
                             .handle_uuid(&scope_uuid)
                             .metadata_opt(Some(metadata))
                             .build(),
-                    )
-                    .is_ok()
-                    {
-                        forget_scope_local_promise_aware(&scope_uuid.to_string());
-                    }
+                    );
                     result.map_err(to_napi_err)
                 })
                 .await
@@ -2884,7 +2804,6 @@ pub fn register_tool_execution_intercept(
     )]
     callable: JsFunction,
 ) -> Result<()> {
-    let key = PromiseAwareKey::GlobalToolExecution(name.clone());
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
@@ -2896,7 +2815,6 @@ pub fn register_tool_execution_intercept(
         callable::wrap_js_tool_exec_intercept_fn(pa_fn.clone()),
     )
     .map_err(to_napi_err)?;
-    remember_promise_aware(key, pa_fn);
     Ok(())
 }
 
@@ -2905,13 +2823,7 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
-    let key = PromiseAwareKey::GlobalToolExecution(name.clone());
-    let removed =
-        core_registry_api::deregister_tool_execution_intercept(&name).map_err(to_napi_err)?;
-    if removed {
-        forget_promise_aware(&key);
-    }
-    Ok(removed)
+    core_registry_api::deregister_tool_execution_intercept(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -3075,7 +2987,6 @@ pub fn register_llm_execution_intercept(
     priority: i32,
     callable: JsFunction,
 ) -> Result<()> {
-    let key = PromiseAwareKey::GlobalLlmExecution(name.clone());
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
@@ -3087,7 +2998,6 @@ pub fn register_llm_execution_intercept(
         callable::wrap_js_llm_exec_intercept_fn(pa_fn.clone()),
     )
     .map_err(to_napi_err)?;
-    remember_promise_aware(key, pa_fn);
     Ok(())
 }
 
@@ -3096,13 +3006,7 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
-    let key = PromiseAwareKey::GlobalLlmExecution(name.clone());
-    let removed =
-        core_registry_api::deregister_llm_execution_intercept(&name).map_err(to_napi_err)?;
-    if removed {
-        forget_promise_aware(&key);
-    }
-    Ok(removed)
+    core_registry_api::deregister_llm_execution_intercept(&name).map_err(to_napi_err)
 }
 
 /// Register a streaming LLM execution intercept following the middleware chain pattern.
@@ -3118,7 +3022,6 @@ pub fn register_llm_stream_execution_intercept(
     priority: i32,
     callable: JsFunction,
 ) -> Result<()> {
-    let key = PromiseAwareKey::GlobalLlmStreamExecution(name.clone());
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
@@ -3130,7 +3033,6 @@ pub fn register_llm_stream_execution_intercept(
         callable::wrap_js_llm_stream_exec_intercept_fn(pa_fn.clone()),
     )
     .map_err(to_napi_err)?;
-    remember_promise_aware(key, pa_fn);
     Ok(())
 }
 
@@ -3139,13 +3041,7 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
-    let key = PromiseAwareKey::GlobalLlmStreamExecution(name.clone());
-    let removed =
-        core_registry_api::deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)?;
-    if removed {
-        forget_promise_aware(&key);
-    }
-    Ok(removed)
+    core_registry_api::deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -3458,10 +3354,6 @@ pub fn scope_register_tool_execution_intercept(
     )]
     callable: JsFunction,
 ) -> Result<()> {
-    let key = PromiseAwareKey::ScopeToolExecution {
-        scope_uuid: scope_uuid.clone(),
-        name: name.clone(),
-    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
     let pa_fn = std::sync::Arc::new(
@@ -3476,7 +3368,6 @@ pub fn scope_register_tool_execution_intercept(
         callable::wrap_js_tool_exec_intercept_fn(pa_fn.clone()),
     )
     .map_err(to_napi_err)?;
-    remember_promise_aware(key, pa_fn);
     Ok(())
 }
 
@@ -3485,18 +3376,9 @@ pub fn scope_register_tool_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed from the specified scope.
 #[napi]
 pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: String) -> Result<bool> {
-    let key = PromiseAwareKey::ScopeToolExecution {
-        scope_uuid: scope_uuid.clone(),
-        name: name.clone(),
-    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    let removed = core_registry_api::scope_deregister_tool_execution_intercept(&uuid, &name)
-        .map_err(to_napi_err)?;
-    if removed {
-        forget_promise_aware(&key);
-    }
-    Ok(removed)
+    core_registry_api::scope_deregister_tool_execution_intercept(&uuid, &name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -3697,10 +3579,6 @@ pub fn scope_register_llm_execution_intercept(
     priority: i32,
     callable: JsFunction,
 ) -> Result<()> {
-    let key = PromiseAwareKey::ScopeLlmExecution {
-        scope_uuid: scope_uuid.clone(),
-        name: name.clone(),
-    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
     let pa_fn = std::sync::Arc::new(
@@ -3715,7 +3593,6 @@ pub fn scope_register_llm_execution_intercept(
         callable::wrap_js_llm_exec_intercept_fn(pa_fn.clone()),
     )
     .map_err(to_napi_err)?;
-    remember_promise_aware(key, pa_fn);
     Ok(())
 }
 
@@ -3724,18 +3601,9 @@ pub fn scope_register_llm_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed from the specified scope.
 #[napi]
 pub fn scope_deregister_llm_execution_intercept(scope_uuid: String, name: String) -> Result<bool> {
-    let key = PromiseAwareKey::ScopeLlmExecution {
-        scope_uuid: scope_uuid.clone(),
-        name: name.clone(),
-    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    let removed = core_registry_api::scope_deregister_llm_execution_intercept(&uuid, &name)
-        .map_err(to_napi_err)?;
-    if removed {
-        forget_promise_aware(&key);
-    }
-    Ok(removed)
+    core_registry_api::scope_deregister_llm_execution_intercept(&uuid, &name).map_err(to_napi_err)
 }
 
 /// Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
@@ -3752,10 +3620,6 @@ pub fn scope_register_llm_stream_execution_intercept(
     priority: i32,
     callable: JsFunction,
 ) -> Result<()> {
-    let key = PromiseAwareKey::ScopeLlmStreamExecution {
-        scope_uuid: scope_uuid.clone(),
-        name: name.clone(),
-    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
     let pa_fn = std::sync::Arc::new(
@@ -3770,7 +3634,6 @@ pub fn scope_register_llm_stream_execution_intercept(
         callable::wrap_js_llm_stream_exec_intercept_fn(pa_fn.clone()),
     )
     .map_err(to_napi_err)?;
-    remember_promise_aware(key, pa_fn);
     Ok(())
 }
 
@@ -3782,18 +3645,10 @@ pub fn scope_deregister_llm_stream_execution_intercept(
     scope_uuid: String,
     name: String,
 ) -> Result<bool> {
-    let key = PromiseAwareKey::ScopeLlmStreamExecution {
-        scope_uuid: scope_uuid.clone(),
-        name: name.clone(),
-    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    let removed = core_registry_api::scope_deregister_llm_stream_execution_intercept(&uuid, &name)
-        .map_err(to_napi_err)?;
-    if removed {
-        forget_promise_aware(&key);
-    }
-    Ok(removed)
+    core_registry_api::scope_deregister_llm_stream_execution_intercept(&uuid, &name)
+        .map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------

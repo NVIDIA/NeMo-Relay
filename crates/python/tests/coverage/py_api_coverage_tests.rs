@@ -918,6 +918,18 @@ fn to_py_err_and_forward_stream_to_channel_cover_private_helpers() {
 }
 
 #[test]
+fn synchronous_middleware_bridge_avoids_tokio_runtime_reentry() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime.block_on(async {
+        block_on_sync_middleware(async { Ok::<_, nemo_relay::error::FlowError>(7) })
+    });
+    assert_eq!(result.unwrap(), 7);
+}
+
+#[test]
 fn llm_execution_uses_all_response_codec_selection_paths() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {

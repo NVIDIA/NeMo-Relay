@@ -498,7 +498,7 @@ class TestResponseCodecObjectParam:
                 mock_llm,
                 response_codec=codec,
             )
-            subscribers.flush()
+            await subscribers.flush_async()
 
             # Find LLMEnd event
             end_events = [
@@ -531,7 +531,7 @@ class TestResponseCodecObjectParam:
                 return {"result": "ok"}
 
             await llm.execute("test-llm", request, mock_llm)
-            subscribers.flush()
+            await subscribers.flush_async()
 
             end_events = [
                 e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"

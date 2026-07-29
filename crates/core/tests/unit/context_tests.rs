@@ -271,8 +271,8 @@ async fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregist
     );
 }
 
-#[test]
-fn context_state_supports_extensions_events_and_builders() {
+#[tokio::test]
+async fn context_state_supports_extensions_events_and_builders() {
     let mut state = NemoRelayContextState::new();
     assert!(state.extensions.is_empty());
 
@@ -323,14 +323,13 @@ fn context_state_supports_extensions_events_and_builders() {
         content: json!({"messages": []}),
     };
     let entries = state.llm_sanitize_request_entries(&[]);
-    let sanitized = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(NemoRelayContextState::llm_sanitize_request_snapshot_chain(
-            request.clone(),
-            crate::api::runtime::LlmSanitizeRequestContext::default(),
-            &entries,
-        ))
-        .expect("an empty sanitizer chain must retain the request");
+    let sanitized = NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+        request.clone(),
+        crate::api::runtime::LlmSanitizeRequestContext::default(),
+        &entries,
+    )
+    .await
+    .expect("an empty sanitizer chain must retain the request");
     assert!(sanitized.headers.is_empty());
 
     let events = Arc::new(Mutex::new(Vec::<String>::new()));

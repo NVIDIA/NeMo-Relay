@@ -100,6 +100,12 @@ Only enqueue-time validation and runtime-state errors are returned directly;
 middleware and codec errors discovered during queued publication are logged and
 handled according to their fail-open contracts.
 
+Python subscriber flushing is context-sensitive. Continue to call
+`nemo_relay.subscribers.flush()` from synchronous code. From a running
+`asyncio` event loop, replace that call with
+`await nemo_relay.subscribers.flush_async()` so queued async middleware can
+continue running; the synchronous flush raises in that context.
+
 ### Update LLM Sanitizer Callbacks
 
 The registration names remain unchanged for global, plugin-context, and

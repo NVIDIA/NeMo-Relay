@@ -362,10 +362,12 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 376);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 432);
         assert_eq!(
             host_api_v3_offsets(),
-            [0, 320, 328, 336, 344, 352, 360, 368]
+            [
+                0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424
+            ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
@@ -388,10 +390,12 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 188);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 216);
         assert_eq!(
             host_api_v3_offsets(),
-            [0, 160, 164, 168, 172, 176, 180, 184]
+            [
+                0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
+            ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
@@ -402,7 +406,7 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_v3_offsets() -> [usize; 8] {
+fn host_api_v3_offsets() -> [usize; 15] {
     [
         offset_of!(NemoRelayNativeHostApiV3, v1),
         offset_of!(NemoRelayNativeHostApiV3, async_completion_resolve_json),
@@ -414,6 +418,16 @@ fn host_api_v3_offsets() -> [usize; 8] {
         offset_of!(
             NemoRelayNativeHostApiV3,
             plugin_context_register_async_middleware
+        ),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_push_json),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_finish),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_reject),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_is_cancelled),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_release),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_invoke_stream),
+        offset_of!(
+            NemoRelayNativeHostApiV3,
+            plugin_context_register_async_stream_middleware
         ),
     ]
 }

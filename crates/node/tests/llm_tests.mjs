@@ -58,6 +58,20 @@ async function flushSubscriberCallbacks() {
   }
 }
 
+async function assertCompletesWithin(promise, message) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new assert.AssertionError({ message })), 2000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function makeNative() {
   return {
     headers: {},
@@ -293,8 +307,9 @@ describe('LLM execute', () => {
       );
 
       await waitForSubscriberCallbacks(
-        () => events.some((e) => e.name === 'exec_status_ok_llm' && e.scope_category === 'end')
-          && events.some((e) => e.name === 'exec_status_error_llm' && e.scope_category === 'end'),
+        () =>
+          events.some((e) => e.name === 'exec_status_ok_llm' && e.scope_category === 'end') &&
+          events.some((e) => e.name === 'exec_status_error_llm' && e.scope_category === 'end'),
       );
       const okEnd = events.find(
         (e) =>
@@ -593,7 +608,10 @@ describe('LLM guardrails', () => {
         null,
       );
       assert.deepEqual(await stream.next(), { delta: 'ok' });
-      assert.equal(await stream.next(), null);
+      assert.equal(
+        await assertCompletesWithin(stream.next(), 'stream finalization deadlocked inside an async sanitizer'),
+        null,
+      );
       await flushSubscribers();
     } finally {
       deregisterLlmSanitizeResponseGuardrail('node_stream_flush_response');
@@ -696,11 +714,7 @@ describe('LLM guardrails', () => {
     try {
       const handle = llmCall('node_manual_flush', makeNative());
       llmCallEnd(handle, { response: 'ok' });
-      const outcome = await Promise.race([
-        flushSubscribers().then(() => 'flushed'),
-        new Promise((resolve) => setTimeout(() => resolve('timeout'), 2000)),
-      ]);
-      assert.equal(outcome, 'flushed', 'flushSubscribers deadlocked inside an async sanitizer');
+      await assertCompletesWithin(flushSubscribers(), 'flushSubscribers deadlocked inside an async sanitizer');
     } finally {
       deregisterLlmSanitizeRequestGuardrail('node_manual_flush_request');
       deregisterLlmSanitizeResponseGuardrail('node_manual_flush_response');
@@ -801,15 +815,14 @@ describe('LLM guardrails', () => {
     try {
       const request = makeNative();
       await llmCallExecute('llm_san_req_throw', request, () => ({ ok: true }), null, null, null, null, null);
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some(
-            (event) =>
-              event.name === 'llm_san_req_throw' &&
-              event.kind === 'scope' &&
-              event.category === 'llm' &&
-              event.scope_category === 'start',
-          ),
+      await waitForSubscriberCallbacks(() =>
+        events.some(
+          (event) =>
+            event.name === 'llm_san_req_throw' &&
+            event.kind === 'scope' &&
+            event.category === 'llm' &&
+            event.scope_category === 'start',
+        ),
       );
       const start = events.find(
         (event) =>
@@ -981,7 +994,16 @@ describe('LLM guardrails', () => {
       return null;
     });
     try {
-      const result = await llmCallExecute('llm_cond_promise', makeNative(), () => ({ ok: true }), null, null, null, null, null);
+      const result = await llmCallExecute(
+        'llm_cond_promise',
+        makeNative(),
+        () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
       assert.deepEqual(result, { ok: true });
     } finally {
       deregisterLlmConditionalExecutionGuardrail('node_llm_cond_promise');
@@ -1472,10 +1494,7 @@ describe('LLM intercepts', () => {
 
     assert.equal(declarations.split(openKind).length - 1, 1);
     assert.equal(pluginDeclarations.split(openKind).length - 1, 1);
-    assert.match(
-      declarations,
-      /registerLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/,
-    );
+    assert.match(declarations, /registerLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/);
     assert.match(
       declarations,
       /scopeRegisterLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/,
@@ -1488,6 +1507,25 @@ describe('LLM intercepts', () => {
     assert.equal(declarations.split("context: import('./plugin').LlmSanitizeRequestContext").length - 1, 2);
     assert.equal(declarations.split("context: import('./plugin').LlmSanitizeResponseContext").length - 1, 2);
     assert.doesNotMatch(declarations, /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/);
+  });
+
+  it('plugin declarations expose Promise middleware and the implemented stream contract', () => {
+    const declarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
+
+    assert.match(declarations, /registerMarkSanitizeGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
+    assert.match(declarations, /registerScopeSanitizeStartGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
+    assert.match(declarations, /registerScopeSanitizeEndGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
+    assert.match(declarations, /registerToolSanitizeRequestGuardrail\([\s\S]*?Json \| Promise<Json>/);
+    assert.match(declarations, /registerToolSanitizeResponseGuardrail\([\s\S]*?Json \| Promise<Json>/);
+    assert.match(declarations, /registerLlmSanitizeRequestGuardrail\([\s\S]*?Promise<Json \| null>/);
+    assert.match(declarations, /registerLlmSanitizeResponseGuardrail\([\s\S]*?Promise<Json \| null>/);
+    assert.match(declarations, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
+    assert.match(declarations, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
+    assert.match(
+      declarations,
+      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: Json\) => Promise<Json\[\]>/,
+    );
+    assert.doesNotMatch(declarations, /registerLlmStreamExecutionIntercept\([\s\S]*?AsyncIterable/);
   });
 
   it('standalone conditional execution helper throws on rejection', async () => {

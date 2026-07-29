@@ -205,7 +205,7 @@ class TestLLMGuardrails:
         try:
             handle = llm.call("py_manual_flush", make_request())
             llm.call_end(handle, {"response": "ok"})
-            await asyncio.wait_for(asyncio.to_thread(subscribers.flush), timeout=2)
+            await asyncio.wait_for(subscribers.flush_async(), timeout=2)
         finally:
             guardrails.deregister_llm_sanitize_request("py_manual_flush_request")
             guardrails.deregister_llm_sanitize_response("py_manual_flush_response")
@@ -558,6 +558,27 @@ class TestLLMIntercepts:
 
 
 class TestLLMInterceptsAsync:
+    async def test_async_request_intercept_runs_on_originating_loop(self):
+        originating_loop = asyncio.get_running_loop()
+
+        async def intercept_fn(_name, request, annotated):
+            await asyncio.sleep(0)
+            assert asyncio.get_running_loop() is originating_loop
+            content = {**request.content, "intercepted": True}
+            return LLMRequestInterceptOutcome(LLMRequest(request.headers, content), annotated)
+
+        intercepts.register_llm_request("py_llm_async_request_loop", 1, False, intercept_fn)
+        try:
+            result = await llm.execute(
+                "async_request_llm",
+                make_request(),
+                lambda request: {"intercepted": request.content["intercepted"]},
+            )
+        finally:
+            intercepts.deregister_llm_request("py_llm_async_request_loop")
+
+        assert result == {"intercepted": True}
+
     async def test_request_intercept_modifies(self):
         def intercept_fn(name, request, annotated):
             # Request intercepts now operate on LLMRequest
@@ -726,7 +747,7 @@ class TestLLMStreaming:
                 lambda: {"raw": True},
             )
             assert [chunk async for chunk in stream] == [{"token": "hello"}]
-            await asyncio.to_thread(subscribers.flush)
+            await subscribers.flush_async()
         finally:
             guardrails.deregister_llm_sanitize_response("py_llm_async_stream_sanitizer")
             subscribers.deregister("py_llm_async_stream_sanitizer_sub")
@@ -906,7 +927,7 @@ class TestLLMStreaming:
             assert chunks == [{"token": "hello"}]
         finally:
             try:
-                subscribers.flush()
+                await subscribers.flush_async()
             finally:
                 subscribers.deregister("py_llm_finalizer_fail_sub")
 
@@ -937,7 +958,7 @@ class TestLLMStreaming:
             assert chunks == [{"token": "hello"}]
         finally:
             try:
-                subscribers.flush()
+                await subscribers.flush_async()
             finally:
                 subscribers.deregister("py_llm_finalizer_callable_fail_sub")
 
@@ -953,7 +974,7 @@ class TestLLMStreaming:
             llm.call_end(handle, {"ok": True})
         finally:
             try:
-                subscribers.flush()
+                await subscribers.flush_async()
             finally:
                 subscribers.deregister("py_llm_bad_sub")
                 subscribers.deregister("py_llm_good_sub")

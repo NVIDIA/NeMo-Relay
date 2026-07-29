@@ -7,12 +7,19 @@ from __future__ import annotations
 
 import typing
 from collections.abc import Iterator
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 if typing.TYPE_CHECKING:
     import nemo_relay
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_plugin_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Prevent local user plugin configuration from affecting test behavior."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
 
 
 @pytest.fixture(name="subscribed_events")

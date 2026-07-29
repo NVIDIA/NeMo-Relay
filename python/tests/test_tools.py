@@ -209,7 +209,7 @@ class TestToolsAsync:
             await tools.execute("failing_tool", {"x": 1}, failing)
 
         try:
-            subscribers.flush()
+            await subscribers.flush_async()
         finally:
             subscribers.deregister("py_tool_exec_failure_sub")
 
@@ -316,6 +316,22 @@ class TestToolGuardrails:
 
 
 class TestToolGuardrailsAsync:
+    async def test_async_conditional_runs_on_originating_loop(self):
+        originating_loop = asyncio.get_running_loop()
+
+        async def allow(_name, _args):
+            await asyncio.sleep(0)
+            assert asyncio.get_running_loop() is originating_loop
+            return None
+
+        guardrails.register_tool_conditional_execution("py_async_conditional_loop", 1, allow)
+        try:
+            result = await tools.execute("allowed_tool", {}, lambda args: args)
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_async_conditional_loop")
+
+        assert result == {}
+
     async def test_manual_async_sanitizers_publish_transformed_payloads_and_can_flush(self):
         events = []
         request_flushed = False
@@ -341,7 +357,7 @@ class TestToolGuardrailsAsync:
         try:
             handle = tools.call("py_manual_tool_flush", {"original": True})
             tools.call_end(handle, {"ok": True})
-            await asyncio.wait_for(asyncio.to_thread(subscribers.flush), timeout=2)
+            await asyncio.wait_for(subscribers.flush_async(), timeout=2)
         finally:
             guardrails.deregister_tool_sanitize_request("py_manual_tool_flush_request")
             guardrails.deregister_tool_sanitize_response("py_manual_tool_flush_response")
@@ -424,6 +440,22 @@ class TestToolIntercepts:
 
 
 class TestToolInterceptsAsync:
+    async def test_async_request_intercept_runs_on_originating_loop(self):
+        originating_loop = asyncio.get_running_loop()
+
+        async def intercept_fn(_name, args):
+            await asyncio.sleep(0)
+            assert asyncio.get_running_loop() is originating_loop
+            return {**args, "intercepted": True}
+
+        intercepts.register_tool_request("py_async_request_loop", 1, False, intercept_fn)
+        try:
+            result = await tools.execute("intercepted_tool", {}, lambda args: args)
+        finally:
+            intercepts.deregister_tool_request("py_async_request_loop")
+
+        assert result == {"intercepted": True}
+
     async def test_request_intercept_modifies_args(self):
         def intercept_fn(name, args):
             args["intercepted"] = True
@@ -473,7 +505,7 @@ class TestToolInterceptsAsync:
         try:
             result = await tools.execute("next_tool", {"value": 2}, original)
             assert result == {"value": 6, "from_intercept": True}
-            subscribers.flush()
+            await subscribers.flush_async()
             start = _tool_event(events, "next_tool", "start")
             end = _tool_event(events, "next_tool", "end")
             mark = next(

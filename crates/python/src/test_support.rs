@@ -8,6 +8,7 @@ use pyo3::Python;
 
 const BINDING_KIND_ENV: &str = "NEMO_RELAY_BINDING_KIND";
 const RUNTIME_OWNER_ENV: &str = "NEMO_RELAY_RUNTIME_OWNER";
+const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 
 fn python_test_lock() -> &'static Mutex<()> {
     static PYTHON_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -31,6 +32,7 @@ pub(crate) struct PythonTestGuard {
     _lock: MutexGuard<'static, ()>,
     binding_kind: Option<OsString>,
     runtime_owner: Option<OsString>,
+    xdg_config_home: Option<OsString>,
 }
 
 impl Drop for PythonTestGuard {
@@ -44,6 +46,10 @@ impl Drop for PythonTestGuard {
                 Some(value) => std::env::set_var(BINDING_KIND_ENV, value),
                 None => std::env::remove_var(BINDING_KIND_ENV),
             };
+            match &self.xdg_config_home {
+                Some(value) => std::env::set_var(XDG_CONFIG_HOME_ENV, value),
+                None => std::env::remove_var(XDG_CONFIG_HOME_ENV),
+            };
         }
     }
 }
@@ -51,12 +57,19 @@ impl Drop for PythonTestGuard {
 pub(crate) fn init_python_test_locked(lock: MutexGuard<'static, ()>) -> PythonTestGuard {
     let binding_kind = std::env::var_os(BINDING_KIND_ENV);
     let runtime_owner = std::env::var_os(RUNTIME_OWNER_ENV);
+    let xdg_config_home = std::env::var_os(XDG_CONFIG_HOME_ENV);
     clear_runtime_owner_env();
+    let isolated_config_home =
+        std::env::temp_dir().join(format!("nemo-relay-python-tests-{}", std::process::id()));
+    unsafe {
+        std::env::set_var(XDG_CONFIG_HOME_ENV, isolated_config_home);
+    }
     Python::initialize();
     PythonTestGuard {
         _lock: lock,
         binding_kind,
         runtime_owner,
+        xdg_config_home,
     }
 }
 

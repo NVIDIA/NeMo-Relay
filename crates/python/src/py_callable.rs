@@ -108,6 +108,31 @@ fn split_json_or_future(
     }
 }
 
+fn split_json_or_future_with_locals(
+    py: Python<'_>,
+    result: Py<PyAny>,
+    task_locals: Option<&TaskLocals>,
+) -> FlowResult<Result<Json, PyValueFuture>> {
+    let bound = result.bind(py);
+    if bound.getattr("__await__").is_ok() {
+        reject_awaitable_from_sync_caller(bound)?;
+        let future: PyValueFuture = match task_locals {
+            Some(locals) => Box::pin(
+                pyo3_async_runtimes::into_future_with_locals(locals, result.into_bound(py))
+                    .map_err(|error| FlowError::Internal(error.to_string()))?,
+            ),
+            None => Box::pin(
+                pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
+                    .map_err(|error| FlowError::Internal(error.to_string()))?,
+            ),
+        };
+        Ok(Err(future))
+    } else {
+        let json = py_to_json(bound).map_err(|error| FlowError::Internal(error.to_string()))?;
+        Ok(Ok(json))
+    }
+}
+
 async fn resolve_json_or_future(
     outcome: FlowResult<Result<Json, PyValueFuture>>,
 ) -> FlowResult<Json> {
@@ -519,8 +544,10 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
 /// Wrap a Python callable `(str, Json) -> Optional[str]` for tool conditional guardrails.
 pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(move |name: String, args: Json| {
         let py_fn = py_fn.clone();
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let py_args =
@@ -528,7 +555,7 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
                 let result = py_fn
                     .call1(py, (name, py_args))
                     .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_py_object_or_future(py, result)
+                split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
             }))
             .await?;
             Python::attach(|py| {
@@ -550,8 +577,10 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
 /// Wrap a Python callable `(str, Json) -> Json` for tool request intercepts.
 pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(move |name: String, args: Json| {
         let py_fn = py_fn.clone();
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
             resolve_json_or_future(Python::attach(|py| {
                 let py_args =
@@ -559,7 +588,7 @@ pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
                 let result = py_fn
                     .call1(py, (name, py_args))
                     .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_json_or_future(py, result)
+                split_json_or_future_with_locals(py, result, task_locals.as_ref())
             }))
             .await
         })
@@ -987,9 +1016,11 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
 /// edits must be made through the returned annotation; headers remain writable.
 pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestInterceptFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(
         move |name: String, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
             let py_fn = py_fn.clone();
+            let task_locals = task_locals_with_running_loop(task_locals.as_ref());
             Box::pin(async move {
                 let result = resolve_py_object_or_future(Python::attach(|py| {
                     let py_req = PyLLMRequest { inner: request };
@@ -1012,7 +1043,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                         FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
                     })?;
 
-                    split_py_object_or_future(py, result)
+                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
                 }))
                 .await?;
                 Python::attach(|py| {

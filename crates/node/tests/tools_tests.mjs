@@ -735,9 +735,7 @@ describe('Tool guardrails', () => {
     }
     assert.equal(requestFlushed, true);
     assert.equal(responseFlushed, true);
-    const start = events.find(
-      (event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start',
-    );
+    const start = events.find((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start');
     const end = events.find((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'end');
     assert.deepEqual(start.data, { original: true, requestSanitized: true });
     assert.deepEqual(end.data, { ok: true, responseSanitized: true });
@@ -961,6 +959,44 @@ describe('Tool intercepts', () => {
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_repl');
       deregisterSubscriber('node_tool_exec_mark_sub');
+    }
+  });
+
+  it('snapshotted execution intercept survives deregistration', async () => {
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+
+    registerToolExecutionIntercept('node_tool_exec_snapshot_target', 100, async (args, next) => ({
+      result: {
+        ...(await next(args)),
+        snapshotted: true,
+      },
+    }));
+    registerToolExecutionIntercept('node_tool_exec_snapshot_blocker', -100, async (args, next) => {
+      blockerEntered();
+      await release;
+      return { result: await next(args) };
+    });
+
+    try {
+      const execution = toolCallExecute('snapshotted_tool', {}, () => ({ downstream: true }), null, null, null, null);
+      await entered;
+      assert.equal(deregisterToolExecutionIntercept('node_tool_exec_snapshot_target'), true);
+      releaseBlocker();
+      assert.deepEqual(await execution, {
+        downstream: true,
+        snapshotted: true,
+      });
+    } finally {
+      releaseBlocker();
+      deregisterToolExecutionIntercept('node_tool_exec_snapshot_blocker');
+      deregisterToolExecutionIntercept('node_tool_exec_snapshot_target');
     }
   });
 

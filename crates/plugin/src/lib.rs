@@ -860,6 +860,35 @@ pub struct NemoRelayNativeAsyncNext {
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
+/// Opaque incremental output channel supplied to native async stream intercepts.
+#[repr(C)]
+pub struct NemoRelayNativeAsyncStream {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Receives one downstream stream item. `chunk_json` is non-null for a chunk,
+/// `error` is non-null for failure, and `done` marks clean completion. Return
+/// `false` to cancel downstream production after the current callback.
+pub type NemoRelayNativeAsyncNextStreamCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    chunk_json: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+    done: bool,
+) -> bool;
+
+/// Incremental native LLM stream intercept callback.
+///
+/// The callback owns `next` and `stream` and must release each exactly once.
+/// It may push chunks before returning or retain the handles and return
+/// `Pending`; no implicit timeout is applied.
+pub type NemoRelayNativeAsyncStreamMiddlewareCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    stream: *const NemoRelayNativeAsyncStream,
+) -> u32;
+
 /// Completion-based native middleware callback.
 ///
 /// `invocation_json` is borrowed for the call. A callback that returns
@@ -867,7 +896,9 @@ pub struct NemoRelayNativeAsyncNext {
 /// completion reference and must settle it then call the v3
 /// `async_completion_release` hook. The host validates the returned
 /// discriminant. When `next` is non-null, the callback owns that handle for
-/// the invocation and must call `async_next_release` after its final use.
+/// the invocation and must call `async_next_release` exactly once after its
+/// final use, regardless of whether it returns `Complete` or `Pending`. The
+/// host never reclaims a `next` handle after handing it to the callback.
 /// `next` is null for non-execution middleware.
 pub type NemoRelayNativeAsyncMiddlewareCb = unsafe extern "C" fn(
     user_data: *mut c_void,
@@ -907,7 +938,10 @@ pub struct NemoRelayNativeHostApiV3 {
         invocation_json: *const NemoRelayNativeString,
         completion: *const NemoRelayNativeAsyncCompletion,
     ) -> NemoRelayStatus,
-    /// Releases the callback-owned continuation reference for a pending callback.
+    /// Releases the callback-owned continuation reference.
+    ///
+    /// Execution callbacks must call this exactly once after their final use
+    /// for both `Complete` and `Pending` return states.
     pub async_next_release: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext),
     /// Registers any completion-based asynchronous middleware surface.
     ///
@@ -923,6 +957,42 @@ pub struct NemoRelayNativeHostApiV3 {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus,
+    /// Pushes one JSON chunk to an incremental native stream.
+    pub async_stream_push_json: unsafe extern "C" fn(
+        stream: *const NemoRelayNativeAsyncStream,
+        chunk_json: *const NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Finishes an incremental native stream successfully.
+    pub async_stream_finish:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus,
+    /// Rejects an incremental native stream.
+    pub async_stream_reject: unsafe extern "C" fn(
+        stream: *const NemoRelayNativeAsyncStream,
+        message: *const NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Returns true when the consumer cancelled or released the stream.
+    pub async_stream_is_cancelled:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool,
+    /// Releases the callback-owned incremental stream reference.
+    pub async_stream_release: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream),
+    /// Invokes a downstream stream and reports chunks incrementally.
+    pub async_next_invoke_stream: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        invocation_json: *const NemoRelayNativeString,
+        stream: *const NemoRelayNativeAsyncStream,
+        cb: NemoRelayNativeAsyncNextStreamCb,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+    /// Registers an incremental asynchronous LLM stream intercept.
+    pub plugin_context_register_async_stream_middleware: unsafe extern "C" fn(
+        ctx: *mut NemoRelayNativePluginContext,
+        name: *const NemoRelayNativeString,
+        priority: i32,
+        cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    )
+        -> NemoRelayStatus,
 }
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
@@ -2442,6 +2512,33 @@ impl<'a> PluginContext<'a> {
                 cb,
                 user_data,
                 free_fn,
+            )
+        })
+    }
+
+    /// Registers an incremental completion-based LLM stream intercept.
+    ///
+    /// # Safety
+    /// The callback and user data must remain valid until deregistration or
+    /// `free_fn`; callback-owned `next` and `stream` handles must each be
+    /// released exactly once.
+    pub unsafe fn register_async_stream_middleware_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        {
+            return NemoRelayStatus::InvalidArg;
+        }
+        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
+        self.with_name(name, |_, name| unsafe {
+            (host.plugin_context_register_async_stream_middleware)(
+                self.raw, name, priority, cb, user_data, free_fn,
             )
         })
     }
