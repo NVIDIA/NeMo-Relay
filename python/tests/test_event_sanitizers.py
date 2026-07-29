@@ -97,6 +97,36 @@ async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
     assert events[-1].data == {"async": True}
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_event_sanitizer_flush_is_reentrant(capture_events, asynchronous):
+    _capture_name, events = capture_events
+    flush_returned = False
+
+    def sanitize_sync(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        nonlocal flush_returned
+        subscribers.flush()
+        flush_returned = True
+        return fields
+
+    async def sanitize_async(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        await asyncio.sleep(0)
+        return sanitize_sync(_event, fields)
+
+    guardrails.register_mark_sanitize(
+        "python-reentrant-mark",
+        0,
+        sanitize_async if asynchronous else sanitize_sync,
+    )
+    try:
+        scope.event("reentrant-checkpoint", data={"raw": True})
+        await asyncio.to_thread(subscribers.flush)
+    finally:
+        guardrails.deregister_mark_sanitize("python-reentrant-mark")
+
+    assert flush_returned is True
+    assert events[-1].data == {"raw": True}
+
+
 def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events):
     _capture_name, events = capture_events
 

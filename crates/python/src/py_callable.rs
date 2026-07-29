@@ -23,7 +23,6 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use nemo_relay::api::runtime::{
@@ -44,27 +43,6 @@ use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-
-static ACTIVE_EVENT_SANITIZER_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-
-struct ActiveEventSanitizerCallback;
-
-impl ActiveEventSanitizerCallback {
-    fn enter() -> Self {
-        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_add(1, Ordering::AcqRel);
-        Self
-    }
-}
-
-impl Drop for ActiveEventSanitizerCallback {
-    fn drop(&mut self) {
-        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-pub(crate) fn event_sanitizer_callback_active() -> bool {
-    ACTIVE_EVENT_SANITIZER_CALLBACKS.load(Ordering::Acquire) != 0
-}
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
@@ -1164,7 +1142,6 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
         let py_fn = py_fn.clone();
         let task_locals = task_locals.clone();
         Box::pin(async move {
-            let _active_callback = ActiveEventSanitizerCallback::enter();
             let result = Python::attach(
                 |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
                     let py_event = match event.as_ref() {
@@ -1201,10 +1178,14 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                             return Err(FlowError::Internal(error.to_string()));
                         }
                     };
-                    let result = py_fn
-                        .call1(py, (py_event, py_fields))
+                    let invoke = py
+                        .import("nemo_relay._event_sanitizer_context")
+                        .and_then(|module| module.getattr("invoke"))
                         .map_err(|error| FlowError::Internal(error.to_string()))?;
-                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
+                    let result = invoke
+                        .call1((py_fn.bind(py), py_event, py_fields))
+                        .map_err(|error| FlowError::Internal(error.to_string()))?;
+                    split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
                 },
             );
             let result = resolve_py_object_or_future(result).await?;
