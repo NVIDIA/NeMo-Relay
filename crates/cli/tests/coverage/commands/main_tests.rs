@@ -276,6 +276,19 @@ fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
     assert!(!command.project);
     assert!(!command.global);
 
+    let explicit = Cli::try_parse_from([
+        "nemo-relay",
+        "--config",
+        "/managed/config.toml",
+        "config",
+        "edit",
+    ])
+    .unwrap();
+    assert_eq!(
+        explicit.server.config,
+        Some(PathBuf::from("/managed/config.toml"))
+    );
+
     let project = Cli::try_parse_from(["nemo-relay", "config", "edit", "--project"]).unwrap();
     let Command::Config(command) = project.command.unwrap() else {
         panic!("expected config command");

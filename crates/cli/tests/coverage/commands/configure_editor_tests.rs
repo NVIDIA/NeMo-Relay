@@ -181,6 +181,24 @@ fn target_selection_and_file_loading_behave_as_expected() {
 }
 
 #[test]
+fn config_editor_inherits_explicit_target_unless_scope_is_selected() {
+    let inherited = PathBuf::from("/managed/config.toml");
+    let (scope, path) =
+        resolve_edit_target(&ConfigEditCommand::default(), Some(inherited.clone())).unwrap();
+    assert_eq!(scope, TargetScope::User);
+    assert_eq!(path, inherited);
+
+    let global = ConfigEditCommand {
+        global: true,
+        ..ConfigEditCommand::default()
+    };
+    let (scope, path) =
+        resolve_edit_target(&global, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
+    assert_eq!(scope, TargetScope::Global);
+    assert_eq!(path, PathBuf::from("/etc/nemo-relay/config.toml"));
+}
+
+#[test]
 fn documents_are_written_atomically_with_scope_appropriate_permissions() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("nested/config.toml");

@@ -60,7 +60,7 @@ pub(super) async fn execute(
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
     if let Some(ConfigSubcommand::Edit(edit)) = command.command.as_ref() {
-        editor::edit(edit.clone())?;
+        editor::edit(edit.clone(), server.to_runtime().config)?;
         return Ok(ExitCode::SUCCESS);
     }
     let agent = command.agent.map(Into::into);
