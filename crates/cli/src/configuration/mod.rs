@@ -1628,10 +1628,15 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
-// Upstream credentials are bound to their configured endpoint. A higher-priority layer that
-// changes an endpoint without supplying a replacement credential must not inherit the credential
-// for the old endpoint.
+// Upstream credentials are bound to the exact configured base URL, which is the identity of the
+// provider's singleton upstream. A higher-priority layer that changes that identity without
+// supplying a replacement credential must not inherit the credential for the old endpoint.
 fn merge_gateway_config_toml(left: &mut toml::Value, right: toml::Value) {
+    clear_credentials_for_replaced_upstreams(left, &right);
+    merge_toml(left, right);
+}
+
+fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml::Value) {
     if let (Some(existing), Some(override_upstream)) = (
         left.get_mut("upstream").and_then(toml::Value::as_table_mut),
         right.get("upstream").and_then(toml::Value::as_table),
@@ -1648,7 +1653,6 @@ fn merge_gateway_config_toml(left: &mut toml::Value, right: toml::Value) {
             }
         }
     }
-    merge_toml(left, right);
 }
 
 fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {

@@ -710,9 +710,7 @@ fn endpoint_overrides_clear_inherited_provider_auth_headers() {
         r#"
 [upstream]
 openai_base_url = "http://project-openai"
-openai_auth_header = "Bearer project-openai"
 anthropic_base_url = "http://project-anthropic"
-anthropic_auth_header = "Basic project-anthropic"
 "#,
     )
     .unwrap();
@@ -721,7 +719,9 @@ anthropic_auth_header = "Basic project-anthropic"
         r#"
 [upstream]
 openai_base_url = "http://user-openai"
+openai_auth_header = "Bearer user-openai"
 anthropic_base_url = "http://user-anthropic"
+anthropic_auth_header = "Basic user-anthropic"
 "#,
     )
     .unwrap();
@@ -729,9 +729,12 @@ anthropic_base_url = "http://user-anthropic"
 
     let resolved = resolve_server_config(&GatewayOverrides::default()).unwrap();
 
-    assert_eq!(resolved.gateway.openai_base_url, "http://user-openai");
+    assert_eq!(resolved.gateway.openai_base_url, "http://project-openai");
     assert!(resolved.gateway.openai_auth_header.is_none());
-    assert_eq!(resolved.gateway.anthropic_base_url, "http://user-anthropic");
+    assert_eq!(
+        resolved.gateway.anthropic_base_url,
+        "http://project-anthropic"
+    );
     assert!(resolved.gateway.anthropic_auth_header.is_none());
 }
 
@@ -3397,6 +3400,78 @@ command = "system-codex"
     assert_eq!(
         merged["agents"]["claude"]["command"].as_str(),
         Some("project-claude")
+    );
+}
+
+#[test]
+fn upstream_base_url_identity_controls_credential_inheritance() {
+    fn merge_upstream(lower: &str, higher: &str) -> toml::Value {
+        let mut merged = lower
+            .parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .unwrap();
+        let higher = higher
+            .parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .unwrap();
+        merge_gateway_config_toml(&mut merged, higher);
+        merged
+    }
+
+    let lower = r#"
+[upstream]
+openai_base_url = "https://gateway.example/v1"
+openai_auth_header = "Bearer lower"
+"#;
+    let same_identity = merge_upstream(
+        lower,
+        r#"
+[upstream]
+openai_base_url = "https://gateway.example/v1"
+"#,
+    );
+    assert_eq!(
+        same_identity["upstream"]["openai_auth_header"].as_str(),
+        Some("Bearer lower")
+    );
+
+    let replaced_credential = merge_upstream(
+        lower,
+        r#"
+[upstream]
+openai_base_url = "https://gateway.example/v1"
+openai_auth_header = "Bearer higher"
+"#,
+    );
+    assert_eq!(
+        replaced_credential["upstream"]["openai_auth_header"].as_str(),
+        Some("Bearer higher")
+    );
+
+    let changed_identity = merge_upstream(
+        lower,
+        r#"
+[upstream]
+openai_base_url = "https://other.example/v1"
+"#,
+    );
+    assert!(
+        changed_identity["upstream"]
+            .get("openai_auth_header")
+            .is_none()
+    );
+
+    let replaced_identity_and_credential = merge_upstream(
+        lower,
+        r#"
+[upstream]
+openai_base_url = "https://other.example/v1"
+openai_auth_header = "Bearer replacement"
+"#,
+    );
+    assert_eq!(
+        replaced_identity_and_credential["upstream"]["openai_auth_header"].as_str(),
+        Some("Bearer replacement")
     );
 }
 

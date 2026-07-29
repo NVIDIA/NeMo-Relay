@@ -268,6 +268,12 @@ variable when the new endpoint needs custom authentication. Relay doesn't carry
 a custom header from `config.toml` across an environment-level endpoint
 override.
 
+The exact configured base URL is also the upstream identity during file
+layering. A higher layer that keeps the same URL can inherit or replace the
+lower authorization header. A higher layer that changes the URL clears the
+lower header unless that same layer supplies a replacement, preventing
+credentials for one endpoint from being sent to another.
+
 An MCP-managed gateway uses custom or environment credentials only after the
 client proves that it belongs to that managed gateway.
 
