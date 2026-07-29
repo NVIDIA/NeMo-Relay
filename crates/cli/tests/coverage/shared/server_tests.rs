@@ -2911,6 +2911,64 @@ async fn gateway_preserves_streaming_body() {
 }
 
 #[tokio::test]
+async fn gateway_preserves_streaming_provider_error_response() {
+    async fn rate_limited() -> impl IntoResponse {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::RETRY_AFTER, "7"),
+            ],
+            r#"{"error":{"type":"rate_limit_error"}}"#,
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/v1/responses", post(rate_limited)),
+        )
+        .await
+        .unwrap();
+    });
+    let mut config = test_config();
+    config.openai_base_url = format!("http://{address}");
+
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-test",
+                        "input": "hello",
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
+    assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "7");
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        r#"{"error":{"type":"rate_limit_error"}}"#
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_surfaces_streaming_upstream_errors() {
     let upstream = spawn_failing_stream_upstream().await;
     let mut config = test_config();
