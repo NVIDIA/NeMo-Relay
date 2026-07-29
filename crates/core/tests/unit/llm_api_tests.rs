@@ -14,8 +14,8 @@ use tokio_stream::StreamExt;
 use super::{
     CreateLlmHandleParams, LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmHandle,
     LlmRequest, LlmStreamCallExecuteParams, create_llm_handle, emit_llm_start,
-    emit_optimization_marks_with, llm_call, llm_call_end, llm_call_execute,
-    llm_stream_call_execute, project_llm_request_to_current_user_turn,
+    emit_optimization_marks_with, enqueue_optimization_marks, llm_call, llm_call_end,
+    llm_call_execute, llm_stream_call_execute, project_llm_request_to_current_user_turn,
     sanitize_context_for_request_codec, sanitize_context_for_response_codec,
 };
 use crate::api::event::{Event, ScopeCategory};
@@ -1474,6 +1474,41 @@ fn unavailable_mark_sanitizer_does_not_acknowledge_the_delivery_cursor() {
 
     emit_optimization_marks_with(&handle, &[], Some, |_event, _subscribers| true);
     assert!(handle.optimization_recorder.unemitted().is_empty());
+}
+
+#[test]
+fn manual_optimization_mark_snapshot_failure_publishes_fail_open() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    let scope_stack = create_scope_stack();
+    set_thread_scope_stack(scope_stack.clone());
+    let handle = LlmHandle::builder().name("poisoned-mark-snapshot").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new(
+                "test",
+                "snapshot_fail_open"
+            ))
+    );
+    std::thread::spawn(move || {
+        let _guard = scope_stack.write().unwrap();
+        panic!("poison the captured scope stack");
+    })
+    .join()
+    .unwrap_err();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let subscribers = vec![Arc::new(move |event: &Event| {
+        captured.lock().unwrap().push(event.clone());
+    }) as crate::api::runtime::EventSubscriberFn];
+    enqueue_optimization_marks(&handle, &subscribers);
+    flush_subscribers().unwrap();
+
+    assert_eq!(events.lock().unwrap().len(), 1);
+    assert!(handle.optimization_recorder.unemitted().is_empty());
+    set_thread_scope_stack(create_scope_stack());
 }
 
 #[test]

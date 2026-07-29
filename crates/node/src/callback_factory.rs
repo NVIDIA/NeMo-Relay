@@ -123,6 +123,24 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     callbackScopeStack() {
       return eventSanitizerContext.getStore()?.scopeStack;
     },
+
+    withCallbackScopeStack(scopeStack, fn) {
+      const current = eventSanitizerContext.getStore();
+      if (current === undefined) {
+        return { active: false };
+      }
+      const token = { active: current.active, scopeStack };
+      return { active: true, value: eventSanitizerContext.run(token, fn) };
+    },
+
+    setCallbackScopeStack(scopeStack) {
+      const current = eventSanitizerContext.getStore();
+      if (current === undefined) {
+        return false;
+      }
+      current.scopeStack = scopeStack;
+      return true;
+    },
   };
 })()"#;
 
@@ -188,4 +206,30 @@ pub(crate) fn callback_scope_stack(env: &Env) -> napi::Result<Option<ScopeStackH
     }
     let stack = unsafe { <&ScopeStack as FromNapiValue>::from_napi_value(env.raw(), value.raw())? };
     Ok(Some(stack.inner.clone()))
+}
+
+pub(crate) fn with_callback_scope_stack(
+    env: &Env,
+    stack: &ScopeStack,
+    callback: &JsFunction,
+) -> napi::Result<Option<JsUnknown>> {
+    let factories = callback_factories(env)?;
+    let with_stack: JsFunction = factories.get_named_property("withCallbackScopeStack")?;
+    let stack = ScopeStack::from(stack.inner.clone()).into_instance(*env)?;
+    let outcome = with_stack.call(None, &[as_unknown(env, &stack), as_unknown(env, callback)])?;
+    let outcome = unsafe { JsObject::from_raw_unchecked(env.raw(), outcome.raw()) };
+    if !outcome.get_named_property::<bool>("active")? {
+        return Ok(None);
+    }
+    outcome.get_named_property("value").map(Some)
+}
+
+pub(crate) fn set_callback_scope_stack(env: &Env, stack: &ScopeStack) -> napi::Result<bool> {
+    let factories = callback_factories(env)?;
+    let set_stack: JsFunction = factories.get_named_property("setCallbackScopeStack")?;
+    let stack = ScopeStack::from(stack.inner.clone()).into_instance(*env)?;
+    set_stack
+        .call::<JsUnknown>(None, &[as_unknown(env, &stack)])?
+        .coerce_to_bool()?
+        .get_value()
 }

@@ -46,6 +46,12 @@ fn current_publication_context() -> Option<PublicationContext> {
         .or_else(|| THREAD_PUBLICATION_CONTEXT.with(|current| current.borrow().clone()))
 }
 
+/// Capture the current opaque binding publication context for a spawned task.
+#[doc(hidden)]
+pub fn capture_publication_context() -> Option<PublicationContext> {
+    current_publication_context()
+}
+
 /// Run synchronous event emission with an opaque binding context snapshot.
 #[doc(hidden)]
 pub fn with_publication_context<T>(
@@ -111,12 +117,18 @@ mod native {
 
     type DispatcherState = Option<std::result::Result<Sender<DispatcherMessage>, String>>;
     type SanitizerRuntimeState = Option<std::result::Result<tokio::runtime::Runtime, String>>;
+    type BackgroundPublication = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+    type BackgroundPublicationState = Option<
+        std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String>,
+    >;
 
     struct ProcessState {
         dispatcher: Mutex<DispatcherState>,
         sanitizer_runtime: Mutex<SanitizerRuntimeState>,
+        background_publications: Mutex<BackgroundPublicationState>,
         dispatcher_failure_logged: AtomicBool,
         sanitizer_runtime_failure_logged: AtomicBool,
+        background_publication_failure_logged: AtomicBool,
     }
 
     impl ProcessState {
@@ -124,8 +136,10 @@ mod native {
             Self {
                 dispatcher: Mutex::new(None),
                 sanitizer_runtime: Mutex::new(None),
+                background_publications: Mutex::new(None),
                 dispatcher_failure_logged: AtomicBool::new(false),
                 sanitizer_runtime_failure_logged: AtomicBool::new(false),
+                background_publication_failure_logged: AtomicBool::new(false),
             }
         }
     }
@@ -201,6 +215,66 @@ mod native {
             .enable_all()
             .build()
             .map_err(|error| error.to_string())
+    }
+
+    fn start_background_publication_executor()
+    -> std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::Builder::new()
+            .name("nemo-relay-background-publication".into())
+            .spawn(move || {
+                runtime.block_on(async move {
+                    while let Some(publication) = receiver.recv().await {
+                        tokio::spawn(publication);
+                    }
+                });
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(sender)
+    }
+
+    pub(super) fn spawn_background_publication<F>(future: F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let state = process_state();
+        let sender = {
+            let mut executor = state
+                .background_publications
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            executor
+                .get_or_insert_with(start_background_publication_executor)
+                .clone()
+        };
+        match sender {
+            Ok(sender) if sender.send(Box::pin(future)).is_ok() => true,
+            Ok(_) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "background_publication_executor_stopped";
+                    "Background publication executor stopped before accepting stream finalization"
+                );
+                false
+            }
+            Err(error)
+                if !state
+                    .background_publication_failure_logged
+                    .swap(true, Ordering::AcqRel) =>
+            {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "background_publication_executor_failed";
+                    "Background publication executor failed to start: {error}"
+                );
+                false
+            }
+            Err(_) => false,
+        }
     }
 
     #[cfg(test)]
@@ -735,6 +809,39 @@ mod native {
                 "a delivery queued after a flush must not delay that flush"
             );
         }
+
+        #[test]
+        fn detached_publications_share_one_background_executor_thread() {
+            let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+            for _ in 0..32 {
+                let started_tx = started_tx.clone();
+                let mut release_rx = release_rx.clone();
+                assert!(spawn_background_publication(async move {
+                    started_tx.send(std::thread::current().id()).unwrap();
+                    while !*release_rx.borrow() {
+                        release_rx.changed().await.unwrap();
+                    }
+                }));
+            }
+            drop(started_tx);
+            let threads = (0..32)
+                .map(|_| {
+                    started_rx
+                        .recv_timeout(std::time::Duration::from_secs(2))
+                        .expect("background publication should start")
+                })
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                threads.len(),
+                1,
+                "detached publications must not allocate one OS thread per future"
+            );
+            release_tx.send(true).unwrap();
+        }
     }
 }
 
@@ -803,6 +910,15 @@ pub(crate) async fn with_async_publication_context<F: Future>(
     future: F,
 ) -> F::Output {
     native::with_async_publication_context(publication, future).await
+}
+
+/// Schedule detached stream-finalization publication on the process-local
+/// executor. The executor uses one shared OS thread and is reset after fork.
+pub(crate) fn spawn_background_publication<F>(future: F) -> bool
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    native::spawn_background_publication(future)
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.

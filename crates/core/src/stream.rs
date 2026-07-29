@@ -333,33 +333,24 @@ impl LlmStreamWrapper {
                 );
             }
         };
-        let finalize =
-            subscriber_dispatcher::with_async_publication_context(publication_barrier, finalize);
+        let publication_context = subscriber_dispatcher::capture_publication_context();
+        let finalize = subscriber_dispatcher::with_task_publication_context(
+            publication_context,
+            subscriber_dispatcher::with_async_publication_context(publication_barrier, finalize),
+        );
         if background_thread {
-            // `Drop` can run while the current-thread Tokio executor is
-            // synchronously flushing subscribers. Use a dedicated runtime so
-            // the FIFO publication barrier can still be released.
-            std::thread::spawn(move || {
-                if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    runtime.block_on(finalize);
-                }
-            });
+            // `Drop` cannot await middleware and may run while the caller's
+            // executor is synchronously flushing subscribers. A process-local
+            // executor polls all detached finalizers on one shared OS thread.
+            // Pending middleware therefore does not create one thread per
+            // abandoned stream.
+            let _ = subscriber_dispatcher::spawn_background_publication(finalize);
             return None;
         }
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => Some(handle.spawn(finalize)),
             Err(_) => {
-                std::thread::spawn(move || {
-                    if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    {
-                        runtime.block_on(finalize);
-                    }
-                });
+                let _ = subscriber_dispatcher::spawn_background_publication(finalize);
                 None
             }
         }

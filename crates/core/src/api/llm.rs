@@ -591,9 +591,7 @@ fn enqueue_optimization_marks(handle: &LlmHandle, subscribers: &[EventSubscriber
     let scope_stack = handle.captured_scope_stack().clone();
     for (contribution, recorded_at) in contributions {
         let event = optimization_mark_event(handle, &contribution, recorded_at);
-        let Some(sanitizers) = snapshot_event_sanitizers(&event, &scope_stack) else {
-            break;
-        };
+        let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
         if dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack.clone()) {
             handle.optimization_recorder.mark_emitted(1);
         } else {

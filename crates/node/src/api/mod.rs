@@ -1647,7 +1647,14 @@ pub fn create_scope_stack_from_propagation(
 /// The stack is restored before this function returns. Asynchronous callbacks
 /// must not rely on this installation after their first `await`.
 #[napi]
-pub fn with_scope_stack(stack: &ScopeStack, callback: JsFunction) -> napi::Result<JsUnknown> {
+pub fn with_scope_stack(
+    env: Env,
+    stack: &ScopeStack,
+    callback: JsFunction,
+) -> napi::Result<JsUnknown> {
+    if let Some(value) = callback_factory::with_callback_scope_stack(&env, stack, &callback)? {
+        return Ok(value);
+    }
     with_scope_stack_handle(stack.inner.clone(), || {
         callback.call::<JsUnknown>(None, &[])
     })
@@ -1663,8 +1670,12 @@ pub fn current_scope_stack(env: Env) -> napi::Result<ScopeStack> {
 
 /// Binds a scope stack to the current thread.
 #[napi]
-pub fn set_thread_scope_stack(stack: &ScopeStack) {
+pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> napi::Result<()> {
+    if callback_factory::set_callback_scope_stack(&env, stack)? {
+        return Ok(());
+    }
     bind_thread_scope_stack(stack.inner.clone());
+    Ok(())
 }
 
 /// Returns whether the current execution context has an explicitly-initialized

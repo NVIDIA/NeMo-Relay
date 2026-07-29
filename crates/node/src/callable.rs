@@ -479,9 +479,8 @@ pub fn wrap_js_llm_request_intercept_promise_fn(
 
 /// Wrap a Promise-aware JS event sanitizer.
 ///
-/// Scope and mark publication invokes these callbacks from Relay's serial
-/// dispatcher, while managed tool/LLM lifecycle paths can invoke them inline.
-/// The invocation context decides whether `flushSubscribers()` is reentrant.
+/// All lifecycle publication invokes these callbacks from Relay's serial
+/// dispatcher. The invocation context marks `flushSubscribers()` as reentrant.
 pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSanitizeFn {
     Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
         let func = func.clone();

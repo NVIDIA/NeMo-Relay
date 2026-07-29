@@ -607,6 +607,33 @@ describe('Tool guardrails', () => {
     }
   });
 
+  it('Promise middleware preserves its invocation scope before and after await', async () => {
+    const originalStack = lib.currentScopeStack();
+    const invocationStack = lib.createScopeStack();
+    const unrelatedStack = lib.createScopeStack();
+    const observed = [];
+    let invocationScope;
+    lib.registerToolConditionalExecutionGuardrail('node_tool_cond_scope_context', 10, async () => {
+      observed.push(lib.getHandle().uuid);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(lib.getHandle().uuid);
+      return null;
+    });
+    try {
+      const execution = lib.withScopeStack(invocationStack, () => {
+        invocationScope = lib.pushScope('middleware-invocation', lib.ScopeType.Agent);
+        return lib.toolCallExecute('tool_cond_scope_context', {}, (args) => args);
+      });
+      lib.setThreadScopeStack(unrelatedStack);
+      await execution;
+      assert.deepEqual(observed, [invocationScope.uuid, invocationScope.uuid]);
+    } finally {
+      lib.withScopeStack(invocationStack, () => lib.popScope(invocationScope));
+      lib.setThreadScopeStack(originalStack);
+      lib.deregisterToolConditionalExecutionGuardrail('node_tool_cond_scope_context');
+    }
+  });
+
   it('conditional guardrail propagates a rejected Promise', async () => {
     registerToolConditionalExecutionGuardrail('node_tool_cond_reject', 10, async () => {
       throw new Error('guardrail rejected promise');

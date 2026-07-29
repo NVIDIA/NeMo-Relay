@@ -4,6 +4,7 @@
 """Tests for NeMo Relay LLM lifecycle, guardrails, intercepts, and streaming."""
 
 import asyncio
+import contextvars
 from collections.abc import AsyncIterator
 from typing import NoReturn, cast
 
@@ -754,6 +755,43 @@ class TestLLMStreaming:
 
         end = _llm_event(events, "stream_async_response_sanitizer", "end")
         assert end.data == {"sanitized": True}
+
+    async def test_stream_response_sanitizer_preserves_emitter_contextvars(self):
+        request_id = contextvars.ContextVar("stream_request_id", default="registration")
+        observed = []
+
+        async def sanitize_response(response, context):
+            del context
+            observed.append(request_id.get())
+            await asyncio.sleep(0)
+            observed.append(request_id.get())
+            return response
+
+        async def stream_func(request):
+            del request
+            yield {"token": "hello"}
+
+        guardrails.register_llm_sanitize_response(
+            "py_llm_stream_contextvars",
+            1,
+            sanitize_response,
+        )
+        token = request_id.set("caller")
+        try:
+            stream = await llm.stream_execute(
+                "stream_contextvars",
+                make_request(),
+                stream_func,
+                lambda _chunk: None,
+                lambda: {"done": True},
+            )
+            assert [chunk async for chunk in stream] == [{"token": "hello"}]
+            await subscribers.flush_async()
+        finally:
+            request_id.reset(token)
+            guardrails.deregister_llm_sanitize_response("py_llm_stream_contextvars")
+
+        assert observed == ["caller", "caller"]
 
     async def test_stream_execute_aclose_stops_partially_consumed_stream(self):
         producer_closed = asyncio.Event()

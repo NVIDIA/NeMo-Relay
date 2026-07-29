@@ -374,7 +374,9 @@ impl PromiseAwareFn {
                 spread: mode.spread,
                 next,
                 publication: mode.publication,
-                scope_stack: mode.publication.then(current_scope_stack),
+                // Scope identity applies to every middleware callback. The
+                // publication bit controls only re-entrant flush behavior.
+                scope_stack: Some(current_scope_stack()),
                 completion: CallCompletion::new(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,

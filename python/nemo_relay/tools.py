@@ -121,11 +121,15 @@ def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | 
             end event. When omitted, the runtime default end timestamp is used.
 
     Returns:
-        None: This function returns after the end event has been recorded.
+        None: This function returns after an immutable end-event snapshot and
+        its middleware/subscriber chains have been queued for publication.
 
     Notes:
-        ``call_end()`` applies sanitize-response guardrails to the emitted
-        end-event payload but does not alter the caller-owned ``result`` object.
+        ``call_end()`` remains synchronous. Sanitize-response guardrails,
+        event sanitizers, and subscriber delivery run later on Relay's serial
+        publication path. Callback failures are logged and fail open; they
+        cannot be raised by this call. The caller-owned ``result`` is not
+        altered.
         ``timestamp`` must be a timezone-aware ``datetime``; strings and naive
         datetimes are rejected.
     """

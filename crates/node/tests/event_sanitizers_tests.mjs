@@ -134,8 +134,11 @@ describe('event sanitizer registries', () => {
     const originalStack = lib.currentScopeStack();
     const emitterStack = lib.createScopeStack();
     const unrelatedStack = lib.createScopeStack();
+    const overrideStack = lib.createScopeStack();
+    let overrideRootUuid;
     let emitterScopeUuid;
     const observedParents = [];
+    const observedOverrides = [];
 
     lib.registerMarkSanitizeGuardrail('node-event-scope-context', 0, async (event, fields) => {
       if (event.name !== 'scope-context-original') {
@@ -145,10 +148,16 @@ describe('event sanitizer registries', () => {
       await new Promise((resolve) => setImmediate(resolve));
       observedParents.push(lib.getHandle().uuid);
       lib.event('scope-context-nested', null, { originalParent: event.parent_uuid });
+      observedOverrides.push(
+        lib.withScopeStack(overrideStack, () => lib.getHandle().uuid),
+      );
+      lib.setThreadScopeStack(overrideStack);
+      observedOverrides.push(lib.getHandle().uuid);
       return fields;
     });
 
     try {
+      overrideRootUuid = lib.withScopeStack(overrideStack, () => lib.getHandle().uuid);
       lib.withScopeStack(emitterStack, () => {
         emitterScopeUuid = lib.pushScope('scope-context-emitter', lib.ScopeType.Agent).uuid;
         lib.event('scope-context-original', null, {});
@@ -161,6 +170,7 @@ describe('event sanitizer registries', () => {
       await waitFor(events, 2);
 
       assert.deepEqual(observedParents, [emitterScopeUuid, emitterScopeUuid]);
+      assert.deepEqual(observedOverrides, [overrideRootUuid, overrideRootUuid]);
       const nested = events.find((event) => event.name === 'scope-context-nested');
       assert.equal(nested.parent_uuid, emitterScopeUuid);
       assert.notEqual(nested.parent_uuid, unrelatedRootUuid);
