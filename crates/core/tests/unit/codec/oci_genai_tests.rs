@@ -319,13 +319,26 @@ fn test_cohere_v2_chat_result() {
                     "id": "call-v2-1",
                     "type": "FUNCTION",
                     "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}
-                }]
+                }],
+                // Message-level per the OCI CohereAssistantMessageV2 schema.
+                "toolPlan": "I will check the weather.",
+                "citations": [{"start": 0, "end": 8, "text": "Checking"}]
             },
             "finishReason": "TOOL_CALL",
             "usage": {"promptTokens": 20, "completionTokens": 15, "totalTokens": 35}
         }
     });
     let annotated = OCIGenAIChatCodec.decode_response(&response).unwrap();
+
+    // Grounding metadata and the tool plan are not normalized but must
+    // survive, namespaced under the message they came from.
+    assert_eq!(
+        annotated.extra.get("message"),
+        Some(&json!({
+            "toolPlan": "I will check the weather.",
+            "citations": [{"start": 0, "end": 8, "text": "Checking"}]
+        }))
+    );
 
     assert_eq!(annotated.id.as_deref(), Some("resp-v2-123"));
     assert_eq!(annotated.model.as_deref(), Some("cohere.command-a-03-2025"));
@@ -392,10 +405,19 @@ fn test_unmodeled_response_fields_preserved_in_extra() {
         "chatResponse": {
             "apiFormat": "GENERIC",
             "timeCreated": "2026-07-27T17:27:25.871Z",
-            "serviceTier": "default",
             "choices": [{
-                "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "hi"}]},
-                "finishReason": "stop"
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [{"type": "TEXT", "text": "hi"}],
+                    "refusal": null,
+                    "reasoningContent": "chain of thought"
+                },
+                "finishReason": "stop",
+                // Choice-level per the OCI ChatChoice schema.
+                "serviceTier": "default",
+                "groundingMetadata": {"sources": ["doc-1"]},
+                "logprobs": {"tokenLogprobs": [-0.1]}
             }],
             "usage": {"totalTokens": 9}
         }
@@ -406,10 +428,22 @@ fn test_unmodeled_response_fields_preserved_in_extra() {
         annotated.extra.get("timeCreated"),
         Some(&json!("2026-07-27T17:27:25.871Z"))
     );
-    assert_eq!(annotated.extra.get("serviceTier"), Some(&json!("default")));
     assert_eq!(
         annotated.extra.get("futureEnvelopeField"),
         Some(&json!({"nested": true}))
+    );
+    // Choice- and message-level unmodeled fields are namespaced by origin.
+    assert_eq!(
+        annotated.extra.get("choice"),
+        Some(&json!({
+            "serviceTier": "default",
+            "groundingMetadata": {"sources": ["doc-1"]},
+            "logprobs": {"tokenLogprobs": [-0.1]}
+        }))
+    );
+    assert_eq!(
+        annotated.extra.get("message"),
+        Some(&json!({"refusal": null, "reasoningContent": "chain of thought"}))
     );
     // Modeled fields stay normalized-only.
     for modeled in [
@@ -449,6 +483,7 @@ fn test_finish_reason_mapping() {
         ("stop", FinishReason::Complete),
         ("length", FinishReason::Length),
         ("tool_calls", FinishReason::ToolUse),
+        ("content_filter", FinishReason::ContentFilter),
         ("COMPLETE", FinishReason::Complete),
         ("MAX_TOKENS", FinishReason::Length),
         // Live Gemini-on-OCI responses use the lowercase spelling.

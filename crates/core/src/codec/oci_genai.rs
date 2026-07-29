@@ -15,9 +15,13 @@
 //! - **Responses**: `ChatResult` payloads (`modelId`, `chatResponse`); `usage`
 //!   counters are `promptTokens`/`completionTokens`/`totalTokens`.
 //! - **Unmodeled fields are preserved**: envelope and chat-response fields the
-//!   normalized shape does not model (`timeCreated`, `serviceTier`, grounding
-//!   metadata, future provider fields) are carried in `extra` rather than
-//!   discarded, consistent with the other response codecs.
+//!   normalized shape does not model (`timeCreated`, future provider fields)
+//!   are carried in `extra` rather than discarded, consistent with the other
+//!   response codecs. Unmodeled fields of the decoded choice and assistant
+//!   message — `logprobs`, `serviceTier`, `groundingMetadata`,
+//!   `reasoningContent`, `refusal` (GENERIC) and `toolPlan`, `citations`
+//!   (COHEREV2) per the OCI schema — are namespaced in `extra` under
+//!   `"choice"` and `"message"`.
 //!
 //! The codec accepts the REST wire format only: camelCase keys, as documented
 //! in the OCI API reference. Alternate renderings produced by Oracle tooling
@@ -54,6 +58,7 @@ fn map_oci_finish_reason(reason: &str) -> FinishReason {
         "stop" | "COMPLETE" | "STOP_SEQUENCE" => FinishReason::Complete,
         "length" | "max_tokens" | "MAX_TOKENS" => FinishReason::Length,
         "tool_calls" | "TOOL_CALL" => FinishReason::ToolUse,
+        "content_filter" => FinishReason::ContentFilter,
         other => FinishReason::Unknown(other.to_string()),
     }
 }
@@ -200,7 +205,7 @@ impl LlmResponseCodec for OCIGenAIChatCodec {
             .unwrap_or("GENERIC")
             .to_uppercase();
 
-        let (message, tool_calls, finish_reason) = match api_format.as_str() {
+        let (message, tool_calls, finish_reason, nested_extra) = match api_format.as_str() {
             "COHERE" => decode_cohere_response_body(chat_response),
             "COHEREV2" => decode_cohere_v2_response_body(chat_response)?,
             _ => decode_generic_response_body(chat_response)?,
@@ -235,6 +240,7 @@ impl LlmResponseCodec for OCIGenAIChatCodec {
             None => serde_json::Map::new(),
         };
         extra.extend(unmodeled_fields(chat_response, modeled_response_keys));
+        extra.extend(nested_extra);
 
         Ok(AnnotatedLlmResponse {
             id,
@@ -257,33 +263,76 @@ type ResponseBody = (
     Option<MessageContent>,
     Option<Vec<ResponseToolCall>>,
     Option<String>,
+    serde_json::Map<String, Json>,
 );
+
+/// Keys of the decoded GENERIC choice consumed by the normalized shape.
+///
+/// `index` is excluded from `extra` carriage as well: it is positional trivia
+/// (always `0` for the single decoded choice) rather than provider data.
+const MODELED_CHOICE_KEYS: &[&str] = &["message", "finishReason", "index"];
+
+/// Keys of a decoded assistant message consumed by the normalized shape.
+const MODELED_MESSAGE_KEYS: &[&str] = &["role", "content", "toolCalls"];
+
+/// Namespace unmodeled fields of a decoded nested container under `key`.
+///
+/// The choice-level fields of GENERIC responses (`logprobs`, `usage`,
+/// `groundingMetadata`, `serviceTier`) and the message-level fields of
+/// GENERIC (`refusal`, `annotations`, `reasoningContent`) and COHEREV2
+/// (`toolPlan`, `citations`) responses are documented in the OCI schema but
+/// not normalized; they are carried in `extra` under the container's wire key
+/// so their origin stays unambiguous.
+fn nest_unmodeled_fields(
+    extra: &mut serde_json::Map<String, Json>,
+    key: &str,
+    obj: &serde_json::Map<String, Json>,
+    modeled: &[&str],
+) {
+    let unmodeled = unmodeled_fields(obj, modeled);
+    if !unmodeled.is_empty() {
+        extra.insert(key.to_string(), Json::Object(unmodeled));
+    }
+}
 
 fn decode_generic_response_body(
     chat_response: &serde_json::Map<String, Json>,
 ) -> Result<ResponseBody> {
+    let mut nested_extra = serde_json::Map::new();
     let Some(first_choice) = chat_response
         .get("choices")
         .and_then(Json::as_array)
         .and_then(|choices| choices.first())
         .and_then(Json::as_object)
     else {
-        return Ok((None, None, None));
+        return Ok((None, None, None, nested_extra));
     };
+    nest_unmodeled_fields(
+        &mut nested_extra,
+        "choice",
+        first_choice,
+        MODELED_CHOICE_KEYS,
+    );
     let finish_reason = first_choice
         .get("finishReason")
         .and_then(Json::as_str)
         .map(str::to_string);
     let Some(raw_message) = first_choice.get("message").and_then(Json::as_object) else {
-        return Ok((None, None, finish_reason));
+        return Ok((None, None, finish_reason, nested_extra));
     };
+    nest_unmodeled_fields(
+        &mut nested_extra,
+        "message",
+        raw_message,
+        MODELED_MESSAGE_KEYS,
+    );
     let message = decode_generic_content(raw_message.get("content"))?;
     let tool_calls = raw_message
         .get("toolCalls")
         .and_then(Json::as_array)
         .map(|calls| decode_response_tool_calls(calls))
         .filter(|calls: &Vec<ResponseToolCall>| !calls.is_empty());
-    Ok((message, tool_calls, finish_reason))
+    Ok((message, tool_calls, finish_reason, nested_extra))
 }
 
 fn decode_cohere_response_body(chat_response: &serde_json::Map<String, Json>) -> ResponseBody {
@@ -300,7 +349,9 @@ fn decode_cohere_response_body(chat_response: &serde_json::Map<String, Json>) ->
         .get("finishReason")
         .and_then(Json::as_str)
         .map(str::to_string);
-    (message, tool_calls, finish_reason)
+    // COHERE (v1) is flat: unmodeled fields live directly on the chat
+    // response and are already carried by the chat-response-level pass.
+    (message, tool_calls, finish_reason, serde_json::Map::new())
 }
 
 /// Decode a COHEREV2 (`CohereChatResponseV2`) body: a single assistant
@@ -310,20 +361,27 @@ fn decode_cohere_response_body(chat_response: &serde_json::Map<String, Json>) ->
 fn decode_cohere_v2_response_body(
     chat_response: &serde_json::Map<String, Json>,
 ) -> Result<ResponseBody> {
+    let mut nested_extra = serde_json::Map::new();
     let finish_reason = chat_response
         .get("finishReason")
         .and_then(Json::as_str)
         .map(str::to_string);
     let Some(raw_message) = chat_response.get("message").and_then(Json::as_object) else {
-        return Ok((None, None, finish_reason));
+        return Ok((None, None, finish_reason, nested_extra));
     };
+    nest_unmodeled_fields(
+        &mut nested_extra,
+        "message",
+        raw_message,
+        MODELED_MESSAGE_KEYS,
+    );
     let message = decode_generic_content(raw_message.get("content"))?;
     let tool_calls = raw_message
         .get("toolCalls")
         .and_then(Json::as_array)
         .map(|calls| decode_response_tool_calls(calls))
         .filter(|calls: &Vec<ResponseToolCall>| !calls.is_empty());
-    Ok((message, tool_calls, finish_reason))
+    Ok((message, tool_calls, finish_reason, nested_extra))
 }
 
 /// Convert an OCI response tool-call list into [`ResponseToolCall`]s.
