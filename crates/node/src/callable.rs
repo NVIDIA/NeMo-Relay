@@ -12,7 +12,6 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use napi::bindgen_prelude::ToNapiValue;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -44,27 +43,6 @@ use crate::callback_factory;
 use crate::convert::{callback_json, record_callback_error, to_napi_err};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
-
-static ACTIVE_EVENT_SANITIZER_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-
-struct ActiveEventSanitizerCallback;
-
-impl ActiveEventSanitizerCallback {
-    fn enter() -> Self {
-        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_add(1, Ordering::AcqRel);
-        Self
-    }
-}
-
-impl Drop for ActiveEventSanitizerCallback {
-    fn drop(&mut self) {
-        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-pub(crate) fn event_sanitizer_callback_active() -> bool {
-    ACTIVE_EVENT_SANITIZER_CALLBACKS.load(Ordering::Acquire) != 0
-}
 
 /// Structured codec identity delivered to JavaScript LLM sanitizers.
 #[napi(object)]
@@ -321,6 +299,8 @@ pub fn wrap_js_llm_sanitize_request_promise_fn(func: Arc<PromiseAwareFn>) -> Llm
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
             let func = func.clone();
+            let publication =
+                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
             Box::pin(async move {
                 let request = serde_json::to_value(request).map_err(|error| {
                     let error = FlowError::Internal(format!(
@@ -330,26 +310,26 @@ pub fn wrap_js_llm_sanitize_request_promise_fn(func: Arc<PromiseAwareFn>) -> Llm
                     error
                 })?;
                 let context = js_llm_sanitize_request_context(&context);
-                let value = func
-                    .call_spread_with_arg0(Box::new(move |env| {
-                        let mut args = env.create_array_with_length(2)?;
-                        let request = unsafe {
-                            JsUnknown::from_raw_unchecked(
-                                env.raw(),
-                                Json::to_napi_value(env.raw(), request)?,
-                            )
-                        };
-                        args.set_element(0, request)?;
-                        args.set_element(
-                            1,
-                            js_llm_sanitize_request_context_to_napi(env, context)?,
-                        )?;
-                        Ok(js_object_to_unknown(env, args))
-                    }))
-                    .await
-                    .inspect_err(|error| {
-                        record_callback_error(error.to_string());
-                    })?;
+                let build_args: crate::promise_call::Arg0Builder = Box::new(move |env| {
+                    let mut args = env.create_array_with_length(2)?;
+                    let request = unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            env.raw(),
+                            Json::to_napi_value(env.raw(), request)?,
+                        )
+                    };
+                    args.set_element(0, request)?;
+                    args.set_element(1, js_llm_sanitize_request_context_to_napi(env, context)?)?;
+                    Ok(js_object_to_unknown(env, args))
+                });
+                let value = if publication {
+                    func.call_spread_with_arg0_for_publication(build_args).await
+                } else {
+                    func.call_spread_with_arg0(build_args).await
+                }
+                .inspect_err(|error| {
+                    record_callback_error(error.to_string());
+                })?;
                 if value.is_null() {
                     Ok(None)
                 } else {
@@ -374,25 +354,29 @@ pub fn wrap_js_llm_sanitize_response_promise_fn(
 ) -> LlmSanitizeResponseFn {
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         let func = func.clone();
+        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let context = js_llm_sanitize_response_context(&context);
-            let value = func
-                .call_spread_with_arg0(Box::new(move |env| {
-                    let mut args = env.create_array_with_length(2)?;
-                    let response = unsafe {
-                        JsUnknown::from_raw_unchecked(
-                            env.raw(),
-                            Json::to_napi_value(env.raw(), response)?,
-                        )
-                    };
-                    args.set_element(0, response)?;
-                    args.set_element(1, js_llm_sanitize_response_context_to_napi(env, context)?)?;
-                    Ok(js_object_to_unknown(env, args))
-                }))
-                .await
-                .inspect_err(|error| {
-                    record_callback_error(error.to_string());
-                })?;
+            let build_args: crate::promise_call::Arg0Builder = Box::new(move |env| {
+                let mut args = env.create_array_with_length(2)?;
+                let response = unsafe {
+                    JsUnknown::from_raw_unchecked(
+                        env.raw(),
+                        Json::to_napi_value(env.raw(), response)?,
+                    )
+                };
+                args.set_element(0, response)?;
+                args.set_element(1, js_llm_sanitize_response_context_to_napi(env, context)?)?;
+                Ok(js_object_to_unknown(env, args))
+            });
+            let value = if publication {
+                func.call_spread_with_arg0_for_publication(build_args).await
+            } else {
+                func.call_spread_with_arg0(build_args).await
+            }
+            .inspect_err(|error| {
+                record_callback_error(error.to_string());
+            })?;
             Ok((!value.is_null()).then_some(value))
         })
     })
@@ -498,7 +482,6 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
     Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
         let func = func.clone();
         Box::pin(async move {
-            let _active_callback = ActiveEventSanitizerCallback::enter();
             let event_json = JsEvent::try_from_event(&event)
                 .map(JsEvent::into_json)
                 .map_err(|error| {
@@ -1167,102 +1150,6 @@ pub fn wrap_js_event_subscriber(
                 "nemo_relay: failed to queue JS event subscriber callback: {status:?}"
             ));
         }
-    })
-}
-
-/// Wrap a JS event sanitizer: ``(event, fields) => fields``.
-pub fn wrap_js_event_sanitize_fn(
-    func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
-) -> EventSanitizeFn {
-    let func = Arc::new(func);
-    Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
-        let func = func.clone();
-        Box::pin(async move {
-            let _active_callback = ActiveEventSanitizerCallback::enter();
-            let event_json = match JsEvent::try_from_event(&event) {
-                Ok(event) => event.into_json(),
-                Err(error) => {
-                    record_callback_error(format!(
-                        "nemo_relay: failed to serialize JS event sanitizer context: {error}"
-                    ));
-                    return Err(FlowError::Internal(error.to_string()));
-                }
-            };
-            let js_fields = EventSanitizeFields {
-                data: fields.data,
-                category_profile: fields
-                    .category_profile
-                    .as_ref()
-                    .map(serde_json::to_value)
-                    .transpose()
-                    .map_err(|error| {
-                        let error = FlowError::Internal(format!(
-                            "failed to serialize JS event sanitizer category profile: {error}"
-                        ));
-                        record_callback_error(error.to_string());
-                        error
-                    })?,
-                metadata: fields.metadata,
-            };
-            let js_fields = serde_json::to_value(js_fields).map_err(|error| {
-                let error = FlowError::Internal(format!(
-                    "failed to serialize JS event sanitizer fields: {error}"
-                ));
-                record_callback_error(error.to_string());
-                error
-            })?;
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
-                (event_json, js_fields),
-                ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                record_callback_error(format!(
-                    "nemo_relay: failed to queue JS event sanitizer callback: {status:?}"
-                ));
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS event sanitizer callback: {status:?}"
-                )));
-            }
-            let sanitized: Result<CoreEventSanitizeFields> = async {
-                let result = await_middleware_json_result(
-                    rx,
-                    "nemo_relay: JS event sanitizer callback failed",
-                )
-                .await?;
-                let result = event_sanitize_fields_from_json(result).map_err(|error| {
-                    FlowError::Internal(format!(
-                        "nemo_relay: invalid JS event sanitizer result: {error}"
-                    ))
-                })?;
-                let category_profile = result
-                    .category_profile
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .map_err(|error| {
-                        FlowError::Internal(format!(
-                            "nemo_relay: invalid JS event sanitizer result: {error}"
-                        ))
-                    })?;
-                Ok(CoreEventSanitizeFields {
-                    data: result.data,
-                    category_profile,
-                    metadata: result.metadata,
-                })
-            }
-            .await;
-            match sanitized {
-                Ok(sanitized) => Ok(sanitized),
-                Err(error) => {
-                    record_callback_error(error.to_string());
-                    Err(error)
-                }
-            }
-        })
     })
 }
 

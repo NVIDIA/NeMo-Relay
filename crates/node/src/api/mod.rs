@@ -1413,7 +1413,9 @@ impl PersistentJsFunction {
 }
 
 fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
-    let callback = Arc::new(crate::promise_call::PromiseAwareFn::new(env, func)?);
+    let callback = Arc::new(crate::promise_call::PromiseAwareFn::new_event_sanitizer(
+        env, func,
+    )?);
     Ok(callable::wrap_js_event_sanitize_promise_fn(callback))
 }
 
@@ -3180,15 +3182,21 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 ///
 /// The Promise rejects if the blocking task fails or the core subscriber flush returns an error.
 /// Callers should handle errors when awaiting it.
-#[napi]
-pub async fn flush_subscribers() -> Result<()> {
-    if crate::callable::event_sanitizer_callback_active() {
-        return Ok(());
-    }
-    tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
-        .await
-        .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
-        .map_err(to_napi_err)
+#[napi(ts_return_type = "Promise<void>")]
+pub fn flush_subscribers(env: Env) -> Result<JsObject> {
+    let reentrant = crate::callback_factory::event_sanitizer_callback_active(&env)?;
+    env.execute_tokio_future(
+        async move {
+            if reentrant {
+                return Ok(());
+            }
+            tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
+                .await
+                .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
+                .map_err(to_napi_err)
+        },
+        |env, _| env.get_undefined(),
+    )
 }
 
 // ---------------------------------------------------------------------------

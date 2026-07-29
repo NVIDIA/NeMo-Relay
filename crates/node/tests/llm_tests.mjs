@@ -645,6 +645,33 @@ describe('LLM guardrails', () => {
     deregisterLlmSanitizeRequestGuardrail('node_llm_san_req');
   });
 
+  it('manual async sanitizers can flush subscribers without deadlocking', async () => {
+    let requestFlushed = false;
+    let responseFlushed = false;
+    registerSubscriber('node_manual_flush_subscriber', () => {});
+    registerLlmSanitizeRequestGuardrail('node_manual_flush_request', 10, async (request) => {
+      await flushSubscribers();
+      requestFlushed = true;
+      return request;
+    });
+    registerLlmSanitizeResponseGuardrail('node_manual_flush_response', 10, async (response) => {
+      await flushSubscribers();
+      responseFlushed = true;
+      return response;
+    });
+    try {
+      const handle = llmCall('node_manual_flush', makeNative());
+      llmCallEnd(handle, { response: 'ok' });
+      await flushSubscribers();
+    } finally {
+      deregisterLlmSanitizeRequestGuardrail('node_manual_flush_request');
+      deregisterLlmSanitizeResponseGuardrail('node_manual_flush_response');
+      deregisterSubscriber('node_manual_flush_subscriber');
+    }
+    assert.equal(requestFlushed, true);
+    assert.equal(responseFlushed, true);
+  });
+
   it('sanitize request guardrail rewrites start event payload', async () => {
     const events = [];
     registerSubscriber('node_llm_san_req_evt', (e) => events.push(e));

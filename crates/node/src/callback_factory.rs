@@ -5,9 +5,12 @@
 
 use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v1";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v2";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
+  const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
+  const eventSanitizerContext = new AsyncLocalStorage();
+
   function jsonValue(value, seen = new Set()) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') {
       return value;
@@ -49,6 +52,38 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return result;
   }
 
+  function callPromise(fn, arg0, spread, next, resolve, reject, publication) {
+    const token = { active: publication };
+    const invoke = () => {
+      Promise.resolve().then(() => (
+        next === undefined
+          ? (spread ? fn(...arg0) : fn(arg0))
+          : (spread ? fn(...arg0, next) : fn(arg0, next))
+      )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
+        token.active = false;
+        resolve(value);
+      }, (error) => {
+        token.active = false;
+        let message = 'unknown error';
+        try {
+          if (typeof error === 'string') {
+            message = error;
+          } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+            message = String(error);
+          } else if (error != null && typeof error.message === 'string') {
+            message = error.message;
+          }
+        } catch {}
+        reject(message);
+      });
+    };
+    if (publication) {
+      eventSanitizerContext.run(token, invoke);
+    } else {
+      invoke();
+    }
+  }
+
   return {
     execution(fn) {
       return function __nemo_relay_execution_wrapper(...args) {
@@ -66,7 +101,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     },
 
     promise(fn) {
-      return function __nemo_relay_promise_wrapper(error, arg0, spread, next, resolve, reject) {
+      return function __nemo_relay_promise_wrapper(error, arg0, spread, next, resolve, reject, publication) {
         if (error != null) {
           let message = 'unknown error';
           try {
@@ -75,24 +110,26 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           reject(message);
           return;
         }
-        Promise.resolve().then(() => (
-          next === undefined
-            ? (spread ? fn(...arg0) : fn(arg0))
-            : (spread ? fn(...arg0, next) : fn(arg0, next))
-        )).then((value) => jsonValue(value === undefined ? null : value)).then(resolve, (error) => {
+        callPromise(fn, arg0, spread, next, resolve, reject, publication);
+      };
+    },
+
+    eventSanitizerPromise(fn) {
+      return function __nemo_relay_event_sanitizer_promise_wrapper(error, arg0, spread, next, resolve, reject) {
+        if (error != null) {
           let message = 'unknown error';
           try {
-            if (typeof error === 'string') {
-              message = error;
-            } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
-              message = String(error);
-            } else if (error != null && typeof error.message === 'string') {
-              message = error.message;
-            }
+            message = String(error?.message ?? error);
           } catch {}
           reject(message);
-        });
+          return;
+        }
+        callPromise(fn, arg0, spread, next, resolve, reject, true);
       };
+    },
+
+    eventSanitizerCallbackActive() {
+      return eventSanitizerContext.getStore()?.active === true;
     },
   };
 })()"#;
@@ -139,4 +176,20 @@ pub(crate) fn wrap_execution_callback(env: &Env, func: &JsFunction) -> napi::Res
 
 pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
     wrap_callback(env, func, "promise")
+}
+
+pub(crate) fn wrap_event_sanitizer_callback(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "eventSanitizerPromise")
+}
+
+pub(crate) fn event_sanitizer_callback_active(env: &Env) -> napi::Result<bool> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("eventSanitizerCallbackActive")?;
+    callback
+        .call::<JsUnknown>(None, &[])?
+        .coerce_to_bool()?
+        .get_value()
 }

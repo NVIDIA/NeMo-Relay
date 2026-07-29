@@ -252,6 +252,10 @@ typedef char *(*NemoRelayEventSanitizeCb)(void *user_data,
 /**
  * Optional destructor for user data passed to callbacks.
  * Called when the runtime no longer needs the associated callback.
+ *
+ * Middleware callbacks may run concurrently on Relay runtime or publication
+ * threads. Callers must keep `user_data` valid and thread-safe until this
+ * destructor runs.
  */
 typedef void (*NemoRelayFreeFn)(void *user_data);
 
@@ -361,6 +365,10 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
 /**
  * Runtime-provided "next" callback for LLM execution middleware chain.
  * Takes a native JSON C string, returns a response JSON C string.
+ * `next_ctx` is borrowed and valid only until the intercept callback returns;
+ * callers must not retain it or invoke `next_fn` asynchronously. The returned
+ * string belongs to the caller and must be released with
+ * `nemo_relay_string_free`.
  */
 typedef char *(*NemoRelayLlmExecNextFn)(const char *native_json, void *next_ctx);
 
@@ -405,7 +413,10 @@ typedef char *(*NemoRelayToolConditionalCb)(void *user_data, const char *name, c
 /**
  * Runtime-provided "next" callback for tool execution middleware chain.
  * Call this from an intercept to invoke the next layer (or original function).
- * `next_ctx` is an opaque pointer managed by the runtime.
+ * `next_ctx` is borrowed and valid only until the intercept callback returns;
+ * callers must not retain it or invoke `next_fn` asynchronously. The returned
+ * string belongs to the caller and must be released with
+ * `nemo_relay_string_free`.
  */
 typedef char *(*NemoRelayToolExecNextFn)(const char *args_json, void *next_ctx);
 

@@ -38,7 +38,7 @@ use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
 
-use crate::convert::{c_str_to_json, json_to_c_string};
+use crate::convert::json_to_c_string;
 use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};
 use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
@@ -48,6 +48,10 @@ use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
 /// Optional destructor for user data passed to callbacks.
 /// Called when the runtime no longer needs the associated callback.
+///
+/// Middleware callbacks may run concurrently on Relay runtime or publication
+/// threads. Callers must keep `user_data` valid and thread-safe until this
+/// destructor runs.
 pub type NemoRelayFreeFn = Option<unsafe extern "C" fn(user_data: *mut libc::c_void)>;
 
 /// Callback for tool request/response sanitization guardrails and intercepts.
@@ -76,7 +80,10 @@ pub type NemoRelayToolExecCb =
 
 /// Runtime-provided "next" callback for tool execution middleware chain.
 /// Call this from an intercept to invoke the next layer (or original function).
-/// `next_ctx` is an opaque pointer managed by the runtime.
+/// `next_ctx` is borrowed and valid only until the intercept callback returns;
+/// callers must not retain it or invoke `next_fn` asynchronously. The returned
+/// string belongs to the caller and must be released with
+/// `nemo_relay_string_free`.
 pub type NemoRelayToolExecNextFn =
     unsafe extern "C" fn(args_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
@@ -169,6 +176,10 @@ pub type NemoRelayLlmExecCb =
 
 /// Runtime-provided "next" callback for LLM execution middleware chain.
 /// Takes a native JSON C string, returns a response JSON C string.
+/// `next_ctx` is borrowed and valid only until the intercept callback returns;
+/// callers must not retain it or invoke `next_fn` asynchronously. The returned
+/// string belongs to the caller and must be released with
+/// `nemo_relay_string_free`.
 pub type NemoRelayLlmExecNextFn =
     unsafe extern "C" fn(native_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
@@ -398,6 +409,7 @@ pub fn wrap_tool_exec_fn(
     Box::new(move |args: Json| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
             unsafe { nemo_relay_string_free_internal(c_args) };
@@ -454,6 +466,7 @@ pub fn wrap_tool_exec_intercept_fn(
             }
 
             let c_args = json_to_c_string(&args);
+            clear_last_error();
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
             unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
             unsafe { nemo_relay_string_free_internal(c_args) };
@@ -526,6 +539,7 @@ pub fn wrap_llm_exec_intercept_fn(
 
                 let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
                 let c_request = json_to_c_string(&request_json);
+                clear_last_error();
                 let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
                 unsafe { nemo_relay_string_free_internal(c_request) };
@@ -601,6 +615,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
 
                 let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
                 let c_request = json_to_c_string(&request_json);
+                clear_last_error();
                 let result_ptr =
                     unsafe { cb(ud.ptr, c_request, llm_stream_next_trampoline, next_ctx) };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn)) };
@@ -710,7 +725,7 @@ pub fn wrap_llm_sanitize_request_fn(
                     Ok(identity) => identity,
                     Err(error) => {
                         set_last_error(&error.to_string());
-                        return Ok(None);
+                        return Err(error);
                     }
                 };
                 let codec = context
@@ -727,7 +742,10 @@ pub fn wrap_llm_sanitize_request_fn(
                 let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
                 if result_ptr.is_null() {
                     unsafe { drop(Box::from_raw(ffi_req)) };
-                    return Ok(None);
+                    return match last_error_message() {
+                        Some(message) => Err(FlowError::Internal(message)),
+                        None => Ok(None),
+                    };
                 }
                 if result_ptr == ffi_req {
                     return Ok(Some(unsafe { Box::from_raw(ffi_req) }.0));
@@ -754,7 +772,7 @@ pub fn wrap_llm_sanitize_response_fn(
                 Ok(identity) => identity,
                 Err(error) => {
                     set_last_error(&error.to_string());
-                    return Ok(None);
+                    return Err(error);
                 }
             };
             let codec = context
@@ -771,16 +789,32 @@ pub fn wrap_llm_sanitize_response_fn(
             let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };
             if result_ptr.is_null() {
                 unsafe { nemo_relay_string_free_internal(response_json) };
-                return Ok(None);
+                return match last_error_message() {
+                    Some(message) => Err(FlowError::Internal(message)),
+                    None => Ok(None),
+                };
             }
-            let result = c_str_to_json(result_ptr);
+            let result = unsafe { CStr::from_ptr(result_ptr) }
+                .to_str()
+                .map_err(|error| {
+                    FlowError::Internal(format!(
+                        "LLM response sanitizer returned invalid UTF-8: {error}"
+                    ))
+                })
+                .and_then(|value| {
+                    serde_json::from_str(value).map_err(|error| {
+                        FlowError::Internal(format!(
+                            "LLM response sanitizer returned invalid JSON: {error}"
+                        ))
+                    })
+                });
             unsafe {
                 nemo_relay_string_free_internal(response_json);
                 if result_ptr != response_json {
                     nemo_relay_string_free_internal(result_ptr);
                 }
             }
-            Ok(result)
+            result.map(Some)
         })
     })
 }
@@ -842,6 +876,7 @@ pub fn wrap_llm_exec_fn(
     Box::new(move |request: LlmRequest| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
@@ -867,6 +902,7 @@ pub fn wrap_llm_stream_exec_fn(
     Box::new(move |request: LlmRequest| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
@@ -1056,8 +1092,10 @@ fn json_result_from_ptr(ptr: *mut c_char, fallback: &str) -> Result<Json> {
         let message = last_error_message().unwrap_or_else(|| fallback.to_string());
         return Err(FlowError::Internal(message));
     }
-    let value = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
-    serde_json::from_str(&value)
+    let value = unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .map_err(|error| FlowError::Internal(format!("{fallback}: invalid UTF-8: {error}")))?;
+    serde_json::from_str(value)
         .map_err(|error| FlowError::Internal(format!("{fallback}: invalid JSON: {error}")))
 }
 

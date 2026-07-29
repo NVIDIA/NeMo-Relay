@@ -32,6 +32,7 @@ use nemo_relay::api::runtime::{
     ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3_async_runtimes::TaskLocals;
@@ -128,7 +129,15 @@ fn split_py_object_or_future(
     py: Python<'_>,
     result: Py<PyAny>,
 ) -> FlowResult<Result<Py<PyAny>, PyValueFuture>> {
-    split_py_object_or_future_with_locals(py, result, None)
+    let bound = result.bind(py);
+    if bound.getattr("__await__").is_ok() {
+        reject_awaitable_from_sync_caller(bound)?;
+        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        Ok(Err(Box::pin(future)))
+    } else {
+        Ok(Ok(result))
+    }
 }
 
 fn split_py_object_or_future_with_locals(
@@ -144,10 +153,21 @@ fn split_py_object_or_future_with_locals(
                 pyo3_async_runtimes::into_future_with_locals(locals, result.into_bound(py))
                     .map_err(|e| FlowError::Internal(e.to_string()))?,
             ),
-            None => Box::pin(
-                pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                    .map_err(|e| FlowError::Internal(e.to_string()))?,
-            ),
+            None => Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    Python::attach(|py| {
+                        let coroutine = py
+                            .import("nemo_relay._event_sanitizer_context")
+                            .and_then(|module| module.getattr("await_result"))
+                            .and_then(|await_result| await_result.call1((result.bind(py),)))?;
+                        py.import("asyncio")
+                            .and_then(|asyncio| asyncio.call_method1("run", (coroutine,)))
+                            .map(Bound::unbind)
+                    })
+                })
+                .await
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+            }),
         };
         Ok(Err(future))
     } else {
@@ -859,18 +879,23 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
             let py_fn = py_fn.clone();
             let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+            let publication =
+                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
             Box::pin(async move {
                 let result = resolve_py_object_or_future(Python::attach(|py| {
-                    let result = py_fn
-                        .call1(
-                            py,
-                            (
-                                PyLLMRequest { inner: request },
-                                PyLlmSanitizeRequestContext { inner: context },
-                            ),
-                        )
-                        .map_err(|e| FlowError::Internal(e.to_string()))?;
-                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
+                    let args = (
+                        PyLLMRequest { inner: request },
+                        PyLlmSanitizeRequestContext { inner: context },
+                    );
+                    let result = if publication {
+                        py.import("nemo_relay._event_sanitizer_context")
+                            .and_then(|module| module.getattr("invoke"))
+                            .and_then(|invoke| invoke.call1((py_fn.bind(py), args.0, args.1)))
+                    } else {
+                        py_fn.bind(py).call1(args)
+                    }
+                    .map_err(|e| FlowError::Internal(e.to_string()))?;
+                    split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
                 }))
                 .await?;
                 Python::attach(|py| {
@@ -1077,15 +1102,21 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         let py_fn = py_fn.clone();
         let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let py_context = PyLlmSanitizeResponseContext { inner: context };
                 let py_response = json_to_py(py, &response)
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let result = py_fn
-                    .call1(py, (py_response, py_context))
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
+                let result = if publication {
+                    py.import("nemo_relay._event_sanitizer_context")
+                        .and_then(|module| module.getattr("invoke"))
+                        .and_then(|invoke| invoke.call1((py_fn.bind(py), py_response, py_context)))
+                } else {
+                    py_fn.bind(py).call1((py_response, py_context))
+                }
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
             }))
             .await?;
             Python::attach(|py| {

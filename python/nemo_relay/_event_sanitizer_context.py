@@ -26,6 +26,11 @@ async def _await_result(result: Awaitable[Any]) -> Any:
         _ACTIVE.reset(token)
 
 
+async def await_result(result: Awaitable[Any]) -> Any:
+    """Await an arbitrary awaitable without changing sanitizer context."""
+    return await result
+
+
 def invoke(callback: Callable[..., Any], *args: Any) -> Any:
     """Invoke a sanitizer while marking its sync and async execution contexts."""
     token = _ACTIVE.set(True)

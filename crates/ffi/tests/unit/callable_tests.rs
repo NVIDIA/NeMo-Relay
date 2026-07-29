@@ -473,32 +473,37 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     for callback in [invalid_json_cb, invalid_utf8_cb] {
         let malformed_response =
             wrap_llm_sanitize_response_fn(callback, std::ptr::null_mut(), None);
-        assert_eq!(
-            resolve(malformed_response(
-                json!({"secret": "must be omitted"}),
-                nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
-            ))
-            .unwrap(),
-            None
+        let error = resolve(malformed_response(
+            json!({"secret": "must be preserved"}),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+        ))
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid"),
+            "unexpected sanitizer error: {error}"
         );
     }
 }
 
 #[test]
-fn test_llm_sanitizers_fail_closed_for_runtime_codec_ids_with_embedded_nul() {
+fn test_llm_sanitizers_report_runtime_codec_ids_with_embedded_nul() {
     let runtime_identity =
         nemo_relay::api::runtime::LlmCodecIdentity::Runtime("runtime\0codec".to_string());
 
     let request_sanitizer =
         wrap_llm_sanitize_request_fn(llm_request_alias_cb, std::ptr::null_mut(), None);
-    let request_result = resolve(request_sanitizer(
+    let request_error = resolve(request_sanitizer(
         make_request(),
         nemo_relay::api::runtime::LlmSanitizeRequestContext::with_identity(
             runtime_identity.clone(),
         ),
     ))
-    .expect("legacy sanitizer wrappers report callback errors out of band");
-    assert_eq!(request_result, None);
+    .unwrap_err();
+    assert!(
+        request_error
+            .to_string()
+            .contains("runtime codec ID contains an embedded NUL")
+    );
     assert!(
         last_error_message()
             .unwrap()
@@ -507,12 +512,16 @@ fn test_llm_sanitizers_fail_closed_for_runtime_codec_ids_with_embedded_nul() {
 
     let response_sanitizer =
         wrap_llm_sanitize_response_fn(json_alias_cb, std::ptr::null_mut(), None);
-    let response_result = resolve(response_sanitizer(
-        json!({"secret": "must be omitted"}),
+    let response_error = resolve(response_sanitizer(
+        json!({"secret": "must be preserved"}),
         nemo_relay::api::runtime::LlmSanitizeResponseContext::with_identity(runtime_identity),
     ))
-    .expect("legacy sanitizer wrappers report callback errors out of band");
-    assert_eq!(response_result, None);
+    .unwrap_err();
+    assert!(
+        response_error
+            .to_string()
+            .contains("runtime codec ID contains an embedded NUL")
+    );
     assert!(
         last_error_message()
             .unwrap()
