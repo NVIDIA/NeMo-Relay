@@ -378,13 +378,33 @@ impl RunningGateway {
             .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
     }
 
-    // Requests shutdown and joins the server task. The send can fail only if the task already exited;
-    // the join result still captures whether serving ended cleanly.
+    // Requests shutdown and joins the server task. A second Ctrl-C while cleanup is in progress
+    // aborts the task so a stuck in-flight request cannot make the terminal unresponsive.
     async fn stop(self) -> Result<(), CliError> {
+        self.stop_with_interrupt(tokio::signal::ctrl_c()).await
+    }
+
+    async fn stop_with_interrupt<F>(mut self, interrupt: F) -> Result<(), CliError>
+    where
+        F: std::future::Future<Output = std::io::Result<()>>,
+    {
         let _ = self.shutdown_tx.send(());
-        self.task
-            .await
-            .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
+        tokio::pin!(interrupt);
+        tokio::select! {
+            result = &mut self.task => {
+                result.map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
+            }
+            interrupt_result = &mut interrupt => {
+                interrupt_result?;
+                self.task.abort();
+                match self.task.await {
+                    Err(error) if error.is_cancelled() => Ok(()),
+                    result => result.map_err(|error| {
+                        CliError::Launch(format!("gateway task failed: {error}"))
+                    })?,
+                }
+            }
+        }
     }
 }
 

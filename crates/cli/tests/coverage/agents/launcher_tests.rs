@@ -62,6 +62,16 @@ impl Drop for EnvScope {
     }
 }
 
+struct DropSignal(Option<oneshot::Sender<()>>);
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
 #[test]
 fn infers_agent_from_command_or_uses_override() {
     let command = RunOverrides {
@@ -2009,6 +2019,32 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
+}
+
+#[tokio::test]
+async fn gateway_stop_interrupt_aborts_a_stuck_task() {
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (dropped_tx, dropped_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _drop_signal = DropSignal(Some(dropped_tx));
+        let _ = started_tx.send(());
+        std::future::pending::<Result<(), CliError>>().await
+    });
+    started_rx.await.unwrap();
+    let gateway = RunningGateway { shutdown_tx, task };
+
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        gateway.stop_with_interrupt(async { Ok(()) }),
+    )
+    .await
+    .expect("interrupt did not force gateway shutdown")
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), dropped_rx)
+        .await
+        .expect("interrupted gateway task was not dropped")
+        .unwrap();
 }
 
 #[tokio::test]
