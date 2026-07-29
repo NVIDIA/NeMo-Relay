@@ -188,6 +188,36 @@ fn config_editor_inherits_explicit_target_unless_scope_is_selected() {
     assert_eq!(scope, TargetScope::User);
     assert_eq!(path, inherited);
 
+    let user = ConfigEditCommand {
+        user: true,
+        ..ConfigEditCommand::default()
+    };
+    let (scope, path) =
+        resolve_edit_target(&user, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
+    assert_eq!(scope, TargetScope::User);
+    assert_eq!(
+        path,
+        crate::configuration::user_config_dir()
+            .unwrap()
+            .join("config.toml")
+    );
+
+    let project_root = tempfile::tempdir().unwrap();
+    let _cwd = crate::test_support::CwdTestScope::enter(project_root.path());
+    let project = ConfigEditCommand {
+        project: true,
+        ..ConfigEditCommand::default()
+    };
+    let (scope, path) =
+        resolve_edit_target(&project, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
+    assert_eq!(scope, TargetScope::Project);
+    assert_eq!(
+        path,
+        std::env::current_dir()
+            .unwrap()
+            .join(".nemo-relay/config.toml")
+    );
+
     let global = ConfigEditCommand {
         global: true,
         ..ConfigEditCommand::default()

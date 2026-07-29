@@ -53,6 +53,20 @@ fn plugins_edit_inherits_explicit_plugin_target_unless_scope_is_selected() {
 }
 
 #[test]
+fn easy_path_setup_inherits_explicit_plugin_target() {
+    let plugin_config_path = PathBuf::from("/managed/plugins.toml");
+    let inherited = crate::server::GatewayOverrides {
+        plugin_config_path: Some(plugin_config_path.clone()),
+        ..crate::server::GatewayOverrides::default()
+    };
+
+    assert_eq!(
+        run::easy_path_plugin_config_path(&inherited),
+        Some(plugin_config_path)
+    );
+}
+
+#[test]
 fn operational_command_names_cover_logging_exempt_commands() {
     for (args, expected) in [
         (vec!["nemo-relay", "codex"], "codex"),

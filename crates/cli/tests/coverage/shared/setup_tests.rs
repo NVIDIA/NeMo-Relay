@@ -583,11 +583,21 @@ fn plugins_resume_command_matches_scope() {
 
 #[test]
 fn plugins_resume_command_preserves_explicit_plugin_path() {
-    let path = PathBuf::from("/managed/plugins.toml");
+    let path = PathBuf::from("/managed/plugin configs/plugins.toml");
+    #[cfg(windows)]
+    let expected = concat!(
+        "nemo-relay --plugin-config-path ",
+        "\"/managed/plugin configs/plugins.toml\" plugins edit"
+    );
+    #[cfg(not(windows))]
+    let expected = concat!(
+        "nemo-relay --plugin-config-path ",
+        "'/managed/plugin configs/plugins.toml' plugins edit"
+    );
 
     assert_eq!(
         plugins_resume_command(ConfigScope::Global, Some(&path)),
-        "nemo-relay --plugin-config-path /managed/plugins.toml plugins edit"
+        expected
     );
 }
 

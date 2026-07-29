@@ -167,7 +167,10 @@ plugin configuration. When the top-level command receives
 
 Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can
-open the plugin editor again later with `nemo-relay plugins edit`, or use
+open the plugin editor again later with the resume command printed by Relay.
+For an explicit `--config path/to/config.toml` flow, the equivalent command is
+`nemo-relay --plugin-config-path path/to/plugins.toml plugins edit`. Otherwise,
+use `nemo-relay plugins edit` for user configuration or
 `nemo-relay plugins edit --project` for project configuration.
 
 ### Edit Gateway Configuration
