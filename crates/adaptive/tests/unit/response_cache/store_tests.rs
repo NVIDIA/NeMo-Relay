@@ -6,6 +6,9 @@
 use super::*;
 use serde_json::json;
 
+#[cfg(feature = "redis-backend")]
+use std::net::TcpListener;
+
 fn entry(key: &str, created: u64, expires: u64) -> CacheEntry {
     CacheEntry {
         response: json!({ "answer": key }),
@@ -18,6 +21,32 @@ fn entry(key: &str, created: u64, expires: u64) -> CacheEntry {
 }
 
 const BIG: usize = 1 << 20; // 1 MiB — never evicts in these tests
+
+#[cfg(feature = "redis-backend")]
+#[tokio::test(start_paused = true)]
+async fn redis_initialization_times_out_for_a_silent_peer() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("redis://{}/", listener.local_addr().unwrap());
+    let started = tokio::time::Instant::now();
+
+    let err = match RedisCacheStore::new(&url, "test:").await {
+        Ok(_) => panic!("a silent Redis peer must not complete initialization"),
+        Err(err) => err,
+    };
+
+    assert!(
+        matches!(
+            err,
+            AdaptiveError::Storage(ref message)
+                if message == "redis CONNECT: timed out after 2s"
+        ),
+        "initialization must use the response-cache Redis deadline: {err}"
+    );
+    assert_eq!(
+        tokio::time::Instant::now().duration_since(started),
+        REDIS_OP_TIMEOUT
+    );
+}
 
 #[test]
 fn ttl_arithmetic_is_milliseconds() {

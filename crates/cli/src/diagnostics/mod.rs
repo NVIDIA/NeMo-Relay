@@ -632,17 +632,31 @@ async fn collect_response_cache_component_checks(
             return;
         }
     };
-    match response_cache::check_backend_health(&config).await {
-        Ok(backend) => checks.push(Check {
+    checks.push(response_cache_backend_check(response_cache::check_backend_health(&config)).await);
+}
+
+async fn response_cache_backend_check(
+    health_check: impl std::future::Future<Output = Result<String, String>>,
+) -> Check {
+    match timeout(NETWORK_TIMEOUT, health_check).await {
+        Ok(Ok(backend)) => Check {
             name: "Response cache",
             status: Status::Pass,
             details: format!("on; backend '{backend}' reachable"),
-        }),
-        Err(error) => checks.push(Check {
+        },
+        Ok(Err(error)) => Check {
             name: "Response cache",
             status: Status::Fail,
             details: format!("backend not reachable: {error}"),
-        }),
+        },
+        Err(_) => Check {
+            name: "Response cache",
+            status: Status::Fail,
+            details: format!(
+                "backend not reachable: probe timed out after {}s",
+                NETWORK_TIMEOUT.as_secs()
+            ),
+        },
     }
 }
 

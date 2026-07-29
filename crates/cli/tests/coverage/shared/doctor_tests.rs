@@ -1083,6 +1083,27 @@ async fn collect_observability_reports_response_cache_on_when_configured() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn response_cache_backend_check_reports_timeout() {
+    let check = response_cache_backend_check(std::future::pending()).await;
+
+    assert_eq!(check.name, "Response cache");
+    assert_eq!(check.status, Status::Fail);
+    assert_eq!(
+        check.details,
+        "backend not reachable: probe timed out after 2s"
+    );
+}
+
+#[tokio::test]
+async fn response_cache_backend_check_preserves_backend_error() {
+    let check = response_cache_backend_check(async { Err("connection refused".to_string()) }).await;
+
+    assert_eq!(check.name, "Response cache");
+    assert_eq!(check.status, Status::Fail);
+    assert_eq!(check.details, "backend not reachable: connection refused");
+}
+
 #[tokio::test]
 async fn collect_observability_reports_response_cache_not_configured_without_section() {
     // Adaptive present but no `response_cache` section -> reported as not configured.

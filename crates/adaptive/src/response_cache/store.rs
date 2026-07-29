@@ -323,7 +323,7 @@ impl RedisCacheStore {
     /// # Errors
     /// Returns [`AdaptiveError::Storage`] when the client or connection fails.
     pub async fn new(url: &str, key_prefix: impl Into<String>) -> Result<Self> {
-        let (_client, conn) = crate::redis::connect(url).await?;
+        let (_client, conn) = with_redis_deadline("CONNECT", crate::redis::connect(url)).await?;
         Ok(Self {
             conn,
             key_prefix: key_prefix.into(),
