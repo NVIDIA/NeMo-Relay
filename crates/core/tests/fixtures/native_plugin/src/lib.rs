@@ -741,8 +741,16 @@ unsafe extern "C" fn raw_async_stream_forward(
 ) -> bool {
     let state = unsafe { &*(user_data as *const AsyncStreamForward) };
     if !chunk.is_null() {
-        return unsafe { (state.host.async_stream_push_json)(state.stream, chunk) }
-            == NemoRelayStatus::Ok;
+        if unsafe { (state.host.async_stream_push_json)(state.stream, chunk) }
+            == NemoRelayStatus::Ok
+        {
+            return true;
+        }
+        unsafe {
+            (state.host.async_stream_release)(state.stream);
+            drop(Box::from_raw(user_data as *mut AsyncStreamForward));
+        }
+        return false;
     }
     if !error.is_null() {
         unsafe { (state.host.async_stream_reject)(state.stream, error) };

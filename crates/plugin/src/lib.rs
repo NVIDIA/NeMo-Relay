@@ -872,8 +872,12 @@ pub struct NemoRelayNativeAsyncStream {
 }
 
 /// Receives one downstream stream item. `chunk_json` is non-null for a chunk,
-/// `error` is non-null for failure, and `done` marks clean completion. Return
-/// `false` to cancel downstream production after the current callback.
+/// `error` is non-null for failure or consumer cancellation, and `done` marks
+/// clean completion. Unless the callback itself returns `false`, the host
+/// invokes one terminal callback so the plugin can reclaim `user_data`.
+/// Return `false` to cancel downstream production after the current callback;
+/// in that case, reclaim `user_data` before returning because no later callback
+/// is made.
 pub type NemoRelayNativeAsyncNextStreamCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     chunk_json: *const NemoRelayNativeString,
@@ -1002,6 +1006,11 @@ pub struct NemoRelayNativeHostApiV3 {
     /// Releases the callback-owned incremental stream reference.
     pub async_stream_release: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream),
     /// Invokes a downstream stream and reports chunks incrementally.
+    ///
+    /// The host reports consumer cancellation through one terminal callback
+    /// with a non-null error. If a result callback returns `false`, it must
+    /// reclaim its own `user_data` before returning because no terminal
+    /// callback follows.
     pub async_next_invoke_stream: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,

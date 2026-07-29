@@ -57,6 +57,12 @@ binding consumes it through CGo.
 - **Go binding foundation**: The repository-maintained Go binding consumes
   this ABI through CGo.
 
+Middleware callbacks in the raw C ABI are synchronous. Relay invokes a
+callback on a native thread and waits for it to return. Blocking I/O and other
+long-running callback work therefore occupy that thread and can reduce
+middleware throughput. The FFI does not expose completion-based middleware
+registration.
+
 ## Installation
 
 Build the FFI library from a repository checkout:

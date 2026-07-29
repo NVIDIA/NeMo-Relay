@@ -21,14 +21,23 @@ hook system.
 
 ## Asynchronous Callbacks
 
-All middleware families accept asynchronous callbacks. Rust callbacks return a
-future, and Node callbacks may return a value or a Promise. Python registrations
-accept callbacks that return a value or an awaitable when invoked through an
-asynchronous Relay API or queued event publication. Synchronous standalone
-Python calls cannot drive an awaitable callback. Call the same standalone
-helper from a running event loop and await the returned value instead. Relay
-awaits entries sequentially in priority order, so later callbacks observe
-earlier middleware output.
+All middleware families are asynchronous in the Rust runtime. Rust callbacks
+return a future, and Node callbacks may return a value or a Promise. Python
+registrations accept callbacks that return a value or an awaitable when invoked
+through an asynchronous Relay API or queued event publication. Worker and
+native-plugin middleware can also complete asynchronously. Relay awaits entries
+sequentially in priority order, so later callbacks observe earlier middleware
+output.
+
+The experimental raw C FFI and Go binding retain synchronous middleware
+callbacks. Relay invokes each callback on a native thread and waits for it to
+return, so blocking I/O or other long-running work occupies that thread and can
+reduce middleware throughput. There is no completion-based C or Go middleware
+registration API.
+
+Synchronous standalone Python calls cannot drive an awaitable callback. Call
+the same standalone helper from a running event loop and await the returned
+value instead.
 
 Managed execution is asynchronous because its result depends on middleware
 completion. Python standalone conditional and request-intercept helpers return

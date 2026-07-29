@@ -42,6 +42,11 @@ existing error behavior for its middleware family.
 | Node.js | Direct return value | Direct return value or `Promise` |
 | Go / raw C FFI | Synchronous callback | Synchronous callback |
 
+The experimental Go and raw C FFI callbacks remain synchronous. Relay waits
+for each callback on a native thread, so blocking I/O and other long-running
+callback work occupy that thread. No completion-based registration API is
+provided for these bindings.
+
 Python's standalone middleware helpers preserve their direct synchronous
 return when called without a running `asyncio` loop. In that mode, registered
 callbacks must also return direct values; an awaitable callback raises a clear
@@ -316,7 +321,7 @@ The codec capability ID in the protocol is SDK-internal. Do not expose or
 persist it in plugin code. The host rejects forged, expired, unauthorized, and
 wrong-direction capability IDs.
 
-### Rebuild Native and Raw FFI Plugins
+### Rebuild Native Plugins and Raw FFI Consumers
 
 NeMo Relay 0.7 uses native ABI v3. Recompile native plugins against the 0.7
 `nemo-relay-plugin` crate and rebuild raw FFI consumers against the generated
@@ -325,9 +330,10 @@ NeMo Relay 0.7 uses native ABI v3. Recompile native plugins against the 0.7
 The v3 table preserves the v2 prefix, and Relay retries a legacy v2 table when
 loading a plugin that rejects v3. That fallback supports loading, not
 compatibility with changed middleware, LLM sanitizer, ABI, or schema contracts.
-Rebuild plugins that use raw ABI callbacks: v3 adds completion-based async
-middleware registration, async execution continuations, and explicit
-cancellation/late-settlement behavior.
+Rebuild native plugins that use the raw plugin ABI callbacks: native ABI v3
+adds completion-based async middleware registration, async execution
+continuations, and explicit cancellation/late-settlement behavior. This is
+separate from the synchronous `nemo-relay-ffi` middleware registration API.
 
 The plugin manifest value remains `compat.native_api = "1"`. This manifest
 contract version is separate from the host ABI version; do not change it to
@@ -395,7 +401,7 @@ Before deployment:
 2. Add the required directional context argument and optional payload result.
 3. Check that no callback implicitly returns `None`, `null`, or `undefined`.
 4. Convert every Rust worker sanitizer callback to an asynchronous callback.
-5. Rebuild native and raw FFI plugins against 0.7.
+5. Rebuild native plugins and raw FFI consumers against 0.7.
 6. Regenerate and redeploy workers with the matching 0.7 protocol and SDK.
 7. Remove fixed PII `codec` values from mixed-provider configurations.
 8. Test buffered and streaming calls for every provider and custom codec that

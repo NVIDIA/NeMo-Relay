@@ -175,6 +175,12 @@ chunk or rejection and retry after the consumer advances. `InvalidArg` means
 the stream is already closed or cancelled and must not be retried. Check
 `async_stream_is_cancelled` during longer producer work.
 
+For `async_next_invoke_stream`, Relay reports downstream failure or consumer
+cancellation through one terminal callback with a non-null error, and reports
+clean completion with `done = true`. Reclaim the callback's `user_data` in that
+terminal callback. If a chunk callback returns `false`, reclaim `user_data`
+before returning because Relay does not invoke another callback afterward.
+
 Cancelling the one-shot completion supplied to a non-stream execution
 intercept also aborts any pending `async_next_invoke` continuation. Plugins
 must still release their callback-owned completion and `next` references

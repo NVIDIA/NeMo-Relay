@@ -1334,7 +1334,7 @@ where
 struct NativeCallbackUserData {
     ptr: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
-    _instance: Arc<NativePluginInstance>,
+    _instance: Option<Arc<NativePluginInstance>>,
 }
 
 struct NativeCallbackUserDataGuard {
@@ -1387,7 +1387,7 @@ fn make_user_data(
     Arc::new(NativeCallbackUserData {
         ptr: user_data,
         free_fn,
-        _instance: instance,
+        _instance: Some(instance),
     })
 }
 
@@ -1489,6 +1489,7 @@ struct NativeAsyncStreamCallbackGuard {
     cb: NemoRelayNativeAsyncNextStreamCb,
     user_data: usize,
     stream: Arc<NativeAsyncStream>,
+    _library_guard: Option<Arc<NativeCallbackUserData>>,
     active: bool,
 }
 
@@ -1498,22 +1499,39 @@ impl NativeAsyncStreamCallbackGuard {
     }
 
     fn fail(&mut self, error: &str) {
-        if self.active
-            && !self.stream.cancelled.load(Ordering::Acquire)
-            && let Some(message) = native_string_from_str(error)
-        {
+        if !self.active {
+            return;
+        }
+        // Cancellation owns terminal delivery. Leave the guard active so its
+        // Drop implementation can notify the plugin and release callback data.
+        if self.stream.cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(message) = native_string_from_str(error) {
             unsafe {
                 let _ = (self.cb)(self.user_data as *mut c_void, ptr::null(), message, false);
                 native_string_free(message);
             }
+            self.active = false;
         }
-        self.active = false;
     }
 }
 
 impl Drop for NativeAsyncStreamCallbackGuard {
     fn drop(&mut self) {
-        if self.active && !self.stream.cancelled.load(Ordering::Acquire) {
+        if !self.active {
+            return;
+        }
+        if self.stream.cancelled.load(Ordering::Acquire) {
+            if let Some(message) =
+                native_string_from_str("native async stream continuation was cancelled")
+            {
+                unsafe {
+                    let _ = (self.cb)(self.user_data as *mut c_void, ptr::null(), message, false);
+                    native_string_free(message);
+                }
+            }
+        } else {
             unsafe {
                 let _ = (self.cb)(
                     self.user_data as *mut c_void,
@@ -1587,6 +1605,11 @@ async fn invoke_native_async_callback(
         before_settlement_lock: None,
         _callback_user_data: Some(user_data.clone()),
     });
+    let mut wait = NativeAsyncWait {
+        completion: Arc::clone(&completion),
+        receiver,
+        completed: false,
+    };
     let completion_ref = Arc::into_raw(completion.clone()) as usize;
     let next_ref = match (next, runtime) {
         (Some(inner), Some(runtime)) => Some(Arc::into_raw(Arc::new(NativeAsyncNext::new(
@@ -1649,11 +1672,6 @@ async fn invoke_native_async_callback(
             ));
         }
     }
-    let mut wait = NativeAsyncWait {
-        completion,
-        receiver,
-        completed: false,
-    };
     wait.receive().await
 }
 
@@ -2056,9 +2074,15 @@ unsafe extern "C" fn native_async_next_invoke_stream(
     }
     let next_fn = next_fn.clone();
     let continuation_context = next.context.clone();
-    let library_guard = next._callback_user_data.clone();
     let user_data = user_data as usize;
     let output_stream_for_task = Arc::clone(&output_stream);
+    let callback_guard = NativeAsyncStreamCallbackGuard {
+        cb,
+        user_data,
+        stream: output_stream_for_task,
+        _library_guard: next._callback_user_data.clone(),
+        active: true,
+    };
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let task = next.runtime.spawn(async move {
         if start_rx.await.is_err() {
@@ -2066,13 +2090,7 @@ unsafe extern "C" fn native_async_next_invoke_stream(
         }
         continuation_context
             .run(async move {
-                let _library_guard = library_guard;
-                let mut callback_guard = NativeAsyncStreamCallbackGuard {
-                    cb,
-                    user_data,
-                    stream: output_stream_for_task,
-                    active: true,
-                };
+                let mut callback_guard = callback_guard;
                 let result = AssertUnwindSafe(async {
                     match next_fn(request).await {
                         Ok(mut stream) => {
@@ -2419,6 +2437,13 @@ fn wrap_native_incremental_llm_stream_execution(
     free_fn: NemoRelayNativeFreeFn,
 ) -> LlmStreamExecutionFn {
     let user_data = make_user_data(instance, user_data, free_fn);
+    wrap_native_incremental_llm_stream_execution_with_user_data(cb, user_data)
+}
+
+fn wrap_native_incremental_llm_stream_execution_with_user_data(
+    cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+    user_data: Arc<NativeCallbackUserData>,
+) -> LlmStreamExecutionFn {
     Arc::new(move |name, request, next| {
         let user_data = user_data.clone();
         let name = name.to_owned();
@@ -2452,6 +2477,10 @@ fn wrap_native_incremental_llm_stream_execution(
                 before_settlement_lock: None,
                 _callback_user_data: Some(user_data.clone()),
             });
+            let output = NativeAsyncStreamReceiver {
+                receiver,
+                stream: Arc::clone(&stream),
+            };
             let stream_ref = Arc::into_raw(stream.clone());
             let state = catch_unwind(AssertUnwindSafe(|| unsafe {
                 cb(
@@ -2468,11 +2497,6 @@ fn wrap_native_incremental_llm_stream_execution(
             {
                 Some(state) => state,
                 None => {
-                    stream
-                        .sender
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .take();
                     return Err(FlowError::Internal(
                         "native async stream callback panicked or returned an invalid state".into(),
                     ));
@@ -2489,10 +2513,7 @@ fn wrap_native_incremental_llm_stream_execution(
                     "native async stream callback returned Complete without finishing".into(),
                 ));
             }
-            Ok(LlmJsonStream::new(NativeAsyncStreamReceiver {
-                receiver,
-                stream,
-            }))
+            Ok(LlmJsonStream::new(output))
         })
     })
 }

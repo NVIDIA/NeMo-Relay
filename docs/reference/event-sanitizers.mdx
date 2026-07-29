@@ -209,14 +209,17 @@ activation fails.
 The source-first C API uses `NemoRelayEventSanitizeCb`. It provides global,
 scope-local, and plugin-context registration functions for all three surfaces.
 Global names start with `nemo_relay_register_`, and scope-local names start
-with `nemo_relay_scope_register_`.
+with `nemo_relay_scope_register_`. These callbacks are synchronous: Relay
+waits on a native thread until the callback returns, and no completion-based
+registration variant is provided.
 
 The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, global
 `Register*SanitizeGuardrail` helpers, scope-local
 `ScopeRegister*SanitizeGuardrail` helpers, and the same methods on
 `PluginContext`. The `guardrails` package provides shorter aliases. Because a
 returned `EventSanitizeFields` replaces all three fields, copy the supplied
-value and modify only the fields that should change.
+value and modify only the fields that should change. Go middleware callbacks
+are also synchronous; blocking work occupies the native callback thread.
 
 ## Related Topics
 
