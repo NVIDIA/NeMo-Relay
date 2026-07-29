@@ -116,7 +116,8 @@ pub(crate) fn resolve_logging_config(
     let user_only = user_only || user_config_scope();
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths_scoped(explicit.as_ref(), user_only) {
-        let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
+        let required = explicit.as_ref() == Some(&path);
+        let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
         };
         let parsed = raw
@@ -983,7 +984,8 @@ fn load_shared_config_scoped(
 ) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths_scoped(explicit, user_only) {
-        let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
+        let required = explicit == Some(&path);
+        let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
         };
         let parsed = raw
@@ -1051,26 +1053,26 @@ pub(crate) fn any_config_file_exists() -> bool {
     config_paths(None).iter().any(|path| path.exists())
 }
 
-// Returns the config search path. An explicit path disables implicit discovery; otherwise system
-// config is lowest priority, the nearest project config is next, and user config is merged last.
+// Returns the config search path from lowest to highest precedence. An explicit path replaces the
+// ambient user file; project discovery and the system layer still apply.
 fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     config_paths_scoped(explicit, user_config_scope())
 }
 
 fn config_paths_scoped(explicit: Option<&PathBuf>, user_only: bool) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     if let Some(path) = explicit {
-        return vec![path.clone()];
+        paths.push(path.clone());
+    } else if let Some(user) = user_config_path() {
+        paths.push(user);
     }
-    let mut paths = vec![PathBuf::from("/etc/nemo-relay/config.toml")];
     if !user_only
         && let Ok(cwd) = std::env::current_dir()
         && let Some(project) = find_project_config(&cwd)
     {
         paths.push(project);
     }
-    if let Some(user) = user_config_path() {
-        paths.push(user);
-    }
+    paths.push(PathBuf::from("/etc/nemo-relay/config.toml"));
     paths
 }
 

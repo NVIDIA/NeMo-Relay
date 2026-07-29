@@ -152,8 +152,9 @@ nemo-relay run --agent codex --dry-run
 
 Project config lives at `./.nemo-relay/config.toml`; user config lives at
 `~/.config/nemo-relay/config.toml` or `$XDG_CONFIG_HOME/nemo-relay/config.toml`.
-The project layer overrides system config, and the user layer overrides the
-project layer.
+Runtime files layer from lowest to highest precedence as explicit-or-user,
+nearest project, then system. An explicit `--config` replaces the ambient user
+file without suppressing project or system configuration.
 
 Set up agent entries in the top-level config with:
 

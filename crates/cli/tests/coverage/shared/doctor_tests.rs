@@ -56,7 +56,7 @@ fn empty_report() -> DoctorReport {
             shell: Some("zsh".into()),
         },
         configuration: ConfigurationInfo {
-            explicit_config: false,
+            explicit: None,
             workspace: ConfigLayer {
                 path: PathBuf::from("/x/.nemo-relay/config.toml"),
                 status: Status::Info,

@@ -48,6 +48,46 @@ fn explicit_plugin_config_path_resolves_runtime_target() {
 }
 
 #[test]
+fn config_paths_layer_explicit_or_user_then_project_then_system() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let child = project.join("nested");
+    let xdg = temp.path().join("xdg");
+    let project_config = project.join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::write(&project_config, "").unwrap();
+    let discovered_project_config = project_config.canonicalize().unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&child, &xdg);
+    let system_config = PathBuf::from("/etc/nemo-relay/config.toml");
+
+    assert_eq!(
+        config_paths_scoped(None, false),
+        vec![
+            xdg.join("nemo-relay/config.toml"),
+            discovered_project_config.clone(),
+            system_config.clone(),
+        ]
+    );
+
+    let explicit_config = temp.path().join("managed/config.toml");
+    assert_eq!(
+        config_paths_scoped(Some(&explicit_config), false),
+        vec![
+            explicit_config.clone(),
+            discovered_project_config,
+            system_config.clone(),
+        ]
+    );
+    assert_eq!(
+        config_paths_scoped(Some(&explicit_config), true),
+        vec![explicit_config, system_config],
+        "user-only mode suppresses project discovery but retains the system layer"
+    );
+}
+
+#[test]
 fn plugin_config_paths_layer_explicit_or_user_then_project_then_system() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
@@ -556,6 +596,7 @@ fn agent_inference_uses_executable_basename() {
 
 #[test]
 fn explicit_toml_config_maps_supported_sections() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     std::fs::write(
@@ -732,6 +773,7 @@ anthropic_auth_header = "Basic file-anthropic"
 
 #[test]
 fn invalid_provider_auth_header_errors_do_not_expose_secret_values() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     std::fs::write(
@@ -755,6 +797,7 @@ fn invalid_provider_auth_header_errors_do_not_expose_secret_values() {
 
 #[test]
 fn invalid_anthropic_provider_auth_header_errors_do_not_expose_secret_values() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     std::fs::write(
@@ -800,6 +843,7 @@ fn invalid_provider_auth_environment_errors_do_not_expose_secret_values() {
 
 #[test]
 fn explicit_config_must_exist() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("missing-config.toml");
     let command = RunOverrides {
@@ -873,6 +917,7 @@ path = "/etc/nemo-relay/pricing.json"
 #[cfg(unix)]
 #[test]
 fn unreadable_config_errors_include_the_source_path() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     use std::os::unix::fs::PermissionsExt;
 
     if unsafe { libc::geteuid() } == 0 {
@@ -920,6 +965,7 @@ fn unreadable_config_errors_include_the_source_path() {
 
 #[test]
 fn legacy_observability_config_sections_fail_clearly() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     for (name, contents, expected) in [
         (
@@ -963,6 +1009,7 @@ fn legacy_observability_config_sections_fail_clearly() {
 
 #[test]
 fn explicit_plugins_toml_maps_root_plugin_config() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(
@@ -1089,8 +1136,8 @@ fn persistent_user_scope_excludes_project_gateway_and_plugin_layers() {
     assert_eq!(
         config_paths(None),
         vec![
-            PathBuf::from("/etc/nemo-relay/config.toml"),
             xdg.join("nemo-relay/config.toml"),
+            PathBuf::from("/etc/nemo-relay/config.toml"),
         ]
     );
     assert_eq!(
@@ -1858,6 +1905,7 @@ kind = "observability"
 
 #[test]
 fn config_toml_plugin_configuration_is_rejected() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(
@@ -1882,6 +1930,7 @@ config = { version = 1, components = [] }
 
 #[test]
 fn plugin_config_path_overrides_sibling_plugin_file() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     let sibling_path = temp.path().join("plugins.toml");
@@ -1911,6 +1960,7 @@ fn plugin_config_path_overrides_sibling_plugin_file() {
 
 #[test]
 fn cli_run_overrides_config_values() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     std::fs::write(
@@ -1941,6 +1991,7 @@ openai_base_url = "http://file-openai"
 
 #[test]
 fn run_inherits_top_level_server_flags_when_subcommand_flags_are_absent() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     std::fs::write(
@@ -2776,6 +2827,7 @@ fn bootstrap_hmac_key_rejects_corrupt_persistent_state() {
 
 #[test]
 fn persistent_server_resolution_rejects_project_specific_flags() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let args = GatewayOverrides {
         config: Some(PathBuf::from("project-config.toml")),
         ..GatewayOverrides::default()
@@ -2791,6 +2843,7 @@ fn persistent_server_resolution_rejects_project_specific_flags() {
 
 #[test]
 fn server_resolution_fails_when_required_enabled_dynamic_plugin_is_blocked_by_policy() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -2825,6 +2878,7 @@ allowed = false
 
 #[test]
 fn server_resolution_fails_when_required_enabled_dynamic_plugin_fails_integrity() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -2891,6 +2945,7 @@ startup = "required"
 
 #[test]
 fn server_resolution_fails_when_required_enabled_dynamic_plugin_lacks_trusted_keys() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -2959,6 +3014,7 @@ attestation = "signature_required"
 
 #[test]
 fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_trusted_key() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -3031,6 +3087,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
 
 #[test]
 fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_signature() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -3117,6 +3174,7 @@ fn gateway_body_limit_defaults_are_stable() {
 
 #[test]
 fn gateway_body_limit_file_values_must_be_nonzero() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     for (field, expected) in [
@@ -3141,6 +3199,7 @@ fn gateway_body_limit_file_values_must_be_nonzero() {
 
 #[test]
 fn run_resolution_applies_all_run_overrides() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = isolated_config_path(&temp);
     std::fs::write(&config_path, "").unwrap();
@@ -3165,6 +3224,7 @@ fn run_resolution_applies_all_run_overrides() {
 
 #[test]
 fn run_resolution_fails_when_required_enabled_dynamic_plugin_is_blocked_by_policy() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -3206,6 +3266,7 @@ allowed = false
 
 #[test]
 fn malformed_shared_config_reports_context() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let invalid_toml = temp.path().join("invalid.toml");
     std::fs::write(&invalid_toml, "server = [").unwrap();
@@ -3287,6 +3348,58 @@ unknown_component = "error"
     );
 }
 
+#[test]
+fn uphill_config_layers_replace_scalars_and_aggregate_distinct_agent_tables() {
+    let layers = [
+        r#"
+[gateway]
+max_hook_payload_bytes = 100
+
+[agents.codex]
+command = "user-codex"
+"#,
+        r#"
+[gateway]
+max_passthrough_body_bytes = 200
+
+[agents.claude]
+command = "project-claude"
+"#,
+        r#"
+[gateway]
+max_hook_payload_bytes = 300
+
+[agents.codex]
+command = "system-codex"
+"#,
+    ];
+    let mut merged = toml::Value::Table(toml::map::Map::new());
+    for layer in layers {
+        let layer = layer
+            .parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .unwrap();
+        merge_gateway_config_toml(&mut merged, layer);
+    }
+
+    assert_eq!(
+        merged["gateway"]["max_hook_payload_bytes"].as_integer(),
+        Some(300)
+    );
+    assert_eq!(
+        merged["gateway"]["max_passthrough_body_bytes"].as_integer(),
+        Some(200)
+    );
+    assert_eq!(
+        merged["agents"]["codex"]["command"].as_str(),
+        Some("system-codex")
+    );
+    assert_eq!(
+        merged["agents"]["claude"]["command"].as_str(),
+        Some("project-claude")
+    );
+}
+
 #[cfg(windows)]
 fn set_test_windows_dacl(path: &std::path::Path, sddl: &str) {
     use std::os::windows::ffi::OsStrExt;
@@ -3338,6 +3451,7 @@ fn set_test_windows_dacl(path: &std::path::Path, sddl: &str) {
 
 #[test]
 fn logging_defaults_when_section_absent() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = isolated_config_path(&temp);
     std::fs::write(&config_path, "").unwrap();
@@ -3356,6 +3470,7 @@ fn logging_defaults_when_section_absent() {
 
 #[test]
 fn logging_parses_global_settings_and_file_sinks() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = isolated_config_path(&temp);
     let log_a = temp.path().join("a.log.jsonl");
@@ -3415,6 +3530,7 @@ format = "human"
 
 #[test]
 fn logging_rotation_cli_config_preserves_pair_and_rejects_incomplete_pair() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = isolated_config_path(&temp);
     let log_path = temp.path().join("relay.log.jsonl");
@@ -3465,6 +3581,7 @@ max_file_size_bytes = 1024
 
 #[test]
 fn logging_rejects_invalid_level_format_missing_path_and_zero_queue() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
 
     let bad_level = temp.path().join("bad-level.toml");
@@ -3560,6 +3677,7 @@ queue_capacity = {}
 
 #[test]
 fn logging_rejects_invalid_sink_level_and_format() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
 
     let bad_sink_level = temp.path().join("bad-sink-level.toml");
@@ -3601,6 +3719,7 @@ format = "yaml"
 
 #[test]
 fn logging_rejects_unknown_section_and_sink_fields() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
 
     let unknown_logging_field = temp.path().join("unknown-logging-field.toml");
@@ -3641,6 +3760,7 @@ queue_capcity = 32
 
 #[test]
 fn logging_rejects_empty_sink_path() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let config_path = isolated_config_path(&temp);
     std::fs::write(
@@ -3662,6 +3782,7 @@ path = ""
 
 #[test]
 fn logging_config_does_not_read_rust_log() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let _env = crate::test_support::ENV_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());

@@ -226,6 +226,7 @@ fn cli_logging_options_override_environment_source() {
 
 #[test]
 fn cli_logging_resolves_explicit_relay_config() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let _environment = crate::test_support::EnvScope::set(&[
         ("NEMO_RELAY_LOG", None),
         ("NEMO_RELAY_LOG_STDERR_FORMAT", None),

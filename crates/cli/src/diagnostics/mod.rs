@@ -153,23 +153,17 @@ fn collect_configuration(
         .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
     let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
-    let workspace = gateway_overrides
-        .config
-        .as_deref()
-        .map_or_else(|| layer_status(&workspace_path), layer_status);
+    let explicit = gateway_overrides.config.as_deref().map(layer_status);
+    let workspace = layer_status(&workspace_path);
     let global = if explicit_config {
-        ignored_layer_status(&global_path)
+        replaced_user_layer_status(&global_path)
     } else {
         layer_status(&global_path)
     };
-    let system = if explicit_config {
-        ignored_layer_status(&system_path)
-    } else {
-        layer_status(&system_path)
-    };
+    let system = layer_status(&system_path);
 
     ConfigurationInfo {
-        explicit_config,
+        explicit,
         workspace,
         global,
         system,
@@ -312,12 +306,12 @@ fn layer_status(path: &Path) -> ConfigLayer {
     }
 }
 
-fn ignored_layer_status(path: &Path) -> ConfigLayer {
+fn replaced_user_layer_status(path: &Path) -> ConfigLayer {
     ConfigLayer {
         path: path.to_path_buf(),
         status: Status::Info,
         active: false,
-        details: "not selected because --config scopes configuration".into(),
+        details: "replaced by explicit --config".into(),
     }
 }
 

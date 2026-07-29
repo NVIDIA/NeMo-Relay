@@ -3204,7 +3204,7 @@ fn cli_doctor_json_reports_a_missing_explicit_config() {
 }
 
 #[test]
-fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
+fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     let cwd = temp.path().join("workdir");
@@ -3223,25 +3223,31 @@ fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
         .output()
         .unwrap();
 
-    assert!(
-        output.status.success(),
-        "explicit config should ignore invalid workspace config: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(!output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        report["configuration"]["workspace"]["path"],
+        report["configuration"]["explicit"]["path"],
         config.display().to_string()
     );
-    assert_eq!(report["configuration"]["workspace"]["status"], "pass");
-    assert_eq!(report["configuration"]["workspace"]["active"], true);
+    assert_eq!(report["configuration"]["explicit"]["status"], "pass");
+    assert_eq!(report["configuration"]["explicit"]["active"], true);
+    assert_eq!(
+        report["configuration"]["workspace"]["path"],
+        cwd.canonicalize()
+            .unwrap()
+            .join(".nemo-relay/config.toml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(report["configuration"]["workspace"]["status"], "fail");
+    assert_eq!(report["configuration"]["workspace"]["active"], false);
     assert_eq!(report["configuration"]["global"]["status"], "info");
     assert_eq!(report["configuration"]["global"]["active"], false);
     assert!(
         report["configuration"]["global"]["details"]
             .as_str()
             .unwrap()
-            .contains("--config scopes configuration")
+            .contains("replaced by explicit --config")
     );
 
     let human_output = Command::new(gateway_bin())
@@ -3251,11 +3257,13 @@ fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
         .args(["--config", config.to_str().unwrap(), "doctor"])
         .output()
         .unwrap();
-    assert!(human_output.status.success());
+    assert!(!human_output.status.success());
     let stdout = String::from_utf8_lossy(&human_output.stdout);
     assert!(stdout.contains("Explicit"));
     assert!(stdout.contains(config.to_str().unwrap()));
-    assert!(stdout.contains("not selected because --config scopes configuration"));
+    assert!(stdout.contains("Workspace"));
+    assert!(stdout.contains("invalid TOML"));
+    assert!(stdout.contains("replaced by explicit --config"));
 }
 
 #[test]
