@@ -173,6 +173,12 @@ func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	backend := NewInMemoryResponseCacheBackend()
 	rc := NewResponseCacheConfig()
+	if rc.TTLSeconds == nil || *rc.TTLSeconds != 3600 {
+		t.Fatalf("constructor TTL default mismatch: %#v", rc.TTLSeconds)
+	}
+	if rc.Priority == nil || *rc.Priority != 50 {
+		t.Fatalf("constructor priority default mismatch: %#v", rc.Priority)
+	}
 	rc.Namespace = "go-harness"
 	rc.CacheNondeterministic = true
 	rc.Backend = &backend
@@ -237,4 +243,76 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	if !found {
 		t.Fatalf("expected response_cache.invalid_bypass_rate diagnostic, got %#v", badReport.Diagnostics)
 	}
+}
+
+func TestResponseCacheConfigPreservesOmissionAndExplicitZero(t *testing.T) {
+	marshal := func(t *testing.T, responseCache ResponseCacheConfig) map[string]any {
+		t.Helper()
+		payload, err := json.Marshal(responseCache)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+		return decoded
+	}
+	validate := func(t *testing.T, responseCache ResponseCacheConfig) ConfigReport {
+		t.Helper()
+		config := NewAdaptiveConfig()
+		config.ResponseCache = &responseCache
+		report, err := ValidateAdaptiveConfig(config)
+		if err != nil {
+			t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+		}
+		return report
+	}
+
+	t.Run("partial config delegates to Rust defaults", func(t *testing.T) {
+		responseCache := ResponseCacheConfig{Namespace: "dev"}
+		decoded := marshal(t, responseCache)
+		if _, ok := decoded["ttl_seconds"]; ok {
+			t.Fatalf("partial config must omit ttl_seconds: %#v", decoded)
+		}
+		if _, ok := decoded["priority"]; ok {
+			t.Fatalf("partial config must omit priority: %#v", decoded)
+		}
+		if report := validate(t, responseCache); len(report.Diagnostics) != 0 {
+			t.Fatalf("expected Rust defaults to validate cleanly, got %#v", report.Diagnostics)
+		}
+	})
+
+	t.Run("explicit TTL zero remains invalid", func(t *testing.T) {
+		zero := uint64(0)
+		responseCache := ResponseCacheConfig{TTLSeconds: &zero}
+		if got := marshal(t, responseCache)["ttl_seconds"]; got != float64(0) {
+			t.Fatalf("explicit ttl_seconds=0 was not preserved: %#v", got)
+		}
+		report := validate(t, responseCache)
+		found := false
+		for _, diagnostic := range report.Diagnostics {
+			if diagnostic.Code == "response_cache.invalid_ttl" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected response_cache.invalid_ttl, got %#v", report.Diagnostics)
+		}
+	})
+
+	t.Run("explicit priority zero remains valid", func(t *testing.T) {
+		zero := int32(0)
+		responseCache := ResponseCacheConfig{Priority: &zero}
+		decoded := marshal(t, responseCache)
+		if got := decoded["priority"]; got != float64(0) {
+			t.Fatalf("explicit priority=0 was not preserved: %#v", got)
+		}
+		if _, ok := decoded["ttl_seconds"]; ok {
+			t.Fatalf("unconfigured ttl_seconds must remain omitted: %#v", decoded)
+		}
+		if report := validate(t, responseCache); len(report.Diagnostics) != 0 {
+			t.Fatalf("expected priority=0 to validate cleanly, got %#v", report.Diagnostics)
+		}
+	})
 }

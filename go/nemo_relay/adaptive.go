@@ -73,14 +73,13 @@ type AcgConfig struct {
 // runtime; this struct only has to carry the section through to the FFI validator.
 type ResponseCacheConfig struct {
 	// TTLSeconds is how long a stored answer stays reusable, in seconds (> 0).
-	// Always serialized: with omitempty an explicit 0 would vanish and Rust's
-	// default (3600) would silently replace it instead of failing validation.
-	TTLSeconds uint64 `json:"ttl_seconds"`
+	// Nil delegates to Rust's default (3600); a pointer to 0 is rejected.
+	TTLSeconds *uint64 `json:"ttl_seconds,omitempty"`
 	// Namespace is folded into every key to separate environments/tenants.
 	Namespace string `json:"namespace,omitempty"`
 	// Priority is the execution-intercept priority; lower runs first/outermost.
-	// Always serialized so an explicit 0 (outermost) stays expressible.
-	Priority int32 `json:"priority"`
+	// Nil delegates to Rust's default (50); a pointer to 0 selects outermost.
+	Priority *int32 `json:"priority,omitempty"`
 	// BypassRate is the probability in [0.0, 1.0] of skipping the cache and running live.
 	BypassRate float64 `json:"bypass_rate,omitempty"`
 	// CacheNondeterministic lets requests that are not explicitly deterministic
@@ -181,9 +180,11 @@ func NewAcgConfig() AcgConfig {
 // caching disabled). Backend is left nil so the core applies its in-memory default;
 // set it for redis or to tune the in-memory budget.
 func NewResponseCacheConfig() ResponseCacheConfig {
+	ttlSeconds := uint64(3600)
+	priority := int32(50)
 	return ResponseCacheConfig{
-		TTLSeconds:            3600,
-		Priority:              50,
+		TTLSeconds:            &ttlSeconds,
+		Priority:              &priority,
 		CacheNondeterministic: false,
 		KeyStrategy:           "exact_request",
 	}
