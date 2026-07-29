@@ -4,7 +4,7 @@
 //! Unit tests for shared in the NeMo Relay core crate.
 
 use super::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, json};
 
@@ -174,13 +174,16 @@ async fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     let _guard = lock_runtime_owner();
     reset_global();
 
+    let observed_without_codec = Arc::new(Mutex::new(None));
+    let callback_observed_without_codec = Arc::clone(&observed_without_codec);
     register_llm_request_intercept(
         "shared-none",
         1,
         false,
-        Arc::new(|_name, mut request, annotated| {
+        Arc::new(move |_name, mut request, annotated| {
+            let callback_observed_without_codec = Arc::clone(&callback_observed_without_codec);
             Box::pin(async move {
-                assert!(annotated.is_none());
+                *callback_observed_without_codec.lock().unwrap() = Some(annotated.is_none());
                 request.headers.insert("x-no-codec".into(), json!(true));
                 let mut annotated = SharedTestCodec.decode(&request)?;
                 annotated.model = Some("interceptor-model".into());
@@ -201,6 +204,7 @@ async fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         )
         .await
         .unwrap();
+    assert_eq!(*observed_without_codec.lock().unwrap(), Some(true));
     assert_eq!(
         request_without_codec.headers.get("x-no-codec"),
         Some(&json!(true))
@@ -214,13 +218,21 @@ async fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     assert!(pending_marks_without_codec.is_empty());
     deregister_llm_request_intercept("shared-none").unwrap();
 
+    let observed_with_codec = Arc::new(Mutex::new(None));
+    let callback_observed_with_codec = Arc::clone(&observed_with_codec);
     register_llm_request_intercept(
         "shared-codec",
         1,
         false,
-        Arc::new(|_name, mut request, annotated| {
+        Arc::new(move |_name, mut request, annotated| {
+            let callback_observed_with_codec = Arc::clone(&callback_observed_with_codec);
             Box::pin(async move {
-                let mut annotated = annotated.expect("codec should provide annotated request");
+                *callback_observed_with_codec.lock().unwrap() =
+                    Some(annotated.as_ref().and_then(|value| value.model.clone()));
+                let mut annotated = match annotated {
+                    Some(value) => value,
+                    None => SharedTestCodec.decode(&request)?,
+                };
                 annotated.model = Some("intercepted-model".into());
                 request.headers.insert("x-codec".into(), json!(true));
                 Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
@@ -242,6 +254,10 @@ async fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         .await
         .unwrap();
 
+    assert_eq!(
+        *observed_with_codec.lock().unwrap(),
+        Some(Some("decoded-model".into()))
+    );
     assert_eq!(
         request_with_codec.headers.get("x-codec"),
         Some(&json!(true))

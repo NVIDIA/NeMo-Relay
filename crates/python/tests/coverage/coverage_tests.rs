@@ -674,10 +674,12 @@ def event_fail(event):
         );
 
         let tool_fail = wrap_py_tool_fn(module.getattr("tool_fail").unwrap().unbind());
+        let error = runtime
+            .block_on(tool_fail("demo".to_string(), json!({"x": 1})))
+            .unwrap_err();
         assert!(
-            runtime
-                .block_on(tool_fail("demo".to_string(), json!({"x": 1})))
-                .is_err()
+            error.to_string().contains("tool boom"),
+            "unexpected tool error: {error}"
         );
 
         let tool_cond =
@@ -694,13 +696,15 @@ def event_fail(event):
         let llm_sanitize =
             wrap_py_llm_sanitize_request_fn(module.getattr("llm_sanitize_bad").unwrap().unbind())
                 .unwrap();
+        let error = runtime
+            .block_on(llm_sanitize(
+                request.clone(),
+                nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+            ))
+            .unwrap_err();
         assert!(
-            runtime
-                .block_on(llm_sanitize(
-                    request.clone(),
-                    nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
-                ))
-                .is_err()
+            error.to_string().contains("unexpected type"),
+            "unexpected LLM request sanitizer error: {error}"
         );
 
         let llm_cond = wrap_py_llm_conditional_fn(module.getattr("llm_cond_bad").unwrap().unbind());
@@ -730,22 +734,26 @@ def event_fail(event):
 
         let tool_req =
             wrap_py_tool_request_intercept_fn(module.getattr("tool_fail").unwrap().unbind());
+        let error = runtime
+            .block_on(tool_req("demo".to_string(), json!({"x": 1})))
+            .unwrap_err();
         assert!(
-            runtime
-                .block_on(tool_req("demo".to_string(), json!({"x": 1})))
-                .is_err()
+            error.to_string().contains("tool boom"),
+            "unexpected tool request intercept error: {error}"
         );
 
         let llm_resp =
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_fail").unwrap().unbind())
                 .unwrap();
+        let error = runtime
+            .block_on(llm_resp(
+                json!({"ok": true}),
+                nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+            ))
+            .unwrap_err();
         assert!(
-            runtime
-                .block_on(llm_resp(
-                    json!({"ok": true}),
-                    nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
-                ))
-                .is_err()
+            error.to_string().contains("resp boom"),
+            "unexpected LLM response sanitizer error: {error}"
         );
 
         let mut collector =

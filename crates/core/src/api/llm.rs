@@ -719,7 +719,9 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
     let handle = create_llm_handle(handle_params)?;
     let scope_stack = handle.captured_scope_stack().clone();
     let (entries, subscribers, agent_is_fresh) = {
-        let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+        let mut scope_guard = scope_stack
+            .write()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_sanitize_request_guardrails
         });
@@ -899,7 +901,9 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = params.handle.captured_scope_stack().clone();
     let (entries, subscribers) = {
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_sanitize_response_guardrails
         });

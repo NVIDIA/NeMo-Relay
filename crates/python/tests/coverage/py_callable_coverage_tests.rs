@@ -8,7 +8,7 @@ use super::*;
 use std::ffi::CString;
 use std::sync::Arc;
 
-use pyo3::types::PyModule;
+use pyo3::types::{PyDict, PyList, PyModule};
 use serde_json::json;
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
@@ -16,6 +16,34 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let file_name = CString::new("py_callable_coverage_tests.py").unwrap();
     let module_name = CString::new("py_callable_coverage_tests").unwrap();
     PyModule::from_code(py, &code, &file_name, &module_name).unwrap()
+}
+
+fn install_event_sanitizer_context_module(py: Python<'_>) {
+    let code = CString::new(include_str!(
+        "../../../../python/nemo_relay/_event_sanitizer_context.py"
+    ))
+    .unwrap();
+    let file_name = CString::new("_event_sanitizer_context.py").unwrap();
+    let module_name = CString::new("nemo_relay._event_sanitizer_context").unwrap();
+    let context = PyModule::from_code(py, &code, &file_name, &module_name).unwrap();
+    let parent = PyModule::new(py, "nemo_relay").unwrap();
+    parent
+        .setattr("__path__", PyList::empty(py))
+        .expect("test package path should be writable");
+    parent
+        .setattr("_event_sanitizer_context", &context)
+        .expect("test context module should be writable");
+    let modules = py
+        .import("sys")
+        .unwrap()
+        .getattr("modules")
+        .unwrap()
+        .cast_into::<PyDict>()
+        .unwrap();
+    modules.set_item("nemo_relay", parent).unwrap();
+    modules
+        .set_item("nemo_relay._event_sanitizer_context", context)
+        .unwrap();
 }
 
 fn make_request() -> LlmRequest {
@@ -673,6 +701,7 @@ fn event_sanitize_wrapper_covers_conversion_success_and_error_propagation() {
 
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
+        install_event_sanitizer_context_module(py);
         let module = load_module(
             py,
             r#"

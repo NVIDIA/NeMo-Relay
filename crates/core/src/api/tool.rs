@@ -231,7 +231,9 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
     let (entries, subscribers) = {
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_sanitize_request_guardrails
         });
@@ -418,7 +420,9 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
     let (entries, subscribers) = {
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_sanitize_response_guardrails
         });
