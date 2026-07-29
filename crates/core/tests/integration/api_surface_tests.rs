@@ -1921,21 +1921,19 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
     stream.close().await.unwrap();
 
     let success_events = captured_events_snapshot(&events);
-    let success_start = success_events
+    let scope_events = success_events
         .iter()
-        .find(|event| {
-            event.kind() == "scope" && event.scope_category() == Some(ScopeCategory::Start)
-        })
-        .expect("stream start event");
-    let success_end = success_events
-        .iter()
-        .rev()
-        .find(|event| event.kind() == "scope" && event.scope_category() == Some(ScopeCategory::End))
-        .expect("stream end event");
-    assert_eq!(success_start.kind(), "scope");
+        .filter(|event| event.kind() == "scope")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        scope_events.len(),
+        2,
+        "expected exactly one stream scope pair"
+    );
+    let success_start = scope_events[0];
+    let success_end = scope_events[1];
     assert_eq!(success_start.scope_category(), Some(ScopeCategory::Start));
     assert_eq!(success_start.category().unwrap().as_str(), "llm");
-    assert_eq!(success_end.kind(), "scope");
     assert_eq!(success_end.scope_category(), Some(ScopeCategory::End));
     assert_eq!(success_end.category().unwrap().as_str(), "llm");
     assert_eq!(

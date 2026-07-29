@@ -680,6 +680,8 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
             .get::<unsafe extern "C" fn() -> bool>(b"nemo_relay_fixture_async_pending_entered\0")
             .expect("v3 async native fixture should export its pending-entry signal")
     };
+    // This pointer remains valid only while `activation` keeps the fixture
+    // library loaded; never call it after clearing the plugin configuration.
     assert!(!unsafe { pending_entered() });
     drop(fixture_library);
     let mut cleanup = NativePluginTestCleanup::new();

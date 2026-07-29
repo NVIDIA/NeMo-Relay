@@ -1072,7 +1072,7 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
     let task_locals = capture_python_task_locals();
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         let py_fn = py_fn.clone();
-        let task_locals = task_locals.clone();
+        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let py_context = PyLlmSanitizeResponseContext { inner: context };
@@ -1140,7 +1140,7 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
     let task_locals = capture_python_task_locals();
     Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let py_fn = py_fn.clone();
-        let task_locals = task_locals.clone();
+        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
         Box::pin(async move {
             let result = Python::attach(
                 |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
