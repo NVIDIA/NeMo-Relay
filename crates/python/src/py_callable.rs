@@ -179,6 +179,25 @@ fn capture_python_task_locals() -> Option<TaskLocals> {
     Python::attach(|py| pyo3_async_runtimes::tokio::get_current_locals(py).ok())
 }
 
+fn task_locals_with_running_loop(registered: Option<&TaskLocals>) -> Option<TaskLocals> {
+    capture_python_task_locals()
+        .or_else(|| registered.cloned())
+        .filter(|locals| {
+            Python::attach(|py| {
+                let event_loop = locals.event_loop(py);
+                let running = event_loop
+                    .call_method0("is_running")
+                    .and_then(|value| value.extract::<bool>())
+                    .unwrap_or(false);
+                let closed = event_loop
+                    .call_method0("is_closed")
+                    .and_then(|value| value.extract::<bool>())
+                    .unwrap_or(true);
+                running && !closed
+            })
+        })
+}
+
 async fn resolve_py_object_or_future(
     outcome: FlowResult<Result<Py<PyAny>, PyValueFuture>>,
 ) -> FlowResult<Py<PyAny>> {
@@ -472,7 +491,7 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
     let task_locals = capture_python_task_locals();
     Arc::new(move |name: String, args: Json| {
         let py_fn = py_fn.clone();
-        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
@@ -890,7 +909,7 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
             let py_fn = py_fn.clone();
-            let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+            let task_locals = task_locals_with_running_loop(task_locals.as_ref());
             let publication =
                 nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
             Box::pin(async move {
@@ -935,7 +954,7 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
     let task_locals = capture_python_task_locals();
     Arc::new(move |request: LlmRequest| {
         let py_fn = py_fn.clone();
-        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let result = py_fn
@@ -1113,7 +1132,7 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
     let task_locals = capture_python_task_locals();
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
         let py_fn = py_fn.clone();
-        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
@@ -1187,7 +1206,7 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
     let task_locals = capture_python_task_locals();
     Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let py_fn = py_fn.clone();
-        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
             let result = Python::attach(
                 |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {

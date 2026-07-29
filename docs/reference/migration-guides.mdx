@@ -68,13 +68,27 @@ register_tool_conditional_execution_guardrail(
 )?;
 ```
 
+Rust middleware inputs that previously borrowed call data are now owned so
+they can live for the duration of the returned future. Update explicitly typed
+closures and named callback functions as follows:
+
+- Event sanitizers receive `Arc<Event>` instead of `&Event`.
+- Tool sanitizers, conditional guardrails, and request intercepts receive an
+  owned `String` tool name; tool conditional guardrails also receive an owned
+  `Json` payload instead of `&Json`.
+- LLM conditional guardrails receive an owned `LlmRequest` instead of
+  `&LlmRequest`, and LLM request intercepts receive an owned `String` call
+  name.
+
 Python and Node.js registration names are unchanged. Mark a Python callback
 `async def`, or return a Promise from Node.js, only when it needs asynchronous
 work; existing direct-value callbacks remain supported.
 
-Queued Python event sanitizers registered outside a running event loop use
-`asyncio.run` with a fresh loop. Bare coroutine results are supported in that
-fallback; `Task` and `Future` instances bound to a different loop are not.
+When queued Python middleware has no live captured event loop—including when
+it was registered outside a loop or its registration loop has closed—the
+fallback uses `asyncio.run` with a fresh loop. Bare coroutine results are
+supported in that fallback; `Task` and `Future` instances bound to a different
+loop are not.
 
 Scope, mark, and manual tool/LLM lifecycle APIs remain synchronous. This
 includes `push_scope`, `pop_scope`, mark APIs, `tool_call`, `tool_call_end`,

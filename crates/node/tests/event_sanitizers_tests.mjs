@@ -129,6 +129,40 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(events.at(-1).data, { sanitized: true });
   });
 
+  it('preserves snapshotted sanitizers after deregistration', async () => {
+    const events = capture('node-event-sanitize-snapshot-sub');
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+    lib.registerMarkSanitizeGuardrail('node-event-snapshot-blocker', 0, async (_event, fields) => {
+      blockerEntered();
+      await release;
+      return fields;
+    });
+    lib.registerMarkSanitizeGuardrail('node-event-snapshot-target', 10, async (_event, fields) => {
+      return { ...fields, data: { snapshotted: true } };
+    });
+    try {
+      lib.event('snapshot-checkpoint', null, { raw: true });
+      await entered;
+      assert.equal(lib.deregisterMarkSanitizeGuardrail('node-event-snapshot-target'), true);
+      releaseBlocker();
+      await lib.flushSubscribers();
+      await waitFor(events, 1);
+    } finally {
+      releaseBlocker();
+      lib.deregisterMarkSanitizeGuardrail('node-event-snapshot-blocker');
+      lib.deregisterMarkSanitizeGuardrail('node-event-snapshot-target');
+      lib.deregisterSubscriber('node-event-sanitize-snapshot-sub');
+    }
+    assert.deepEqual(events.at(-1).data, { snapshotted: true });
+  });
+
   it('does not deadlock when an async sanitizer flushes subscribers', async () => {
     const events = capture('node-event-sanitize-reentrant-flush-sub');
     let flushReturned = false;

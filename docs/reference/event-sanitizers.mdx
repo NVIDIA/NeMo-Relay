@@ -69,6 +69,11 @@ This preserves FIFO start/end/mark delivery without making `push_scope`,
 event is emitted still applies to its queued snapshot. An asynchronous
 sanitizer rejection fails open and preserves the last valid event fields.
 
+When Python code emits events from an `asyncio` task, await
+`nemo_relay.subscribers.flush_async()` to drain queued publication without
+blocking the event loop that runs async sanitizers. The synchronous
+`subscribers.flush()` barrier raises when called from a running event loop.
+
 ## Registration Lifetimes
 
 Where you register a sanitizer determines how long it stays active.

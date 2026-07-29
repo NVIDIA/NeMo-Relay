@@ -153,6 +153,8 @@ nemo_relay.subscribers.deregister("printer")
 
 Native subscriber delivery is asynchronous, so call
 `nemo_relay.subscribers.flush()` before you read subscriber output or exit.
+From an `asyncio` task, use `await nemo_relay.subscribers.flush_async()` so
+async event sanitizers can continue running on that event loop.
 
 For host integrations that need a serialized event shape, consume the
 canonical JSON payload from the subscriber event object:

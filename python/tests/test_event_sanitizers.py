@@ -97,6 +97,53 @@ async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
     assert events[-1].data == {"async": True}
 
 
+async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_events):
+    _capture_name, events = capture_events
+
+    async def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        await asyncio.sleep(0)
+        return {
+            "data": {"async_flush": True},
+            "category_profile": fields["category_profile"],
+            "metadata": fields["metadata"],
+        }
+
+    guardrails.register_mark_sanitize("python-async-flush", 0, sanitize)
+    try:
+        scope.event("async-flush-checkpoint", data={"raw": True})
+        with pytest.raises(RuntimeError, match=r"await subscribers\.flush_async"):
+            subscribers.flush()
+        await asyncio.wait_for(subscribers.flush_async(), timeout=2)
+    finally:
+        guardrails.deregister_mark_sanitize("python-async-flush")
+
+    assert events[-1].data == {"async_flush": True}
+
+
+def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events):
+    _capture_name, events = capture_events
+
+    async def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        await asyncio.sleep(0)
+        return {
+            "data": {"fresh_loop": True},
+            "category_profile": fields["category_profile"],
+            "metadata": fields["metadata"],
+        }
+
+    async def register() -> None:
+        guardrails.register_mark_sanitize("python-closed-loop-fallback", 0, sanitize)
+
+    asyncio.run(register())
+    try:
+        scope.event("closed-loop-checkpoint", data={"raw": True})
+        subscribers.flush()
+    finally:
+        guardrails.deregister_mark_sanitize("python-closed-loop-fallback")
+
+    assert events[-1].data == {"fresh_loop": True}
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_event_sanitizer_flush_is_reentrant(capture_events, asynchronous):
     _capture_name, events = capture_events

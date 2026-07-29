@@ -22,6 +22,7 @@ Example::
         nemo_relay.subscribers.deregister("logger")
 """
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -98,11 +99,35 @@ def flush() -> None:
     Call this function outside subscriber and queued publication sanitizer
     callbacks. A re-entrant call returns without waiting to avoid blocking the
     dispatcher. Publication middleware must not move such a call to an unmarked
-    worker thread.
+    worker thread. From an ``asyncio`` task, await :func:`flush_async` instead.
+
+    Raises:
+        RuntimeError: If called while an ``asyncio`` event loop is running on
+            the current thread.
     """
     if _event_sanitizer_callback_active():
         return None
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError(
+            "subscribers.flush() cannot block a running asyncio event loop; use 'await subscribers.flush_async()'"
+        )
     return _native_flush()
 
 
-__all__ = ["deregister", "flush", "register"]
+async def flush_async() -> None:
+    """Wait asynchronously for subscriber callbacks already queued by Relay.
+
+    Use this barrier from an ``asyncio`` task. The blocking native wait runs on
+    a worker thread so an event sanitizer scheduled on the caller's event loop
+    can continue to make progress.
+    """
+    if _event_sanitizer_callback_active():
+        return None
+    await asyncio.to_thread(_native_flush)
+
+
+__all__ = ["deregister", "flush", "flush_async", "register"]
