@@ -422,6 +422,71 @@ describe('event sanitizer registries', () => {
     }
   });
 
+  it('clears sanitizer re-entrancy after a native descendant round trip', async () => {
+    const events = capture('node-event-sanitize-native-descendant-sub');
+    let secondSanitizerEntered;
+    const secondEntered = new Promise((resolve) => {
+      secondSanitizerEntered = resolve;
+    });
+    let releaseSecondSanitizer;
+    const releaseSecond = new Promise((resolve) => {
+      releaseSecondSanitizer = resolve;
+    });
+    let descendantFlushStarted;
+    const flushStarted = new Promise((resolve) => {
+      descendantFlushStarted = resolve;
+    });
+    let descendantFlush;
+    let descendantExecution;
+
+    lib.registerToolConditionalExecutionGuardrail(
+      'node-event-native-descendant-conditional',
+      0,
+      async (name) => {
+        if (name === 'node-event-native-descendant-tool') {
+          await secondEntered;
+          descendantFlush = lib.flushSubscribers();
+          descendantFlushStarted();
+          await descendantFlush;
+        }
+        return null;
+      },
+    );
+    lib.registerMarkSanitizeGuardrail(
+      'node-event-native-descendant-sanitizer',
+      0,
+      async (event, fields) => {
+        if (event.name === 'native-descendant-origin') {
+          descendantExecution = lib.toolCallExecute('node-event-native-descendant-tool', {}, (args) => args);
+        } else if (event.name === 'native-descendant-blocked') {
+          secondSanitizerEntered();
+          await releaseSecond;
+        }
+        return fields;
+      },
+    );
+    try {
+      lib.event('native-descendant-origin', null, { raw: true });
+      lib.event('native-descendant-blocked', null, { raw: true });
+      await secondEntered;
+      await flushStarted;
+      const state = await Promise.race([
+        descendantFlush.then(() => 'flushed'),
+        new Promise((resolve) => setTimeout(() => resolve('pending'), 50)),
+      ]);
+      assert.equal(state, 'pending');
+      releaseSecondSanitizer();
+      await descendantExecution;
+      await lib.flushSubscribers();
+      await waitFor(events, 4);
+    } finally {
+      releaseSecondSanitizer();
+      lib.deregisterMarkSanitizeGuardrail('node-event-native-descendant-sanitizer');
+      lib.deregisterToolConditionalExecutionGuardrail('node-event-native-descendant-conditional');
+      lib.deregisterSubscriber('node-event-sanitize-native-descendant-sub');
+    }
+  });
+
   it('fails open and records invalid sanitizer results', async () => {
     const events = capture('node-event-sanitize-invalid-sub');
     const invalidResults = {

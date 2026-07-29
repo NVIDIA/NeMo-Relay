@@ -125,6 +125,28 @@ async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events):
     assert observed == {"request-a": "request-a", "request-b": "request-b"}
 
 
+async def test_async_mark_sanitizer_uses_cross_thread_emitter_context(capture_events):
+    request_id = contextvars.ContextVar("cross_thread_request_id", default="registration")
+    observed: list[str] = []
+
+    async def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        observed.append(request_id.get())
+        await asyncio.sleep(0)
+        observed.append(request_id.get())
+        return fields
+
+    guardrails.register_mark_sanitize("python-cross-thread-emitter-context", 0, sanitize)
+    token = request_id.set("emission")
+    try:
+        await asyncio.to_thread(scope.event, "cross-thread-emitter-context")
+        await subscribers.flush_async()
+    finally:
+        request_id.reset(token)
+        guardrails.deregister_mark_sanitize("python-cross-thread-emitter-context")
+
+    assert observed == ["emission", "emission"]
+
+
 def test_sync_mark_sanitizer_uses_emitter_context(capture_events):
     request_id = contextvars.ContextVar("request_id", default="registration")
     observed: list[str] = []
@@ -194,9 +216,13 @@ async def test_async_flush_does_not_consume_default_executor(capture_events):
 
 def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events):
     _capture_name, events = capture_events
+    request_id = contextvars.ContextVar("fallback_request_id", default="registration")
+    observed: list[str] = []
 
     async def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        observed.append(request_id.get())
         await asyncio.sleep(0)
+        observed.append(request_id.get())
         return {
             "data": {"fresh_loop": True},
             "category_profile": fields["category_profile"],
@@ -207,13 +233,16 @@ def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events)
         guardrails.register_mark_sanitize("python-closed-loop-fallback", 0, sanitize)
 
     asyncio.run(register())
+    token = request_id.set("emission")
     try:
         scope.event("closed-loop-checkpoint", data={"raw": True})
         subscribers.flush()
     finally:
+        request_id.reset(token)
         guardrails.deregister_mark_sanitize("python-closed-loop-fallback")
 
     assert events[-1].data == {"fresh_loop": True}
+    assert observed == ["emission", "emission"]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

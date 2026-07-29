@@ -170,6 +170,7 @@ fn split_py_object_or_future_with_locals(
     py: Python<'_>,
     result: Py<PyAny>,
     task_locals: Option<&TaskLocals>,
+    invocation_context: Option<&Bound<'_, PyAny>>,
 ) -> FlowResult<Result<Py<PyAny>, PyValueFuture>> {
     let bound = result.bind(py);
     if bound.getattr("__await__").is_ok() {
@@ -179,21 +180,31 @@ fn split_py_object_or_future_with_locals(
                 pyo3_async_runtimes::into_future_with_locals(locals, result.into_bound(py))
                     .map_err(|e| FlowError::Internal(e.to_string()))?,
             ),
-            None => Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    Python::attach(|py| {
-                        let coroutine = py
-                            .import("nemo_relay._event_sanitizer_context")
-                            .and_then(|module| module.getattr("await_result"))
-                            .and_then(|await_result| await_result.call1((result.bind(py),)))?;
-                        py.import("asyncio")
-                            .and_then(|asyncio| asyncio.call_method1("run", (coroutine,)))
-                            .map(Bound::unbind)
+            None => {
+                let invocation_context = invocation_context.map(|context| context.clone().unbind());
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || {
+                        Python::attach(|py| {
+                            let coroutine = py
+                                .import("nemo_relay._event_sanitizer_context")
+                                .and_then(|module| module.getattr("await_result"))
+                                .and_then(|await_result| await_result.call1((result.bind(py),)))?;
+                            let asyncio_run = py
+                                .import("asyncio")
+                                .and_then(|asyncio| asyncio.getattr("run"))?;
+                            match invocation_context {
+                                Some(context) => context
+                                    .bind(py)
+                                    .call_method1("run", (asyncio_run, coroutine))
+                                    .map(Bound::unbind),
+                                None => asyncio_run.call1((coroutine,)).map(Bound::unbind),
+                            }
+                        })
                     })
+                    .await
+                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
                 })
-                .await
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
-            }),
+            }
         };
         Ok(Err(future))
     } else {
@@ -259,12 +270,14 @@ fn task_locals_with_running_loop(registered: Option<&TaskLocals>) -> Option<Task
 fn copy_publication_invocation<'py>(
     py: Python<'py>,
     context: &PythonPublicationContext,
+    fallback_task_locals: Option<TaskLocals>,
 ) -> PyResult<(Bound<'py, PyAny>, Option<TaskLocals>)> {
     let invocation_context = context.context.bind(py).call_method0("copy")?;
     let task_locals = context
         .task_locals
         .clone()
         .and_then(running_task_locals)
+        .or(fallback_task_locals)
         .map(|locals| {
             TaskLocals::new(locals.event_loop(py)).with_context(invocation_context.clone())
         });
@@ -572,9 +585,9 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
                 let (invocation_context, task_locals) = match publication_context.as_ref() {
                     Some(context) => {
                         let (context, publication_task_locals) =
-                            copy_publication_invocation(py, context)
+                            copy_publication_invocation(py, context, task_locals)
                                 .map_err(|error| FlowError::Internal(error.to_string()))?;
-                        (Some(context), publication_task_locals.or(task_locals))
+                        (Some(context), publication_task_locals)
                     }
                     None => (None, task_locals),
                 };
@@ -597,7 +610,12 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
                     (None, false) => py_fn.bind(py).call1((name, py_args)),
                 }
                 .map_err(|e| FlowError::Internal(format!("Python tool callback failed: {e}")))?;
-                split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
             }))
             .await?;
             Python::attach(|py| {
@@ -622,7 +640,7 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
                 let result = py_fn
                     .call1(py, (name, py_args))
                     .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
+                split_py_object_or_future_with_locals(py, result, task_locals.as_ref(), None)
             }))
             .await?;
             Python::attach(|py| {
@@ -1014,9 +1032,9 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
                     let (invocation_context, task_locals) = match publication_context.as_ref() {
                         Some(context) => {
                             let (context, publication_task_locals) =
-                                copy_publication_invocation(py, context)
+                                copy_publication_invocation(py, context, task_locals)
                                     .map_err(|error| FlowError::Internal(error.to_string()))?;
-                            (Some(context), publication_task_locals.or(task_locals))
+                            (Some(context), publication_task_locals)
                         }
                         None => (None, task_locals),
                     };
@@ -1042,7 +1060,12 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
                         (None, false) => py_fn.bind(py).call1(args),
                     }
                     .map_err(|e| FlowError::Internal(e.to_string()))?;
-                    split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
+                    split_py_object_or_future_with_locals(
+                        py,
+                        result.unbind(),
+                        task_locals.as_ref(),
+                        invocation_context.as_ref(),
+                    )
                 }))
                 .await?;
                 Python::attach(|py| {
@@ -1076,7 +1099,7 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
                 let result = py_fn
                     .call1(py, (PyLLMRequest { inner: request },))
                     .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
+                split_py_object_or_future_with_locals(py, result, task_locals.as_ref(), None)
             }))
             .await?;
             Python::attach(|py| {
@@ -1130,7 +1153,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                         FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
                     })?;
 
-                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
+                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref(), None)
                 }))
                 .await?;
                 Python::attach(|py| {
@@ -1258,9 +1281,9 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
                 let (invocation_context, task_locals) = match publication_context.as_ref() {
                     Some(context) => {
                         let (context, publication_task_locals) =
-                            copy_publication_invocation(py, context)
+                            copy_publication_invocation(py, context, task_locals)
                                 .map_err(|error| FlowError::Internal(error.to_string()))?;
-                        (Some(context), publication_task_locals.or(task_locals))
+                        (Some(context), publication_task_locals)
                     }
                     None => (None, task_locals),
                 };
@@ -1287,7 +1310,12 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
                     (None, false) => py_fn.bind(py).call1((py_response, py_context)),
                 }
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
-                split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
             }))
             .await?;
             Python::attach(|py| {
@@ -1354,9 +1382,9 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                     let (invocation_context, task_locals) = match publication_context.as_ref() {
                         Some(context) => {
                             let (context, publication_task_locals) =
-                                copy_publication_invocation(py, context)
+                                copy_publication_invocation(py, context, task_locals)
                                     .map_err(|error| FlowError::Internal(error.to_string()))?;
-                            (Some(context), publication_task_locals.or(task_locals))
+                            (Some(context), publication_task_locals)
                         }
                         None => (None, task_locals),
                     };
@@ -1404,7 +1432,12 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                         None => invoke.call1((py_fn.bind(py), py_event, py_fields)),
                     }
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
-                    split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
+                    split_py_object_or_future_with_locals(
+                        py,
+                        result.unbind(),
+                        task_locals.as_ref(),
+                        invocation_context.as_ref(),
+                    )
                 },
             );
             let result = resolve_py_object_or_future(result).await?;

@@ -583,6 +583,53 @@ describe('LLM guardrails', () => {
     }
   });
 
+  it('stream response sanitizers preserve the invocation scope across await', async () => {
+    const originalStack = lib.currentScopeStack();
+    const invocationStack = lib.createScopeStack();
+    const unrelatedStack = lib.createScopeStack();
+    const observed = [];
+    let invocationScope;
+
+    registerLlmSanitizeResponseGuardrail('node_stream_response_scope', 10, async (response) => {
+      observed.push(lib.getHandle().uuid);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(lib.getHandle().uuid);
+      return response;
+    });
+    try {
+      const execution = lib.withScopeStack(invocationStack, () => {
+        invocationScope = lib.pushScope('stream-response-scope', lib.ScopeType.Agent);
+        return llmStreamCallExecute(
+          'stream_response_scope',
+          makeNative(),
+          (wrapper) => {
+            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'done' });
+            lib.endStream(wrapper.__nemo_relay_stream_id);
+          },
+          null,
+          () => ({ done: true }),
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+        );
+      });
+      lib.setThreadScopeStack(unrelatedStack);
+      const stream = await execution;
+      assert.deepEqual(await stream.next(), { token: 'done' });
+      assert.equal(await stream.next(), null);
+      assert.deepEqual(observed, [invocationScope.uuid, invocationScope.uuid]);
+    } finally {
+      lib.withScopeStack(invocationStack, () => lib.popScope(invocationScope));
+      lib.setThreadScopeStack(originalStack);
+      deregisterLlmSanitizeResponseGuardrail('node_stream_response_scope');
+    }
+  });
+
   it('stream response sanitizers can flush subscribers without deadlocking', async () => {
     let responseFlushed = false;
     registerSubscriber('node_stream_flush_subscriber', () => {});

@@ -27,20 +27,22 @@ use crate::callback_factory;
 use crate::types::ScopeStack;
 
 tokio::task_local! {
-    static PUBLICATION_CALLBACK_ACTIVE: bool;
+    static PUBLICATION_CALLBACK_CONTEXT_ID: Option<String>;
 }
 
 pub(crate) async fn with_publication_callback_context<F: Future>(
-    active: bool,
+    context_id: Option<String>,
     future: F,
 ) -> F::Output {
-    PUBLICATION_CALLBACK_ACTIVE.scope(active, future).await
+    PUBLICATION_CALLBACK_CONTEXT_ID
+        .scope(context_id, future)
+        .await
 }
 
-fn publication_callback_active() -> bool {
-    PUBLICATION_CALLBACK_ACTIVE
-        .try_with(|active| *active)
-        .unwrap_or(false)
+fn publication_callback_context_id() -> Option<String> {
+    PUBLICATION_CALLBACK_CONTEXT_ID
+        .try_with(Clone::clone)
+        .unwrap_or(None)
 }
 
 pub type JsonNextFn =
@@ -75,6 +77,7 @@ struct CallArgs {
     spread: bool,
     next: Option<NextFn>,
     publication: bool,
+    publication_context_id: Option<String>,
     /// Scope stack captured when Relay invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
     completion: CallCompletion,
@@ -152,7 +155,7 @@ fn build_next_unknown(
     env: &Env,
     next: NextFn,
     scope_stack: ScopeStackHandle,
-    publication: bool,
+    publication_context_id: Option<String>,
 ) -> napi::Result<JsUnknown> {
     let next_fn = match next {
         NextFn::Json(next) => {
@@ -160,9 +163,10 @@ fn build_next_unknown(
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
                 let scope_stack = scope_stack.clone();
+                let publication_context_id = publication_context_id.clone();
                 ctx.env.execute_tokio_future(
                     async move {
-                        with_publication_callback_context(publication, async move {
+                        with_publication_callback_context(publication_context_id, async move {
                             TASK_SCOPE_STACK
                                 .scope(scope_stack, async move {
                                     next(arg)
@@ -182,9 +186,10 @@ fn build_next_unknown(
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
                 let scope_stack = scope_stack.clone();
+                let publication_context_id = publication_context_id.clone();
                 ctx.env.execute_tokio_future(
                     async move {
-                        with_publication_callback_context(publication, async move {
+                        with_publication_callback_context(publication_context_id, async move {
                             TASK_SCOPE_STACK
                                 .scope(scope_stack, async move {
                                     next(arg)
@@ -261,7 +266,12 @@ impl PromiseAwareFn {
                                 "middleware next callback is missing its captured scope stack",
                             )
                         })?;
-                        build_next_unknown(&ctx.env, next, scope_stack, ctx.value.publication)?
+                        build_next_unknown(
+                            &ctx.env,
+                            next,
+                            scope_stack,
+                            ctx.value.publication_context_id.clone(),
+                        )?
                     }
                     None => undefined_to_unknown(&ctx.env)?,
                 };
@@ -283,6 +293,10 @@ impl PromiseAwareFn {
                         ctx.env.get_boolean(ctx.value.publication)?.raw(),
                     )
                 };
+                let publication_context_id = match ctx.value.publication_context_id {
+                    Some(context_id) => json_to_unknown(&ctx.env, Json::String(context_id))?,
+                    None => undefined_to_unknown(&ctx.env)?,
+                };
                 let scope_stack = match ctx.value.scope_stack {
                     Some(scope_stack) => {
                         let scope_stack = ScopeStack::from(scope_stack).into_instance(ctx.env)?;
@@ -297,6 +311,7 @@ impl PromiseAwareFn {
                     resolve,
                     reject,
                     publication,
+                    publication_context_id,
                     scope_stack,
                 ];
                 Ok(args)
@@ -418,7 +433,8 @@ impl PromiseAwareFn {
                 arg0,
                 spread: mode.spread,
                 next,
-                publication: mode.publication || publication_callback_active(),
+                publication: mode.publication,
+                publication_context_id: publication_callback_context_id(),
                 // Scope identity applies to every middleware callback. The
                 // publication bit controls only re-entrant flush behavior.
                 scope_stack: Some(current_scope_stack()),

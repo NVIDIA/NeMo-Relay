@@ -41,7 +41,8 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, current_scope_stack,
+    EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
+    current_scope_stack,
 };
 use crate::api::shared::{metadata_with_otel_status, snapshot_event_sanitizers};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -262,6 +263,7 @@ impl LlmStreamWrapper {
         };
         let handle = self.handle.clone();
         let scope_stack = self.scope_stack.clone();
+        let finalization_scope_stack = scope_stack.clone();
         let subscribers = self.subscribers.clone();
         let response_codec = self.response_codec.clone();
         let sanitize_context = self.sanitize_context.clone();
@@ -333,6 +335,7 @@ impl LlmStreamWrapper {
                 );
             }
         };
+        let finalize = TASK_SCOPE_STACK.scope(finalization_scope_stack, finalize);
         let publication_context = subscriber_dispatcher::capture_publication_context();
         let finalize = subscriber_dispatcher::with_task_publication_context(
             publication_context,

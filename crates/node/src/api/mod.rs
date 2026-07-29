@@ -1916,7 +1916,7 @@ pub fn with_scope(
     input: Option<Json>,
 ) -> Result<JsObject> {
     let attrs = ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     let scope_handle = with_scope_stack_handle(scope_stack.clone(), || {
         core_scope_api::push_scope(
@@ -1963,7 +1963,7 @@ pub fn with_scope(
 
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         let build_handle: crate::promise_call::Arg0Builder =
@@ -2130,7 +2130,7 @@ pub fn tool_call_execute(
     metadata: Option<Json>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
@@ -2141,7 +2141,7 @@ pub fn tool_call_execute(
 
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         core_tool_api::tool_call_execute(
@@ -2187,7 +2187,7 @@ pub fn tool_call_execute_async(
     metadata: Option<Json>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
@@ -2207,7 +2207,7 @@ pub fn tool_call_execute_async(
 
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         core_tool_api::tool_call_execute(
@@ -2339,7 +2339,7 @@ pub fn llm_call_execute(
     #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<JsFunction>,
 ) -> Result<JsObject> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
@@ -2373,7 +2373,7 @@ pub fn llm_call_execute(
         });
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         let params = core_llm_api::LlmCallExecuteParams::builder()
@@ -2424,7 +2424,7 @@ pub fn llm_call_execute_async(
     #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<JsFunction>,
 ) -> Result<JsObject> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
@@ -2468,7 +2468,7 @@ pub fn llm_call_execute_async(
 
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         let params = core_llm_api::LlmCallExecuteParams::builder()
@@ -2534,7 +2534,7 @@ pub fn llm_stream_call_execute(
     #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<JsFunction>,
 ) -> Result<JsObject> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
@@ -2611,7 +2611,7 @@ pub fn llm_stream_call_execute(
     let completion_codec_references = codec_references.clone();
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id.clone(), async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         let params = core_llm_api::LlmStreamCallExecuteParams::builder()
@@ -2636,7 +2636,7 @@ pub fn llm_stream_call_execute(
                         let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
                         let (closed, closed_rx) = tokio::sync::watch::channel(None);
                         tokio::spawn(with_publication_callback_context(
-                            publication_callback_active,
+                            publication_context_id,
                             forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
                         ));
 
@@ -3799,11 +3799,11 @@ pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<b
 /// Returns the transformed arguments.
 #[napi(ts_return_type = "Promise<unknown>")]
 pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsObject> {
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         core_tool_api::tool_request_intercepts(&name, args)
@@ -3822,11 +3822,11 @@ pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsO
 /// Throws if any guardrail rejects.
 #[napi(ts_return_type = "Promise<void>")]
 pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<JsObject> {
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         core_tool_api::tool_conditional_execution(&name, &args)
@@ -3850,11 +3850,11 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         core_llm_api::llm_request_intercepts(&name, llm_request)
@@ -3884,11 +3884,11 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
 pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    let publication_callback_active = callback_factory::event_sanitizer_callback_active(&env)?;
+    let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
-            with_publication_callback_context(publication_callback_active, async move {
+            with_publication_callback_context(publication_context_id, async move {
                 TASK_SCOPE_STACK
                     .scope(scope_stack, async move {
                         core_llm_api::llm_conditional_execution(&llm_request)
