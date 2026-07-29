@@ -394,6 +394,12 @@ impl RunningGateway {
                 result.map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
             }
             Err(_) => {
+                log::info!(
+                    target: "nemo_relay.server",
+                    event = "transparent_gateway_shutdown_timed_out",
+                    timeout_ms = timeout.as_millis();
+                    "Transparent gateway shutdown timed out; aborting task"
+                );
                 self.task.abort();
                 match self.task.await {
                     Err(error) if error.is_cancelled() => Ok(()),
