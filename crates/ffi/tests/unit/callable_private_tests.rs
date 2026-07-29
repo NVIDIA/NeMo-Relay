@@ -9,18 +9,60 @@ unsafe extern "C" fn complete_without_settling(
     _user_data: *mut libc::c_void,
     _invocation_json: *const c_char,
     _completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState {
-    NemoRelayAsyncCallbackState::Complete
+) -> u32 {
+    NemoRelayAsyncCallbackState::Complete as u32
 }
 
 unsafe extern "C" fn retain_pending_completion(
     user_data: *mut libc::c_void,
     _invocation_json: *const c_char,
     completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState {
+) -> u32 {
     let slot = unsafe { &*user_data.cast::<std::sync::atomic::AtomicUsize>() };
     slot.store(completion as usize, Ordering::Release);
-    NemoRelayAsyncCallbackState::Pending
+    NemoRelayAsyncCallbackState::Pending as u32
+}
+
+struct RetainedAsyncHandles {
+    completion: AtomicUsize,
+    next: AtomicUsize,
+    freed: Arc<AtomicBool>,
+}
+
+unsafe extern "C" fn retain_pending_handles(
+    user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    next: *const NemoRelayAsyncNext,
+    completion: *const NemoRelayAsyncCompletion,
+) -> u32 {
+    let state = unsafe { &*user_data.cast::<RetainedAsyncHandles>() };
+    state
+        .completion
+        .store(completion as usize, Ordering::Release);
+    state.next.store(next as usize, Ordering::Release);
+    NemoRelayAsyncCallbackState::Pending as u32
+}
+
+unsafe extern "C" fn free_retained_async_handles(user_data: *mut libc::c_void) {
+    let state = unsafe { Box::from_raw(user_data.cast::<RetainedAsyncHandles>()) };
+    state.freed.store(true, Ordering::Release);
+}
+
+unsafe extern "C" fn invalid_async_json_state(
+    _user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    _completion: *const NemoRelayAsyncCompletion,
+) -> u32 {
+    99
+}
+
+unsafe extern "C" fn invalid_async_intercept_state(
+    _user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    _next: *const NemoRelayAsyncNext,
+    _completion: *const NemoRelayAsyncCompletion,
+) -> u32 {
+    99
 }
 
 unsafe extern "C" fn send_next_result(
@@ -79,6 +121,7 @@ fn async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlements() {
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        _callback_user_data: None,
     });
     let completion_ref = Arc::into_raw(Arc::clone(&completion));
     let invalid_json = CString::new("not-json").unwrap();
@@ -109,6 +152,7 @@ fn async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlements() {
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        _callback_user_data: None,
     });
     let completion_ref = Arc::into_raw(Arc::clone(&completion));
     assert_eq!(
@@ -190,6 +234,86 @@ fn async_callback_wrappers_reject_complete_callbacks_without_settlement() {
 }
 
 #[test]
+fn pending_async_handles_retain_callback_user_data_until_release() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let freed = Arc::new(AtomicBool::new(false));
+    let state = Box::new(RetainedAsyncHandles {
+        completion: AtomicUsize::new(0),
+        next: AtomicUsize::new(0),
+        freed: Arc::clone(&freed),
+    });
+    let state = Box::into_raw(state);
+    let user_data = Arc::new(UserData {
+        ptr: state.cast(),
+        free_fn: Some(free_retained_async_handles),
+    });
+
+    runtime.block_on(async {
+        let mut invocation = Box::pin(invoke_async_intercept(
+            retain_pending_handles,
+            user_data,
+            serde_json::json!({}),
+            AsyncNextInner::Tool(Arc::new(|value| Box::pin(async move { Ok(value) }))),
+        ));
+        tokio::select! {
+            biased;
+            result = &mut invocation => panic!("pending callback unexpectedly settled: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        drop(invocation);
+    });
+
+    assert!(!freed.load(Ordering::Acquire));
+    let completion =
+        unsafe { &*state }.completion.load(Ordering::Acquire) as *const NemoRelayAsyncCompletion;
+    let next = unsafe { &*state }.next.load(Ordering::Acquire) as *const NemoRelayAsyncNext;
+    assert!(!completion.is_null());
+    assert!(!next.is_null());
+    assert!(unsafe { nemo_relay_async_completion_is_cancelled(completion) });
+
+    unsafe { nemo_relay_async_completion_release(completion) };
+    assert!(!freed.load(Ordering::Acquire));
+    unsafe { nemo_relay_async_next_release(next) };
+    assert!(freed.load(Ordering::Acquire));
+}
+
+#[test]
+fn async_callbacks_reject_invalid_foreign_states() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let user_data = || {
+        Arc::new(UserData {
+            ptr: std::ptr::null_mut(),
+            free_fn: None,
+        })
+    };
+
+    let error = runtime
+        .block_on(invoke_async_json(
+            invalid_async_json_state,
+            user_data(),
+            serde_json::json!({}),
+        ))
+        .unwrap_err();
+    assert!(error.to_string().contains("invalid state 99"));
+
+    let error = runtime
+        .block_on(invoke_async_intercept(
+            invalid_async_intercept_state,
+            user_data(),
+            serde_json::json!({}),
+            AsyncNextInner::Tool(Arc::new(|value| Box::pin(async move { Ok(value) }))),
+        ))
+        .unwrap_err();
+    assert!(error.to_string().contains("invalid state 99"));
+}
+
+#[test]
 fn async_next_invocation_supports_tool_llm_and_stream_continuations() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -241,12 +365,14 @@ fn async_next_invocation_supports_tool_llm_and_stream_continuations() {
         let next = Arc::new(NemoRelayAsyncNext {
             inner,
             runtime: runtime.handle().clone(),
+            _callback_user_data: None,
         });
         let next_ref = Arc::into_raw(next);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let completion = Arc::new(NemoRelayAsyncCompletion {
             sender: std::sync::Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
+            _callback_user_data: None,
         });
         let completion_ref = Arc::into_raw(Arc::clone(&completion));
         assert_eq!(
@@ -265,12 +391,14 @@ fn async_next_invocation_supports_tool_llm_and_stream_continuations() {
             Box::pin(async move { Ok(request.content) })
         })),
         runtime: runtime.handle().clone(),
+        _callback_user_data: None,
     });
     let next_ref = Arc::into_raw(next);
     let (sender, _receiver) = tokio::sync::oneshot::channel();
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        _callback_user_data: None,
     });
     let completion_ref = Arc::into_raw(Arc::clone(&completion));
     let malformed_request = CString::new(r#"{"content":{}}"#).unwrap();
@@ -326,6 +454,7 @@ fn async_next_callback_reports_tool_llm_and_stream_results() {
         let next = Arc::new(NemoRelayAsyncNext {
             inner,
             runtime: runtime.handle().clone(),
+            _callback_user_data: None,
         });
         let next_ref = Arc::into_raw(next);
         let (sender, receiver) =
@@ -350,6 +479,7 @@ fn async_next_callback_reports_tool_llm_and_stream_results() {
             Box::pin(async { Err(FlowError::Internal("next failed".into())) })
         })),
         runtime: runtime.handle().clone(),
+        _callback_user_data: None,
     });
     let next_ref = Arc::into_raw(next);
     let invocation = CString::new("{}").unwrap();

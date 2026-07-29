@@ -136,7 +136,7 @@ fn validate_async_callback_abi(callable: &str) {
                 user_data: *mut libc::c_void,
                 invocation_json: *const c_char,
                 completion: *const NemoRelayAsyncCompletion,
-            ) -> NemoRelayAsyncCallbackState;"#
+            ) -> u32;"#
         ),
         "NemoRelayAsyncJsonCb drifted from ASYNC_REGISTRATIONS"
     );
@@ -148,7 +148,7 @@ fn validate_async_callback_abi(callable: &str) {
                 invocation_json: *const c_char,
                 next: *const NemoRelayAsyncNext,
                 completion: *const NemoRelayAsyncCompletion,
-            ) -> NemoRelayAsyncCallbackState;"#
+            ) -> u32;"#
         ),
         "NemoRelayAsyncInterceptCb drifted from ASYNC_REGISTRATIONS"
     );

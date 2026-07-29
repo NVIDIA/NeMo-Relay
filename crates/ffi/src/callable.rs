@@ -67,10 +67,23 @@ pub enum NemoRelayAsyncCallbackState {
     Pending = 1,
 }
 
+impl TryFrom<u32> for NemoRelayAsyncCallbackState {
+    type Error = u32;
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            value if value == Self::Complete as u32 => Ok(Self::Complete),
+            value if value == Self::Pending as u32 => Ok(Self::Pending),
+            value => Err(value),
+        }
+    }
+}
+
 /// One-shot completion passed to asynchronous C callbacks.
 pub struct NemoRelayAsyncCompletion {
     sender: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<Json>>>>,
     cancelled: AtomicBool,
+    _callback_user_data: Option<Arc<UserData>>,
 }
 
 /// Generic completion-based middleware callback.
@@ -84,12 +97,13 @@ pub type NemoRelayAsyncJsonCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     invocation_json: *const c_char,
     completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState;
+) -> u32;
 
 /// Runtime-owned asynchronous `next` continuation for execution intercepts.
 pub struct NemoRelayAsyncNext {
     inner: AsyncNextInner,
     runtime: tokio::runtime::Handle,
+    _callback_user_data: Option<Arc<UserData>>,
 }
 
 enum AsyncNextInner {
@@ -151,7 +165,7 @@ pub type NemoRelayAsyncInterceptCb = unsafe extern "C" fn(
     invocation_json: *const c_char,
     next: *const NemoRelayAsyncNext,
     completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState;
+) -> u32;
 
 /// Result callback used by channel/future-style async `next` wrappers.
 ///
@@ -218,11 +232,21 @@ async fn invoke_async_json(
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        _callback_user_data: Some(user_data.clone()),
     });
     let callback_ref = Arc::into_raw(completion.clone());
     let invocation = json_to_c_string(&invocation);
     let state = unsafe { cb(user_data.ptr, invocation, callback_ref) };
     unsafe { nemo_relay_string_free_internal(invocation) };
+    let state = match NemoRelayAsyncCallbackState::try_from(state) {
+        Ok(state) => state,
+        Err(state) => {
+            unsafe { drop(Arc::from_raw(callback_ref)) };
+            return Err(FlowError::Internal(format!(
+                "async C callback returned invalid state {state}"
+            )));
+        }
+    };
     if state == NemoRelayAsyncCallbackState::Complete {
         unsafe { drop(Arc::from_raw(callback_ref)) };
         if completion
@@ -260,16 +284,28 @@ async fn invoke_async_intercept(
     let completion = Arc::new(NemoRelayAsyncCompletion {
         sender: std::sync::Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        _callback_user_data: Some(user_data.clone()),
     });
     let callback_ref = Arc::into_raw(completion.clone());
     let next = Arc::new(NemoRelayAsyncNext {
         inner: next,
         runtime,
+        _callback_user_data: Some(user_data.clone()),
     });
     let next_ref = Arc::into_raw(next);
     let invocation = json_to_c_string(&invocation);
     let state = unsafe { cb(user_data.ptr, invocation, next_ref, callback_ref) };
     unsafe { nemo_relay_string_free_internal(invocation) };
+    let state = match NemoRelayAsyncCallbackState::try_from(state) {
+        Ok(state) => state,
+        Err(state) => {
+            unsafe { drop(Arc::from_raw(callback_ref)) };
+            unsafe { drop(Arc::from_raw(next_ref)) };
+            return Err(FlowError::Internal(format!(
+                "async C intercept returned invalid state {state}"
+            )));
+        }
+    };
     if state == NemoRelayAsyncCallbackState::Complete {
         unsafe { drop(Arc::from_raw(callback_ref)) };
         unsafe { drop(Arc::from_raw(next_ref)) };

@@ -17,8 +17,8 @@ unsafe extern "C" fn async_json_registration_callback(
     _user_data: *mut libc::c_void,
     _invocation_json: *const c_char,
     _completion: *const callable::NemoRelayAsyncCompletion,
-) -> callable::NemoRelayAsyncCallbackState {
-    callable::NemoRelayAsyncCallbackState::Pending
+) -> u32 {
+    callable::NemoRelayAsyncCallbackState::Pending as u32
 }
 
 unsafe extern "C" fn async_intercept_registration_callback(
@@ -26,8 +26,8 @@ unsafe extern "C" fn async_intercept_registration_callback(
     _invocation_json: *const c_char,
     _next: *const callable::NemoRelayAsyncNext,
     _completion: *const callable::NemoRelayAsyncCompletion,
-) -> callable::NemoRelayAsyncCallbackState {
-    callable::NemoRelayAsyncCallbackState::Pending
+) -> u32 {
+    callable::NemoRelayAsyncCallbackState::Pending as u32
 }
 
 #[test]

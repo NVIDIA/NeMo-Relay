@@ -22,7 +22,7 @@ unsafe extern "C" fn async_json_passthrough_callback(
     user_data: *mut libc::c_void,
     invocation_json: *const c_char,
     completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState {
+) -> u32 {
     let kind = unsafe { *(user_data.cast::<usize>()) };
     let invocation: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(invocation_json) }
@@ -58,7 +58,7 @@ unsafe extern "C" fn async_json_passthrough_callback(
         unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
         NemoRelayStatus::Ok
     );
-    NemoRelayAsyncCallbackState::Complete
+    NemoRelayAsyncCallbackState::Complete as u32
 }
 
 unsafe extern "C" fn async_invalid_stream_callback(
@@ -66,13 +66,13 @@ unsafe extern "C" fn async_invalid_stream_callback(
     _invocation_json: *const c_char,
     _next: *const NemoRelayAsyncNext,
     completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState {
+) -> u32 {
     let value = CString::new(json!({"not": "an array"}).to_string()).expect("JSON has no NUL");
     assert_eq!(
         unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
         NemoRelayStatus::Ok
     );
-    NemoRelayAsyncCallbackState::Complete
+    NemoRelayAsyncCallbackState::Complete as u32
 }
 
 fn async_callback_user_data(kind: usize) -> *mut libc::c_void {
@@ -88,7 +88,7 @@ unsafe extern "C" fn async_next_callback(
     invocation_json: *const c_char,
     next: *const NemoRelayAsyncNext,
     completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState {
+) -> u32 {
     let invocation: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(invocation_json) }
             .to_str()
@@ -111,7 +111,7 @@ unsafe extern "C" fn async_next_callback(
     }
     // A successful invoke retained a completion reference; this callback drops
     // its own next and completion references before transferring Pending ownership.
-    NemoRelayAsyncCallbackState::Pending
+    NemoRelayAsyncCallbackState::Pending as u32
 }
 
 unsafe extern "C" fn async_tool_outcome_callback(
@@ -119,7 +119,7 @@ unsafe extern "C" fn async_tool_outcome_callback(
     invocation_json: *const c_char,
     _next: *const NemoRelayAsyncNext,
     completion: *const NemoRelayAsyncCompletion,
-) -> NemoRelayAsyncCallbackState {
+) -> u32 {
     let invocation: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(invocation_json) }
             .to_str()
@@ -133,7 +133,7 @@ unsafe extern "C" fn async_tool_outcome_callback(
         unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
         NemoRelayStatus::Ok
     );
-    NemoRelayAsyncCallbackState::Complete
+    NemoRelayAsyncCallbackState::Complete as u32
 }
 
 #[test]
