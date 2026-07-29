@@ -54,6 +54,7 @@ Install the tools needed for the surfaces you touch. For a full repository valid
 | `uv` | Current project workflow tool | Python environments, docs dependencies, pre-commit |
 | `just` | 1.40 or newer | Canonical build, test, docs, package task runner |
 | `cargo-deny` | Current stable | Rust dependency auditing |
+| `cargo-about` | 0.9.1 | Rust dependency attribution generation |
 | `cargo-nextest` | 0.9.111 or newer | CI-style Rust test runs |
 | `cargo-llvm-cov` | 0.8.5 or newer | CI-style coverage reports |
 
@@ -62,6 +63,7 @@ Common setup commands:
 ```bash
 cargo install just --locked
 cargo install cargo-deny --locked
+cargo install cargo-about --version 0.9.1 --locked --features cli
 cargo install cargo-nextest --version 0.9.111 --locked
 cargo install cargo-llvm-cov --version 0.8.5 --locked
 
