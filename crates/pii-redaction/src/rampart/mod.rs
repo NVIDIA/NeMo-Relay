@@ -231,6 +231,7 @@ impl Plugin for RampartPiiPlugin {
         let parsed = parse_config(plugin_config);
         Box::pin(async move {
             let config = parsed?;
+            enforce_activation_invariants(&config)?;
             let model_path = PathBuf::from(&config.model_path);
             let max_windows = config.max_windows_per_payload;
             let batch_size = config.inference_batch_size;
@@ -410,99 +411,121 @@ fn validate_rampart_pii_config(
         }
     }
 
-    if config.version != default_config_version() {
+    for violation in config_value_violations(&config) {
         push_unsupported(
             &mut diagnostics,
             &config,
+            violation.field,
+            violation.message,
+        );
+    }
+    diagnostics
+}
+
+struct ConfigViolation {
+    field: &'static str,
+    message: String,
+}
+
+impl ConfigViolation {
+    fn new(field: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            field,
+            message: message.into(),
+        }
+    }
+}
+
+fn enforce_activation_invariants(config: &RampartPiiConfig) -> PluginResult<()> {
+    let violations = config_value_violations(config);
+    if violations.is_empty() {
+        return Ok(());
+    }
+    let details = violations
+        .into_iter()
+        .map(|violation| format!("{}: {}", violation.field, violation.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(PluginError::InvalidConfig(format!(
+        "invalid Rampart PII plugin config: {details}"
+    )))
+}
+
+fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
+    let mut violations = Vec::new();
+    if config.version != default_config_version() {
+        violations.push(ConfigViolation::new(
             "version",
             format!(
                 "Rampart PII config version {} is unsupported",
                 config.version
             ),
-        );
+        ));
     }
     if config.model_path.trim().is_empty() || config.model_path.len() > MAX_MODEL_PATH_BYTES {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "model_path",
             format!("model_path must be non-empty and at most {MAX_MODEL_PATH_BYTES} UTF-8 bytes"),
-        );
+        ));
     } else if !PathBuf::from(&config.model_path).is_absolute() {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "model_path",
-            "model_path must be absolute".into(),
-        );
+            "model_path must be absolute",
+        ));
     }
     if !(config.input || config.output || config.mark || config.tool_input || config.tool_output) {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "input",
-            "at least one sanitization surface must be enabled".into(),
-        );
+            "at least one sanitization surface must be enabled",
+        ));
     }
     if let Some(codec) = config.codec.as_deref()
         && !supported_codec_names().contains(&codec)
     {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "codec",
-            "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'".into(),
-        );
+            "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'",
+        ));
     }
     if config.target_paths.is_empty() && config.target_path_patterns.is_empty() {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "target_paths",
-            "target_paths or target_path_patterns must select explicit content fields".into(),
-        );
+            "target_paths or target_path_patterns must select explicit content fields",
+        ));
     }
     if config.target_paths.len() + config.target_path_patterns.len() > MAX_TARGET_PATHS {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "target_paths",
             format!(
                 "target_paths and target_path_patterns must contain at most {MAX_TARGET_PATHS} entries"
             ),
-        );
+        ));
     }
     if config
         .target_paths
         .iter()
         .any(|path| path.len() > MAX_TARGET_PATH_BYTES || !is_valid_json_pointer(path))
     {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "target_paths",
-            "target_paths entries must be bounded valid JSON pointers".into(),
-        );
+            "target_paths entries must be bounded valid JSON pointers",
+        ));
     }
     if config
         .target_path_patterns
         .iter()
         .any(|path| path.len() > MAX_TARGET_PATH_BYTES || !is_valid_json_pointer_pattern(path))
     {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "target_path_patterns",
-            "target_path_patterns entries must be bounded JSON pointers with only complete '*' segments".into(),
-        );
+            "target_path_patterns entries must be bounded JSON pointers with only complete '*' segments",
+        ));
     }
     if !config.min_score.is_finite() || !(0.0..=1.0).contains(&config.min_score) {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "min_score",
-            "min_score must be a finite number between 0 and 1".into(),
-        );
+            "min_score must be a finite number between 0 and 1",
+        ));
     }
     if config.excluded_labels.len() > MAX_EXCLUDED_LABELS
         || config
@@ -512,40 +535,32 @@ fn validate_rampart_pii_config(
         || config.excluded_labels.iter().collect::<HashSet<_>>().len()
             != config.excluded_labels.len()
     {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "excluded_labels",
             format!(
                 "excluded_labels must contain at most {MAX_EXCLUDED_LABELS} unique, bounded labels"
             ),
-        );
+        ));
     }
     if config.replacement.len() > MAX_REPLACEMENT_BYTES {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "replacement",
             format!("replacement must not exceed {MAX_REPLACEMENT_BYTES} UTF-8 bytes"),
-        );
+        ));
     }
     if !(1..=512).contains(&config.max_windows_per_payload) {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "max_windows_per_payload",
-            "max_windows_per_payload must be between 1 and 512".into(),
-        );
+            "max_windows_per_payload must be between 1 and 512",
+        ));
     }
     if !(1..=64).contains(&config.inference_batch_size) {
-        push_unsupported(
-            &mut diagnostics,
-            &config,
+        violations.push(ConfigViolation::new(
             "inference_batch_size",
-            "inference_batch_size must be between 1 and 64".into(),
-        );
+            "inference_batch_size must be between 1 and 64",
+        ));
     }
-    diagnostics
+    violations
 }
 
 fn push_unsupported(
@@ -687,6 +702,46 @@ mod tests {
                 .iter()
                 .any(|item| item.field.as_deref() == Some("target_path_patterns"))
         );
+    }
+
+    #[tokio::test]
+    async fn registration_enforces_safety_invariants_when_policy_warns() {
+        let cases = [
+            (
+                "target_paths",
+                serde_json::json!(["messages/0/content"]),
+                "target_paths entries",
+            ),
+            ("min_score", serde_json::json!(1.1), "min_score must"),
+        ];
+
+        for (field, value, expected) in cases {
+            let mut config = valid_config();
+            config.insert(
+                "policy".into(),
+                serde_json::json!({"unsupported_value": "warn"}),
+            );
+            config.insert(field.into(), value);
+            let diagnostics = validate_rampart_pii_config(&config, None);
+            assert!(
+                diagnostics.iter().any(|diagnostic| {
+                    diagnostic.level == DiagnosticLevel::Warning
+                        && diagnostic.field.as_deref() == Some(field)
+                }),
+                "expected a warning for {field}: {diagnostics:?}"
+            );
+
+            let plugin = RampartPiiPlugin;
+            let mut context = PluginRegistrationContext::with_namespace("rampart-test::");
+            let error = plugin
+                .register(&config, &mut context)
+                .await
+                .expect_err("unsafe configuration must fail registration");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected registration error for {field}: {error}"
+            );
+        }
     }
 
     #[test]
