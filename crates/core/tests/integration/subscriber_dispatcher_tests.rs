@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::registry::{
-    deregister_mark_sanitize_guardrail, register_mark_sanitize_guardrail,
+    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
+    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
 };
 use nemo_relay::api::runtime::{
     NemoRelayContextState, create_scope_stack, current_scope_stack, global_context,
@@ -156,6 +157,47 @@ fn queued_sanitizer_keeps_the_emission_time_scope_after_pop() {
     assert_eq!(*observed.lock().unwrap(), Some(expected_uuid));
     deregister_mark_sanitize_guardrail("scope-snapshot-sanitizer").unwrap();
     deregister_subscriber("scope-snapshot-subscriber").unwrap();
+}
+
+#[test]
+fn scope_end_sanitizer_keeps_the_ending_scope_across_await() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let scope = push_scope(
+        PushScopeParams::builder()
+            .name("ending-scope")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let expected_uuid = scope.uuid;
+    let observed = Arc::new(Mutex::new(None));
+    let observed_scope = Arc::clone(&observed);
+    register_subscriber("scope-end-context-subscriber", Arc::new(|_| {})).unwrap();
+    register_scope_sanitize_end_guardrail(
+        "scope-end-context-sanitizer",
+        10,
+        Arc::new(move |_, fields| {
+            let observed_scope = Arc::clone(&observed_scope);
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+                *observed_scope.lock().unwrap() =
+                    Some(current_scope_stack().read().unwrap().top().uuid);
+                Ok(fields)
+            })
+        }),
+    )
+    .unwrap();
+
+    pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
+    flush_subscribers().unwrap();
+
+    assert_eq!(*observed.lock().unwrap(), Some(expected_uuid));
+    deregister_scope_sanitize_end_guardrail("scope-end-context-sanitizer").unwrap();
+    deregister_subscriber("scope-end-context-subscriber").unwrap();
 }
 
 #[test]

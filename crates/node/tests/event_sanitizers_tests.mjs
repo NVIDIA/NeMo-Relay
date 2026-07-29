@@ -196,6 +196,31 @@ describe('event sanitizer registries', () => {
     }
   });
 
+  it('preserves the ending scope across an async scope-end sanitizer', async () => {
+    const events = capture('node-scope-end-context-sub');
+    const observed = [];
+    lib.registerScopeSanitizeEndGuardrail(
+      'node-scope-end-context',
+      0,
+      async (_event, fields) => {
+        observed.push(lib.getHandle().uuid);
+        await new Promise((resolve) => setImmediate(resolve));
+        observed.push(lib.getHandle().uuid);
+        return fields;
+      },
+    );
+    const scope = lib.pushScope('node-ending-scope', lib.ScopeType.Agent);
+    try {
+      lib.popScope(scope);
+      await lib.flushSubscribers();
+      await waitFor(events, 2);
+    } finally {
+      lib.deregisterScopeSanitizeEndGuardrail('node-scope-end-context');
+      lib.deregisterSubscriber('node-scope-end-context-sub');
+    }
+    assert.deepEqual(observed, [scope.uuid, scope.uuid]);
+  });
+
   it('preserves snapshotted sanitizers after deregistration', async () => {
     const events = capture('node-event-sanitize-snapshot-sub');
     let blockerEntered;

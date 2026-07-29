@@ -5,7 +5,7 @@ use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, M
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
-    current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
+    current_scope_stack, snapshot_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
 use crate::api::shared::{
     ensure_runtime_owner, resolve_parent_uuid, snapshot_event_sanitizers,
@@ -331,13 +331,14 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     // published later, but scope cleanup must not change the middleware that
     // was visible when the end event was emitted.
     let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
+    let publication_scope_stack = snapshot_scope_stack(&emission_scope_stack)?;
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
     let _ = subscriber_dispatcher::dispatch_sanitized_event(
         event,
         sanitizers,
         &subscribers,
-        emission_scope_stack,
+        publication_scope_stack,
     );
     Ok(())
 }

@@ -3230,15 +3230,39 @@ impl<'a> OptionalHostJson<'a> {
     }
 }
 
+enum OwnedHostApi {
+    V1(NemoRelayNativeHostApiV1),
+    V3(NemoRelayNativeHostApiV3),
+}
+
+impl OwnedHostApi {
+    unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        {
+            Self::V3(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV3) })
+        } else {
+            Self::V1(*host)
+        }
+    }
+
+    fn v1(&self) -> &NemoRelayNativeHostApiV1 {
+        match self {
+            Self::V1(host) => host,
+            Self::V3(host) => &host.v1,
+        }
+    }
+}
+
 struct PluginState<P> {
-    host: NemoRelayNativeHostApiV1,
+    host: OwnedHostApi,
     plugin: Mutex<P>,
 }
 
 unsafe extern "C" fn drop_plugin_state<P: NativePlugin>(user_data: *mut c_void) {
     if !user_data.is_null() {
         let state = unsafe { Box::from_raw(user_data as *mut PluginState<P>) };
-        let host = state.host;
+        let host = *state.host.v1();
         if catch_unwind(AssertUnwindSafe(|| drop(state))).is_err() {
             set_last_error(&host, "native plugin state drop panicked");
         }
@@ -3256,22 +3280,23 @@ unsafe extern "C" fn validate_trampoline<P: NativePlugin>(
     unsafe { *out_diagnostics_json = ptr::null_mut() };
     let state = unsafe { &*(user_data as *const PluginState<P>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let config = match read_json_object(&state.host, plugin_config_json) {
+        let host = state.host.v1();
+        let config = match read_json_object(host, plugin_config_json) {
             Ok(config) => config,
             Err(status) => return status,
         };
         let plugin = match state.plugin.lock() {
             Ok(plugin) => plugin,
             Err(_) => {
-                set_last_error(&state.host, "native plugin state lock poisoned");
+                set_last_error(host, "native plugin state lock poisoned");
                 return NemoRelayStatus::Internal;
             }
         };
         let diagnostics = plugin.validate(&config);
-        write_json(&state.host, &diagnostics, out_diagnostics_json)
+        write_json(host, &diagnostics, out_diagnostics_json)
     }));
     result.unwrap_or_else(|_| {
-        set_last_error(&state.host, "native plugin validate callback panicked");
+        set_last_error(state.host.v1(), "native plugin validate callback panicked");
         NemoRelayStatus::Internal
     })
 }
@@ -3286,28 +3311,29 @@ unsafe extern "C" fn register_trampoline<P: NativePlugin>(
     }
     let state = unsafe { &*(user_data as *const PluginState<P>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let config = match read_json_object(&state.host, plugin_config_json) {
+        let host = state.host.v1();
+        let config = match read_json_object(host, plugin_config_json) {
             Ok(config) => config,
             Err(status) => return status,
         };
-        let mut ctx = unsafe { PluginContext::from_raw(&state.host, ctx) };
+        let mut ctx = unsafe { PluginContext::from_raw(host, ctx) };
         let mut plugin = match state.plugin.lock() {
             Ok(plugin) => plugin,
             Err(_) => {
-                set_last_error(&state.host, "native plugin state lock poisoned");
+                set_last_error(host, "native plugin state lock poisoned");
                 return NemoRelayStatus::Internal;
             }
         };
         match plugin.register(&config, &mut ctx) {
             Ok(()) => NemoRelayStatus::Ok,
             Err(message) => {
-                set_last_error(&state.host, &message);
+                set_last_error(host, &message);
                 NemoRelayStatus::Internal
             }
         }
     }));
     result.unwrap_or_else(|_| {
-        set_last_error(&state.host, "native plugin register callback panicked");
+        set_last_error(state.host.v1(), "native plugin register callback panicked");
         NemoRelayStatus::Internal
     })
 }
@@ -3551,7 +3577,7 @@ where
         return NemoRelayStatus::Internal;
     };
     let state = Box::new(PluginState {
-        host: *host_ref,
+        host: unsafe { OwnedHostApi::copy_from(host_ref) },
         plugin: Mutex::new(plugin),
     });
     unsafe {

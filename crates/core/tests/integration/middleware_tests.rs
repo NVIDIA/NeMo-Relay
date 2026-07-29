@@ -3601,6 +3601,91 @@ async fn test_managed_llm_event_sanitizers_run_off_execution_path_in_fifo_order(
 }
 
 #[tokio::test]
+async fn test_stream_response_sanitizer_nested_mark_precedes_end_event() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "stream_nested_publication_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        "stream_nested_publication_sanitizer",
+        1,
+        Arc::new(|response, _context| {
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+                event(
+                    EmitMarkEventParams::builder()
+                        .name("stream-sanitizer-nested-mark")
+                        .build(),
+                )
+                .unwrap();
+                Ok(Some(response))
+            })
+        }),
+    )
+    .unwrap();
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("stream-nested-publication")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                        "chunk": "done"
+                    }))])))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({"response": "done"})))
+            .build(),
+    )
+    .await
+    .unwrap();
+    while let Some(item) = stream.next().await {
+        item.unwrap();
+    }
+    stream.close().await.unwrap();
+    flush_subscribers().unwrap();
+
+    let names = events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| {
+            (
+                event.name().to_string(),
+                event.scope_category(),
+                event.parent_uuid(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mark_index = names
+        .iter()
+        .position(|(name, _, _)| name == "stream-sanitizer-nested-mark")
+        .unwrap();
+    let end_index = names
+        .iter()
+        .position(|(name, category, _)| {
+            name == "stream-nested-publication" && *category == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert!(mark_index < end_index);
+
+    deregister_llm_sanitize_response_guardrail("stream_nested_publication_sanitizer").unwrap();
+    deregister_subscriber("stream_nested_publication_observer").unwrap();
+}
+
+#[tokio::test]
 async fn test_managed_llm_emits_pending_marks_under_started_scope() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

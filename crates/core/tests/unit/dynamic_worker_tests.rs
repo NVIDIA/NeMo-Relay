@@ -4,11 +4,15 @@
 use std::sync::{Arc, Mutex};
 
 use crate::api::event::{BaseEvent, MarkEvent};
+use crate::api::optimization::{
+    LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
+};
 use crate::api::runtime::{
     BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
     NemoRelayContextState,
 };
 use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::optimization::LlmOptimizationContribution;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay_worker_proto::json_envelope;
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
@@ -36,6 +40,32 @@ const AUTH_TOKEN: &str = "auth-test";
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
+}
+
+#[tokio::test]
+async fn continuation_context_preserves_optimization_recorder_across_tasks() {
+    for producer in ["worker-unary-next", "worker-stream-next"] {
+        let recorder = LlmOptimizationRecorder::default();
+        let context = scope_llm_optimization_recorder(recorder.clone(), async {
+            ContinuationContext::capture()
+        })
+        .await;
+        tokio::spawn(async move {
+            context
+                .run(async move {
+                    tokio::task::yield_now().await;
+                    assert!(record_llm_optimization_contribution(
+                        LlmOptimizationContribution::new(producer, "worker_next")
+                    ));
+                })
+                .await;
+        })
+        .await
+        .unwrap();
+        let contributions = recorder.unemitted();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].producer, producer);
+    }
 }
 
 #[test]

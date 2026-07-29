@@ -330,7 +330,7 @@ mod native {
             scope_stack,
             publication_context: current_publication_context(),
         };
-        send_dispatch_message(message)
+        enqueue_dispatch_message(message)
     }
 
     pub(super) fn dispatch_reserved_sanitized_event(
@@ -353,21 +353,7 @@ mod native {
             scope_stack,
             publication_context: current_publication_context(),
         };
-        let buffer_active = ASYNC_PUBLICATION_MESSAGES
-            .try_with(|messages| messages.borrow().is_some())
-            .unwrap_or(false);
-        if buffer_active {
-            ASYNC_PUBLICATION_MESSAGES.with(|messages| {
-                messages
-                    .borrow_mut()
-                    .as_mut()
-                    .expect("publication buffer checked above")
-                    .push(message);
-            });
-            true
-        } else {
-            send_dispatch_message(message)
-        }
+        enqueue_dispatch_message(message)
     }
 
     pub(super) fn dispatch_transformed_event(
@@ -388,7 +374,7 @@ mod native {
             scope_stack,
             publication_context: current_publication_context(),
         };
-        send_dispatch_message(message)
+        enqueue_dispatch_message(message)
     }
 
     /// Reserve a FIFO position for publications produced by an async task.
@@ -499,6 +485,23 @@ mod native {
             }
             Err(_) => false,
         }
+    }
+
+    fn enqueue_dispatch_message(message: DispatcherMessage) -> bool {
+        let mut message = Some(message);
+        let buffered = ASYNC_PUBLICATION_MESSAGES
+            .try_with(|messages| {
+                let mut messages = messages.borrow_mut();
+                match messages.as_mut() {
+                    Some(messages) => {
+                        messages.push(message.take().expect("message is buffered once"));
+                        true
+                    }
+                    None => false,
+                }
+            })
+            .unwrap_or(false);
+        buffered || send_dispatch_message(message.expect("unbuffered message remains available"))
     }
 
     fn start_dispatcher() -> std::result::Result<Sender<DispatcherMessage>, String> {

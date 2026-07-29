@@ -58,6 +58,9 @@ use tower::service_fn;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
+use crate::api::optimization::{
+    LlmOptimizationRecorder, current_llm_optimization_recorder, scope_llm_optimization_recorder,
+};
 use crate::api::runtime::scope_stack::active_event_uuid;
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationContext, capture_publication_context, with_task_publication_context,
@@ -2402,6 +2405,7 @@ struct ContinuationContext {
     scope_stack: crate::api::runtime::ScopeStackHandle,
     active_event_uuid: Option<Uuid>,
     publication_context: Option<PublicationContext>,
+    optimization_recorder: Option<LlmOptimizationRecorder>,
 }
 
 impl ContinuationContext {
@@ -2410,15 +2414,22 @@ impl ContinuationContext {
             scope_stack: current_scope_stack(),
             active_event_uuid: active_event_uuid(),
             publication_context: capture_publication_context(),
+            optimization_recorder: current_llm_optimization_recorder(),
         }
     }
 
     async fn run<F: Future>(&self, future: F) -> F::Output {
         let scoped = TASK_SCOPE_STACK.scope(self.scope_stack.clone(), future);
         let published = with_task_publication_context(self.publication_context.clone(), scoped);
-        match self.active_event_uuid {
-            Some(uuid) => with_active_event_uuid(uuid, published).await,
-            None => published.await,
+        let active = async {
+            match self.active_event_uuid {
+                Some(uuid) => with_active_event_uuid(uuid, published).await,
+                None => published.await,
+            }
+        };
+        match &self.optimization_recorder {
+            Some(recorder) => scope_llm_optimization_recorder(recorder.clone(), active).await,
+            None => active.await,
         }
     }
 }
@@ -2684,9 +2695,18 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             context
                 .run(async move {
                     let mut stream = stream;
-                    while let Some(item) = stream.next().await {
-                        if tx.send(item).await.is_err() {
-                            break;
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = tx.closed() => break,
+                            item = stream.next() => {
+                                let Some(item) = item else {
+                                    break;
+                                };
+                                if tx.send(item).await.is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
                 })

@@ -303,26 +303,13 @@ pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
     host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus {
-    if host.is_null() || out.is_null() {
-        return NemoRelayStatus::NullPointer;
+    unsafe {
+        nemo_relay_plugin::export_plugin(
+            host,
+            out,
+            FixtureAsyncPlugin { host: None },
+        )
     }
-    let host_v1 = unsafe { &*host };
-    if host_v1.abi_version < 3
-        || host_v1.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
-    {
-        return NemoRelayStatus::InvalidArg;
-    }
-    let host_v3 = unsafe { &*(host as *const NemoRelayNativeHostApiV3) };
-    let mut plugin = NemoRelayNativePluginV1::default();
-    plugin.plugin_kind = unsafe { raw_host_string(&host_v3.v1, "fixture_async") };
-    if plugin.plugin_kind.is_null() {
-        return NemoRelayStatus::Internal;
-    }
-    plugin.user_data = Box::into_raw(Box::new(*host_v3)).cast();
-    plugin.register = Some(raw_register_async_tool_request);
-    plugin.drop = Some(raw_drop_async_host);
-    unsafe { *out = plugin };
-    NemoRelayStatus::Ok
 }
 
 #[unsafe(no_mangle)]
@@ -615,15 +602,35 @@ unsafe extern "C" fn raw_register_event_sanitize_errors(
     status
 }
 
-unsafe extern "C" fn raw_register_async_tool_request(
-    user_data: *mut c_void,
-    _plugin_config_json: *const NemoRelayNativeString,
-    ctx: *mut NemoRelayNativePluginContext,
-) -> NemoRelayStatus {
-    if user_data.is_null() {
-        return NemoRelayStatus::NullPointer;
+struct FixtureAsyncPlugin {
+    host: Option<Box<NemoRelayNativeHostApiV3>>,
+}
+
+impl NativePlugin for FixtureAsyncPlugin {
+    fn plugin_kind(&self) -> &str {
+        "fixture_async"
     }
-    let host = unsafe { &*(user_data as *const NemoRelayNativeHostApiV3) };
+
+    fn register(
+        &mut self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::Result<()> {
+        let host = ctx.host_api();
+        if host.abi_version < 3
+            || host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        {
+            return Err("fixture async plugin requires ABI v3".into());
+        }
+        self.host = Some(Box::new(unsafe {
+            *(host as *const _ as *const NemoRelayNativeHostApiV3)
+        }));
+        let user_data = self
+            .host
+            .as_deref()
+            .map(|host| (host as *const NemoRelayNativeHostApiV3).cast_mut().cast())
+            .expect("fixture async host was initialized");
+
     let registrations: [(
         NemoRelayNativeAsyncMiddlewareKind,
         &str,
@@ -696,15 +703,10 @@ unsafe extern "C" fn raw_register_async_tool_request(
         ),
     ];
     for (kind, registration_name, callback) in registrations {
-        let name = unsafe { raw_host_string(&host.v1, registration_name) };
-        if name.is_null() {
-            return NemoRelayStatus::Internal;
-        }
         let status = unsafe {
-            (host.plugin_context_register_async_middleware)(
-                ctx,
-                kind as u32,
-                name,
+            ctx.register_async_middleware_raw(
+                kind,
+                registration_name,
                 0,
                 false,
                 callback,
@@ -712,30 +714,24 @@ unsafe extern "C" fn raw_register_async_tool_request(
                 None,
             )
         };
-        unsafe { (host.v1.string_free)(name) };
         if status != NemoRelayStatus::Ok {
-            return status;
+            return Err(format!("async registration failed: {status:?}"));
         }
     }
-    let name = unsafe { raw_host_string(&host.v1, "fixture_async_llm_stream") };
-    if name.is_null() {
-        return NemoRelayStatus::Internal;
-    }
     let status = unsafe {
-        (host.plugin_context_register_async_stream_middleware)(
-            ctx,
-            name,
+        ctx.register_async_stream_middleware_raw(
+            "fixture_async_llm_stream",
             0,
             raw_async_stream_callback,
             user_data,
             None,
         )
     };
-    unsafe { (host.v1.string_free)(name) };
     if status != NemoRelayStatus::Ok {
-        return status;
+        return Err(format!("async stream registration failed: {status:?}"));
     }
-    NemoRelayStatus::Ok
+        Ok(())
+    }
 }
 
 struct AsyncStreamForward {
@@ -1146,12 +1142,6 @@ unsafe extern "C" fn raw_event_sanitize_error_callback(
 unsafe extern "C" fn raw_drop_host(user_data: *mut c_void) {
     if !user_data.is_null() {
         drop(unsafe { Box::from_raw(user_data as *mut NemoRelayNativeHostApiV1) });
-    }
-}
-
-unsafe extern "C" fn raw_drop_async_host(user_data: *mut c_void) {
-    if !user_data.is_null() {
-        drop(unsafe { Box::from_raw(user_data as *mut NemoRelayNativeHostApiV3) });
     }
 }
 

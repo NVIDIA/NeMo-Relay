@@ -1445,6 +1445,7 @@ struct NativeAsyncStreamReceiver {
 struct NativeAsyncStreamCallbackGuard {
     cb: NemoRelayNativeAsyncNextStreamCb,
     user_data: usize,
+    stream: Arc<NativeAsyncStream>,
     active: bool,
 }
 
@@ -1456,7 +1457,7 @@ impl NativeAsyncStreamCallbackGuard {
 
 impl Drop for NativeAsyncStreamCallbackGuard {
     fn drop(&mut self) {
-        if self.active {
+        if self.active && !self.stream.cancelled.load(Ordering::Acquire) {
             unsafe {
                 let _ = (self.cb)(
                     self.user_data as *mut c_void,
@@ -1930,6 +1931,7 @@ unsafe extern "C" fn native_async_next_invoke_stream(
     let scope_stack = next.scope_stack.clone();
     let library_guard = next._callback_user_data.clone();
     let user_data = user_data as usize;
+    let output_stream_for_task = Arc::clone(&output_stream);
     let task = next
         .runtime
         .spawn(TASK_SCOPE_STACK.scope(scope_stack, async move {
@@ -1937,6 +1939,7 @@ unsafe extern "C" fn native_async_next_invoke_stream(
             let mut callback_guard = NativeAsyncStreamCallbackGuard {
                 cb,
                 user_data,
+                stream: output_stream_for_task,
                 active: true,
             };
             match next_fn(request).await {
@@ -1952,14 +1955,6 @@ unsafe extern "C" fn native_async_next_invoke_stream(
                                         native_string_free(chunk);
                                     }
                                     if !keep_going {
-                                        unsafe {
-                                            let _ = cb(
-                                                user_data as *mut c_void,
-                                                ptr::null(),
-                                                ptr::null(),
-                                                true,
-                                            );
-                                        }
                                         callback_guard.finish();
                                         return;
                                     }
@@ -2000,10 +1995,16 @@ unsafe extern "C" fn native_async_next_invoke_stream(
                 }
             }
         }));
-    *output_stream
+    let abort = task.abort_handle();
+    let mut downstream_abort = output_stream
         .downstream_abort
         .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(task.abort_handle());
+        .unwrap_or_else(|error| error.into_inner());
+    if output_stream.cancelled.load(Ordering::Acquire) {
+        abort.abort();
+    } else {
+        *downstream_abort = Some(abort);
+    }
     NemoRelayStatus::Ok
 }
 
