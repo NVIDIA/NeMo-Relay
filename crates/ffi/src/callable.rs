@@ -41,7 +41,7 @@ use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
 
-use crate::convert::json_to_c_string;
+use crate::convert::{c_str_to_json, json_to_c_string};
 use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};
 use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
