@@ -32,3 +32,5 @@ Returns [`FlowError::InvalidArgument`](/reference/api/rust-library-reference/nem
 ## Notes
 
 The implicit root scope cannot be removed.
+
+Scope-end emission snapshots the visible scope-local sanitizers before removing the scope. Publication is then queued after removal using that snapshot, so cleanup does not change the middleware applied to the emitted event.

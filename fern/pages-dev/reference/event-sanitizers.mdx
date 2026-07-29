@@ -53,6 +53,19 @@ binding callback results fail open and preserve the current fields. In Node.js,
 a synchronous sanitizer callback that throws also fails open; Relay records the
 error for `getLastCallbackError()`.
 
+## Publication Semantics
+
+Scope and mark emission APIs remain synchronous. They snapshot the event,
+visible sanitizer chain, and subscribers, then enqueue that snapshot for
+sanitization and publication on a serial background dispatcher. Subscribers
+and exporters therefore receive the sanitized event after the emission call
+returns.
+
+The dispatcher processes snapshots in FIFO order, preserving scope start/end
+and mark ordering. Closing a scope or deregistering middleware after emission
+does not alter an already-snapshotted publication chain. Use the binding's
+subscriber flush API when a test or shutdown path must wait for queued delivery.
+
 ## Registration Lifetimes
 
 Where you register a sanitizer determines how long it stays active.

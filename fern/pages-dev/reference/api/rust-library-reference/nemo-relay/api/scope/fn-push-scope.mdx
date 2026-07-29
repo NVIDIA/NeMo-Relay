@@ -36,4 +36,4 @@ Returns an error when the runtime owner check fails or when internal state canno
 
 ## Notes
 
-Scope-local subscribers attached to ancestor scopes observe the emitted start event before the function returns.
+The event and its visible middleware/subscriber chains are snapshotted before this function returns. Sanitization and subscriber delivery happen later on the serial publication dispatcher.
