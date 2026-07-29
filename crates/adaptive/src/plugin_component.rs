@@ -320,7 +320,6 @@ fn validate_adaptive_plugin_config_with_policy(
                 "cache_nondeterministic",
                 "key_strategy",
                 "header_allowlist",
-                "skip_keys",
                 "backend",
             ],
         );

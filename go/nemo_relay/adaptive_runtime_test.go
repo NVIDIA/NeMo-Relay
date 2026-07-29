@@ -198,6 +198,9 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	if section["namespace"] != "go-harness" {
 		t.Fatalf("response_cache fields not preserved: %#v", section)
 	}
+	if _, ok := section["skip_keys"]; ok {
+		t.Fatalf("response_cache must not expose arbitrary key omission: %#v", section)
+	}
 	if v, ok := section["cache_nondeterministic"].(bool); !ok || !v {
 		t.Fatalf("explicit cache_nondeterministic=true was not preserved: %#v", section["cache_nondeterministic"])
 	}

@@ -90,8 +90,6 @@ type ResponseCacheConfig struct {
 	KeyStrategy string `json:"key_strategy,omitempty"`
 	// HeaderAllowlist lists request headers folded into the key; never auth headers.
 	HeaderAllowlist []string `json:"header_allowlist,omitempty"`
-	// SkipKeys lists extra top-level request-body keys to drop from the key.
-	SkipKeys []string `json:"skip_keys,omitempty"`
 	// Backend selects the cache's own storage backend (distinct from the adaptive
 	// state backend). Defaults to in-memory when nil.
 	Backend *ResponseCacheBackendConfig `json:"backend,omitempty"`

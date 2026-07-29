@@ -254,7 +254,6 @@ describe('adaptive helpers', () => {
       cacheNondeterministic: false,
       keyStrategy: 'exact_request',
       headerAllowlist: [],
-      skipKeys: [],
       backend: adaptive.inMemoryBackend(),
     });
     assert.deepEqual(adaptive.ComponentSpec({ version: 1, responseCache }).config, {
@@ -267,7 +266,6 @@ describe('adaptive helpers', () => {
         cache_nondeterministic: false,
         key_strategy: 'exact_request',
         header_allowlist: [],
-        skip_keys: [],
         backend: adaptive.inMemoryBackend(),
       },
     });

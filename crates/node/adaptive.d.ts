@@ -61,7 +61,6 @@ export interface ResponseCacheConfig {
   cacheNondeterministic?: boolean;
   keyStrategy?: string;
   headerAllowlist?: string[];
-  skipKeys?: string[];
   backend?: BackendSpec;
 }
 
@@ -73,7 +72,6 @@ interface ResponseCachePluginConfig {
   cache_nondeterministic?: boolean;
   key_strategy?: string;
   header_allowlist?: string[];
-  skip_keys?: string[];
   backend?: BackendSpec;
 }
 

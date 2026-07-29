@@ -170,7 +170,6 @@ function responseCacheConfig(config = {}) {
     cacheNondeterministic: false,
     keyStrategy: 'exact_request',
     headerAllowlist: [],
-    skipKeys: [],
     backend: backend ?? inMemoryBackend(),
     ...rest,
   };
@@ -182,7 +181,6 @@ const RESPONSE_CACHE_PLUGIN_FIELDS = {
   cacheNondeterministic: 'cache_nondeterministic',
   keyStrategy: 'key_strategy',
   headerAllowlist: 'header_allowlist',
-  skipKeys: 'skip_keys',
 };
 
 function toPluginConfig(config) {

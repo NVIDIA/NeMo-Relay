@@ -106,9 +106,6 @@ pub fn build_cache_key(
         for key in DEFAULT_SKIP_KEYS {
             object.remove(*key);
         }
-        for key in &config.skip_keys {
-            object.remove(key);
-        }
         normalize_tool_call_ids(object);
     }
 

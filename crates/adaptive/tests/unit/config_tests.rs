@@ -134,6 +134,10 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
         response_cache.field("bypass_rate").unwrap().kind,
         EditorFieldKind::Float
     );
+    assert!(
+        response_cache.field("skip_keys").is_none(),
+        "exact-match cache config must not expose arbitrary key omission"
+    );
     let response_cache_backend = response_cache.field("backend").unwrap().schema().unwrap();
     assert_eq!(
         response_cache_backend.field("kind").unwrap().kind,

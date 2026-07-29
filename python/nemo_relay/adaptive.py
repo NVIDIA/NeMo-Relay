@@ -268,7 +268,6 @@ class ResponseCacheConfig:
             caches only requests explicitly pinned deterministic (``temperature`` = 0).
         key_strategy: Key strategy. Only ``"exact_request"`` is supported.
         header_allowlist: Request headers folded into the key; never auth headers.
-        skip_keys: Extra top-level request-body keys to drop from the key.
         backend: Cache storage backend (``in_memory`` or ``redis``).
     """
 
@@ -279,7 +278,6 @@ class ResponseCacheConfig:
     cache_nondeterministic: bool = False
     key_strategy: str = "exact_request"
     header_allowlist: list[str] = field(default_factory=list)
-    skip_keys: list[str] = field(default_factory=list)
     backend: BackendSpec = field(default_factory=BackendSpec.in_memory)
 
     def to_dict(self) -> JsonObject:
@@ -293,7 +291,6 @@ class ResponseCacheConfig:
                 "cache_nondeterministic": self.cache_nondeterministic,
                 "key_strategy": self.key_strategy,
                 "header_allowlist": self.header_allowlist,
-                "skip_keys": self.skip_keys,
                 "backend": _normalize(self.backend),
             }
         )

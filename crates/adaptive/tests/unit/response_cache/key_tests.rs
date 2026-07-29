@@ -61,7 +61,7 @@ fn field_order_and_whitespace_do_not_change_the_key() {
 }
 
 #[test]
-fn skiplist_fields_do_not_change_the_key() {
+fn built_in_noise_fields_do_not_change_the_key() {
     let config = cache_all_config();
     let base = request(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}));
     let noisy = request(json!({
@@ -74,6 +74,121 @@ fn skiplist_fields_do_not_change_the_key() {
     assert_eq!(
         key_of("openai", &base, &config),
         key_of("openai", &noisy, &config)
+    );
+}
+
+#[test]
+fn legacy_skip_keys_cannot_collapse_normalized_fields() {
+    // `skip_keys` was removed before schema v1 shipped. If an old draft config
+    // still carries it, serde ignores the unknown field and exact-match keying
+    // must retain normalized common, provider-specific, and Responses fields.
+    let config: ResponseCacheConfig = serde_json::from_value(json!({
+        "cache_nondeterministic": true,
+        "skip_keys": [
+            "params",
+            "api_specific",
+            "reasoning",
+            "include",
+            "max_output_tokens"
+        ]
+    }))
+    .unwrap();
+
+    let chat = |max_tokens: u64, response_format: &str| {
+        request(json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": max_tokens,
+            "response_format": {"type": response_format}
+        }))
+    };
+    let chat_base = chat(16, "json_object");
+    let chat_max_changed = chat(32, "json_object");
+    let chat_format_changed = chat(16, "text");
+    for request in [&chat_base, &chat_max_changed, &chat_format_changed] {
+        assert_eq!(
+            resolved_body("openai", request).1,
+            Some("openai_chat"),
+            "chat controls must exercise normalized keying"
+        );
+    }
+    assert_ne!(
+        key_of("openai", &chat_base, &config),
+        key_of("openai", &chat_max_changed, &config),
+        "normalized generation params must remain answer-determining"
+    );
+    assert_ne!(
+        key_of("openai", &chat_base, &config),
+        key_of("openai", &chat_format_changed, &config),
+        "normalized API-specific controls must remain answer-determining"
+    );
+
+    let responses = |max_output_tokens: u64, effort: &str, include: &str| {
+        request(json!({
+            "model": "gpt-4o",
+            "input": [{"role": "user", "content": "hi"}],
+            "store": false,
+            "max_output_tokens": max_output_tokens,
+            "reasoning": {"effort": effort},
+            "include": [include]
+        }))
+    };
+    let responses_base = responses(16, "low", "reasoning.encrypted_content");
+    let responses_max_changed = responses(32, "low", "reasoning.encrypted_content");
+    let responses_reasoning_changed = responses(16, "high", "reasoning.encrypted_content");
+    let responses_include_changed = responses(16, "low", "message.output_text.logprobs");
+    for request in [
+        &responses_base,
+        &responses_max_changed,
+        &responses_reasoning_changed,
+        &responses_include_changed,
+    ] {
+        assert_eq!(
+            resolved_body("openai", request).1,
+            Some("openai_responses"),
+            "Responses controls must exercise normalized keying"
+        );
+    }
+    for changed in [
+        &responses_max_changed,
+        &responses_reasoning_changed,
+        &responses_include_changed,
+    ] {
+        assert_ne!(
+            key_of("openai", &responses_base, &config),
+            key_of("openai", changed, &config),
+            "Responses controls must remain answer-determining"
+        );
+    }
+}
+
+#[test]
+fn legacy_skip_keys_cannot_collapse_raw_fallback_fields() {
+    let config: ResponseCacheConfig = serde_json::from_value(json!({
+        "cache_nondeterministic": true,
+        "skip_keys": ["vendor_control"]
+    }))
+    .unwrap();
+    let make = |mode: &str| {
+        request(json!({
+            "model": "vendor-model",
+            "prompt": "hi",
+            "vendor_control": {"mode": mode}
+        }))
+    };
+    let first = make("precise");
+    let second = make("creative");
+    for request in [&first, &second] {
+        assert_eq!(
+            resolved_body("custom-provider", request).1,
+            None,
+            "custom-provider controls must exercise raw fallback keying"
+        );
+    }
+    assert_ne!(
+        key_of("custom-provider", &first, &config),
+        key_of("custom-provider", &second, &config),
+        "unknown raw-fallback fields must remain answer-determining"
     );
 }
 

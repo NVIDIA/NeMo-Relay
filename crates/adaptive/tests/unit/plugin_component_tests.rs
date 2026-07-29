@@ -345,6 +345,9 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
         "tool_parallelism": {
             "mode": "observe_only"
         },
+        "response_cache": {
+            "skip_keys": ["params"]
+        },
         "policy": {
             "unknown_field": "warn"
         }
@@ -360,6 +363,11 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
         diag.code == "adaptive.unknown_field"
             && diag.component.as_deref() == Some("adaptive_hints")
             && diag.field.as_deref() == Some("extra")
+    }));
+    assert!(diagnostics.iter().any(|diag| {
+        diag.code == "adaptive.unknown_field"
+            && diag.component.as_deref() == Some("response_cache")
+            && diag.field.as_deref() == Some("skip_keys")
     }));
 }
 

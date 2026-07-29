@@ -166,7 +166,6 @@ class TestDynamicConfigContract:
             "cache_nondeterministic": False,
             "key_strategy": "exact_request",
             "header_allowlist": [],
-            "skip_keys": [],
             "backend": {"kind": "in_memory", "config": {}},
         }
 

@@ -211,8 +211,6 @@ pub struct ResponseCacheConfig {
     pub key_strategy: String,
     /// Request headers (case-insensitive) folded into the key; never auth headers.
     pub header_allowlist: Vec<String>,
-    /// Extra top-level request-body keys to drop from the key, beyond the noise defaults.
-    pub skip_keys: Vec<String>,
     /// Storage backend selection.
     pub backend: BackendConfig,
 }
@@ -227,7 +225,6 @@ impl Default for ResponseCacheConfig {
             cache_nondeterministic: false,
             key_strategy: KEY_STRATEGY_EXACT_REQUEST.to_string(),
             header_allowlist: Vec::new(),
-            skip_keys: Vec::new(),
             backend: BackendConfig::default(),
         }
     }
@@ -398,7 +395,6 @@ nemo_relay::editor_config! {
         cache_nondeterministic => { label: "cache_nondeterministic", kind: Boolean },
         key_strategy => { label: "key_strategy", kind: String },
         header_allowlist => { label: "header_allowlist", kind: Json },
-        skip_keys => { label: "skip_keys", kind: Json },
         backend => {
             label: "backend",
             kind: Section,

@@ -1068,7 +1068,7 @@ async fn buffered_refusal_entry_is_not_replayed_to_a_streaming_caller() {
 }
 
 #[tokio::test]
-async fn misconfigured_keys_and_headers_are_rejected_by_validation() {
+async fn misconfigured_headers_and_backends_are_rejected_by_validation() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     register_adaptive_component().unwrap();
@@ -1083,25 +1083,6 @@ async fn misconfigured_keys_and_headers_are_rejected_by_validation() {
             ..PluginConfig::default()
         })
     };
-
-    let report = validate(ResponseCacheConfig {
-        skip_keys: vec![
-            "messages".to_string(),
-            "system".to_string(),
-            "prompt".to_string(),
-        ],
-        ..ResponseCacheConfig::default()
-    });
-    assert_eq!(
-        report
-            .diagnostics
-            .iter()
-            .filter(|d| d.code == "response_cache.reserved_skip_key")
-            .count(),
-        3,
-        "dropping an answer-determining field must be rejected: {:?}",
-        report.diagnostics
-    );
 
     let report = validate(ResponseCacheConfig {
         header_allowlist: vec!["Authorization".to_string()],

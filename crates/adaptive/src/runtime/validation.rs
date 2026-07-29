@@ -118,26 +118,6 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
             format!("unsupported key_strategy; only \"{KEY_STRATEGY_EXACT_REQUEST}\" is supported"),
         ));
     }
-    // Dropping an answer-determining field merges requests that differ there.
-    const RESERVED_SKIP_KEYS: &[&str] = &[
-        "messages",
-        "input",
-        "prompt",
-        "instructions",
-        "system",
-        "model",
-        "tools",
-        "tool_choice",
-    ];
-    for key in &config.skip_keys {
-        if RESERVED_SKIP_KEYS.contains(&key.as_str()) {
-            report.diagnostics.push(response_cache_error(
-                "response_cache.reserved_skip_key",
-                Some("skip_keys"),
-                format!("skip_keys must not drop the answer-determining field '{key}'"),
-            ));
-        }
-    }
     // Auth material must never enter the key or the stored entries.
     const AUTH_HEADERS: &[&str] = &[
         "authorization",
