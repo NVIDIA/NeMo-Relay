@@ -268,6 +268,10 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert!(tool_result.get("pending_marks").is_none());
 
     flush_subscribers().expect("native fixture events should flush");
+    // The native subscriber emits its mark while handling the outer event.
+    // A second barrier drains publications queued by callbacks before the
+    // first barrier completed.
+    flush_subscribers().expect("native fixture subscriber events should flush");
     let first_events = events.lock().unwrap().clone();
     find_event(&first_events, "fixture.native.subscriber.mark", None);
     assert_parent(&first_events, "fixture.native.mark", None, Some(outer_uuid));
