@@ -124,12 +124,14 @@ register_tool_sanitize_request_guardrail(
     "search.redact_api_key",
     10,
     Arc::new(|_tool_name, mut args| {
-        if let Some(object) = args.as_object_mut() {
-            if object.contains_key("api_key") {
-                object.insert("api_key".into(), json!("<redacted>"));
+        Box::pin(async move {
+            if let Some(object) = args.as_object_mut() {
+                if object.contains_key("api_key") {
+                    object.insert("api_key".into(), json!("<redacted>"));
+                }
             }
-        }
-        args
+            Ok(args)
+        })
     }),
 )?;
 
@@ -137,9 +139,11 @@ register_tool_conditional_execution_guardrail(
     "search.require_query",
     20,
     Arc::new(|_tool_name, args| {
-        Ok(match args.get("query").and_then(|value| value.as_str()) {
-            Some(query) if !query.is_empty() => None,
-            _ => Some("search.query is required".into()),
+        Box::pin(async move {
+            Ok(match args.get("query").and_then(|value| value.as_str()) {
+                Some(query) if !query.is_empty() => None,
+                _ => Some("search.query is required".into()),
+            })
         })
     }),
 )?;

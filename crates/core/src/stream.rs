@@ -337,6 +337,7 @@ impl LlmStreamWrapper {
                 let _ = done.send(());
             }
         };
+        let finalize = subscriber_dispatcher::with_async_publication_context(finalize);
         if background_thread {
             // `Drop` can run while the current-thread Tokio executor is
             // synchronously flushing subscribers. Use a dedicated runtime so

@@ -469,18 +469,30 @@ fn stream_from_async_iter(async_iter: Py<PyAny>) -> FlowResult<LlmJsonStream> {
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
 pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(move |name: String, args: Json| {
         let py_fn = py_fn.clone();
+        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
+        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
-            resolve_json_or_future(Python::attach(|py| {
+            let result = resolve_py_object_or_future(Python::attach(|py| {
                 let py_args = json_to_py(py, &args)
                     .map_err(|e| FlowError::Internal(format!("tool json_to_py failed: {e}")))?;
-                let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
-                    FlowError::Internal(format!("Python tool callback failed: {e}"))
-                })?;
-                split_json_or_future(py, result)
+                let result = if publication {
+                    py.import("nemo_relay._event_sanitizer_context")
+                        .and_then(|module| module.getattr("invoke"))
+                        .and_then(|invoke| invoke.call1((py_fn.bind(py), name, py_args)))
+                } else {
+                    py_fn.bind(py).call1((name, py_args))
+                }
+                .map_err(|e| FlowError::Internal(format!("Python tool callback failed: {e}")))?;
+                split_py_object_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
             }))
-            .await
+            .await?;
+            Python::attach(|py| {
+                py_to_json(result.bind(py))
+                    .map_err(|e| FlowError::Internal(format!("tool py_to_json failed: {e}")))
+            })
         })
     })
 }

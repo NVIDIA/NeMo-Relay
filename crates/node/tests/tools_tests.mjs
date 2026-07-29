@@ -709,6 +709,40 @@ describe('Tool guardrails', () => {
     }
   });
 
+  it('manual async sanitizers can flush subscribers without deadlocking', async () => {
+    const events = [];
+    let requestFlushed = false;
+    let responseFlushed = false;
+    registerSubscriber('node_manual_tool_flush_subscriber', (event) => events.push(event));
+    registerToolSanitizeRequestGuardrail('node_manual_tool_flush_request', 10, async (_name, args) => {
+      await flushSubscribers();
+      requestFlushed = true;
+      return { ...args, requestSanitized: true };
+    });
+    registerToolSanitizeResponseGuardrail('node_manual_tool_flush_response', 10, async (_name, response) => {
+      await flushSubscribers();
+      responseFlushed = true;
+      return { ...response, responseSanitized: true };
+    });
+    try {
+      const handle = toolCall('node_manual_tool_flush', { original: true });
+      toolCallEnd(handle, { ok: true });
+      await flushSubscribers();
+    } finally {
+      deregisterToolSanitizeRequestGuardrail('node_manual_tool_flush_request');
+      deregisterToolSanitizeResponseGuardrail('node_manual_tool_flush_response');
+      deregisterSubscriber('node_manual_tool_flush_subscriber');
+    }
+    assert.equal(requestFlushed, true);
+    assert.equal(responseFlushed, true);
+    const start = events.find(
+      (event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start',
+    );
+    const end = events.find((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'end');
+    assert.deepEqual(start.data, { original: true, requestSanitized: true });
+    assert.deepEqual(end.data, { ok: true, responseSanitized: true });
+  });
+
   it('conditional guardrail (block)', () => {
     registerToolConditionalExecutionGuardrail('node_tool_block', 10, (name, args) => 'blocked');
     deregisterToolConditionalExecutionGuardrail('node_tool_block');

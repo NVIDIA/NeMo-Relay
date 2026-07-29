@@ -2918,8 +2918,8 @@ pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
 ///
 /// The `guardrail` callback receives `(request, context)` and must return the sanitized request,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
-/// guardrail with the same `name` already exists. If the callback throws, Relay omits the payload
-/// and records the error for `getLastCallbackError()`.
+/// guardrail with the same `name` already exists. If the callback throws, Relay preserves the last
+/// valid payload, continues publication, and records the error for `getLastCallbackError()`.
 #[napi]
 pub fn register_llm_sanitize_request_guardrail(
     env: Env,
@@ -2952,8 +2952,8 @@ pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
 ///
 /// The `guardrail` callback receives `(response, context)` and must return the sanitized response,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
-/// guardrail with the same `name` already exists. If the callback throws, Relay omits the payload
-/// and records the error for `getLastCallbackError()`.
+/// guardrail with the same `name` already exists. If the callback throws, Relay preserves the last
+/// valid payload, continues publication, and records the error for `getLastCallbackError()`.
 #[napi]
 pub fn register_llm_sanitize_response_guardrail(
     env: Env,
@@ -3174,8 +3174,9 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Return a Promise that resolves when native subscriber callbacks queued
 /// before this call finish.
 ///
-/// When called from an event-sanitizer callback, this Promise resolves without waiting to prevent
-/// a cycle with the serial dispatcher.
+/// When called from a queued publication sanitizer callback (including event and manual tool/LLM
+/// sanitizers), this Promise resolves without waiting to prevent a cycle with the serial
+/// dispatcher.
 ///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
 /// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
@@ -3502,7 +3503,8 @@ pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: Strin
 /// The `guardrail` callback receives `(request, context)` and must return the sanitized request,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists on the specified scope. If the callback throws,
-/// Relay omits the payload and records the error for `getLastCallbackError()`.
+/// Relay preserves the last valid payload, continues publication, and records the error for
+/// `getLastCallbackError()`.
 #[napi]
 pub fn scope_register_llm_sanitize_request_guardrail(
     env: Env,
@@ -3546,7 +3548,8 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 /// The `guardrail` callback receives `(response, context)` and must return the sanitized response,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists on the specified scope. If the callback throws,
-/// Relay omits the payload and records the error for `getLastCallbackError()`.
+/// Relay preserves the last valid payload, continues publication, and records the error for
+/// `getLastCallbackError()`.
 #[napi]
 pub fn scope_register_llm_sanitize_response_guardrail(
     env: Env,

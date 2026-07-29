@@ -1972,3 +1972,45 @@ async fn test_stream_response_codec_annotation_uses_sanitized_aggregated_respons
     deregister_subscriber("stream_sanitized_resp_codec_sub").unwrap();
     deregister_llm_sanitize_response_guardrail("stream_sanitize_resp_codec_annotation").unwrap();
 }
+
+#[tokio::test]
+async fn test_stream_response_sanitizer_can_flush_subscribers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_subscriber("stream_reentrant_flush_subscriber", Arc::new(|_| {})).unwrap();
+    register_llm_sanitize_response_guardrail(
+        "stream_reentrant_flush_sanitizer",
+        1,
+        Arc::new(|response, _context| {
+            Box::pin(async move {
+                flush_subscribers()?;
+                Ok(Some(response))
+            })
+        }),
+    )
+    .unwrap();
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("stream_reentrant_flush")
+            .request(make_openai_chat_request("stream me"))
+            .func(noop_stream_exec_fn())
+            .collector(Box::new(|_chunk| Ok(())))
+            .finalizer(Box::new(|| make_openai_chat_response("done")))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    while stream.next().await.is_some() {}
+    tokio::time::timeout(std::time::Duration::from_secs(2), stream.close())
+        .await
+        .expect("stream close deadlocked in response sanitizer")
+        .unwrap();
+    flush_subscribers().unwrap();
+
+    deregister_llm_sanitize_response_guardrail("stream_reentrant_flush_sanitizer").unwrap();
+    deregister_subscriber("stream_reentrant_flush_subscriber").unwrap();
+}

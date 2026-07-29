@@ -95,9 +95,9 @@ def flush() -> None:
     waiting for observer work. Use this barrier in tests and shutdown paths when
     captured subscriber output must be complete before continuing.
 
-    Call this function outside subscriber and event-sanitizer callbacks. A
-    re-entrant call returns without waiting to avoid blocking the dispatcher,
-    so callbacks later in the same dispatch snapshot can still run.
+    Call this function outside subscriber and queued publication sanitizer
+    callbacks. A re-entrant call returns without waiting to avoid blocking the
+    dispatcher, so callbacks later in the same dispatch snapshot can still run.
     """
     if _event_sanitizer_callback_active():
         return None

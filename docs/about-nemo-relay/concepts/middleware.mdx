@@ -328,14 +328,18 @@ register_llm_sanitize_request_guardrail(
     "redact-openai-chat",
     10,
     Arc::new(|mut request, context| {
-        if context.codec() == &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
-            && let Some(codec) = context.resolve_codec()
-            && let Ok(mut annotated) = codec.decode(&request)
-        {
-            annotated.messages.clear();
-            request = codec.encode(&annotated, &request).ok()?;
-        }
-        Some(request)
+        Box::pin(async move {
+            if context.codec() == &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+                && let Some(codec) = context.resolve_codec()
+                && let Ok(mut annotated) = codec.decode(&request)
+            {
+                annotated.messages.clear();
+                if let Ok(encoded) = codec.encode(&annotated, &request) {
+                    request = encoded;
+                }
+            }
+            Ok(Some(request))
+        })
     }),
 )?;
 ```

@@ -888,11 +888,13 @@ async fn build_llm_end_payload(
 ///   the handle start time if the current time is not later.
 ///
 /// # Returns
-/// A [`Result`] that is `Ok(())` when the end event has been emitted.
+/// A [`Result`] that is `Ok(())` when the end event has been queued for
+/// sanitization and publication.
 ///
 /// # Errors
 /// Returns an error when the runtime owner check fails, internal state cannot be
-/// read safely, or response codec decoding fails.
+/// read safely, or the event cannot be queued. Sanitizer and response-codec
+/// errors discovered during queued publication are logged and fail open.
 ///
 /// # Notes
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
