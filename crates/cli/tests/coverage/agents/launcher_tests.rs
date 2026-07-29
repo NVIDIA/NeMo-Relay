@@ -2036,7 +2036,7 @@ async fn gateway_stop_aborts_a_task_that_exceeds_the_grace_period() {
 
     tokio::time::timeout(
         Duration::from_secs(1),
-        gateway.stop_with_timeout(Duration::from_millis(10)),
+        gateway.stop_with_interrupt_and_timeout(std::future::pending(), Duration::from_millis(10)),
     )
     .await
     .expect("forced gateway shutdown did not finish")
@@ -2044,6 +2044,35 @@ async fn gateway_stop_aborts_a_task_that_exceeds_the_grace_period() {
     tokio::time::timeout(Duration::from_secs(1), dropped_rx)
         .await
         .expect("aborted gateway task was not dropped")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn gateway_stop_interrupt_aborts_a_stuck_task() {
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (dropped_tx, dropped_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _drop_signal = DropSignal(Some(dropped_tx));
+        let _ = started_tx.send(());
+        std::future::pending::<Result<(), CliError>>().await
+    });
+    started_rx.await.unwrap();
+    let gateway = RunningGateway { shutdown_tx, task };
+
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        gateway.stop_with_interrupt_and_timeout(
+            async { Ok(()) },
+            TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT,
+        ),
+    )
+    .await
+    .expect("interrupt did not force gateway shutdown")
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), dropped_rx)
+        .await
+        .expect("interrupted gateway task was not dropped")
         .unwrap();
 }
 

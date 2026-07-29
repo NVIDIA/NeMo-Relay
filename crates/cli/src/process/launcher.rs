@@ -380,24 +380,48 @@ impl RunningGateway {
             .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
     }
 
-    // Requests shutdown and joins the server task, aborting it if an in-flight request prevents
-    // graceful shutdown from completing. The send can fail only if the task already exited.
+    // Requests shutdown and joins the server task. A second Ctrl-C aborts cleanup immediately;
+    // otherwise, a stuck in-flight request is aborted after the grace period.
     async fn stop(self) -> Result<(), CliError> {
-        self.stop_with_timeout(TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT)
-            .await
+        self.stop_with_interrupt_and_timeout(
+            tokio::signal::ctrl_c(),
+            TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT,
+        )
+        .await
     }
 
-    async fn stop_with_timeout(mut self, timeout: Duration) -> Result<(), CliError> {
+    async fn stop_with_interrupt_and_timeout<F>(
+        mut self,
+        interrupt: F,
+        timeout: Duration,
+    ) -> Result<(), CliError>
+    where
+        F: std::future::Future<Output = std::io::Result<()>>,
+    {
         let _ = self.shutdown_tx.send(());
-        match tokio::time::timeout(timeout, &mut self.task).await {
-            Ok(result) => {
+        tokio::pin!(interrupt);
+        let timeout_duration = timeout;
+        let timeout_sleep = tokio::time::sleep(timeout_duration);
+        tokio::pin!(timeout_sleep);
+        tokio::select! {
+            result = &mut self.task => {
                 result.map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
             }
-            Err(_) => {
+            interrupt_result = &mut interrupt => {
+                interrupt_result?;
+                self.task.abort();
+                match self.task.await {
+                    Err(error) if error.is_cancelled() => Ok(()),
+                    result => result.map_err(|error| {
+                        CliError::Launch(format!("gateway task failed: {error}"))
+                    })?,
+                }
+            }
+            _ = &mut timeout_sleep => {
                 log::info!(
                     target: "nemo_relay.server",
                     event = "transparent_gateway_shutdown_timed_out",
-                    timeout_ms = timeout.as_millis();
+                    timeout_ms = timeout_duration.as_millis();
                     "Transparent gateway shutdown timed out; aborting task"
                 );
                 self.task.abort();
