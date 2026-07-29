@@ -53,6 +53,11 @@ fn validate_async_registration_parity(crate_dir: &str) {
     println!("cargo:rerun-if-changed=cbindgen.toml");
     println!("cargo:rerun-if-changed=src");
 
+    let callable_path = format!("{crate_dir}/src/callable.rs");
+    let callable = std::fs::read_to_string(&callable_path)
+        .unwrap_or_else(|error| panic!("read {callable_path}: {error}"));
+    validate_async_callback_abi(&callable);
+
     let mut expected = Vec::new();
     for source in REGISTRATION_SOURCES {
         let source_path = format!("{crate_dir}/{source}");
@@ -80,6 +85,87 @@ fn validate_async_registration_parity(crate_dir: &str) {
     );
 }
 
+fn normalize_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn rust_type_alias(source: &str, name: &str) -> String {
+    let prefix = format!("pub type {name}");
+    let start = source
+        .find(&prefix)
+        .unwrap_or_else(|| panic!("src/callable.rs is missing {name}"));
+    let end = source[start..]
+        .find(';')
+        .map(|offset| start + offset + 1)
+        .unwrap_or_else(|| panic!("src/callable.rs has an unterminated {name} alias"));
+    normalize_whitespace(&source[start..end])
+}
+
+/// Keep the handwritten C typedef block tied to the Rust callback ABI that
+/// cbindgen cannot derive through registration macros.
+fn validate_async_callback_abi(callable: &str) {
+    let enum_start = callable
+        .find("pub enum NemoRelayAsyncCallbackState")
+        .expect("src/callable.rs is missing NemoRelayAsyncCallbackState");
+    let enum_prefix = &callable[..enum_start];
+    assert!(
+        enum_prefix
+            .rsplit_once("#[repr(u32)]")
+            .is_some_and(|(_, suffix)| suffix.len() < 256),
+        "NemoRelayAsyncCallbackState must retain its u32 representation"
+    );
+    let enum_end = callable[enum_start..]
+        .find("\n}")
+        .map(|offset| enum_start + offset)
+        .expect("NemoRelayAsyncCallbackState is unterminated");
+    let discriminants = callable[enum_start..enum_end]
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("Complete =") || line.starts_with("Pending ="))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        discriminants,
+        ["Complete = 0,", "Pending = 1,"],
+        "NemoRelayAsyncCallbackState drifted from the C callback-state constants"
+    );
+
+    assert_eq!(
+        rust_type_alias(callable, "NemoRelayAsyncJsonCb"),
+        normalize_whitespace(
+            r#"pub type NemoRelayAsyncJsonCb = unsafe extern "C" fn(
+                user_data: *mut libc::c_void,
+                invocation_json: *const c_char,
+                completion: *const NemoRelayAsyncCompletion,
+            ) -> NemoRelayAsyncCallbackState;"#
+        ),
+        "NemoRelayAsyncJsonCb drifted from ASYNC_REGISTRATIONS"
+    );
+    assert_eq!(
+        rust_type_alias(callable, "NemoRelayAsyncInterceptCb"),
+        normalize_whitespace(
+            r#"pub type NemoRelayAsyncInterceptCb = unsafe extern "C" fn(
+                user_data: *mut libc::c_void,
+                invocation_json: *const c_char,
+                next: *const NemoRelayAsyncNext,
+                completion: *const NemoRelayAsyncCompletion,
+            ) -> NemoRelayAsyncCallbackState;"#
+        ),
+        "NemoRelayAsyncInterceptCb drifted from ASYNC_REGISTRATIONS"
+    );
+    for declaration in [
+        "typedef uint32_t NemoRelayAsyncCallbackState;",
+        "NEMO_RELAY_ASYNC_CALLBACK_STATE_COMPLETE = 0,",
+        "NEMO_RELAY_ASYNC_CALLBACK_STATE_PENDING = 1,",
+        "typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncJsonCb)(void *user_data, const char *invocation_json, const struct NemoRelayAsyncCompletion *completion);",
+        "typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncInterceptCb)(void *user_data, const char *invocation_json, const struct NemoRelayAsyncNext *next, const struct NemoRelayAsyncCompletion *completion);",
+    ] {
+        assert!(
+            ASYNC_REGISTRATIONS.contains(declaration),
+            "ASYNC_REGISTRATIONS is missing callback ABI declaration: {declaration}"
+        );
+    }
+}
+
 fn parse_async_prototype(line: &str) -> Option<AsyncPrototype> {
     let line = line.strip_prefix("NemoRelayStatus ")?;
     let (name, parameters) = line.split_once('(')?;
@@ -94,8 +180,6 @@ fn parse_async_macro_invocations(source: &str) -> Vec<AsyncPrototype> {
     const MACROS: &[(&str, bool)] = &[
         ("global_async_registration!(", false),
         ("scope_async_registration!(", true),
-        ("global_async_event_registration!(", false),
-        ("scope_async_event_registration!(", true),
     ];
 
     let mut prototypes = Vec::new();

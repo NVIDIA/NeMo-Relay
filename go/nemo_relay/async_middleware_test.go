@@ -59,6 +59,7 @@ func TestAsyncMiddlewareGlobalRegistrationParity(t *testing.T) {
 			if err := registration.register(name); err != nil {
 				t.Fatalf("register: %v", err)
 			}
+			t.Cleanup(func() { _ = registration.deregister(name) })
 			if err := registration.register(name); err == nil {
 				t.Fatal("duplicate registration unexpectedly succeeded")
 			}

@@ -41,7 +41,14 @@ unsafe extern "C" fn async_json_passthrough_callback(
             "pending_marks": [],
             "optimization_contributions": [],
         }),
-        7 => invocation["fields"].clone(),
+        7 => {
+            assert_eq!(
+                crate::api::nemo_relay_flush_subscribers(),
+                NemoRelayStatus::Internal,
+                "flush inside an async event sanitizer must report would-block"
+            );
+            invocation["fields"].clone()
+        }
         8 => Json::String("blocked by async guardrail".into()),
         9 => json!({"invalid": true}),
         _ => unreachable!("test callback kind must be known"),
@@ -102,6 +109,8 @@ unsafe extern "C" fn async_next_callback(
         nemo_relay_async_next_release(next);
         nemo_relay_async_completion_release(completion);
     }
+    // A successful invoke retained a completion reference; this callback drops
+    // its own next and completion references before transferring Pending ownership.
     NemoRelayAsyncCallbackState::Pending
 }
 

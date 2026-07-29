@@ -1291,8 +1291,9 @@ NemoRelayStatus nemo_relay_deregister_subscriber(const char *name);
 /**
  * Wait for subscriber callbacks queued before this call to finish.
  *
- * A call from an asynchronous event-sanitizer callback returns without waiting to prevent a
- * cycle with the serial dispatcher.
+ * A call made while an asynchronous C event sanitizer is pending returns `Internal` with a
+ * would-block error instead of waiting. Completion callbacks may resume on arbitrary threads, so
+ * callers that are not inside the sanitizer can retry after it settles.
  */
 NemoRelayStatus nemo_relay_flush_subscribers(void);
 

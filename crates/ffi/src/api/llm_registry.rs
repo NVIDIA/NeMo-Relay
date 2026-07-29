@@ -434,13 +434,17 @@ pub unsafe extern "C" fn nemo_relay_deregister_subscriber(name: *const c_char) -
 
 /// Wait for subscriber callbacks queued before this call to finish.
 ///
-/// A call from an asynchronous event-sanitizer callback returns without waiting to prevent a
-/// cycle with the serial dispatcher.
+/// A call made while an asynchronous C event sanitizer is pending returns `Internal` with a
+/// would-block error instead of waiting. Completion callbacks may resume on arbitrary threads, so
+/// callers that are not inside the sanitizer can retry after it settles.
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_flush_subscribers() -> NemoRelayStatus {
     clear_last_error();
     if crate::callable::event_sanitizer_callback_active() {
-        return NemoRelayStatus::Ok;
+        crate::error::set_last_error(
+            "subscriber flush would block while an asynchronous event sanitizer is pending",
+        );
+        return NemoRelayStatus::Internal;
     }
     match core_subscriber_api::flush_subscribers() {
         Ok(()) => NemoRelayStatus::Ok,

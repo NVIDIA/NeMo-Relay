@@ -831,6 +831,9 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 			}
 			// Successful invocation transfers token ownership to the one-shot
 			// result trampoline, even if this waiter is cancelled first.
+			// Keep the token registered when cancellation wins: unregistering
+			// before a late Rust callback would be a use-after-free. Runtime
+			// teardown that prevents delivery can therefore retain this token.
 			select {
 			case result := <-ch:
 				return result.value, result.err
