@@ -885,7 +885,12 @@ pub type NemoRelayNativeAsyncNextStreamCb = unsafe extern "C" fn(
 ///
 /// The callback owns `next` and `stream` and must release each exactly once.
 /// It may push chunks before returning or retain the handles and return
-/// `Pending`; no implicit timeout is applied.
+/// `Pending`; no implicit timeout is applied. Relay can invoke separate
+/// middleware calls concurrently without stable OS-thread affinity. Retained
+/// handles may be used from a plugin-owned thread, while callbacks supplied to
+/// `async_next_invoke_stream` run on a Relay runtime worker. The plugin must
+/// synchronize shared `user_data` and callback state and serialize each
+/// handle's final release after its last operation returns.
 pub type NemoRelayNativeAsyncStreamMiddlewareCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
@@ -903,7 +908,13 @@ pub type NemoRelayNativeAsyncStreamMiddlewareCb = unsafe extern "C" fn(
 /// the invocation and must call `async_next_release` exactly once after its
 /// final use, regardless of whether it returns `Complete` or `Pending`. The
 /// host never reclaims a `next` handle after handing it to the callback.
-/// `next` is null for non-execution middleware.
+/// `next` is null for non-execution middleware. Relay invokes the callback on
+/// the Tokio runtime worker polling that middleware invocation, without stable
+/// OS-thread affinity; separate invocations may run concurrently. After
+/// returning `Pending`, retained completion and `next` handles may be used from
+/// a plugin-owned thread. The plugin must synchronize shared `user_data` and
+/// callback state and serialize each handle's final release after its last
+/// operation returns.
 pub type NemoRelayNativeAsyncMiddlewareCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,

@@ -32,8 +32,8 @@ use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn, current_scope_stack,
-    snapshot_scope_stack,
+    MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+    ToolSanitizeFn, current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -425,8 +425,10 @@ fn copy_publication_invocation_with_buffer<'py>(
     publication_buffer: Option<PublicationBuffer>,
 ) -> PyResult<(Bound<'py, PyAny>, Option<TaskLocals>)> {
     let invocation_context = context.context.bind(py).call_method0("copy")?;
-    let scope_stack = snapshot_scope_stack(&current_scope_stack())
-        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    // The dispatcher already installs an isolated emission-time snapshot.
+    // Retain that handle so callback-local scope mutations stay visible to
+    // nested events without exposing stack cloning as a public runtime API.
+    let scope_stack = current_scope_stack();
     let scope_stack = Py::new(
         py,
         PyScopeStack {
@@ -947,6 +949,7 @@ pub fn wrap_py_tool_exec_fn(
 #[pyclass]
 struct PyToolNextFn {
     inner: ToolExecutionNextFn,
+    context: MiddlewareContinuationContext,
 }
 
 #[pymethods]
@@ -957,10 +960,11 @@ impl PyToolNextFn {
         args: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.clone();
+        let context = self.context.clone();
         let json_args = py_to_json(args)?;
-        let future = next(json_args);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = future
+            let result = context
+                .invoke(move || next(json_args))
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Python::attach(|py| json_to_py(py, &result))
@@ -973,15 +977,17 @@ impl PyToolNextFn {
 #[pyclass]
 struct PyLlmNextFn {
     inner: LlmExecutionNextFn,
+    context: MiddlewareContinuationContext,
 }
 
 #[pymethods]
 impl PyLlmNextFn {
     fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.clone();
-        let future = next(request.inner);
+        let context = self.context.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = future
+            let result = context
+                .invoke(move || next(request.inner))
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Python::attach(|py| json_to_py(py, &result))
@@ -994,15 +1000,17 @@ impl PyLlmNextFn {
 #[pyclass]
 struct PyLlmStreamNextFn {
     inner: LlmStreamExecutionNextFn,
+    context: MiddlewareContinuationContext,
 }
 
 #[pymethods]
 impl PyLlmStreamNextFn {
     fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.clone();
-        let future = next(request.inner);
+        let context = self.context.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let rust_stream = future
+            let rust_stream = context
+                .invoke(move || next(request.inner))
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
@@ -1010,12 +1018,16 @@ impl PyLlmStreamNextFn {
             let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
             let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
             let (closed, closed_rx) = tokio::sync::watch::channel(None);
-            tokio::spawn(crate::py_api::forward_stream_to_channel(
-                rust_stream,
-                tx,
-                cancel_rx,
-                closed,
-            ));
+            tokio::spawn(async move {
+                context
+                    .run(crate::py_api::forward_stream_to_channel(
+                        rust_stream,
+                        tx,
+                        cancel_rx,
+                        closed,
+                    ))
+                    .await;
+            });
 
             Ok(crate::py_types::PyLlmStream {
                 receiver: Arc::new(tokio::sync::Mutex::new(rx)),
@@ -1043,7 +1055,10 @@ pub fn wrap_py_tool_exec_intercept_fn(
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
                 let py_args =
                     json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                let py_next = PyToolNextFn { inner: next };
+                let py_next = PyToolNextFn {
+                    inner: next,
+                    context: MiddlewareContinuationContext::capture(),
+                };
                 let py_next = py_next
                     .into_pyobject(py)
                     .map_err(|e| FlowError::Internal(e.to_string()))?
@@ -1105,7 +1120,10 @@ pub fn wrap_py_llm_exec_intercept_fn(
                         copy_middleware_invocation(py, task_locals)
                             .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let py_req = PyLLMRequest { inner: request };
-                    let py_next = PyLlmNextFn { inner: next };
+                    let py_next = PyLlmNextFn {
+                        inner: next,
+                        context: MiddlewareContinuationContext::capture(),
+                    };
                     let py_req = py_req
                         .into_pyobject(py)
                         .map_err(|e| FlowError::Internal(e.to_string()))?
@@ -1170,7 +1188,10 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         copy_middleware_invocation(py, task_locals)
                             .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let py_req = PyLLMRequest { inner: request };
-                    let py_next = PyLlmStreamNextFn { inner: next };
+                    let py_next = PyLlmStreamNextFn {
+                        inner: next,
+                        context: MiddlewareContinuationContext::capture(),
+                    };
                     let py_req = py_req
                         .into_pyobject(py)
                         .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?

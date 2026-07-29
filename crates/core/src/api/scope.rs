@@ -3,9 +3,10 @@
 
 use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, MarkEvent};
 use crate::api::runtime::global_context;
+use crate::api::runtime::scope_stack::snapshot_scope_stack;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
-    current_scope_stack, snapshot_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
+    current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
 use crate::api::shared::{
     ensure_runtime_owner, resolve_parent_uuid, snapshot_event_sanitizers,

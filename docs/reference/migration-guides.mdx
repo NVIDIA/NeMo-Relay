@@ -15,7 +15,7 @@ intervening release in sequence.
 
 NeMo Relay 0.7 makes the Rust middleware callback contract asynchronous and
 adds awaitable middleware support across the in-process bindings, native
-plugins, raw C FFI consumers, and worker plugins. It also changes the LLM
+plugins, and worker plugins. It also changes the LLM
 observability sanitizer contract. Complete the following migrations before you
 run existing middleware or a sanitizer with a 0.7 host.
 
@@ -40,7 +40,7 @@ existing error behavior for its middleware family.
 | Rust | `Fn(...) -> Result<T>` | `Fn(...) -> Pin<Box<dyn Future<Output = Result<T>> + Send>>` |
 | Python | Direct return value | Direct return value or awaitable |
 | Node.js | Direct return value | Direct return value or `Promise` |
-| Go / raw C FFI | Synchronous callback | Existing synchronous callback, or the new `Async` / completion-based registration API |
+| Go / raw C FFI | Synchronous callback | Synchronous callback |
 
 Python's standalone middleware helpers preserve their direct synchronous
 return when called without a running `asyncio` loop. In that mode, registered
@@ -83,6 +83,17 @@ closures and named callback functions as follows:
 Python and Node.js registration names are unchanged. Mark a Python callback
 `async def`, or return a Promise from Node.js, only when it needs asynchronous
 work; existing direct-value callbacks remain supported.
+
+<Warning>
+Do not introduce recursive middleware calls while converting callbacks to
+async. Event sanitizers, conditional-execution guardrails, request intercepts,
+execution intercepts, and subscribers must not call NeMo Relay APIs that run
+middleware, flush subscribers, wait on exporters, or clear plugins. Within
+these callbacks, scope operations remain supported at every nesting level,
+including replacement of the active stack with an arbitrary scope stack. Event
+emission is the only supported operation that can enqueue additional callback
+work. An execution intercept may also invoke its supplied `next` continuation.
+</Warning>
 
 When queued Python middleware has no live captured event loop—including when
 it was registered outside a loop or its registration loop has closed—the

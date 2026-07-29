@@ -144,6 +144,20 @@ it exactly once, call `async_completion_release`, and release an async `next`
 handle after use. The host marks a completion cancelled when the awaiting
 runtime work is dropped; late and duplicate settlement is rejected safely.
 
+Relay invokes an asynchronous middleware callback synchronously on the Tokio
+runtime worker that is polling that middleware invocation. There is no stable
+OS-thread affinity, and separate invocations can run concurrently. After
+returning `Pending`, a plugin can use its retained completion, stream, or
+`next` handle from another plugin-owned thread. The host synchronizes those
+opaque handles, schedules `next` on the captured Relay runtime, and can invoke
+an incremental downstream-stream callback on a Relay runtime worker. The
+plugin must synchronize shared `user_data` and callback state, and must keep
+them alive until the corresponding host-owned registration and all
+callback-owned handle references are released. Do not race a handle's release
+operation against settlement, cancellation inspection, stream operations, or
+`next` invocation using that same reference; serialize the final release after
+the last such call returns.
+
 Event sanitizers registered through this extension still run on Relay's serial
 publication dispatcher. Scope and mark emission remain synchronous and their
 sanitized events are delivered later in emission order.
@@ -211,9 +225,9 @@ JSON string handles, which callers release with the ordinary host string
 release operation.
 
 A successful null sanitizer output omits the LLM observability payload and its
-annotation. Returning an error also fails closed rather than exposing the
-unsanitized payload. Neither case changes the client-visible request or
-response.
+annotation. Returning an error fails open: Relay records the callback error and
+preserves the last valid observability payload and annotation. Neither case
+changes the client-visible request or response.
 
 Use the `nemo-relay-plugin` crate rather than the host `nemo-relay` runtime
 crate. Refer to [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)

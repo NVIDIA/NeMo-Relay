@@ -952,21 +952,19 @@ class AtofExporter:
     def force_flush(self) -> None:
         """Flush the exporter.
 
-        Outside a native subscriber callback, wait for queued subscriber
-        delivery, then flush the file sink or ask the stream sink to drain up
-        to its timeout. A re-entrant call does not establish the delivery
-        barrier. A stream timeout is logged and does not by itself return an
-        error.
+        Outside subscriber and middleware callbacks, wait for queued
+        subscriber delivery, then flush the file sink or ask the stream sink
+        to drain up to its timeout. A stream timeout is logged and does not by
+        itself return an error.
         """
         ...
     def shutdown(self) -> None:
         """Flush the exporter and shut it down.
 
-        Outside a native subscriber callback, wait for queued subscriber
-        delivery, then flush the file sink or ask the stream sink to drain and
-        close up to its timeout. A re-entrant call does not establish the
-        delivery barrier. A stream timeout is logged and does not by itself
-        return an error.
+        Outside subscriber and middleware callbacks, wait for queued
+        subscriber delivery, then flush the file sink or ask the stream sink
+        to drain and close up to its timeout. A stream timeout is logged and
+        does not by itself return an error.
         """
         ...
 
@@ -1980,8 +1978,9 @@ def deregister_subscriber(name: str) -> bool:
 def flush_subscribers() -> None:
     """Wait for subscriber callbacks queued by native event emission.
 
-    Call this function outside subscriber callbacks. A re-entrant call returns
-    without waiting, so callbacks later in the same dispatch snapshot can run.
+    Call this function outside subscribers, event sanitizers, conditional
+    guardrails, and request or execution intercepts. The public Python wrapper
+    handles the limited queued tool/LLM observability-sanitizer exception.
     """
     ...
 

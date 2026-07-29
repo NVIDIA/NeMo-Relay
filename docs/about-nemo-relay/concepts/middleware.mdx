@@ -37,6 +37,21 @@ APIs (`tool_call`, `tool_call_end`, `llm_call`, and `llm_call_end`) remain
 synchronous: they create or close their handle immediately and queue observability
 work rather than awaiting it.
 
+<Warning>
+Event sanitizers, conditional-execution guardrails, request intercepts, and
+execution intercepts are not re-entrant. These callbacks must not invoke
+another NeMo Relay API that runs middleware, flushes subscriber delivery, waits
+on an exporter, or clears plugins. Scope APIs remain supported: callbacks may
+create, push, or pop scopes at any nesting level and may replace the active
+scope stack with an arbitrary stack. Emitting a new event is the only
+supported operation that can enqueue additional callback work; Relay queues
+that event for later publication instead of recursively dispatching it.
+
+An execution intercept may invoke the `next` continuation supplied to that
+callback. This is the only supported way for an intercept to enter the
+remaining execution chain. Call `next` only as documented for that intercept.
+</Warning>
+
 ## Registration Levels
 
 Middleware and subscribers can be registered at different levels depending on their

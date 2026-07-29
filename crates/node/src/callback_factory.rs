@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v4";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v5";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -164,7 +164,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           try {
             message = String(error?.message ?? error);
           } catch {}
-          reject(message);
+          if (typeof reject === 'function') {
+            reject(message);
+          }
           return;
         }
         callPromise(
@@ -181,7 +183,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       };
     },
 
-    eventSanitizerCallbackActive() {
+    publicationCallbackActive() {
       return eventSanitizerContext.getStore()?.publicationState.active === true;
     },
 
@@ -268,9 +270,9 @@ pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Resul
     wrap_callback(env, func, "promise")
 }
 
-pub(crate) fn event_sanitizer_callback_active(env: &Env) -> napi::Result<bool> {
+pub(crate) fn publication_callback_active(env: &Env) -> napi::Result<bool> {
     let factories = callback_factories(env)?;
-    let callback: JsFunction = factories.get_named_property("eventSanitizerCallbackActive")?;
+    let callback: JsFunction = factories.get_named_property("publicationCallbackActive")?;
     callback
         .call::<JsUnknown>(None, &[])?
         .coerce_to_bool()?

@@ -141,4 +141,17 @@ describe('callback error helpers', () => {
       /PromiseAwareFn threadsafe function closed/i,
     );
   });
+
+  it('PromiseAwareFn argument conversion failures reject without invoking the callback', async () => {
+    let invoked = false;
+    await assert.rejects(
+      () =>
+        __testClosedPromiseAwareCall(() => {
+          invoked = true;
+          return null;
+        }, true),
+      /forced PromiseAwareFn conversion failure/i,
+    );
+    assert.equal(invoked, false);
+  });
 });

@@ -1801,21 +1801,40 @@ pub fn test_closed_finalizer_callback(
     wrapped()
 }
 
-/// Internal test helper: exercise the PromiseAwareFn closed-call path.
+/// Internal test helper: exercise PromiseAwareFn queue and conversion failures.
 #[napi(
     js_name = "__testClosedPromiseAwareCall",
     ts_return_type = "Promise<unknown>"
 )]
-pub fn test_closed_promise_aware_call(env: Env, func: JsFunction) -> Result<JsObject> {
+pub fn test_closed_promise_aware_call(
+    env: Env,
+    func: JsFunction,
+    force_conversion_failure: Option<bool>,
+) -> Result<JsObject> {
     let promise_aware = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &func).map_err(|e| {
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
-    promise_aware.close();
+    if !force_conversion_failure.unwrap_or(false) {
+        promise_aware.close();
+    }
 
     env.execute_tokio_future(
-        async move { promise_aware.call(Json::Null).await.map_err(to_napi_err) },
+        async move {
+            if force_conversion_failure.unwrap_or(false) {
+                promise_aware
+                    .call_with_arg0(Box::new(|_| {
+                        Err(napi::Error::from_reason(
+                            "forced PromiseAwareFn conversion failure",
+                        ))
+                    }))
+                    .await
+            } else {
+                promise_aware.call(Json::Null).await
+            }
+            .map_err(to_napi_err)
+        },
         |_env, result| Ok(result),
     )
 }
@@ -3216,10 +3235,10 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Return a Promise that resolves when native subscriber callbacks queued
 /// before this call finish.
 ///
-/// When called from a queued publication sanitizer callback (including event and manual tool/LLM
-/// sanitizers), this Promise resolves without waiting to prevent a cycle with the serial
-/// dispatcher. Publication middleware must not move such a re-entrant flush to
-/// an unmarked worker thread.
+/// Call this function outside subscribers, event sanitizers, conditional
+/// guardrails, and request or execution intercepts. A queued tool or LLM
+/// observability sanitizer may call it, but the Promise resolves without
+/// waiting for its own publication.
 ///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
 /// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
@@ -3228,7 +3247,7 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Callers should handle errors when awaiting it.
 #[napi(ts_return_type = "Promise<void>")]
 pub fn flush_subscribers(env: Env) -> Result<JsObject> {
-    let reentrant = crate::callback_factory::event_sanitizer_callback_active(&env)?;
+    let reentrant = crate::callback_factory::publication_callback_active(&env)?;
     env.execute_tokio_future(
         async move {
             if reentrant {
@@ -4117,23 +4136,23 @@ impl AtofExporter {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
-    /// file sink or ask the stream sink to drain for up to its timeout. A re-entrant call does not
-    /// establish the delivery barrier. A stream timeout is logged and does not by itself return an
-    /// error.
+    /// Outside subscriber and middleware callbacks, wait for queued subscriber delivery, then
+    /// flush the file sink or ask the stream sink to drain for up to its timeout. A stream timeout
+    /// is logged and does not by itself return an error.
     #[napi]
-    pub fn force_flush(&self, env: Env) -> napi::Result<()> {
-        with_effective_scope_stack(&env, || self.inner.force_flush())?
+    pub fn force_flush(&self) -> napi::Result<()> {
+        self.inner
+            .force_flush()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
-    /// file sink or ask the stream sink to drain and close up to its timeout. A re-entrant call
-    /// does not establish the delivery barrier. A stream timeout is logged and does not by itself
-    /// return an error.
+    /// Outside subscriber and middleware callbacks, wait for queued subscriber delivery, then
+    /// flush the file sink or ask the stream sink to drain and close up to its timeout. A stream
+    /// timeout is logged and does not by itself return an error.
     #[napi]
-    pub fn shutdown(&self, env: Env) -> napi::Result<()> {
-        with_effective_scope_stack(&env, || self.inner.shutdown())?
+    pub fn shutdown(&self) -> napi::Result<()> {
+        self.inner
+            .shutdown()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
@@ -4208,15 +4227,17 @@ impl OpenTelemetrySubscriber {
 
     /// Force a flush of finished spans through the exporter.
     #[napi]
-    pub fn force_flush(&self, env: Env) -> napi::Result<()> {
-        with_effective_scope_stack(&env, || self.inner.force_flush())?
+    pub fn force_flush(&self) -> napi::Result<()> {
+        self.inner
+            .force_flush()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Shut down the underlying tracer provider.
     #[napi]
-    pub fn shutdown(&self, env: Env) -> napi::Result<()> {
-        with_effective_scope_stack(&env, || self.inner.shutdown())?
+    pub fn shutdown(&self) -> napi::Result<()> {
+        self.inner
+            .shutdown()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }

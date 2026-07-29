@@ -55,6 +55,15 @@ the last valid observability payload without changing provider execution. In Nod
 a synchronous sanitizer callback that throws also fails open; Relay records the
 error for `getLastCallbackError()`.
 
+<Warning>
+Event sanitizer callbacks are not re-entrant. Do not call another NeMo Relay
+API that runs middleware, flushes subscribers, waits on an exporter, or clears
+plugins. Scope APIs remain supported: callbacks may create, push, or pop scopes
+at any nesting level and may replace the active scope stack with an arbitrary
+stack. Emitting a new event is the only supported operation that can
+enqueue additional callback work; Relay queues it for later publication.
+</Warning>
+
 ## Async Delivery and Ordering
 
 Event sanitizer callbacks may be asynchronous: use an `async def` callback in
@@ -197,28 +206,17 @@ activation fails.
 
 ## Experimental C and Go Bindings
 
-The source-first C API retains `NemoRelayEventSanitizeCb` and adds parallel
-completion-based async registration APIs. An async callback returns `Complete`
-or `Pending` and settles its one-shot completion handle with resolve or reject.
-The absence of an implicit timeout is intentional: Relay preserves strict FIFO
-publication, so one unsettled `Pending` completion blocks every later event in
-that publication queue. Plugin authors should arrange their own operation
-deadline and settle each retained completion exactly once on every success,
-failure, and cancellation path.
+The source-first C API uses `NemoRelayEventSanitizeCb`. It provides global,
+scope-local, and plugin-context registration functions for all three surfaces.
+Global names start with `nemo_relay_register_`, and scope-local names start
+with `nemo_relay_scope_register_`.
 
-Relay cancels the handle when its invocation is abandoned, which is the
-host-supported recovery mechanism; late or duplicate settlement after
-cancellation is rejected safely. After resolving or rejecting a retained
-completion, call `nemo_relay_async_completion_release` to release the
-callback-owned reference. Global names start with `nemo_relay_register_`, and
-scope-local names start with `nemo_relay_scope_register_`.
-
-The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, and
-`AsyncMiddlewareFunc` variants for global and scope-local event sanitizers.
-Async Go callbacks receive a `context.Context`; Relay cancels it when the
-invocation is abandoned. Because a returned `EventSanitizeFields` replaces all
-three fields, copy the supplied value and modify only the fields that should
-change.
+The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, global
+`Register*SanitizeGuardrail` helpers, scope-local
+`ScopeRegister*SanitizeGuardrail` helpers, and the same methods on
+`PluginContext`. The `guardrails` package provides shorter aliases. Because a
+returned `EventSanitizeFields` replaces all three fields, copy the supplied
+value and modify only the fields that should change.
 
 ## Related Topics
 

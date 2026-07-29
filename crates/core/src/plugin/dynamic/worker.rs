@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
@@ -12,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
     RelayHostRuntime, RelayHostRuntimeServer,
@@ -58,20 +60,13 @@ use tower::service_fn;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
-use crate::api::optimization::{
-    LlmOptimizationRecorder, current_llm_optimization_recorder, scope_llm_optimization_recorder,
-};
-use crate::api::runtime::scope_stack::active_event_uuid;
 use crate::api::runtime::subscriber_dispatcher::{
-    PublicationBuffer, PublicationContext, capture_nested_publication_buffer,
-    capture_publication_context, with_nested_publication_buffer,
-    with_task_nested_publication_buffer, with_task_publication_context,
+    PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use crate::api::runtime::{
     EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
-    TASK_SCOPE_STACK, ToolExecutionNextFn, current_scope_stack, with_active_event_uuid,
-    with_scope_stack,
+    MiddlewareContinuationContext, ToolExecutionNextFn, current_scope_stack, with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -2430,56 +2425,18 @@ struct StoredInvocationContext {
 }
 
 #[derive(Clone)]
-struct ContinuationContext {
-    scope_stack: crate::api::runtime::ScopeStackHandle,
-    active_event_uuid: Option<Uuid>,
-    publication_context: Option<PublicationContext>,
-    publication_buffer: Option<PublicationBuffer>,
-    optimization_recorder: Option<LlmOptimizationRecorder>,
-}
-
-impl ContinuationContext {
-    fn capture() -> Self {
-        Self {
-            scope_stack: current_scope_stack(),
-            active_event_uuid: active_event_uuid(),
-            publication_context: capture_publication_context(),
-            publication_buffer: capture_nested_publication_buffer(),
-            optimization_recorder: current_llm_optimization_recorder(),
-        }
-    }
-
-    async fn run<F: Future>(&self, future: F) -> F::Output {
-        let scoped = TASK_SCOPE_STACK.scope(self.scope_stack.clone(), future);
-        let published = with_task_publication_context(self.publication_context.clone(), scoped);
-        let published =
-            with_task_nested_publication_buffer(self.publication_buffer.clone(), published);
-        let active = async {
-            match self.active_event_uuid {
-                Some(uuid) => with_active_event_uuid(uuid, published).await,
-                None => published.await,
-            }
-        };
-        match &self.optimization_recorder {
-            Some(recorder) => scope_llm_optimization_recorder(recorder.clone(), active).await,
-            None => active.await,
-        }
-    }
-}
-
-#[derive(Clone)]
 enum Continuation {
     Tool {
         next: ToolExecutionNextFn,
-        context: ContinuationContext,
+        context: MiddlewareContinuationContext,
     },
     Llm {
         next: LlmExecutionNextFn,
-        context: ContinuationContext,
+        context: MiddlewareContinuationContext,
     },
     LlmStream {
         next: LlmStreamExecutionNextFn,
-        context: ContinuationContext,
+        context: MiddlewareContinuationContext,
     },
 }
 
@@ -2487,21 +2444,21 @@ impl Continuation {
     fn tool(next: ToolExecutionNextFn) -> Self {
         Self::Tool {
             next,
-            context: ContinuationContext::capture(),
+            context: MiddlewareContinuationContext::capture(),
         }
     }
 
     fn llm(next: LlmExecutionNextFn) -> Self {
         Self::Llm {
             next,
-            context: ContinuationContext::capture(),
+            context: MiddlewareContinuationContext::capture(),
         }
     }
 
     fn llm_stream(next: LlmStreamExecutionNextFn) -> Self {
         Self::LlmStream {
             next,
-            context: ContinuationContext::capture(),
+            context: MiddlewareContinuationContext::capture(),
         }
     }
 }
@@ -2679,7 +2636,15 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.value, "tool next value").map_err(status_from_flow)?;
         let value = decode_json_envelope::<Json>(&value)
             .map_err(|err| Status::invalid_argument(format!("invalid tool next JSON: {err}")))?;
-        let result = context.run(next(value)).await;
+        let result = AssertUnwindSafe(context.invoke(move || next(value)))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|payload| {
+                Err(FlowError::Internal(format!(
+                    "worker tool continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )))
+            });
         Ok(Response::new(json_result(result)))
     }
 
@@ -2700,7 +2665,15 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
             .map_err(|err| Status::invalid_argument(format!("invalid LLM next request: {err}")))?;
-        let result = context.run(next(request)).await;
+        let result = AssertUnwindSafe(context.invoke(move || next(request)))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|payload| {
+                Err(FlowError::Internal(format!(
+                    "worker LLM continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )))
+            });
         Ok(Response::new(json_result(result)))
     }
 
@@ -2725,7 +2698,16 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
             Status::invalid_argument(format!("invalid LLM stream next request: {err}"))
         })?;
-        let stream = context.run(next(request)).await.map_err(status_from_flow)?;
+        let stream = AssertUnwindSafe(context.invoke(move || next(request)))
+            .catch_unwind()
+            .await
+            .map_err(|payload| {
+                Status::internal(format!(
+                    "worker stream continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                ))
+            })?
+            .map_err(status_from_flow)?;
         let (tx, rx) = mpsc::channel(16);
         tokio::spawn(async move {
             context
@@ -2735,12 +2717,23 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                         tokio::select! {
                             biased;
                             _ = tx.closed() => break,
-                            item = stream.next() => {
-                                let Some(item) = item else {
-                                    break;
-                                };
-                                if tx.send(item).await.is_err() {
-                                    break;
+                            item = AssertUnwindSafe(stream.next()).catch_unwind() => {
+                                match item {
+                                    Ok(Some(item)) => {
+                                        if tx.send(item).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Ok(None) => break,
+                                    Err(payload) => {
+                                        let _ = tx
+                                            .send(Err(FlowError::Internal(format!(
+                                                "worker stream continuation panicked: {}",
+                                                panic_payload_message(payload.as_ref())
+                                            ))))
+                                            .await;
+                                        break;
+                                    }
                                 }
                             }
                         }

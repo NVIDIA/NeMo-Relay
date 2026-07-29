@@ -480,7 +480,8 @@ pub fn wrap_js_llm_request_intercept_promise_fn(
 /// Wrap a Promise-aware JS event sanitizer.
 ///
 /// All lifecycle publication invokes these callbacks from Relay's serial
-/// dispatcher. The invocation context marks `flushSubscribers()` as reentrant.
+/// dispatcher. The invocation context is also used by queued tool and LLM
+/// observability sanitizers so a flush cannot wait on its own publication.
 pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSanitizeFn {
     Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
         let func = func.clone();

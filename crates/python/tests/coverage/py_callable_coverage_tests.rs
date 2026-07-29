@@ -579,8 +579,10 @@ async def collect_stream(awaitable):
 
         with_event_loop(py, |event_loop| {
             pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
+                let continuation_context = MiddlewareContinuationContext::capture();
                 let tool_next = PyToolNextFn {
                     inner: Arc::new(|args| Box::pin(async move { Ok(json!({"echo": args["x"]})) })),
+                    context: continuation_context.clone(),
                 };
                 let tool_awaitable = Python::attach(|py| {
                     tool_next.__call__(py, tool_args.bind(py)).unwrap().unbind()
@@ -601,6 +603,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|_| {
                         Box::pin(async { Err(FlowError::Internal("tool next boom".into())) })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let tool_err_awaitable = Python::attach(|py| {
                     tool_next_err
@@ -626,6 +629,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|request| {
                         Box::pin(async move { Ok(json!({"model": request.content["model"]})) })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let llm_awaitable = Python::attach(|py| {
                     llm_next
@@ -652,6 +656,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|_| {
                         Box::pin(async { Err(FlowError::Internal("llm next boom".into())) })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let llm_err_awaitable = Python::attach(|py| {
                     llm_next_err
@@ -686,6 +691,7 @@ async def collect_stream(awaitable):
                             ))
                         })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let stream_awaitable = Python::attach(|py| {
                     stream_next
@@ -714,6 +720,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|_| {
                         Box::pin(async { Err(FlowError::Internal("stream next boom".into())) })
                     }),
+                    context: continuation_context,
                 };
                 let stream_err_awaitable = Python::attach(|py| {
                     stream_next_err
@@ -905,4 +912,22 @@ def llm_custom_awaitable(request):
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
     assert_eq!(runtime.block_on(llm_custom(make_request())).unwrap(), None);
+}
+
+#[test]
+fn execution_next_context_restores_scope() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let scope_stack = nemo_relay::api::runtime::create_scope_stack();
+        let context = nemo_relay::api::runtime::with_scope_stack(scope_stack.clone(), || {
+            MiddlewareContinuationContext::capture()
+        });
+
+        let observed =
+            tokio::spawn(async move { context.run(async move { current_scope_stack() }).await })
+                .await
+                .unwrap();
+
+        assert!(Arc::ptr_eq(&observed, &scope_stack));
+    });
 }

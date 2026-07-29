@@ -47,7 +47,7 @@ async fn continuation_context_preserves_optimization_recorder_across_tasks() {
     for producer in ["worker-unary-next", "worker-stream-next"] {
         let recorder = LlmOptimizationRecorder::default();
         let context = scope_llm_optimization_recorder(recorder.clone(), async {
-            ContinuationContext::capture()
+            MiddlewareContinuationContext::capture()
         })
         .await;
         tokio::spawn(async move {
@@ -2038,6 +2038,29 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect_err("invalid tool next JSON should fail");
     assert_eq!(invalid_tool_json.code(), tonic::Code::InvalidArgument);
 
+    let tool_continuation = state
+        .insert_continuation(Continuation::tool(Arc::new(|_value| {
+            Box::pin(async move {
+                panic!("worker tool next panic");
+            })
+        })))
+        .expect("panicking tool continuation should insert");
+    let result = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: tool_continuation,
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+        }))
+        .await
+        .expect("tool panic should become a structured result")
+        .into_inner();
+    assert!(
+        result
+            .error
+            .is_some_and(|error| error.message.contains("worker tool next panic"))
+    );
+
     let llm_continuation = state
         .insert_continuation(Continuation::llm(Arc::new(|request| {
             Box::pin(async move { Ok(request.content) })
@@ -2056,6 +2079,32 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .await
         .expect_err("invalid LLM next request should fail");
     assert_eq!(invalid_llm_json.code(), tonic::Code::InvalidArgument);
+
+    let llm_continuation = state
+        .insert_continuation(Continuation::llm(Arc::new(|_request| {
+            Box::pin(async move {
+                panic!("worker LLM next panic");
+            })
+        })))
+        .expect("panicking LLM continuation should insert");
+    let result = service
+        .llm_next(Request::new(LlmNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: llm_continuation,
+            request: Some(
+                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
+                    .expect("llm request envelope"),
+            ),
+        }))
+        .await
+        .expect("LLM panic should become a structured result")
+        .into_inner();
+    assert!(
+        result
+            .error
+            .is_some_and(|error| error.message.contains("worker LLM next panic"))
+    );
 
     let stream_continuation = state
         .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
@@ -2095,6 +2144,42 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
             assert!(error.message.contains("stream item failed"));
         }
         other => panic!("expected worker stream error, got {other:?}"),
+    }
+
+    let stream_continuation = state
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::new(futures_util::stream::once(async move {
+                    panic!("worker stream next panic");
+                    #[allow(unreachable_code)]
+                    Ok(json!({}))
+                })))
+            })
+        })))
+        .expect("panicking stream continuation should insert");
+    let stream_response = service
+        .llm_stream_next(Request::new(LlmStreamNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: stream_continuation,
+            request: Some(
+                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
+                    .expect("llm request envelope"),
+            ),
+        }))
+        .await
+        .expect("stream next should return a stream before polling");
+    let mut stream = stream_response.into_inner();
+    let chunk = stream
+        .next()
+        .await
+        .expect("panicking stream should yield one error")
+        .expect("panic should be translated into a stream item");
+    match chunk.item {
+        Some(StreamItem::Error(error)) => {
+            assert!(error.message.contains("worker stream next panic"));
+        }
+        other => panic!("expected worker panic error, got {other:?}"),
     }
 
     let stream_continuation = state

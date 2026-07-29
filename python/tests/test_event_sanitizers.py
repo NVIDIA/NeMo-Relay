@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import cast
@@ -14,7 +13,6 @@ import pytest
 
 import nemo_relay
 from nemo_relay import EventSanitizeFields, guardrails, plugin, scope, scope_local, subscribers
-from nemo_relay._event_sanitizer_context import callback_active, loop_affine
 
 
 @pytest.fixture(name="capture_events")
@@ -131,43 +129,6 @@ async def test_nested_async_sanitizer_event_precedes_already_queued_event(captur
     ]
 
 
-def test_sync_standalone_middleware_preserves_nested_publication_order(capture_events):
-    _capture_name, events = capture_events
-    entered = threading.Event()
-    release = threading.Event()
-
-    def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
-        if event.name == "python-sync-outer-event":
-            entered.set()
-            assert release.wait(timeout=2)
-            nemo_relay.tools.conditional_execution("python-nested-conditional", {})
-        return fields
-
-    guardrails.register_tool_conditional_execution(
-        "python-nested-conditional",
-        0,
-        lambda _name, _args: None,
-    )
-    guardrails.register_mark_sanitize("python-sync-nested-order", 0, sanitize)
-    try:
-        scope.event("python-sync-outer-event")
-        assert entered.wait(timeout=2)
-        scope.event("python-sync-later-event")
-        release.set()
-        subscribers.flush()
-    finally:
-        release.set()
-        guardrails.deregister_mark_sanitize("python-sync-nested-order")
-        guardrails.deregister_tool_conditional_execution("python-nested-conditional")
-
-    assert [event.name for event in events] == [
-        "python-sync-outer-event",
-        "python-nested-conditional",
-        "python-nested-conditional",
-        "python-sync-later-event",
-    ]
-
-
 async def test_scope_start_sanitizer_uses_started_scope_context(capture_events):
     _capture_name, events = capture_events
     observed_scope_uuids: list[str] = []
@@ -239,70 +200,6 @@ async def test_async_mark_sanitizer_uses_cross_thread_emitter_context(capture_ev
         guardrails.deregister_mark_sanitize("python-cross-thread-emitter-context")
 
     assert observed == ["emission", "emission"]
-
-
-async def test_sanitizer_descendants_lose_reentrant_flush_after_settlement(capture_events):
-    blocker_entered = asyncio.Event()
-    release_blocker = asyncio.Event()
-    descendant_finished = asyncio.Event()
-    descendant_task: asyncio.Task[None] | None = None
-
-    async def descendant() -> None:
-        await blocker_entered.wait()
-        await subscribers.flush_async()
-        descendant_finished.set()
-
-    async def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
-        nonlocal descendant_task
-        if event.name == "descendant-origin":
-            descendant_task = asyncio.create_task(descendant())
-        elif event.name == "descendant-blocked":
-            blocker_entered.set()
-            await release_blocker.wait()
-        return fields
-
-    guardrails.register_mark_sanitize("python-descendant-flush-liveness", 0, sanitize)
-    try:
-        scope.event("descendant-origin")
-        scope.event("descendant-blocked")
-        await asyncio.wait_for(blocker_entered.wait(), timeout=1)
-        await asyncio.sleep(0.05)
-        assert not descendant_finished.is_set()
-        release_blocker.set()
-        await asyncio.wait_for(subscribers.flush_async(), timeout=1)
-        assert descendant_task is not None
-        await asyncio.wait_for(descendant_task, timeout=1)
-    finally:
-        release_blocker.set()
-        guardrails.deregister_mark_sanitize("python-descendant-flush-liveness")
-
-
-async def test_cancelled_sanitizer_expires_descendant_context():
-    descendant_started = asyncio.Event()
-    release_descendant = asyncio.Event()
-    observed: list[bool] = []
-
-    async def descendant() -> None:
-        descendant_started.set()
-        await release_descendant.wait()
-        observed.append(callback_active())
-
-    async def never() -> None:
-        await asyncio.Event().wait()
-
-    def sanitizer() -> object:
-        asyncio.create_task(descendant())
-        return never()
-
-    execution = asyncio.ensure_future(loop_affine(sanitizer, sanitizer=True)())
-    await asyncio.wait_for(descendant_started.wait(), timeout=1)
-    execution.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await execution
-    release_descendant.set()
-    await asyncio.sleep(0)
-
-    assert observed == [False]
 
 
 def test_sync_mark_sanitizer_uses_emitter_context(capture_events):
@@ -434,36 +331,6 @@ def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events)
 
     assert events[-1].data == {"fresh_loop": True}
     assert observed == ["emission", "emission"]
-
-
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_event_sanitizer_flush_is_reentrant(capture_events, asynchronous):
-    _capture_name, events = capture_events
-    flush_returned = False
-
-    def sanitize_sync(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
-        nonlocal flush_returned
-        subscribers.flush()
-        flush_returned = True
-        return fields
-
-    async def sanitize_async(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
-        await asyncio.sleep(0)
-        return sanitize_sync(_event, fields)
-
-    guardrails.register_mark_sanitize(
-        "python-reentrant-mark",
-        0,
-        sanitize_async if asynchronous else sanitize_sync,
-    )
-    try:
-        scope.event("reentrant-checkpoint", data={"raw": True})
-        await subscribers.flush_async()
-    finally:
-        guardrails.deregister_mark_sanitize("python-reentrant-mark")
-
-    assert flush_returned is True
-    assert events[-1].data == {"raw": True}
 
 
 def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events):

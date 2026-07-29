@@ -1564,9 +1564,10 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
 
 /// Wait for subscriber callbacks queued before this call to finish.
 ///
-/// Public Python wrappers prevent re-entrant event-sanitizer callbacks from
-/// waiting on the serial dispatcher. Publication middleware must not move such
-/// a re-entrant flush to an unmarked worker thread.
+/// Call this function outside subscribers, event sanitizers, conditional
+/// guardrails, and request or execution intercepts. The public Python wrapper
+/// lets queued tool and LLM observability sanitizers return without waiting on
+/// their own publication.
 #[pyfunction]
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
     py.detach(core_subscriber_api::flush_subscribers)

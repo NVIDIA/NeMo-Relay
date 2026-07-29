@@ -23,7 +23,9 @@ use serde_json::Value as Json;
 use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_task_nested_publication_buffer,
 };
-use nemo_relay::api::runtime::{ScopeStackHandle, TASK_SCOPE_STACK, current_scope_stack};
+use nemo_relay::api::runtime::{
+    MiddlewareContinuationContext, ScopeStackHandle, current_scope_stack,
+};
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
 use crate::callback_factory;
@@ -87,6 +89,7 @@ struct CallArgs {
     /// Scope stack captured when Relay invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
     publication_buffer: Option<PublicationBuffer>,
+    continuation_context: Option<MiddlewareContinuationContext>,
     completion: CallCompletion,
 }
 
@@ -161,29 +164,27 @@ fn undefined_to_unknown(env: &Env) -> napi::Result<JsUnknown> {
 fn build_next_unknown(
     env: &Env,
     next: NextFn,
-    scope_stack: ScopeStackHandle,
+    continuation_context: MiddlewareContinuationContext,
     publication_context_id: Option<String>,
-    publication_buffer: Option<PublicationBuffer>,
 ) -> napi::Result<JsUnknown> {
     let next_fn = match next {
         NextFn::Json(next) => {
             env.create_function_from_closure("__nemo_relay_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
-                let scope_stack = scope_stack.clone();
+                let continuation_context = continuation_context.clone();
                 let publication_context_id = publication_context_id.clone();
-                let publication_buffer = publication_buffer.clone();
                 ctx.env.execute_tokio_future(
                     async move {
                         with_publication_callback_context(
                             publication_context_id,
-                            publication_buffer,
+                            None,
                             async move {
-                                TASK_SCOPE_STACK
-                                    .scope(scope_stack, async move {
-                                        next(arg)
-                                            .await
-                                            .map_err(|e| napi::Error::from_reason(e.to_string()))
+                                continuation_context
+                                    .invoke(move || async move {
+                                        next(arg).await.map_err(|error| {
+                                            napi::Error::from_reason(error.to_string())
+                                        })
                                     })
                                     .await
                             },
@@ -198,20 +199,19 @@ fn build_next_unknown(
             env.create_function_from_closure("__nemo_relay_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
-                let scope_stack = scope_stack.clone();
+                let continuation_context = continuation_context.clone();
                 let publication_context_id = publication_context_id.clone();
-                let publication_buffer = publication_buffer.clone();
                 ctx.env.execute_tokio_future(
                     async move {
                         with_publication_callback_context(
                             publication_context_id,
-                            publication_buffer,
+                            None,
                             async move {
-                                TASK_SCOPE_STACK
-                                    .scope(scope_stack, async move {
-                                        next(arg)
-                                            .await
-                                            .map_err(|e| napi::Error::from_reason(e.to_string()))
+                                continuation_context
+                                    .invoke(move || async move {
+                                        next(arg).await.map_err(|error| {
+                                            napi::Error::from_reason(error.to_string())
+                                        })
                                     })
                                     .await
                             },
@@ -277,67 +277,80 @@ impl PromiseAwareFn {
     fn from_wrapper(env: &Env, wrapper: &JsFunction) -> napi::Result<Self> {
         let mut tsfn =
             env.create_threadsafe_function(wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
-                let next = match ctx.value.next {
-                    Some(next) => {
-                        let scope_stack = ctx.value.scope_stack.clone().ok_or_else(|| {
-                            napi::Error::from_reason(
-                                "middleware next callback is missing its captured scope stack",
-                            )
-                        })?;
-                        build_next_unknown(
-                            &ctx.env,
-                            next,
-                            scope_stack,
-                            ctx.value.publication_context_id.clone(),
-                            ctx.value.publication_buffer.clone(),
-                        )?
-                    }
-                    None => undefined_to_unknown(&ctx.env)?,
-                };
-                let (resolve, reject) = build_completion_unknowns(&ctx.env, ctx.value.completion)?;
-                let arg0 = match ctx.value.arg0 {
-                    PrimaryArg::Json(value) => json_to_unknown(&ctx.env, value)?,
-                    PrimaryArg::Build(build) => build(&ctx.env)?,
-                };
-
-                let spread = unsafe {
-                    JsUnknown::from_raw_unchecked(
-                        ctx.env.raw(),
-                        ctx.env.get_boolean(ctx.value.spread)?.raw(),
-                    )
-                };
-                let publication = unsafe {
-                    JsUnknown::from_raw_unchecked(
-                        ctx.env.raw(),
-                        ctx.env.get_boolean(ctx.value.publication)?.raw(),
-                    )
-                };
-                let publication_context_id = match ctx.value.publication_context_id {
-                    Some(context_id) => json_to_unknown(&ctx.env, Json::String(context_id))?,
-                    None => undefined_to_unknown(&ctx.env)?,
-                };
-                let scope_stack = match ctx.value.scope_stack {
-                    Some(scope_stack) => {
-                        let scope_stack = ScopeStack {
-                            inner: scope_stack,
-                            publication_buffer: ctx.value.publication_buffer,
+                let completion = ctx.value.completion.clone();
+                let result = (|| {
+                    let next = match ctx.value.next {
+                        Some(next) => {
+                            let continuation_context = ctx
+                                .value
+                                .continuation_context
+                                .clone()
+                                .ok_or_else(|| {
+                                napi::Error::from_reason(
+                                    "middleware next callback is missing its captured Relay context",
+                                )
+                            })?;
+                            build_next_unknown(
+                                &ctx.env,
+                                next,
+                                continuation_context,
+                                ctx.value.publication_context_id.clone(),
+                            )?
                         }
-                        .into_instance(ctx.env)?;
-                        unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) }
-                    }
-                    None => undefined_to_unknown(&ctx.env)?,
-                };
-                let args = vec![
-                    arg0,
-                    spread,
-                    next,
-                    resolve,
-                    reject,
-                    publication,
-                    publication_context_id,
-                    scope_stack,
-                ];
-                Ok(args)
+                        None => undefined_to_unknown(&ctx.env)?,
+                    };
+                    let arg0 = match ctx.value.arg0 {
+                        PrimaryArg::Json(value) => json_to_unknown(&ctx.env, value)?,
+                        PrimaryArg::Build(build) => build(&ctx.env)?,
+                    };
+                    let spread = unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            ctx.env.raw(),
+                            ctx.env.get_boolean(ctx.value.spread)?.raw(),
+                        )
+                    };
+                    let publication = unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            ctx.env.raw(),
+                            ctx.env.get_boolean(ctx.value.publication)?.raw(),
+                        )
+                    };
+                    let publication_context_id = match ctx.value.publication_context_id {
+                        Some(context_id) => json_to_unknown(&ctx.env, Json::String(context_id))?,
+                        None => undefined_to_unknown(&ctx.env)?,
+                    };
+                    let scope_stack = match ctx.value.scope_stack {
+                        Some(scope_stack) => {
+                            let scope_stack = ScopeStack {
+                                inner: scope_stack,
+                                publication_buffer: ctx.value.publication_buffer,
+                            }
+                            .into_instance(ctx.env)?;
+                            unsafe {
+                                JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw())
+                            }
+                        }
+                        None => undefined_to_unknown(&ctx.env)?,
+                    };
+                    let (resolve, reject) =
+                        build_completion_unknowns(&ctx.env, ctx.value.completion)?;
+                    Ok(vec![
+                        arg0,
+                        spread,
+                        next,
+                        resolve,
+                        reject,
+                        publication,
+                        publication_context_id,
+                        scope_stack,
+                    ])
+                })();
+                if let Err(error) = &result {
+                    completion.send(Err(FlowError::Internal(format!(
+                        "failed to build JavaScript middleware callback arguments: {error}"
+                    ))));
+                }
+                result
             })?;
 
         // The callback should not keep the Node event loop alive on its own.
@@ -444,6 +457,9 @@ impl PromiseAwareFn {
         next: Option<NextFn>,
     ) -> FlowResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
+        let continuation_context = next
+            .as_ref()
+            .map(|_| MiddlewareContinuationContext::capture());
         let tsfn = self
             .tsfn
             .lock()
@@ -458,10 +474,12 @@ impl PromiseAwareFn {
                 next,
                 publication: mode.publication,
                 publication_context_id: publication_callback_context_id(),
-                // Scope identity applies to every middleware callback. The
-                // publication bit controls only re-entrant flush behavior.
+                // Scope identity applies to every middleware callback.
+                // Publication context also lets queued tool/LLM observability
+                // sanitizers avoid waiting on their own publication.
                 scope_stack: Some(current_scope_stack()),
                 publication_buffer: capture_nested_publication_buffer(),
+                continuation_context,
                 completion: CallCompletion::new(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
@@ -481,3 +499,7 @@ impl Drop for PromiseAwareFn {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/rust/promise_call_tests.rs"]
+mod tests;

@@ -2,18 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 const plugin = require('../plugin.js');
-const execFileAsync = promisify(execFile);
 
 function capture(name) {
   const events = [];
@@ -132,48 +129,6 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(events.at(-1).data, { sanitized: true });
   });
 
-  it('keeps synchronous exporter flush and shutdown reentrant inside Promise sanitizers', async () => {
-    const addonPath = require.resolve('../index.js');
-    const runExporterScenario = async (kind) => {
-      const script = String.raw`
-        const fs = require('node:fs');
-        const os = require('node:os');
-        const path = require('node:path');
-        const lib = require(${JSON.stringify(addonPath)});
-        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nemo-relay-reentrant-exporter-'));
-        const exporter = ${kind === 'atof'
-          ? "new lib.AtofExporter({ outputDirectory: directory })"
-          : "new lib.OpenTelemetrySubscriber({ type: 'full', endpoint: 'http://127.0.0.1:9', timeoutMillis: 10 })"};
-        const sanitizerName = ${JSON.stringify(`node-reentrant-${kind}-sanitizer`)};
-        const subscriberName = ${JSON.stringify(`node-reentrant-${kind}-subscriber`)};
-        lib.registerSubscriber(subscriberName, () => {});
-        lib.registerMarkSanitizeGuardrail(sanitizerName, 0, async (_event, fields) => {
-          await new Promise((resolve) => setImmediate(resolve));
-          exporter.forceFlush();
-          exporter.shutdown();
-          return fields;
-        });
-        lib.event(${JSON.stringify(`node-reentrant-${kind}-event`)});
-        lib.flushSubscribers().then(() => {
-          lib.deregisterMarkSanitizeGuardrail(sanitizerName);
-          lib.deregisterSubscriber(subscriberName);
-          fs.rmSync(directory, { recursive: true, force: true });
-          process.stdout.write('ok');
-        }, (error) => {
-          process.stderr.write(String(error?.stack ?? error));
-          process.exitCode = 1;
-        });
-      `;
-      const { stdout } = await execFileAsync(process.execPath, ['--eval', script], {
-        timeout: 10_000,
-      });
-      assert.equal(stdout, 'ok');
-    };
-
-    await runExporterScenario('atof');
-    await runExporterScenario('otel');
-  });
-
   it('publishes nested Promise sanitizer events before already queued events', async () => {
     const events = capture('node-event-sanitize-nested-order-sub');
     let sanitizerEntered;
@@ -184,18 +139,14 @@ describe('event sanitizer registries', () => {
     const release = new Promise((resolve) => {
       releaseSanitizer = resolve;
     });
-    lib.registerMarkSanitizeGuardrail(
-      'node-event-sanitize-nested-order',
-      0,
-      async (event, fields) => {
-        if (event.name === 'node-outer-event') {
-          sanitizerEntered();
-          await release;
-          lib.withScopeStack(lib.createScopeStack(), () => lib.event('node-nested-event'));
-        }
-        return fields;
-      },
-    );
+    lib.registerMarkSanitizeGuardrail('node-event-sanitize-nested-order', 0, async (event, fields) => {
+      if (event.name === 'node-outer-event') {
+        sanitizerEntered();
+        await release;
+        lib.withScopeStack(lib.createScopeStack(), () => lib.event('node-nested-event'));
+      }
+      return fields;
+    });
     try {
       lib.event('node-outer-event');
       await entered;
@@ -242,9 +193,7 @@ describe('event sanitizer registries', () => {
       await release;
       observedParents.push(lib.getHandle().uuid);
       lib.event('scope-context-nested', null, { originalParent: event.parent_uuid });
-      observedOverrides.push(
-        lib.withScopeStack(overrideStack, () => lib.getHandle().uuid),
-      );
+      observedOverrides.push(lib.withScopeStack(overrideStack, () => lib.getHandle().uuid));
       lib.setThreadScopeStack(overrideStack);
       observedOverrides.push(lib.getHandle().uuid);
       return fields;
@@ -283,16 +232,12 @@ describe('event sanitizer registries', () => {
   it('preserves the ending scope across an async scope-end sanitizer', async () => {
     const events = capture('node-scope-end-context-sub');
     const observed = [];
-    lib.registerScopeSanitizeEndGuardrail(
-      'node-scope-end-context',
-      0,
-      async (_event, fields) => {
-        observed.push(lib.getHandle().uuid);
-        await new Promise((resolve) => setImmediate(resolve));
-        observed.push(lib.getHandle().uuid);
-        return fields;
-      },
-    );
+    lib.registerScopeSanitizeEndGuardrail('node-scope-end-context', 0, async (_event, fields) => {
+      observed.push(lib.getHandle().uuid);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(lib.getHandle().uuid);
+      return fields;
+    });
     const scope = lib.pushScope('node-ending-scope', lib.ScopeType.Agent);
     try {
       lib.popScope(scope);
@@ -339,82 +284,7 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(events.at(-1).data, { snapshotted: true });
   });
 
-  it('does not deadlock when an async sanitizer flushes subscribers', async () => {
-    const events = capture('node-event-sanitize-reentrant-flush-sub');
-    let flushReturned = false;
-    lib.registerMarkSanitizeGuardrail('node-event-reentrant-flush', 0, async (_event, fields) => {
-      await lib.flushSubscribers();
-      flushReturned = true;
-      return fields;
-    });
-    try {
-      lib.event('reentrant-flush-checkpoint', null, { raw: true });
-      await lib.flushSubscribers();
-      await waitFor(events, 1);
-    } finally {
-      lib.deregisterMarkSanitizeGuardrail('node-event-reentrant-flush');
-      lib.deregisterSubscriber('node-event-sanitize-reentrant-flush-sub');
-    }
-    assert.equal(flushReturned, true);
-  });
-
-  it('preserves sanitizer re-entrancy through nested managed middleware', async () => {
-    const events = capture('node-event-sanitize-nested-middleware-sub');
-    const middlewareFlushes = [];
-    lib.registerToolConditionalExecutionGuardrail(
-      'node-event-nested-middleware-conditional',
-      0,
-      async (name) => {
-        if (name === 'node-event-nested-middleware-tool') {
-          await lib.flushSubscribers();
-          middlewareFlushes.push('conditional');
-        }
-        return null;
-      },
-    );
-    lib.registerToolExecutionIntercept(
-      'node-event-nested-middleware-outer',
-      0,
-      async (args, next) => ({ result: await next(args) }),
-    );
-    lib.registerToolExecutionIntercept(
-      'node-event-nested-middleware-inner',
-      10,
-      async (args, next) => {
-        await lib.flushSubscribers();
-        middlewareFlushes.push('execution');
-        return { result: await next(args) };
-      },
-    );
-    lib.registerMarkSanitizeGuardrail(
-      'node-event-nested-middleware-sanitizer',
-      0,
-      async (event, fields) => {
-        if (event.name === 'nested-middleware-checkpoint') {
-          await lib.toolCallExecute('node-event-nested-middleware-tool', {}, (args) => args);
-        }
-        return fields;
-      },
-    );
-    try {
-      lib.event('nested-middleware-checkpoint', null, { raw: true });
-      const state = await Promise.race([
-        lib.flushSubscribers().then(() => 'flushed'),
-        new Promise((resolve) => setTimeout(() => resolve('blocked'), 500)),
-      ]);
-      assert.equal(state, 'flushed');
-      await waitFor(events, 3);
-    } finally {
-      lib.deregisterMarkSanitizeGuardrail('node-event-nested-middleware-sanitizer');
-      lib.deregisterToolConditionalExecutionGuardrail('node-event-nested-middleware-conditional');
-      lib.deregisterToolExecutionIntercept('node-event-nested-middleware-outer');
-      lib.deregisterToolExecutionIntercept('node-event-nested-middleware-inner');
-      lib.deregisterSubscriber('node-event-sanitize-nested-middleware-sub');
-    }
-    assert.deepEqual(middlewareFlushes, ['conditional', 'execution']);
-  });
-
-  it('does not treat an unrelated flush as sanitizer re-entrancy', async () => {
+  it('waits for an in-flight sanitizer when flushed externally', async () => {
     const events = capture('node-event-sanitize-independent-flush-sub');
     let releaseSanitizer;
     let sanitizerEntered;
@@ -449,7 +319,7 @@ describe('event sanitizer registries', () => {
   });
 
   it('queues managed event sanitizers without blocking execution', async () => {
-    lib.registerSubscriber('node-event-inline-flush-sub', () => {});
+    lib.registerSubscriber('node-event-queued-managed-sub', () => {});
     let blockerEntered;
     const entered = new Promise((resolve) => {
       blockerEntered = resolve;
@@ -458,156 +328,36 @@ describe('event sanitizer registries', () => {
     const release = new Promise((resolve) => {
       releaseBlocker = resolve;
     });
-    let inlineFlushReturned = false;
+    let inlineSanitizerReturned = false;
 
-    lib.registerMarkSanitizeGuardrail('node-event-inline-flush-blocker', 0, async (_event, fields) => {
+    lib.registerMarkSanitizeGuardrail('node-event-queued-managed-blocker', 0, async (_event, fields) => {
       blockerEntered();
       await release;
       return fields;
     });
-    lib.registerScopeSanitizeStartGuardrail('node-event-inline-flush', 0, async (_event, fields) => {
-      await lib.flushSubscribers();
-      inlineFlushReturned = true;
+    lib.registerScopeSanitizeStartGuardrail('node-event-queued-managed', 0, async (_event, fields) => {
+      inlineSanitizerReturned = true;
       return fields;
     });
 
     try {
-      lib.event('inline-flush-blocker', null, { raw: true });
+      lib.event('queued-managed-blocker', null, { raw: true });
       await entered;
-      const execution = lib.toolCallExecute('inline-flush-tool', {}, (args) => args);
+      const execution = lib.toolCallExecute('queued-managed-tool', {}, (args) => args);
       const executionState = await Promise.race([
         execution.then(() => 'executed'),
         new Promise((resolve) => setTimeout(() => resolve('blocked'), 250)),
       ]);
       assert.equal(executionState, 'executed');
-      assert.equal(inlineFlushReturned, false);
+      assert.equal(inlineSanitizerReturned, false);
       releaseBlocker();
       await lib.flushSubscribers();
-      assert.equal(inlineFlushReturned, true);
+      assert.equal(inlineSanitizerReturned, true);
     } finally {
       releaseBlocker();
-      lib.deregisterMarkSanitizeGuardrail('node-event-inline-flush-blocker');
-      lib.deregisterScopeSanitizeStartGuardrail('node-event-inline-flush');
-      lib.deregisterSubscriber('node-event-inline-flush-sub');
-    }
-  });
-
-  it('clears sanitizer re-entrancy in async descendants after settlement', async () => {
-    const events = capture('node-event-sanitize-descendant-flush-sub');
-    const nestedStack = lib.createScopeStack();
-    let secondSanitizerEntered;
-    const secondEntered = new Promise((resolve) => {
-      secondSanitizerEntered = resolve;
-    });
-    let releaseSecondSanitizer;
-    const releaseSecond = new Promise((resolve) => {
-      releaseSecondSanitizer = resolve;
-    });
-    let descendantFlushStarted;
-    const flushStarted = new Promise((resolve) => {
-      descendantFlushStarted = resolve;
-    });
-    let descendantFlush;
-    const flushed = new Promise((resolve, reject) => {
-      descendantFlush = { resolve, reject };
-    });
-    lib.registerMarkSanitizeGuardrail('node-event-descendant-flush', 0, async (event, fields) => {
-      if (event.name === 'descendant-flush-origin') {
-        lib.withScopeStack(nestedStack, () => {
-          setTimeout(async () => {
-            await secondEntered;
-            lib.flushSubscribers().then(descendantFlush.resolve, descendantFlush.reject);
-            descendantFlushStarted();
-          }, 0);
-        });
-      } else if (event.name === 'descendant-flush-blocked') {
-        secondSanitizerEntered();
-        await releaseSecond;
-      }
-      return fields;
-    });
-    try {
-      lib.event('descendant-flush-origin', null, { raw: true });
-      lib.event('descendant-flush-blocked', null, { raw: true });
-      await secondEntered;
-      await flushStarted;
-      const state = await Promise.race([
-        flushed.then(() => 'flushed'),
-        new Promise((resolve) => setTimeout(() => resolve('pending'), 50)),
-      ]);
-      assert.equal(state, 'pending');
-      releaseSecondSanitizer();
-      await flushed;
-      await waitFor(events, 2);
-    } finally {
-      releaseSecondSanitizer();
-      lib.deregisterMarkSanitizeGuardrail('node-event-descendant-flush');
-      lib.deregisterSubscriber('node-event-sanitize-descendant-flush-sub');
-    }
-  });
-
-  it('clears sanitizer re-entrancy after a native descendant round trip', async () => {
-    const events = capture('node-event-sanitize-native-descendant-sub');
-    let secondSanitizerEntered;
-    const secondEntered = new Promise((resolve) => {
-      secondSanitizerEntered = resolve;
-    });
-    let releaseSecondSanitizer;
-    const releaseSecond = new Promise((resolve) => {
-      releaseSecondSanitizer = resolve;
-    });
-    let descendantFlushStarted;
-    const flushStarted = new Promise((resolve) => {
-      descendantFlushStarted = resolve;
-    });
-    let descendantFlush;
-    let descendantExecution;
-
-    lib.registerToolConditionalExecutionGuardrail(
-      'node-event-native-descendant-conditional',
-      0,
-      async (name) => {
-        if (name === 'node-event-native-descendant-tool') {
-          await secondEntered;
-          descendantFlush = lib.flushSubscribers();
-          descendantFlushStarted();
-          await descendantFlush;
-        }
-        return null;
-      },
-    );
-    lib.registerMarkSanitizeGuardrail(
-      'node-event-native-descendant-sanitizer',
-      0,
-      async (event, fields) => {
-        if (event.name === 'native-descendant-origin') {
-          descendantExecution = lib.toolCallExecute('node-event-native-descendant-tool', {}, (args) => args);
-        } else if (event.name === 'native-descendant-blocked') {
-          secondSanitizerEntered();
-          await releaseSecond;
-        }
-        return fields;
-      },
-    );
-    try {
-      lib.event('native-descendant-origin', null, { raw: true });
-      lib.event('native-descendant-blocked', null, { raw: true });
-      await secondEntered;
-      await flushStarted;
-      const state = await Promise.race([
-        descendantFlush.then(() => 'flushed'),
-        new Promise((resolve) => setTimeout(() => resolve('pending'), 50)),
-      ]);
-      assert.equal(state, 'pending');
-      releaseSecondSanitizer();
-      await descendantExecution;
-      await lib.flushSubscribers();
-      await waitFor(events, 4);
-    } finally {
-      releaseSecondSanitizer();
-      lib.deregisterMarkSanitizeGuardrail('node-event-native-descendant-sanitizer');
-      lib.deregisterToolConditionalExecutionGuardrail('node-event-native-descendant-conditional');
-      lib.deregisterSubscriber('node-event-sanitize-native-descendant-sub');
+      lib.deregisterMarkSanitizeGuardrail('node-event-queued-managed-blocker');
+      lib.deregisterScopeSanitizeStartGuardrail('node-event-queued-managed');
+      lib.deregisterSubscriber('node-event-queued-managed-sub');
     }
   });
 

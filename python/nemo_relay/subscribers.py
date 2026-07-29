@@ -28,7 +28,7 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from nemo_relay._event_sanitizer_context import callback_active as _event_sanitizer_callback_active
+from nemo_relay._event_sanitizer_context import callback_active as _publication_callback_active
 from nemo_relay._native import (
     deregister_subscriber as _native_deregister,
 )
@@ -193,16 +193,17 @@ def flush() -> None:
     waiting for observer work. Use this barrier in tests and shutdown paths when
     captured subscriber output must be complete before continuing.
 
-    Call this function outside subscriber and queued publication sanitizer
-    callbacks. A re-entrant call returns without waiting to avoid blocking the
-    dispatcher. Publication middleware must not move such a call to an unmarked
-    worker thread. From an ``asyncio`` task, await :func:`flush_async` instead.
+    Call this function outside subscribers, event sanitizers, conditional
+    guardrails, and request or execution intercepts. A queued tool or LLM
+    observability sanitizer may call it, but the call returns without waiting
+    for its own publication. From an ``asyncio`` task, await
+    :func:`flush_async` instead.
 
     Raises:
         RuntimeError: If called while an ``asyncio`` event loop is running on
             the current thread.
     """
-    if _event_sanitizer_callback_active():
+    if _publication_callback_active():
         return None
     try:
         asyncio.get_running_loop()
@@ -222,7 +223,7 @@ async def flush_async() -> None:
     thread coalesces concurrent barriers and waits for the native dispatcher
     without blocking the Python event loop.
     """
-    if _event_sanitizer_callback_active():
+    if _publication_callback_active():
         return None
     loop = asyncio.get_running_loop()
     completed: asyncio.Future[None] = loop.create_future()

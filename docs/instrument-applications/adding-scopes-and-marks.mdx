@@ -101,7 +101,7 @@ async function main() {
       { request_id: "req-123" },
     );
   } finally {
-    flushSubscribers();
+    await flushSubscribers();
     await new Promise((resolve) => setImmediate(resolve));
     deregisterSubscriber("scope-check");
   }
@@ -187,9 +187,8 @@ Check that the subscriber prints:
 - One mark event for `planning-finished`
 - One scope end event for `agent-run`
 
-Native subscribers are delivered asynchronously. Flush subscribers before
-validating printed or captured output. In Node.js, also wait one event-loop tick
-after `flushSubscribers()` so queued JavaScript callbacks can run.
+Native subscribers are delivered asynchronously. Await `flushSubscribers()`
+and then one event-loop turn before validating printed or captured output.
 
 If marks appear outside the intended trace, pass the active scope handle explicitly or make sure the mark is emitted while the scope is active.
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Track re-entrant subscriber flushes from Python event sanitizers."""
+"""Track queued publication callbacks on their originating event loop."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any
 
 
 class _CallbackState:
-    """Shared liveness for contexts copied from one sanitizer invocation."""
+    """Shared liveness for contexts copied from one publication callback."""
 
     __slots__ = ("active",)
 
@@ -24,7 +24,7 @@ _ACTIVE: ContextVar[_CallbackState | None] = ContextVar("nemo_relay_event_saniti
 
 
 def callback_active() -> bool:
-    """Return whether the current Python context is running an event sanitizer."""
+    """Return whether the current context is running queued publication work."""
     state = _ACTIVE.get()
     return state is not None and state.active
 
@@ -69,7 +69,7 @@ async def async_iter_close(iterator: Any) -> None:
 
 
 def invoke(callback: Callable[..., Any], *args: Any) -> Any:
-    """Invoke a sanitizer while marking its sync and async execution contexts."""
+    """Invoke queued publication work while marking its execution context."""
     state = _ACTIVE.get()
     owner = state is None or not state.active
     if owner:

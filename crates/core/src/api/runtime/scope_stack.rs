@@ -29,7 +29,6 @@ use crate::registry::{RegistryEntry, SortedRegistry};
 /// their nearest agent's freshness instead of creating a separate budget.
 /// Additional scopes are pushed as the public API opens lifecycle spans and
 /// removed when those spans close.
-#[derive(Clone)]
 pub struct ScopeStack {
     stack: Vec<ScopeHandle>,
     scope_registries: HashMap<Uuid, ScopeLocalRegistries>,
@@ -97,6 +96,15 @@ impl PropagationContext {
 }
 
 impl ScopeStack {
+    fn snapshot(&self) -> Self {
+        Self {
+            stack: self.stack.clone(),
+            scope_registries: self.scope_registries.clone(),
+            fresh_agents: self.fresh_agents.clone(),
+            propagated_parent_uuid: self.propagated_parent_uuid,
+        }
+    }
+
     /// Create a new scope stack containing only the implicit root scope.
     ///
     /// # Returns
@@ -409,11 +417,11 @@ pub fn create_scope_stack() -> ScopeStackHandle {
 
 /// Clone a scope stack into an isolated emission-time snapshot.
 #[doc(hidden)]
-pub fn snapshot_scope_stack(handle: &ScopeStackHandle) -> Result<ScopeStackHandle> {
+pub(crate) fn snapshot_scope_stack(handle: &ScopeStackHandle) -> Result<ScopeStackHandle> {
     let stack = handle
         .read()
         .unwrap_or_else(|error| error.into_inner())
-        .clone();
+        .snapshot();
     Ok(Arc::new(RwLock::new(stack)))
 }
 
@@ -461,7 +469,6 @@ pub async fn with_active_event_uuid<T>(uuid: Uuid, future: impl Future<Output = 
     ACTIVE_EVENT_UUID.scope(uuid, future).await
 }
 
-#[cfg(feature = "worker-grpc")]
 pub(crate) fn active_event_uuid() -> Option<Uuid> {
     ACTIVE_EVENT_UUID.try_with(|uuid| *uuid).ok()
 }
