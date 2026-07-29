@@ -198,6 +198,10 @@ mod native {
         Ok(())
     }
 
+    pub(super) fn in_dispatcher_callback() -> bool {
+        IN_DISPATCHER.with(Cell::get)
+    }
+
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
         DISPATCHER.get_or_init(start_dispatcher).clone()
     }
@@ -428,4 +432,14 @@ pub(crate) fn register_async_publication() -> Option<std::sync::mpsc::Sender<()>
 /// Wait for all queued subscriber callbacks submitted before this call.
 pub fn flush_subscribers() -> Result<()> {
     native::flush_subscribers()
+}
+
+/// Return whether the current callback was invoked by queued event publication.
+///
+/// Bindings use this to make re-entrant flush operations non-blocking while
+/// the serial dispatcher is awaiting middleware on another language runtime.
+#[doc(hidden)]
+#[must_use]
+pub fn in_dispatcher_callback() -> bool {
+    native::in_dispatcher_callback()
 }

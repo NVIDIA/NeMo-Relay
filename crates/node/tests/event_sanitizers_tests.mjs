@@ -148,6 +148,91 @@ describe('event sanitizer registries', () => {
     assert.equal(flushReturned, true);
   });
 
+  it('does not treat an unrelated flush as sanitizer re-entrancy', async () => {
+    const events = capture('node-event-sanitize-independent-flush-sub');
+    let releaseSanitizer;
+    let sanitizerEntered;
+    const entered = new Promise((resolve) => {
+      sanitizerEntered = resolve;
+    });
+    const release = new Promise((resolve) => {
+      releaseSanitizer = resolve;
+    });
+    lib.registerMarkSanitizeGuardrail('node-event-independent-flush', 0, async (_event, fields) => {
+      sanitizerEntered();
+      await release;
+      return fields;
+    });
+    try {
+      lib.event('independent-flush-checkpoint', null, { raw: true });
+      await entered;
+      const flush = lib.flushSubscribers();
+      const state = await Promise.race([
+        flush.then(() => 'flushed'),
+        new Promise((resolve) => setImmediate(() => resolve('pending'))),
+      ]);
+      assert.equal(state, 'pending');
+      releaseSanitizer();
+      await flush;
+      await waitFor(events, 1);
+    } finally {
+      releaseSanitizer();
+      lib.deregisterMarkSanitizeGuardrail('node-event-independent-flush');
+      lib.deregisterSubscriber('node-event-sanitize-independent-flush-sub');
+    }
+  });
+
+  it('clears sanitizer re-entrancy in async descendants after settlement', async () => {
+    const events = capture('node-event-sanitize-descendant-flush-sub');
+    let secondSanitizerEntered;
+    const secondEntered = new Promise((resolve) => {
+      secondSanitizerEntered = resolve;
+    });
+    let releaseSecondSanitizer;
+    const releaseSecond = new Promise((resolve) => {
+      releaseSecondSanitizer = resolve;
+    });
+    let descendantFlushStarted;
+    const flushStarted = new Promise((resolve) => {
+      descendantFlushStarted = resolve;
+    });
+    let descendantFlush;
+    const flushed = new Promise((resolve, reject) => {
+      descendantFlush = { resolve, reject };
+    });
+    lib.registerMarkSanitizeGuardrail('node-event-descendant-flush', 0, async (event, fields) => {
+      if (event.name === 'descendant-flush-origin') {
+        setTimeout(async () => {
+          await secondEntered;
+          descendantFlushStarted();
+          lib.flushSubscribers().then(descendantFlush.resolve, descendantFlush.reject);
+        }, 0);
+      } else if (event.name === 'descendant-flush-blocked') {
+        secondSanitizerEntered();
+        await releaseSecond;
+      }
+      return fields;
+    });
+    try {
+      lib.event('descendant-flush-origin', null, { raw: true });
+      lib.event('descendant-flush-blocked', null, { raw: true });
+      await secondEntered;
+      await flushStarted;
+      const state = await Promise.race([
+        flushed.then(() => 'flushed'),
+        new Promise((resolve) => setImmediate(() => resolve('pending'))),
+      ]);
+      assert.equal(state, 'pending');
+      releaseSecondSanitizer();
+      await flushed;
+      await waitFor(events, 2);
+    } finally {
+      releaseSecondSanitizer();
+      lib.deregisterMarkSanitizeGuardrail('node-event-descendant-flush');
+      lib.deregisterSubscriber('node-event-sanitize-descendant-flush-sub');
+    }
+  });
+
   it('fails open and records invalid sanitizer results', async () => {
     const events = capture('node-event-sanitize-invalid-sub');
     const invalidResults = {

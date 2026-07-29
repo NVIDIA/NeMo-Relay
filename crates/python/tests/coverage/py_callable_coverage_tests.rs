@@ -18,7 +18,41 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     PyModule::from_code(py, &code, &file_name, &module_name).unwrap()
 }
 
-fn install_event_sanitizer_context_module(py: Python<'_>) {
+struct InstalledContextModule {
+    previous_parent: Option<Py<PyAny>>,
+    previous_context: Option<Py<PyAny>>,
+}
+
+impl Drop for InstalledContextModule {
+    fn drop(&mut self) {
+        Python::attach(|py| {
+            let Ok(modules) = py.import("sys").and_then(|sys| sys.getattr("modules")) else {
+                return;
+            };
+            let Ok(modules) = modules.cast_into::<PyDict>() else {
+                return;
+            };
+            for (name, previous) in [
+                ("nemo_relay", self.previous_parent.take()),
+                (
+                    "nemo_relay._event_sanitizer_context",
+                    self.previous_context.take(),
+                ),
+            ] {
+                match previous {
+                    Some(module) => {
+                        let _ = modules.set_item(name, module);
+                    }
+                    None => {
+                        let _ = modules.del_item(name);
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn install_event_sanitizer_context_module(py: Python<'_>) -> InstalledContextModule {
     let code = CString::new(include_str!(
         "../../../../python/nemo_relay/_event_sanitizer_context.py"
     ))
@@ -40,10 +74,19 @@ fn install_event_sanitizer_context_module(py: Python<'_>) {
         .unwrap()
         .cast_into::<PyDict>()
         .unwrap();
+    let previous_parent = modules.get_item("nemo_relay").unwrap().map(Bound::unbind);
+    let previous_context = modules
+        .get_item("nemo_relay._event_sanitizer_context")
+        .unwrap()
+        .map(Bound::unbind);
     modules.set_item("nemo_relay", parent).unwrap();
     modules
         .set_item("nemo_relay._event_sanitizer_context", context)
         .unwrap();
+    InstalledContextModule {
+        previous_parent,
+        previous_context,
+    }
 }
 
 fn make_request() -> LlmRequest {
@@ -701,14 +744,21 @@ fn event_sanitize_wrapper_covers_conversion_success_and_error_propagation() {
 
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        install_event_sanitizer_context_module(py);
+        let _context_module = install_event_sanitizer_context_module(py);
         let module = load_module(
             py,
             r#"
+import asyncio
+
 def sanitize(event, fields):
     assert event.kind == "mark"
     fields["data"] = {"safe": event.name}
     fields["metadata"] = None
+    return fields
+
+async def async_sanitize(event, fields):
+    await asyncio.sleep(0)
+    fields["data"] = {"async_safe": event.name}
     return fields
 
 def raises(event, fields):
@@ -737,6 +787,16 @@ def invalid(event, fields):
             .unwrap();
         assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
         assert_eq!(sanitized.metadata, None);
+
+        let async_sanitized = runtime
+            .block_on(wrap_py_event_sanitize_fn(
+                module.getattr("async_sanitize").unwrap().unbind(),
+            )(Arc::new(event.clone()), fields.clone()))
+            .unwrap();
+        assert_eq!(
+            async_sanitized.data,
+            Some(json!({"async_safe": "checkpoint"}))
+        );
 
         let raised = runtime
             .block_on(wrap_py_event_sanitize_fn(
@@ -809,4 +869,32 @@ async def llm_fail(request):
             .unwrap();
         });
     });
+}
+
+#[test]
+fn background_middleware_accepts_custom_awaitables() {
+    let _python = crate::test_support::init_python_test();
+    let (_context_module, llm_custom) = Python::attach(|py| {
+        let context_module = install_event_sanitizer_context_module(py);
+        let module = load_module(
+            py,
+            r#"
+class CustomAwaitable:
+    def __await__(self):
+        async def resolve():
+            return None
+        return resolve().__await__()
+
+def llm_custom_awaitable(request):
+    return CustomAwaitable()
+"#,
+        );
+        (
+            context_module,
+            wrap_py_llm_conditional_fn(module.getattr("llm_custom_awaitable").unwrap().unbind()),
+        )
+    });
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    assert_eq!(runtime.block_on(llm_custom(make_request())).unwrap(), None);
 }

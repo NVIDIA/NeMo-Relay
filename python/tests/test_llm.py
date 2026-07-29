@@ -179,6 +179,41 @@ class TestLLMGuardrails:
             assert context.codec.kind == "none"
             assert context.codec.id is None
 
+    async def test_manual_async_sanitizers_can_flush_subscribers(self):
+        request_flushed = False
+        response_flushed = False
+
+        async def sanitize_request(request, context):
+            nonlocal request_flushed
+            del context
+            await asyncio.sleep(0)
+            subscribers.flush()
+            request_flushed = True
+            return request
+
+        async def sanitize_response(response, context):
+            nonlocal response_flushed
+            del context
+            await asyncio.sleep(0)
+            subscribers.flush()
+            response_flushed = True
+            return response
+
+        guardrails.register_llm_sanitize_request("py_manual_flush_request", 1, sanitize_request)
+        guardrails.register_llm_sanitize_response("py_manual_flush_response", 1, sanitize_response)
+        subscribers.register("py_manual_flush_subscriber", lambda _event: None)
+        try:
+            handle = llm.call("py_manual_flush", make_request())
+            llm.call_end(handle, {"response": "ok"})
+            await asyncio.wait_for(asyncio.to_thread(subscribers.flush), timeout=2)
+        finally:
+            guardrails.deregister_llm_sanitize_request("py_manual_flush_request")
+            guardrails.deregister_llm_sanitize_response("py_manual_flush_response")
+            subscribers.deregister("py_manual_flush_subscriber")
+
+        assert request_flushed
+        assert response_flushed
+
     async def test_sanitizers_resolve_active_builtin_codecs(self):
         request_codec_used = False
         response_codec_used = False

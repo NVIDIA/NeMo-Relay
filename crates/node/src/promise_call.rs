@@ -55,6 +55,7 @@ struct CallArgs {
     arg0: PrimaryArg,
     spread: bool,
     next: Option<NextFn>,
+    publication: bool,
     completion: CallCompletion,
 }
 
@@ -184,8 +185,19 @@ impl PromiseAwareFn {
     /// Must be called on the JS main thread (i.e., in a sync `#[napi]` function).
     pub fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
         let wrapper = callback_factory::wrap_promise_callback(env, func)?;
+        Self::from_wrapper(env, &wrapper)
+    }
+
+    /// Create a callback wrapper that marks only its JavaScript async context
+    /// as an active event sanitizer.
+    pub fn new_event_sanitizer(env: &Env, func: &JsFunction) -> napi::Result<Self> {
+        let wrapper = callback_factory::wrap_event_sanitizer_callback(env, func)?;
+        Self::from_wrapper(env, &wrapper)
+    }
+
+    fn from_wrapper(env: &Env, wrapper: &JsFunction) -> napi::Result<Self> {
         let mut tsfn =
-            env.create_threadsafe_function(&wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
+            env.create_threadsafe_function(wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
                 let next = match ctx.value.next {
                     Some(next) => build_next_unknown(&ctx.env, next)?,
                     None => undefined_to_unknown(&ctx.env)?,
@@ -202,7 +214,13 @@ impl PromiseAwareFn {
                         ctx.env.get_boolean(ctx.value.spread)?.raw(),
                     )
                 };
-                let args = vec![arg0, spread, next, resolve, reject];
+                let publication = unsafe {
+                    JsUnknown::from_raw_unchecked(
+                        ctx.env.raw(),
+                        ctx.env.get_boolean(ctx.value.publication)?.raw(),
+                    )
+                };
+                let args = vec![arg0, spread, next, resolve, reject, publication];
                 Ok(args)
             })?;
 
@@ -216,7 +234,8 @@ impl PromiseAwareFn {
 
     /// Call the JS function with the given args and await the result.
     pub async fn call(&self, args: Json) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(args), false, None).await
+        self.call_inner(PrimaryArg::Json(args), false, None, false)
+            .await
     }
 
     /// Call a JavaScript callback with several JSON arguments.
@@ -225,7 +244,7 @@ impl PromiseAwareFn {
     /// guardrails, whose public contract is `(name, payload)` rather than a
     /// single envelope object.
     pub async fn call_spread(&self, args: Vec<Json>) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(Json::Array(args)), true, None)
+        self.call_inner(PrimaryArg::Json(Json::Array(args)), true, None, false)
             .await
     }
 
@@ -236,21 +255,35 @@ impl PromiseAwareFn {
     /// cannot cross the threadsafe-function boundary as plain JSON, such as a
     /// `#[napi]` class instance.
     pub async fn call_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Build(build_arg0), false, None)
+        self.call_inner(PrimaryArg::Build(build_arg0), false, None, false)
             .await
     }
 
     /// Call a JavaScript callback with builder-constructed spread arguments.
     pub async fn call_spread_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Build(build_arg0), true, None)
+        self.call_inner(PrimaryArg::Build(build_arg0), true, None, false)
+            .await
+    }
+
+    /// Call a spread callback from queued event publication.
+    pub async fn call_spread_with_arg0_for_publication(
+        &self,
+        build_arg0: Arg0Builder,
+    ) -> FlowResult<Json> {
+        self.call_inner(PrimaryArg::Build(build_arg0), true, None, true)
             .await
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
     /// resolves to a JSON result.
     pub async fn call_with_json_next(&self, args: Json, next: JsonNextFn) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(args), false, Some(NextFn::Json(next)))
-            .await
+        self.call_inner(
+            PrimaryArg::Json(args),
+            false,
+            Some(NextFn::Json(next)),
+            false,
+        )
+        .await
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
@@ -260,8 +293,13 @@ impl PromiseAwareFn {
         args: Json,
         next: JsonStreamNextFn,
     ) -> FlowResult<Json> {
-        self.call_inner(PrimaryArg::Json(args), false, Some(NextFn::Stream(next)))
-            .await
+        self.call_inner(
+            PrimaryArg::Json(args),
+            false,
+            Some(NextFn::Stream(next)),
+            false,
+        )
+        .await
     }
 
     /// Release the underlying threadsafe function so it does not outlive its registration.
@@ -276,6 +314,7 @@ impl PromiseAwareFn {
         arg0: PrimaryArg,
         spread: bool,
         next: Option<NextFn>,
+        publication: bool,
     ) -> FlowResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let tsfn = self
@@ -290,6 +329,7 @@ impl PromiseAwareFn {
                 arg0,
                 spread,
                 next,
+                publication,
                 completion: CallCompletion::new(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
