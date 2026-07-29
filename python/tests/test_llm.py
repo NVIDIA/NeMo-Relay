@@ -5,6 +5,7 @@
 
 import asyncio
 import contextvars
+import threading
 from collections.abc import AsyncIterator
 from typing import NoReturn, cast
 
@@ -115,6 +116,50 @@ class TestLLMAsync:
         request = make_request()
         result = await llm.execute("async_method_llm", request, func)
         assert result["messages"] == []
+
+    async def test_event_and_response_sanitizers_use_independent_context_snapshots(self):
+        events = []
+        start_entered = threading.Event()
+        release_start = threading.Event()
+        response_called = False
+
+        def sanitize_start(event, fields):
+            if event.name == "context_snapshot_llm":
+                start_entered.set()
+                assert release_start.wait(timeout=2)
+            return fields
+
+        def sanitize_response(response, context):
+            nonlocal response_called
+            del response, context
+            response_called = True
+            return {"sanitized": True}
+
+        async def provider(request):
+            del request
+            assert await asyncio.to_thread(start_entered.wait, 2)
+            return {"raw": True}
+
+        subscribers.register("py_llm_context_snapshot_sub", events.append)
+        guardrails.register_scope_sanitize_start("py_llm_context_snapshot_start", 0, sanitize_start)
+        guardrails.register_llm_sanitize_response(
+            "py_llm_context_snapshot_response",
+            0,
+            sanitize_response,
+        )
+        try:
+            assert await llm.execute("context_snapshot_llm", make_request(), provider) == {"raw": True}
+        finally:
+            release_start.set()
+            guardrails.deregister_scope_sanitize_start("py_llm_context_snapshot_start")
+            guardrails.deregister_llm_sanitize_response("py_llm_context_snapshot_response")
+            try:
+                await subscribers.flush_async()
+            finally:
+                subscribers.deregister("py_llm_context_snapshot_sub")
+
+        assert response_called
+        assert _llm_event(events, "context_snapshot_llm", "end").data == {"sanitized": True}
 
 
 class TestLLMGuardrails:

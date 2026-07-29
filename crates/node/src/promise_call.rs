@@ -20,11 +20,28 @@ use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
-use nemo_relay::api::runtime::{ScopeStackHandle, current_scope_stack};
+use nemo_relay::api::runtime::{ScopeStackHandle, TASK_SCOPE_STACK, current_scope_stack};
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
 use crate::callback_factory;
 use crate::types::ScopeStack;
+
+tokio::task_local! {
+    static PUBLICATION_CALLBACK_ACTIVE: bool;
+}
+
+pub(crate) async fn with_publication_callback_context<F: Future>(
+    active: bool,
+    future: F,
+) -> F::Output {
+    PUBLICATION_CALLBACK_ACTIVE.scope(active, future).await
+}
+
+fn publication_callback_active() -> bool {
+    PUBLICATION_CALLBACK_ACTIVE
+        .try_with(|active| *active)
+        .unwrap_or(false)
+}
 
 pub type JsonNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
@@ -58,7 +75,7 @@ struct CallArgs {
     spread: bool,
     next: Option<NextFn>,
     publication: bool,
-    /// Scope stack captured when Relay registers or invokes the middleware.
+    /// Scope stack captured when Relay invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
     completion: CallCompletion,
 }
@@ -131,17 +148,30 @@ fn undefined_to_unknown(env: &Env) -> napi::Result<JsUnknown> {
     Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) })
 }
 
-fn build_next_unknown(env: &Env, next: NextFn) -> napi::Result<JsUnknown> {
+fn build_next_unknown(
+    env: &Env,
+    next: NextFn,
+    scope_stack: ScopeStackHandle,
+    publication: bool,
+) -> napi::Result<JsUnknown> {
     let next_fn = match next {
         NextFn::Json(next) => {
             env.create_function_from_closure("__nemo_relay_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
+                let scope_stack = scope_stack.clone();
                 ctx.env.execute_tokio_future(
                     async move {
-                        next(arg)
-                            .await
-                            .map_err(|e| napi::Error::from_reason(e.to_string()))
+                        with_publication_callback_context(publication, async move {
+                            TASK_SCOPE_STACK
+                                .scope(scope_stack, async move {
+                                    next(arg)
+                                        .await
+                                        .map_err(|e| napi::Error::from_reason(e.to_string()))
+                                })
+                                .await
+                        })
+                        .await
                     },
                     |_env, value| Ok(value),
                 )
@@ -151,11 +181,19 @@ fn build_next_unknown(env: &Env, next: NextFn) -> napi::Result<JsUnknown> {
             env.create_function_from_closure("__nemo_relay_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
+                let scope_stack = scope_stack.clone();
                 ctx.env.execute_tokio_future(
                     async move {
-                        next(arg)
-                            .await
-                            .map_err(|e| napi::Error::from_reason(e.to_string()))
+                        with_publication_callback_context(publication, async move {
+                            TASK_SCOPE_STACK
+                                .scope(scope_stack, async move {
+                                    next(arg)
+                                        .await
+                                        .map_err(|e| napi::Error::from_reason(e.to_string()))
+                                })
+                                .await
+                        })
+                        .await
                     },
                     |_env, value| Ok(value),
                 )
@@ -217,7 +255,14 @@ impl PromiseAwareFn {
         let mut tsfn =
             env.create_threadsafe_function(wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
                 let next = match ctx.value.next {
-                    Some(next) => build_next_unknown(&ctx.env, next)?,
+                    Some(next) => {
+                        let scope_stack = ctx.value.scope_stack.clone().ok_or_else(|| {
+                            napi::Error::from_reason(
+                                "middleware next callback is missing its captured scope stack",
+                            )
+                        })?;
+                        build_next_unknown(&ctx.env, next, scope_stack, ctx.value.publication)?
+                    }
                     None => undefined_to_unknown(&ctx.env)?,
                 };
                 let (resolve, reject) = build_completion_unknowns(&ctx.env, ctx.value.completion)?;
@@ -373,7 +418,7 @@ impl PromiseAwareFn {
                 arg0,
                 spread: mode.spread,
                 next,
-                publication: mode.publication,
+                publication: mode.publication || publication_callback_active(),
                 // Scope identity applies to every middleware callback. The
                 // publication bit controls only re-entrant flush behavior.
                 scope_stack: Some(current_scope_stack()),

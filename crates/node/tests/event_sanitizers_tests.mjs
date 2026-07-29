@@ -234,6 +234,62 @@ describe('event sanitizer registries', () => {
     assert.equal(flushReturned, true);
   });
 
+  it('preserves sanitizer re-entrancy through nested managed middleware', async () => {
+    const events = capture('node-event-sanitize-nested-middleware-sub');
+    const middlewareFlushes = [];
+    lib.registerToolConditionalExecutionGuardrail(
+      'node-event-nested-middleware-conditional',
+      0,
+      async (name) => {
+        if (name === 'node-event-nested-middleware-tool') {
+          await lib.flushSubscribers();
+          middlewareFlushes.push('conditional');
+        }
+        return null;
+      },
+    );
+    lib.registerToolExecutionIntercept(
+      'node-event-nested-middleware-outer',
+      0,
+      async (args, next) => ({ result: await next(args) }),
+    );
+    lib.registerToolExecutionIntercept(
+      'node-event-nested-middleware-inner',
+      10,
+      async (args, next) => {
+        await lib.flushSubscribers();
+        middlewareFlushes.push('execution');
+        return { result: await next(args) };
+      },
+    );
+    lib.registerMarkSanitizeGuardrail(
+      'node-event-nested-middleware-sanitizer',
+      0,
+      async (event, fields) => {
+        if (event.name === 'nested-middleware-checkpoint') {
+          await lib.toolCallExecute('node-event-nested-middleware-tool', {}, (args) => args);
+        }
+        return fields;
+      },
+    );
+    try {
+      lib.event('nested-middleware-checkpoint', null, { raw: true });
+      const state = await Promise.race([
+        lib.flushSubscribers().then(() => 'flushed'),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ]);
+      assert.equal(state, 'flushed');
+      await waitFor(events, 3);
+    } finally {
+      lib.deregisterMarkSanitizeGuardrail('node-event-nested-middleware-sanitizer');
+      lib.deregisterToolConditionalExecutionGuardrail('node-event-nested-middleware-conditional');
+      lib.deregisterToolExecutionIntercept('node-event-nested-middleware-outer');
+      lib.deregisterToolExecutionIntercept('node-event-nested-middleware-inner');
+      lib.deregisterSubscriber('node-event-sanitize-nested-middleware-sub');
+    }
+    assert.deepEqual(middlewareFlushes, ['conditional', 'execution']);
+  });
+
   it('does not treat an unrelated flush as sanitizer re-entrancy', async () => {
     const events = capture('node-event-sanitize-independent-flush-sub');
     let releaseSanitizer;

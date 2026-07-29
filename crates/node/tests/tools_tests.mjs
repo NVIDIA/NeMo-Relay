@@ -989,6 +989,44 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution intercept next preserves the invocation scope across the chain', async () => {
+    const originalStack = lib.currentScopeStack();
+    const invocationStack = lib.createScopeStack();
+    const unrelatedStack = lib.createScopeStack();
+    const observed = [];
+    let invocationScope;
+
+    const intercept = (label) => async (args, next) => {
+      observed.push([label, 'before', lib.getHandle().uuid]);
+      await new Promise((resolve) => setImmediate(resolve));
+      const result = await next(args);
+      observed.push([label, 'after', lib.getHandle().uuid]);
+      return { result };
+    };
+
+    registerToolExecutionIntercept('node_tool_exec_scope_outer', 10, intercept('outer'));
+    registerToolExecutionIntercept('node_tool_exec_scope_inner', 20, intercept('inner'));
+    try {
+      const execution = lib.withScopeStack(invocationStack, () => {
+        invocationScope = lib.pushScope('execution-intercept-invocation', lib.ScopeType.Agent);
+        return toolCallExecute('execution_intercept_scope', {}, (args) => args);
+      });
+      lib.setThreadScopeStack(unrelatedStack);
+      await execution;
+      assert.deepEqual(observed, [
+        ['outer', 'before', invocationScope.uuid],
+        ['inner', 'before', invocationScope.uuid],
+        ['inner', 'after', invocationScope.uuid],
+        ['outer', 'after', invocationScope.uuid],
+      ]);
+    } finally {
+      lib.withScopeStack(invocationStack, () => lib.popScope(invocationScope));
+      lib.setThreadScopeStack(originalStack);
+      deregisterToolExecutionIntercept('node_tool_exec_scope_outer');
+      deregisterToolExecutionIntercept('node_tool_exec_scope_inner');
+    }
+  });
+
   it('snapshotted execution intercept survives deregistration', async () => {
     let blockerEntered;
     const entered = new Promise((resolve) => {
