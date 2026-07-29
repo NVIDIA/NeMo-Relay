@@ -284,12 +284,17 @@ pub fn wrap_js_tool_request_intercept_promise_fn(func: Arc<PromiseAwareFn>) -> T
 pub fn wrap_js_tool_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> ToolSanitizeFn {
     Arc::new(move |name: String, value: Json| {
         let func = func.clone();
+        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
-            func.call_spread(vec![Json::String(name), value])
-                .await
-                .inspect_err(|error| {
-                    record_callback_error(error.to_string());
-                })
+            let args = vec![Json::String(name), value];
+            let result = if publication {
+                func.call_spread_for_publication(args).await
+            } else {
+                func.call_spread(args).await
+            };
+            result.inspect_err(|error| {
+                record_callback_error(error.to_string());
+            })
         })
     })
 }

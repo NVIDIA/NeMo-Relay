@@ -135,9 +135,11 @@ register_mark_sanitize_guardrail(
     "safe-marks",
     100,
     Arc::new(|event, mut fields| {
-        fields.data = Some(json!({"checkpoint": event.name()}));
-        fields.metadata = None;
-        fields
+        Box::pin(async move {
+            fields.data = Some(json!({"checkpoint": event.name()}));
+            fields.metadata = None;
+            Ok(fields)
+        })
     }),
 )?;
 

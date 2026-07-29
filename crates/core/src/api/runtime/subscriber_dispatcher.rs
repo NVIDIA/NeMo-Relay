@@ -18,6 +18,7 @@ pub(crate) type EventTransformFn = Box<
 
 mod native {
     use std::cell::Cell;
+    use std::collections::VecDeque;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -54,6 +55,9 @@ mod native {
     static SANITIZER_RUNTIME_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
+    }
+    tokio::task_local! {
+        static IN_ASYNC_PUBLICATION: ();
     }
 
     struct DispatchGuard;
@@ -177,7 +181,7 @@ mod native {
     }
 
     pub(super) fn flush_subscribers() -> Result<()> {
-        if IN_DISPATCHER.with(Cell::get) {
+        if in_dispatcher_callback() {
             return Ok(());
         }
         let Some(sender_result) = DISPATCHER.get() else {
@@ -199,7 +203,15 @@ mod native {
     }
 
     pub(super) fn in_dispatcher_callback() -> bool {
-        IN_DISPATCHER.with(Cell::get)
+        IN_DISPATCHER.with(Cell::get) || IN_ASYNC_PUBLICATION.try_with(|_| ()).is_ok()
+    }
+
+    pub(super) async fn with_async_publication_context<F: Future>(future: F) -> F::Output {
+        if IN_ASYNC_PUBLICATION.try_with(|_| ()).is_ok() {
+            future.await
+        } else {
+            IN_ASYNC_PUBLICATION.scope((), future).await
+        }
     }
 
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
@@ -248,10 +260,18 @@ mod native {
     }
 
     fn run_dispatcher(rx: Receiver<DispatcherMessage>) {
-        while let Ok(message) = rx.recv() {
+        let mut pending = VecDeque::new();
+        loop {
+            let message = match pending.pop_front() {
+                Some(message) => message,
+                None => match rx.recv() {
+                    Ok(message) => message,
+                    Err(_) => break,
+                },
+            };
             match message {
                 DispatcherMessage::Flush { done } => {
-                    let pending_flushes = drain_pending_messages(&rx);
+                    let pending_flushes = drain_pending_messages(&rx, &mut pending);
                     let _ = done.send(());
                     for pending in pending_flushes {
                         let _ = pending.send(());
@@ -265,13 +285,17 @@ mod native {
         }
     }
 
-    fn drain_pending_messages(rx: &Receiver<DispatcherMessage>) -> Vec<Sender<()>> {
+    fn drain_pending_messages(
+        rx: &Receiver<DispatcherMessage>,
+        pending: &mut VecDeque<DispatcherMessage>,
+    ) -> Vec<Sender<()>> {
         let mut pending_flushes = Vec::new();
         while let Ok(message) = rx.try_recv() {
             match message {
                 DispatcherMessage::Flush { done } => pending_flushes.push(done),
-                DispatcherMessage::Barrier { done } => {
-                    let _ = done.recv();
+                message @ DispatcherMessage::Barrier { .. } => {
+                    pending.push_back(message);
+                    break;
                 }
                 message => handle_message(message),
             }
@@ -384,6 +408,33 @@ mod native {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::Mutex;
+        use std::time::Duration;
+
+        static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+        #[test]
+        fn flush_does_not_wait_for_a_later_publication_barrier() {
+            let _lock = TEST_MUTEX.lock().unwrap();
+            let first = register_async_publication().expect("first publication barrier");
+            let sender = dispatcher_sender().expect("dispatcher sender");
+            let (flush_tx, flush_rx) = mpsc::channel();
+            sender
+                .send(DispatcherMessage::Flush { done: flush_tx })
+                .unwrap();
+            let later = register_async_publication().expect("later publication barrier");
+
+            first.send(()).unwrap();
+            flush_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("flush queued before the later barrier must complete");
+            later.send(()).unwrap();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -427,6 +478,14 @@ pub(crate) fn dispatch_transformed_event(
 /// leave the dispatcher blocked.
 pub(crate) fn register_async_publication() -> Option<std::sync::mpsc::Sender<()>> {
     native::register_async_publication()
+}
+
+/// Run asynchronous middleware as part of an already-registered publication.
+///
+/// Re-entrant subscriber flushes are no-ops in this context because the
+/// publication's FIFO barrier cannot complete until the middleware returns.
+pub(crate) async fn with_async_publication_context<F: Future>(future: F) -> F::Output {
+    native::with_async_publication_context(future).await
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.

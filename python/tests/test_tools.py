@@ -3,6 +3,7 @@
 
 """Tests for NeMo Relay tool lifecycle, guardrails, and intercepts."""
 
+import asyncio
 from collections import UserDict, UserList
 from dataclasses import dataclass
 from typing import cast
@@ -315,6 +316,48 @@ class TestToolGuardrails:
 
 
 class TestToolGuardrailsAsync:
+    async def test_manual_async_sanitizers_publish_transformed_payloads_and_can_flush(self):
+        events = []
+        request_flushed = False
+        response_flushed = False
+
+        async def sanitize_request(name, args):
+            nonlocal request_flushed
+            await asyncio.sleep(0)
+            subscribers.flush()
+            request_flushed = True
+            return {**args, "request_sanitized": True}
+
+        async def sanitize_response(name, response):
+            nonlocal response_flushed
+            await asyncio.sleep(0)
+            subscribers.flush()
+            response_flushed = True
+            return {**response, "response_sanitized": True}
+
+        subscribers.register("py_manual_tool_flush_subscriber", events.append)
+        guardrails.register_tool_sanitize_request("py_manual_tool_flush_request", 1, sanitize_request)
+        guardrails.register_tool_sanitize_response("py_manual_tool_flush_response", 1, sanitize_response)
+        try:
+            handle = tools.call("py_manual_tool_flush", {"original": True})
+            tools.call_end(handle, {"ok": True})
+            await asyncio.wait_for(asyncio.to_thread(subscribers.flush), timeout=2)
+        finally:
+            guardrails.deregister_tool_sanitize_request("py_manual_tool_flush_request")
+            guardrails.deregister_tool_sanitize_response("py_manual_tool_flush_response")
+            subscribers.deregister("py_manual_tool_flush_subscriber")
+
+        assert request_flushed
+        assert response_flushed
+        assert _tool_event(events, "py_manual_tool_flush", "start").data == {
+            "original": True,
+            "request_sanitized": True,
+        }
+        assert _tool_event(events, "py_manual_tool_flush", "end").data == {
+            "ok": True,
+            "response_sanitized": True,
+        }
+
     async def test_conditional_blocks_execution(self):
         guardrails.register_tool_conditional_execution("py_async_blocker", 1, lambda name, args: "blocked by policy")
 

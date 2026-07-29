@@ -568,6 +568,40 @@ describe('LLM guardrails', () => {
     }
   });
 
+  it('stream response sanitizers can flush subscribers without deadlocking', async () => {
+    let responseFlushed = false;
+    registerSubscriber('node_stream_flush_subscriber', () => {});
+    registerLlmSanitizeResponseGuardrail('node_stream_flush_response', 10, async (response) => {
+      await flushSubscribers();
+      responseFlushed = true;
+      return response;
+    });
+    try {
+      const stream = await llmStreamCallExecute(
+        'node_stream_flush',
+        makeNative(),
+        (wrapper) => {
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { delta: 'ok' });
+          lib.endStream(wrapper.__nemo_relay_stream_id);
+        },
+        null,
+        () => ({ response: 'ok' }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(await stream.next(), { delta: 'ok' });
+      assert.equal(await stream.next(), null);
+      await flushSubscribers();
+    } finally {
+      deregisterLlmSanitizeResponseGuardrail('node_stream_flush_response');
+      deregisterSubscriber('node_stream_flush_subscriber');
+    }
+    assert.equal(responseFlushed, true);
+  });
+
   it('releases custom stream codec references safely after early garbage collection', () => {
     const modulePath = path.join(nodeDir, 'index.js');
     const script = `

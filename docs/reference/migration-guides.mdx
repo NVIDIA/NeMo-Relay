@@ -72,11 +72,15 @@ Python and Node.js registration names are unchanged. Mark a Python callback
 `async def`, or return a Promise from Node.js, only when it needs asynchronous
 work; existing direct-value callbacks remain supported.
 
-Scope lifecycle and mark emission remain synchronous. `push_scope`,
-`pop_scope`, and mark APIs snapshot the event and visible sanitizer/subscriber
-chain, then enqueue sanitization and publication on a serial dispatcher. Event
-subscribers and exporters therefore receive sanitized events later, in emission
-order. Do not add `await` to scope or mark emission calls.
+Scope, mark, and manual tool/LLM lifecycle APIs remain synchronous. This
+includes `push_scope`, `pop_scope`, mark APIs, `tool_call`, `tool_call_end`,
+`llm_call`, and `llm_call_end`. These APIs snapshot the event and visible
+sanitizer/subscriber chain, then enqueue sanitization and publication on a
+serial dispatcher. Event subscribers and exporters therefore receive sanitized
+events later, in emission order. Do not add `await` to these lifecycle calls.
+Only enqueue-time validation and runtime-state errors are returned directly;
+middleware and codec errors discovered during queued publication are logged and
+handled according to their fail-open contracts.
 
 ### Update LLM Sanitizer Callbacks
 
@@ -171,8 +175,9 @@ Check every callback for an implicit empty return. In particular:
 - A Python function that reaches the end without `return` omits the payload.
 - A JavaScript callback that returns `null` or `undefined` omits the payload.
 - A Rust callback must return `Some(payload)` to retain the payload.
-- A sanitizer error reported through a plugin or binding boundary also omits
-  the payload and annotation.
+- A sanitizer error or panic fails open: Relay preserves the last valid payload
+  and annotation snapshot, logs or records the callback error, and continues
+  publication.
 
 Use omission only when recording the payload would be unsafe.
 

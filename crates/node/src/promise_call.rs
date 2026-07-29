@@ -248,6 +248,12 @@ impl PromiseAwareFn {
             .await
     }
 
+    /// Call a spread callback from queued event publication.
+    pub async fn call_spread_for_publication(&self, args: Vec<Json>) -> FlowResult<Json> {
+        self.call_inner(PrimaryArg::Json(Json::Array(args)), true, None, true)
+            .await
+    }
+
     /// Call the JS function with a builder-constructed first argument and await
     /// the result.
     ///
