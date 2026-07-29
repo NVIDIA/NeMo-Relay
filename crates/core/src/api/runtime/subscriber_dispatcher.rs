@@ -17,13 +17,12 @@ pub(crate) type EventTransformFn = Box<
 >;
 
 mod native {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
-    use std::time::Duration;
 
     use super::*;
     use crate::api::runtime::scope_stack::{
@@ -44,7 +43,7 @@ mod native {
             done: Sender<()>,
         },
         Barrier {
-            done: Receiver<()>,
+            publications: Receiver<Vec<DispatcherMessage>>,
         },
     }
 
@@ -58,10 +57,14 @@ mod native {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
     }
     tokio::task_local! {
-        static IN_ASYNC_PUBLICATION: ();
+        static ASYNC_PUBLICATION_MESSAGES: RefCell<Option<Vec<DispatcherMessage>>>;
     }
 
     struct DispatchGuard;
+
+    pub(crate) struct AsyncPublication {
+        sender: Sender<Vec<DispatcherMessage>>,
+    }
 
     impl DispatchGuard {
         fn enter() -> Self {
@@ -106,31 +109,7 @@ mod native {
             subscribers: subscribers.to_vec(),
             scope_stack: current_scope_stack(),
         };
-        match dispatcher_sender() {
-            Ok(sender) => {
-                if sender.send(message).is_err() {
-                    log::warn!(
-                        target: "nemo_relay.runtime",
-                        event = "subscriber_event_dropped",
-                        reason = "dispatcher_disconnected";
-                        "Subscriber event was dropped because the dispatcher stopped"
-                    );
-                    false
-                } else {
-                    true
-                }
-            }
-            Err(_error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "subscriber_dispatcher_failed",
-                    error_kind = "initialization";
-                    "Subscriber dispatcher failed to start"
-                );
-                false
-            }
-            Err(_) => false,
-        }
+        send_dispatch_message(message)
     }
 
     pub(super) fn dispatch_sanitized_event(
@@ -152,6 +131,39 @@ mod native {
         send_dispatch_message(message)
     }
 
+    pub(super) fn dispatch_reserved_sanitized_event(
+        event: Event,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> bool {
+        if subscribers.is_empty() {
+            return true;
+        }
+        let message = DispatcherMessage::Deliver {
+            event: Box::new(event),
+            transform: None,
+            sanitizers,
+            subscribers: subscribers.to_vec(),
+            scope_stack,
+        };
+        let buffer_active = ASYNC_PUBLICATION_MESSAGES
+            .try_with(|messages| messages.borrow().is_some())
+            .unwrap_or(false);
+        if buffer_active {
+            ASYNC_PUBLICATION_MESSAGES.with(|messages| {
+                messages
+                    .borrow_mut()
+                    .as_mut()
+                    .expect("publication buffer checked above")
+                    .push(message);
+            });
+            true
+        } else {
+            send_dispatch_message(message)
+        }
+    }
+
     pub(super) fn dispatch_transformed_event(
         event: Event,
         transform: EventTransformFn,
@@ -169,16 +181,20 @@ mod native {
         send_dispatch_message(message)
     }
 
-    /// Insert a FIFO barrier for work that will enqueue a publication from an
-    /// async task. A later flush waits for the task to signal completion, then
-    /// drains the event it queued before acknowledging the flush.
-    pub(super) fn register_async_publication() -> Option<Sender<()>> {
+    /// Reserve a FIFO position for publications produced by an async task.
+    /// A later flush waits for the task and drains its buffered publications
+    /// at the reserved position before acknowledging the flush.
+    pub(super) fn register_async_publication() -> Option<AsyncPublication> {
         let sender = dispatcher_sender().ok()?;
-        let (done_tx, done_rx) = mpsc::channel();
+        let (publication_tx, publication_rx) = mpsc::channel();
         sender
-            .send(DispatcherMessage::Barrier { done: done_rx })
+            .send(DispatcherMessage::Barrier {
+                publications: publication_rx,
+            })
             .ok()
-            .map(|_| done_tx)
+            .map(|_| AsyncPublication {
+                sender: publication_tx,
+            })
     }
 
     pub(super) fn flush_subscribers() -> Result<()> {
@@ -204,14 +220,31 @@ mod native {
     }
 
     pub(super) fn in_dispatcher_callback() -> bool {
-        IN_DISPATCHER.with(Cell::get) || IN_ASYNC_PUBLICATION.try_with(|_| ()).is_ok()
+        IN_DISPATCHER.with(Cell::get) || ASYNC_PUBLICATION_MESSAGES.try_with(|_| ()).is_ok()
     }
 
-    pub(super) async fn with_async_publication_context<F: Future>(future: F) -> F::Output {
-        if IN_ASYNC_PUBLICATION.try_with(|_| ()).is_ok() {
+    pub(super) async fn with_async_publication_context<F: Future>(
+        publication: Option<AsyncPublication>,
+        future: F,
+    ) -> F::Output {
+        if ASYNC_PUBLICATION_MESSAGES.try_with(|_| ()).is_ok() {
             future.await
         } else {
-            IN_ASYNC_PUBLICATION.scope((), future).await
+            let (output, publications) = ASYNC_PUBLICATION_MESSAGES
+                .scope(
+                    RefCell::new(publication.as_ref().map(|_| Vec::new())),
+                    async {
+                        let output = future.await;
+                        let publications = ASYNC_PUBLICATION_MESSAGES
+                            .with(|messages| messages.borrow_mut().take());
+                        (output, publications)
+                    },
+                )
+                .await;
+            if let (Some(publication), Some(publications)) = (publication, publications) {
+                let _ = publication.sender.send(publications);
+            }
+            output
         }
     }
 
@@ -278,34 +311,14 @@ mod native {
                         let _ = pending.send(());
                     }
                 }
-                DispatcherMessage::Barrier { done } => {
-                    wait_for_barrier(done, &rx, &mut pending);
+                DispatcherMessage::Barrier { publications } => {
+                    if let Ok(publications) = publications.recv() {
+                        for publication in publications {
+                            handle_message(publication);
+                        }
+                    }
                 }
                 message => handle_message(message),
-            }
-        }
-    }
-
-    /// Preserve FIFO delivery behind an asynchronous publication boundary while
-    /// allowing flush requests to return. A flush cannot wait for the current
-    /// publication without risking a cycle when middleware spawned the caller.
-    fn wait_for_barrier(
-        done: Receiver<()>,
-        rx: &Receiver<DispatcherMessage>,
-        pending: &mut VecDeque<DispatcherMessage>,
-    ) {
-        loop {
-            match done.recv_timeout(Duration::from_millis(10)) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-            }
-            while let Ok(message) = rx.try_recv() {
-                match message {
-                    DispatcherMessage::Flush { done } => {
-                        let _ = done.send(());
-                    }
-                    message => pending.push_back(message),
-                }
             }
         }
     }
@@ -340,8 +353,12 @@ mod native {
             DispatcherMessage::Flush { done } => {
                 let _ = done.send(());
             }
-            DispatcherMessage::Barrier { done } => {
-                let _ = done.recv();
+            DispatcherMessage::Barrier { publications } => {
+                if let Ok(publications) = publications.recv() {
+                    for publication in publications {
+                        handle_message(publication);
+                    }
+                }
             }
         }
     }
@@ -439,24 +456,79 @@ mod native {
         use super::*;
 
         #[test]
-        fn flush_does_not_wait_for_active_or_later_publication_barriers() {
+        fn flush_waits_for_active_but_not_later_publication_barriers() {
             let _lock = crate::shared_runtime::runtime_owner_test_mutex()
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             flush_subscribers().unwrap();
             let first = register_async_publication().expect("first publication barrier");
             let sender = dispatcher_sender().expect("dispatcher sender");
+            let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let subscriber: EventSubscriberFn = {
+                let delivered = delivered.clone();
+                std::sync::Arc::new(move |event| {
+                    delivered
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push(event.name().to_string());
+                })
+            };
+            let queued_event = serde_json::from_value(serde_json::json!({
+                "kind": "mark",
+                "atof_version": "0.1",
+                "uuid": "019c1df6-4a57-7000-8000-000000000001",
+                "timestamp": "2026-07-28T00:00:00Z",
+                "name": "queued-before-flush"
+            }))
+            .expect("valid event");
+            sender
+                .send(DispatcherMessage::Deliver {
+                    event: Box::new(queued_event),
+                    transform: None,
+                    sanitizers: Vec::new(),
+                    subscribers: vec![subscriber.clone()],
+                    scope_stack: current_scope_stack(),
+                })
+                .unwrap();
             let (flush_tx, flush_rx) = mpsc::channel();
             sender
                 .send(DispatcherMessage::Flush { done: flush_tx })
                 .unwrap();
             let later = register_async_publication().expect("later publication barrier");
 
+            assert!(
+                flush_rx
+                    .recv_timeout(std::time::Duration::from_millis(50))
+                    .is_err(),
+                "flush must wait for an active publication barrier"
+            );
+            let deferred_event = serde_json::from_value(serde_json::json!({
+                "kind": "mark",
+                "atof_version": "0.1",
+                "uuid": "019c1df6-4a57-7000-8000-000000000002",
+                "timestamp": "2026-07-28T00:00:00Z",
+                "name": "deferred-at-barrier"
+            }))
+            .expect("valid event");
+            first
+                .sender
+                .send(vec![DispatcherMessage::Deliver {
+                    event: Box::new(deferred_event),
+                    transform: None,
+                    sanitizers: Vec::new(),
+                    subscribers: vec![subscriber],
+                    scope_stack: current_scope_stack(),
+                }])
+                .unwrap();
             flush_rx
-                .recv_timeout(Duration::from_secs(1))
-                .expect("flush must not wait for an active publication barrier");
-            first.send(()).unwrap();
-            later.send(()).unwrap();
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("flush queued before the later barrier must complete");
+            assert_eq!(
+                *delivered.lock().unwrap_or_else(|error| error.into_inner()),
+                ["deferred-at-barrier", "queued-before-flush"],
+                "the barrier must publish deferred work at its reserved FIFO position"
+            );
+            later.sender.send(Vec::new()).unwrap();
             flush_subscribers().unwrap();
         }
     }
@@ -485,6 +557,16 @@ pub(crate) fn dispatch_sanitized_event(
     native::dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
 }
 
+/// Publish a stream-finalization event at its reserved FIFO position.
+pub(crate) fn dispatch_reserved_sanitized_event(
+    event: Event,
+    sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> bool {
+    native::dispatch_reserved_sanitized_event(event, sanitizers, subscribers, scope_stack)
+}
+
 /// Queue a snapshot for a middleware-specific asynchronous transformation,
 /// followed by event sanitization and subscriber delivery.
 pub(crate) fn dispatch_transformed_event(
@@ -499,25 +581,26 @@ pub(crate) fn dispatch_transformed_event(
 
 /// Register a FIFO barrier for async work that will queue a subscriber event.
 ///
-/// Dropping the returned sender releases the barrier, so error paths cannot
-/// leave the dispatcher blocked.
-pub(crate) fn register_async_publication() -> Option<std::sync::mpsc::Sender<()>> {
+/// Dropping the returned publication handle releases the barrier, so error
+/// paths cannot leave the dispatcher blocked.
+pub(crate) fn register_async_publication() -> Option<native::AsyncPublication> {
     native::register_async_publication()
 }
 
-/// Run asynchronous middleware as part of an already-registered publication.
+/// Run asynchronous middleware as part of an already-registered publication,
+/// buffering the finalization publications explicitly assigned to its reserved
+/// FIFO position.
 ///
 /// Re-entrant subscriber flushes are no-ops in this context because the
 /// publication's FIFO barrier cannot complete until the middleware returns.
-pub(crate) async fn with_async_publication_context<F: Future>(future: F) -> F::Output {
-    native::with_async_publication_context(future).await
+pub(crate) async fn with_async_publication_context<F: Future>(
+    publication: Option<native::AsyncPublication>,
+    future: F,
+) -> F::Output {
+    native::with_async_publication_context(publication, future).await
 }
 
-/// Wait for queued subscriber callbacks submitted before this call.
-///
-/// If an asynchronous publication boundary is still active, this returns
-/// without waiting for that publication or work queued behind it. This avoids
-/// a cycle when publication middleware spawns or offloads the caller.
+/// Wait for all queued subscriber callbacks submitted before this call.
 pub fn flush_subscribers() -> Result<()> {
     native::flush_subscribers()
 }

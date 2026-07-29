@@ -3174,10 +3174,10 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Return a Promise that resolves when native subscriber callbacks queued
 /// before this call finish.
 ///
-/// When called from queued publication middleware, or while an asynchronous
-/// publication boundary is active, this Promise resolves without waiting.
-/// Call it again after the middleware settles to wait for its event and later
-/// work.
+/// When called from a queued publication sanitizer callback (including event and manual tool/LLM
+/// sanitizers), this Promise resolves without waiting to prevent a cycle with the serial
+/// dispatcher. Publication middleware must not move such a re-entrant flush to
+/// an unmarked worker thread.
 ///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
 /// Promise does not block the Node event loop while Promise-returning event sanitizers settle.

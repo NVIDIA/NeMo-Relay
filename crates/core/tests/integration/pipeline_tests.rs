@@ -30,7 +30,7 @@ use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_relay::api::scope::ScopeType;
+use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
@@ -1985,9 +1985,7 @@ async fn test_stream_response_sanitizer_can_flush_subscribers() {
         1,
         Arc::new(|response, _context| {
             Box::pin(async move {
-                tokio::task::spawn_blocking(flush_subscribers)
-                    .await
-                    .map_err(|error| FlowError::Internal(error.to_string()))??;
+                flush_subscribers()?;
                 Ok(Some(response))
             })
         }),
@@ -2017,4 +2015,121 @@ async fn test_stream_response_sanitizer_can_flush_subscribers() {
 
     deregister_llm_sanitize_response_guardrail("stream_reentrant_flush_sanitizer").unwrap();
     deregister_subscriber("stream_reentrant_flush_subscriber").unwrap();
+}
+
+#[tokio::test]
+async fn test_dropped_stream_end_keeps_fifo_position_before_later_mark() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let sanitizer_started = Arc::new(tokio::sync::Notify::new());
+    let sanitizer_release = Arc::new(tokio::sync::Notify::new());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = events.clone();
+    register_subscriber(
+        "stream_fifo_subscriber",
+        Arc::new(move |event| {
+            captured_events.lock().unwrap().push(event.clone());
+        }),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        "stream_fifo_sanitizer",
+        1,
+        Arc::new({
+            let sanitizer_started = sanitizer_started.clone();
+            let sanitizer_release = sanitizer_release.clone();
+            move |response, _context| {
+                let sanitizer_started = sanitizer_started.clone();
+                let sanitizer_release = sanitizer_release.clone();
+                Box::pin(async move {
+                    sanitizer_started.notify_one();
+                    sanitizer_release.notified().await;
+                    Ok(Some(response))
+                })
+            }
+        }),
+    )
+    .unwrap();
+
+    let stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("stream_fifo")
+            .request(make_openai_chat_request("stream me"))
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    assert!(record_llm_optimization_contribution(
+                        routed_model_contribution()
+                    ));
+                    Ok(LlmJsonStream::new(tokio_stream::empty()))
+                })
+            }))
+            .collector(Box::new(|_chunk| Ok(())))
+            .finalizer(Box::new(|| make_openai_chat_response("done")))
+            .build(),
+    )
+    .await
+    .unwrap();
+    drop(stream);
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sanitizer_started.notified(),
+    )
+    .await
+    .expect("stream response sanitizer did not start");
+    event(
+        EmitMarkEventParams::builder()
+            .name("mark-after-stream-drop")
+            .build(),
+    )
+    .unwrap();
+
+    let (flush_done_tx, flush_done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = flush_subscribers();
+        let _ = flush_done_tx.send(result);
+    });
+    let flush_waited_for_end = flush_done_rx
+        .recv_timeout(std::time::Duration::from_millis(50))
+        .is_err();
+    sanitizer_release.notify_one();
+    assert!(
+        flush_waited_for_end,
+        "flush must wait for the pending stream END"
+    );
+    flush_done_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("flush did not finish after sanitizer release")
+        .unwrap();
+
+    let events = events.lock().unwrap();
+    let end_index = events
+        .iter()
+        .position(|event| {
+            event.name() == "stream_fifo"
+                && is_scope_event(event, ScopeType::Llm, ScopeCategory::End)
+        })
+        .expect("stream END event");
+    let optimization_index = events
+        .iter()
+        .position(|event| event.name() == "nemo_relay.llm.optimization")
+        .expect("stream optimization mark");
+    let mark_index = events
+        .iter()
+        .position(|event| event.name() == "mark-after-stream-drop")
+        .expect("later mark event");
+    assert!(
+        optimization_index < end_index,
+        "optimization marks must retain their position before stream END"
+    );
+    assert!(
+        end_index < mark_index,
+        "stream END must retain its FIFO position before the later mark"
+    );
+
+    drop(events);
+    deregister_llm_sanitize_response_guardrail("stream_fifo_sanitizer").unwrap();
+    deregister_subscriber("stream_fifo_subscriber").unwrap();
 }

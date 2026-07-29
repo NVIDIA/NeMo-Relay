@@ -95,9 +95,10 @@ def flush() -> None:
     waiting for observer work. Use this barrier in tests and shutdown paths when
     captured subscriber output must be complete before continuing.
 
-    A re-entrant call, or a call observed while an asynchronous publication
-    boundary is active, returns without waiting. Call ``flush()`` again after
-    that middleware settles to wait for its event and later work.
+    Call this function outside subscriber and queued publication sanitizer
+    callbacks. A re-entrant call returns without waiting to avoid blocking the
+    dispatcher. Publication middleware must not move such a call to an unmarked
+    worker thread.
     """
     if _event_sanitizer_callback_active():
         return None

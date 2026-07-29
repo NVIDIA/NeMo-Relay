@@ -72,10 +72,10 @@ pub fn deregister_subscriber(name: &str) -> Result<bool> {
 
 /// Wait for all subscriber callbacks queued before this call to finish.
 ///
-/// A re-entrant call returns without waiting. The same applies while an
-/// asynchronous publication boundary is active, including calls spawned or
-/// offloaded by publication middleware. Call again after that middleware
-/// settles to wait for its event and work queued behind it.
+/// A direct re-entrant call from queued publication middleware returns without
+/// waiting. Publication middleware must not move such a flush into
+/// `tokio::spawn`, `tokio::task::spawn_blocking`, or another unmarked task or
+/// thread because the publication cannot complete while awaiting that flush.
 ///
 /// Native targets deliver subscriber callbacks on a background dispatcher so
 /// event-producing APIs do not wait for observer work. Call this helper from

@@ -21,7 +21,7 @@ use crate::api::runtime::LlmCodecIdentity;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher::{
-    dispatch_sanitized_event, dispatch_transformed_event,
+    dispatch_reserved_sanitized_event, dispatch_sanitized_event, dispatch_transformed_event,
 };
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
@@ -543,6 +543,26 @@ pub(crate) async fn emit_optimization_marks(handle: &LlmHandle, subscribers: &[E
         subscribers,
         |event| sanitize_event_with_scope_stack(event, handle.captured_scope_stack()),
         |event, subscribers| NemoRelayContextState::try_emit_event(event, subscribers),
+    )
+    .await;
+}
+
+pub(crate) async fn emit_reserved_optimization_marks(
+    handle: &LlmHandle,
+    subscribers: &[EventSubscriberFn],
+) {
+    emit_optimization_marks_with_async(
+        handle,
+        subscribers,
+        |event| sanitize_event_with_scope_stack(event, handle.captured_scope_stack()),
+        |event, subscribers| {
+            dispatch_reserved_sanitized_event(
+                event.clone(),
+                Vec::new(),
+                subscribers,
+                handle.captured_scope_stack().clone(),
+            )
+        },
     )
     .await;
 }
