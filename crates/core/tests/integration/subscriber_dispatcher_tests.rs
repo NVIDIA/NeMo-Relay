@@ -12,9 +12,12 @@ use nemo_relay::api::registry::{
     deregister_mark_sanitize_guardrail, register_mark_sanitize_guardrail,
 };
 use nemo_relay::api::runtime::{
-    NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
+    NemoRelayContextState, create_scope_stack, current_scope_stack, global_context,
+    set_thread_scope_stack,
 };
-use nemo_relay::api::scope::{EmitMarkEventParams, event};
+use nemo_relay::api::scope::{
+    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
+};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::error::FlowError;
 use serde_json::json;
@@ -101,6 +104,58 @@ fn dispatcher_preserves_event_order() {
     deregister_subscriber("ordered-subscriber").unwrap();
 
     assert_eq!(observed.lock().unwrap().as_slice(), ["one", "two"]);
+}
+
+#[test]
+fn queued_sanitizer_keeps_the_emission_time_scope_after_pop() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let scope = push_scope(
+        PushScopeParams::builder()
+            .name("emission-scope")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let expected_uuid = scope.uuid;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let observed = Arc::new(Mutex::new(None));
+    let observed_scope = Arc::clone(&observed);
+    register_subscriber("scope-snapshot-subscriber", Arc::new(|_| {})).unwrap();
+    register_mark_sanitize_guardrail(
+        "scope-snapshot-sanitizer",
+        10,
+        Arc::new(move |_, fields| {
+            let release_rx = Arc::clone(&release_rx);
+            let observed_scope = Arc::clone(&observed_scope);
+            let started_tx = started_tx.clone();
+            Box::pin(async move {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+                *observed_scope.lock().unwrap() =
+                    Some(current_scope_stack().read().unwrap().top().uuid);
+                Ok(fields)
+            })
+        }),
+    )
+    .unwrap();
+
+    emit_mark("scope-snapshot");
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("sanitizer should suspend on the dispatcher");
+    pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
+    release_tx.send(()).unwrap();
+    flush_subscribers().unwrap();
+
+    assert_eq!(*observed.lock().unwrap(), Some(expected_uuid));
+    deregister_mark_sanitize_guardrail("scope-snapshot-sanitizer").unwrap();
+    deregister_subscriber("scope-snapshot-subscriber").unwrap();
 }
 
 #[test]

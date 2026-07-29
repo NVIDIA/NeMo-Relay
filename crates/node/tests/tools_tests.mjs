@@ -989,6 +989,20 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution intercept rejects non-JSON next arguments without aborting Node', async () => {
+    registerToolExecutionIntercept('node_tool_exec_bigint_next', 10, async (_args, next) => ({
+      result: await next(1n),
+    }));
+    try {
+      await assert.rejects(
+        () => toolCallExecute('bigint_next_tool', {}, (args) => args),
+        /unsupported bigint value.*JSON/i,
+      );
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_bigint_next');
+    }
+  });
+
   it('execution intercept next preserves the invocation scope across the chain', async () => {
     const originalStack = lib.currentScopeStack();
     const invocationStack = lib.createScopeStack();

@@ -58,10 +58,15 @@ use tower::service_fn;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
+use crate::api::runtime::scope_stack::active_event_uuid;
+use crate::api::runtime::subscriber_dispatcher::{
+    PublicationContext, capture_publication_context, with_task_publication_context,
+};
 use crate::api::runtime::{
     EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
-    ToolExecutionNextFn, current_scope_stack, with_scope_stack,
+    TASK_SCOPE_STACK, ToolExecutionNextFn, current_scope_stack, with_active_event_uuid,
+    with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -1553,7 +1558,7 @@ impl WorkerPluginCallback {
     ) -> FlowResult<ToolExecutionInterceptOutcome> {
         let continuation_id = self
             .host_state
-            .insert_continuation(Continuation::Tool(next))?;
+            .insert_continuation(Continuation::tool(next))?;
         let request = self.base_request(
             registration_name,
             RegistrationSurface::ToolExecutionIntercept,
@@ -1743,7 +1748,7 @@ impl WorkerPluginCallback {
     ) -> FlowResult<Json> {
         let continuation_id = self
             .host_state
-            .insert_continuation(Continuation::Llm(next))?;
+            .insert_continuation(Continuation::llm(next))?;
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmExecutionIntercept,
@@ -1767,7 +1772,7 @@ impl WorkerPluginCallback {
     ) -> FlowResult<LlmJsonStream> {
         let continuation_id = self
             .host_state
-            .insert_continuation(Continuation::LlmStream(next))?;
+            .insert_continuation(Continuation::llm_stream(next))?;
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmStreamExecutionIntercept,
@@ -2393,10 +2398,68 @@ impl WorkerHostRuntimeState {
 }
 
 #[derive(Clone)]
+struct ContinuationContext {
+    scope_stack: crate::api::runtime::ScopeStackHandle,
+    active_event_uuid: Option<Uuid>,
+    publication_context: Option<PublicationContext>,
+}
+
+impl ContinuationContext {
+    fn capture() -> Self {
+        Self {
+            scope_stack: current_scope_stack(),
+            active_event_uuid: active_event_uuid(),
+            publication_context: capture_publication_context(),
+        }
+    }
+
+    async fn run<F: Future>(&self, future: F) -> F::Output {
+        let scoped = TASK_SCOPE_STACK.scope(self.scope_stack.clone(), future);
+        let published = with_task_publication_context(self.publication_context.clone(), scoped);
+        match self.active_event_uuid {
+            Some(uuid) => with_active_event_uuid(uuid, published).await,
+            None => published.await,
+        }
+    }
+}
+
+#[derive(Clone)]
 enum Continuation {
-    Tool(ToolExecutionNextFn),
-    Llm(LlmExecutionNextFn),
-    LlmStream(LlmStreamExecutionNextFn),
+    Tool {
+        next: ToolExecutionNextFn,
+        context: ContinuationContext,
+    },
+    Llm {
+        next: LlmExecutionNextFn,
+        context: ContinuationContext,
+    },
+    LlmStream {
+        next: LlmStreamExecutionNextFn,
+        context: ContinuationContext,
+    },
+}
+
+impl Continuation {
+    fn tool(next: ToolExecutionNextFn) -> Self {
+        Self::Tool {
+            next,
+            context: ContinuationContext::capture(),
+        }
+    }
+
+    fn llm(next: LlmExecutionNextFn) -> Self {
+        Self::Llm {
+            next,
+            context: ContinuationContext::capture(),
+        }
+    }
+
+    fn llm_stream(next: LlmStreamExecutionNextFn) -> Self {
+        Self::LlmStream {
+            next,
+            context: ContinuationContext::capture(),
+        }
+    }
 }
 
 struct WorkerHostRuntimeService {
@@ -2560,7 +2623,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
         let continuation = self.state.continuation(&request.continuation_id)?;
-        let Continuation::Tool(next) = continuation else {
+        let Continuation::Tool { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not a tool continuation",
             ));
@@ -2569,7 +2632,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.value, "tool next value").map_err(status_from_flow)?;
         let value = decode_json_envelope::<Json>(&value)
             .map_err(|err| Status::invalid_argument(format!("invalid tool next JSON: {err}")))?;
-        let result = next(value).await;
+        let result = context.run(next(value)).await;
         Ok(Response::new(json_result(result)))
     }
 
@@ -2581,7 +2644,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
         let continuation = self.state.continuation(&request.continuation_id)?;
-        let Continuation::Llm(next) = continuation else {
+        let Continuation::Llm { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM continuation",
             ));
@@ -2590,7 +2653,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
             .map_err(|err| Status::invalid_argument(format!("invalid LLM next request: {err}")))?;
-        let result = next(request).await;
+        let result = context.run(next(request)).await;
         Ok(Response::new(json_result(result)))
     }
 
@@ -2605,7 +2668,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
         let continuation = self.state.continuation(&request.continuation_id)?;
-        let Continuation::LlmStream(next) = continuation else {
+        let Continuation::LlmStream { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM stream continuation",
             ));
@@ -2615,8 +2678,21 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
             Status::invalid_argument(format!("invalid LLM stream next request: {err}"))
         })?;
-        let stream = next(request).await.map_err(status_from_flow)?;
-        let mapped = stream.map(|item| match item {
+        let stream = context.run(next(request)).await.map_err(status_from_flow)?;
+        let (tx, rx) = mpsc::channel(16);
+        tokio::spawn(async move {
+            context
+                .run(async move {
+                    let mut stream = stream;
+                    while let Some(item) = stream.next().await {
+                        if tx.send(item).await.is_err() {
+                            break;
+                        }
+                    }
+                })
+                .await;
+        });
+        let mapped = tokio_stream::wrappers::ReceiverStream::new(rx).map(|item| match item {
             Ok(value) => Ok(StreamChunk {
                 item: Some(stream_chunk_item::Item::Value(json_envelope_infallible(
                     JSON_SCHEMA,

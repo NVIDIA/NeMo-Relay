@@ -1432,6 +1432,7 @@ struct NativeAsyncNext {
 struct NativeAsyncStream {
     sender: Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
     cancelled: AtomicBool,
+    next_invoked: AtomicBool,
     downstream_abort: Mutex<Option<tokio::task::AbortHandle>>,
     _callback_user_data: Option<Arc<NativeCallbackUserData>>,
 }
@@ -1813,41 +1814,47 @@ unsafe extern "C" fn native_async_next_invoke(
         );
         return NemoRelayStatus::InvalidArg;
     }
+    enum Invocation {
+        Tool(Json),
+        Llm(LlmRequest),
+    }
+    let invocation = match &next.inner {
+        NativeAsyncNextInner::Tool(_) => Invocation::Tool(invocation),
+        NativeAsyncNextInner::Llm(_) => match serde_json::from_value(invocation) {
+            Ok(request) => Invocation::Llm(request),
+            Err(error) => {
+                set_native_last_error(error.to_string());
+                return NemoRelayStatus::InvalidJson;
+            }
+        },
+        NativeAsyncNextInner::LlmStream(_) => unreachable!("stream continuations were rejected"),
+    };
     unsafe { Arc::increment_strong_count(completion as *const NativeAsyncCompletion) };
     let completion = unsafe { Arc::from_raw(completion as *const NativeAsyncCompletion) };
     if completion.cancelled.load(Ordering::Acquire) {
         return NemoRelayStatus::InvalidArg;
     }
-    let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> = match &next.inner {
-        NativeAsyncNextInner::Tool(next) => {
-            let next = next.clone();
-            Box::pin(async move {
-                serde_json::to_value(ToolExecutionInterceptOutcome::new(next(invocation).await?))
+    let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> =
+        match (&next.inner, invocation) {
+            (NativeAsyncNextInner::Tool(next), Invocation::Tool(invocation)) => {
+                let next = next.clone();
+                Box::pin(async move {
+                    serde_json::to_value(ToolExecutionInterceptOutcome::new(
+                        next(invocation).await?,
+                    ))
                     .map_err(|error| {
                         FlowError::Internal(format!(
                             "failed to serialize native async tool outcome: {error}"
                         ))
                     })
-            })
-        }
-        NativeAsyncNextInner::Llm(next) => {
-            let request = match serde_json::from_value(invocation) {
-                Ok(request) => request,
-                Err(error) => {
-                    let _ = completion
-                        .sender
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .take()
-                        .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
-                    return NemoRelayStatus::InvalidArg;
-                }
-            };
-            let next = next.clone();
-            Box::pin(async move { next(request).await })
-        }
-        NativeAsyncNextInner::LlmStream(_) => unreachable!("stream continuations were rejected"),
-    };
+                })
+            }
+            (NativeAsyncNextInner::Llm(next), Invocation::Llm(request)) => {
+                let next = next.clone();
+                Box::pin(async move { next(request).await })
+            }
+            _ => unreachable!("native next invocation kind matched its continuation"),
+        };
     let scope_stack = next.scope_stack.clone();
     let mut abort_guard = completion
         .next_abort
@@ -1913,6 +1920,12 @@ unsafe extern "C" fn native_async_next_invoke_stream(
         Ok(request) => request,
         Err(status) => return status,
     };
+    if output_stream.next_invoked.swap(true, Ordering::AcqRel) {
+        set_native_last_error(
+            "native async stream next was already invoked for this output stream",
+        );
+        return NemoRelayStatus::InvalidArg;
+    }
     let next_fn = next_fn.clone();
     let scope_stack = next.scope_stack.clone();
     let library_guard = next._callback_user_data.clone();
@@ -2282,6 +2295,7 @@ fn wrap_native_incremental_llm_stream_execution(
             let stream = Arc::new(NativeAsyncStream {
                 sender: Mutex::new(Some(sender)),
                 cancelled: AtomicBool::new(false),
+                next_invoked: AtomicBool::new(false),
                 downstream_abort: Mutex::new(None),
                 _callback_user_data: Some(user_data.clone()),
             });

@@ -30,7 +30,8 @@ use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn, current_scope_stack,
+    snapshot_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -50,7 +51,8 @@ use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
-    PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyToolExecutionInterceptOutcome,
+    PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyScopeStack,
+    PyToolExecutionInterceptOutcome,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -353,6 +355,7 @@ fn capture_python_task_locals() -> Option<TaskLocals> {
 struct PythonPublicationContext {
     task_locals: Option<TaskLocals>,
     context: Py<PyAny>,
+    scope_stack: nemo_relay::api::runtime::ScopeStackHandle,
 }
 
 pub(crate) fn capture_python_publication_context() -> Option<PublicationContext> {
@@ -365,6 +368,7 @@ pub(crate) fn capture_python_publication_context() -> Option<PublicationContext>
         Some(Arc::new(PythonPublicationContext {
             task_locals: pyo3_async_runtimes::tokio::get_current_locals(py).ok(),
             context,
+            scope_stack: snapshot_scope_stack(&current_scope_stack()).ok()?,
         }) as PublicationContext)
     })
 }
@@ -407,6 +411,11 @@ fn copy_publication_invocation<'py>(
     fallback_task_locals: Option<TaskLocals>,
 ) -> PyResult<(Bound<'py, PyAny>, Option<TaskLocals>)> {
     let invocation_context = context.context.bind(py).call_method0("copy")?;
+    let scope_stack = Py::new(py, PyScopeStack(context.scope_stack.clone()))?;
+    let nemo_relay = py.import("nemo_relay")?;
+    if let Ok(scope_stack_var) = nemo_relay.getattr("_scope_stack_var") {
+        invocation_context.call_method1("run", (scope_stack_var.getattr("set")?, scope_stack))?;
+    }
     let task_locals = context
         .task_locals
         .clone()
@@ -877,9 +886,10 @@ pub fn wrap_py_tool_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync> {
     let py_fn = std::sync::Arc::new(py_fn);
+    let registered_task_locals = capture_python_task_locals();
     Box::new(move |args: Json| {
         let py_fn = py_fn.clone();
-        let task_locals = task_locals_with_running_loop(None);
+        let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
         Box::pin(async move {
             resolve_json_or_future(Python::attach(|py| {
                 let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
@@ -1366,9 +1376,10 @@ pub fn wrap_py_llm_exec_fn(
 ) -> Box<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>
 {
     let py_fn = std::sync::Arc::new(py_fn);
+    let registered_task_locals = capture_python_task_locals();
     Box::new(move |request: LlmRequest| {
         let py_fn = py_fn.clone();
-        let task_locals = task_locals_with_running_loop(None);
+        let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
         Box::pin(async move {
             resolve_json_or_future(Python::attach(|py| {
                 let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
@@ -1403,9 +1414,10 @@ pub fn wrap_py_llm_stream_exec_fn(
         + Sync,
 > {
     let py_fn = std::sync::Arc::new(py_fn);
+    let registered_task_locals = capture_python_task_locals();
     Box::new(move |request: LlmRequest| {
         let py_fn = py_fn.clone();
-        let task_locals = task_locals_with_running_loop(None);
+        let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
         Box::pin(async move {
             let (outcome, invocation_task_locals) = Python::attach(|py| {
                 let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)

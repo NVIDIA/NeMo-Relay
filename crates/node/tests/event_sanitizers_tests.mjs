@@ -137,15 +137,25 @@ describe('event sanitizer registries', () => {
     const overrideStack = lib.createScopeStack();
     let overrideRootUuid;
     let emitterScopeUuid;
+    let emitterScope;
     const observedParents = [];
     const observedOverrides = [];
+    let sanitizerEntered;
+    const entered = new Promise((resolve) => {
+      sanitizerEntered = resolve;
+    });
+    let releaseSanitizer;
+    const release = new Promise((resolve) => {
+      releaseSanitizer = resolve;
+    });
 
     lib.registerMarkSanitizeGuardrail('node-event-scope-context', 0, async (event, fields) => {
       if (event.name !== 'scope-context-original') {
         return fields;
       }
       observedParents.push(lib.getHandle().uuid);
-      await new Promise((resolve) => setImmediate(resolve));
+      sanitizerEntered();
+      await release;
       observedParents.push(lib.getHandle().uuid);
       lib.event('scope-context-nested', null, { originalParent: event.parent_uuid });
       observedOverrides.push(
@@ -159,11 +169,15 @@ describe('event sanitizer registries', () => {
     try {
       overrideRootUuid = lib.withScopeStack(overrideStack, () => lib.getHandle().uuid);
       lib.withScopeStack(emitterStack, () => {
-        emitterScopeUuid = lib.pushScope('scope-context-emitter', lib.ScopeType.Agent).uuid;
+        emitterScope = lib.pushScope('scope-context-emitter', lib.ScopeType.Agent);
+        emitterScopeUuid = emitterScope.uuid;
         lib.event('scope-context-original', null, {});
       });
+      await entered;
+      lib.withScopeStack(emitterStack, () => lib.popScope(emitterScope));
       lib.setThreadScopeStack(unrelatedStack);
       const unrelatedRootUuid = lib.getHandle().uuid;
+      releaseSanitizer();
 
       await lib.flushSubscribers();
       await lib.flushSubscribers();
@@ -175,6 +189,7 @@ describe('event sanitizer registries', () => {
       assert.equal(nested.parent_uuid, emitterScopeUuid);
       assert.notEqual(nested.parent_uuid, unrelatedRootUuid);
     } finally {
+      releaseSanitizer();
       lib.setThreadScopeStack(originalStack);
       lib.deregisterMarkSanitizeGuardrail('node-event-scope-context');
       lib.deregisterSubscriber('node-event-sanitize-scope-context-sub');

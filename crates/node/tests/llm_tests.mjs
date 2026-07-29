@@ -1364,6 +1364,18 @@ describe('LLM intercepts', () => {
     );
   });
 
+  it('execution intercept rejects non-JSON next arguments without aborting Node', async () => {
+    registerLlmExecutionIntercept('node_llm_exec_bigint_next', 10, async (_native, next) => next(1n));
+    try {
+      await assert.rejects(
+        () => llmCallExecute('bigint_next_llm', makeNative(), () => ({ ok: true })),
+        /unsupported bigint value.*JSON/i,
+      );
+    } finally {
+      deregisterLlmExecutionIntercept('node_llm_exec_bigint_next');
+    }
+  });
+
   it('stream execution intercept composes with next', async () => {
     registerLlmStreamExecutionIntercept('node_llm_stream_exec_repl', 10, async (native, next) => {
       native.content.intercepted = true;
@@ -1413,6 +1425,21 @@ describe('LLM intercepts', () => {
       },
     ]);
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec_repl');
+  });
+
+  it('stream execution intercept rejects non-JSON next arguments without aborting Node', async () => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_bigint_next', 10, async (_native, next) => next(1n));
+    try {
+      await assert.rejects(
+        () =>
+          llmStreamCallExecute('bigint_next_stream_llm', makeNative(), (wrapper) => {
+            lib.endStream(wrapper.__nemo_relay_stream_id);
+          }),
+        /unsupported bigint value.*JSON/i,
+      );
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_bigint_next');
+    }
   });
 
   it('snapshotted stream execution intercept survives deregistration', async () => {

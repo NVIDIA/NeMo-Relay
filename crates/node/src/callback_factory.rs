@@ -101,11 +101,14 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       }
       token.scopeStack = null;
     };
+    const safeNext = next === undefined
+      ? undefined
+      : (value) => next(jsonValue(value === undefined ? null : value));
     const invoke = () => {
       Promise.resolve().then(() => (
-        next === undefined
+        safeNext === undefined
           ? (spread ? fn(...arg0) : fn(arg0))
-          : (spread ? fn(...arg0, next) : fn(arg0, next))
+          : (spread ? fn(...arg0, safeNext) : fn(arg0, safeNext))
       )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
         settlePublication();
         resolve(value);

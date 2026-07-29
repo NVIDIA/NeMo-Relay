@@ -23,8 +23,8 @@ pub use scope_stack::{
     capture_propagation_context, capture_propagation_context_with_root, capture_thread_scope_stack,
     create_scope_stack, create_scope_stack_from_propagation, current_scope_stack,
     propagate_scope_to_thread, restore_thread_scope_stack, scope_stack_active,
-    set_thread_scope_stack, sync_thread_scope_stack, task_scope_push, task_scope_remove,
-    task_scope_top, with_active_event_uuid, with_scope_stack,
+    set_thread_scope_stack, snapshot_scope_stack, sync_thread_scope_stack, task_scope_push,
+    task_scope_remove, task_scope_top, with_active_event_uuid, with_scope_stack,
 };
 pub use state::NemoRelayContextState;
 pub use subscriber_dispatcher::flush_subscribers;

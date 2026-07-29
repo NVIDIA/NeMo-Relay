@@ -257,6 +257,39 @@ async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_even
     assert events[-1].data == {"async_flush": True}
 
 
+async def test_queued_sanitizer_keeps_emission_scope_after_pop(capture_events):
+    _capture_name, events = capture_events
+    handle = scope.push("python-emission-scope", nemo_relay.ScopeType.Agent)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        if event.name != "python-scope-snapshot":
+            return fields
+        entered.set()
+        await release.wait()
+        observed.append(scope.get_handle().uuid)
+        scope.event("python-scope-snapshot-nested")
+        return fields
+
+    guardrails.register_mark_sanitize("python-scope-snapshot", 0, sanitize)
+    try:
+        scope.event("python-scope-snapshot")
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        scope.pop(handle)
+        release.set()
+        await asyncio.wait_for(subscribers.flush_async(), timeout=2)
+        await asyncio.wait_for(subscribers.flush_async(), timeout=2)
+    finally:
+        release.set()
+        guardrails.deregister_mark_sanitize("python-scope-snapshot")
+
+    assert observed == [handle.uuid]
+    nested = next(event for event in events if event.name == "python-scope-snapshot-nested")
+    assert nested.parent_uuid == handle.uuid
+
+
 async def test_async_flush_does_not_consume_default_executor(capture_events):
     _capture_name, events = capture_events
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))

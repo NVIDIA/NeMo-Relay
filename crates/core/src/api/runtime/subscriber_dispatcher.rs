@@ -94,7 +94,7 @@ mod native {
     use crate::api::runtime::scope_stack::current_scope_stack;
     use crate::api::runtime::scope_stack::{
         ScopeStackHandle, capture_thread_scope_stack, restore_thread_scope_stack,
-        set_thread_scope_stack,
+        set_thread_scope_stack, snapshot_scope_stack,
     };
     use crate::error::FlowError;
 
@@ -195,6 +195,20 @@ mod native {
         }
     }
 
+    fn immutable_scope_stack(scope_stack: &ScopeStackHandle) -> Option<ScopeStackHandle> {
+        match snapshot_scope_stack(scope_stack) {
+            Ok(scope_stack) => Some(scope_stack),
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_scope_snapshot_failed";
+                    "Queued publication could not snapshot its emitting scope stack: {error}"
+                );
+                None
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn block_on_sanitizer_future<F: Future>(
         future: F,
@@ -282,12 +296,15 @@ mod native {
         if subscribers.is_empty() {
             return true;
         }
+        let Some(scope_stack) = immutable_scope_stack(&current_scope_stack()) else {
+            return false;
+        };
         let message = DispatcherMessage::Deliver {
             event: Box::new(event.clone()),
             transform: None,
             sanitizers: Vec::new(),
             subscribers: subscribers.to_vec(),
-            scope_stack: current_scope_stack(),
+            scope_stack,
             publication_context: current_publication_context(),
         };
         send_dispatch_message(message)
@@ -302,6 +319,9 @@ mod native {
         if subscribers.is_empty() {
             return true;
         }
+        let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
+            return false;
+        };
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: None,
@@ -322,6 +342,9 @@ mod native {
         if subscribers.is_empty() {
             return true;
         }
+        let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
+            return false;
+        };
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: None,
@@ -354,6 +377,9 @@ mod native {
         subscribers: &[EventSubscriberFn],
         scope_stack: ScopeStackHandle,
     ) -> bool {
+        let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
+            return false;
+        };
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: Some(transform),

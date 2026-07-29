@@ -1063,7 +1063,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
     .await;
     let continuation_id = callback
         .host_state
-        .insert_continuation(Continuation::Tool(Arc::new(|value| {
+        .insert_continuation(Continuation::tool(Arc::new(|value| {
             Box::pin(async move { Ok(value) })
         })))
         .expect("continuation should insert");
@@ -1340,7 +1340,11 @@ async fn dropping_host_stream_sends_explicit_worker_cancellation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // The process-wide test mutex serializes global registrations.
 async fn install_registrations_covers_registry_error_edges() {
+    let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     enable_operational_logs();
     for surface in [
         RegistrationSurface::Subscriber,
@@ -1356,15 +1360,17 @@ async fn install_registrations_covers_registry_error_edges() {
         RegistrationSurface::LlmExecutionIntercept,
         RegistrationSurface::LlmStreamExecutionIntercept,
     ] {
+        let duplicate_name = format!("duplicate_worker_{surface:?}");
         let (instance, _shutdown) = fake_worker_instance(vec![
-            registration(surface, "duplicate"),
-            registration(surface, "duplicate"),
+            registration(surface, &duplicate_name),
+            registration(surface, &duplicate_name),
         ])
         .await;
         let mut ctx = PluginRegistrationContext::new();
-        let error = instance
-            .install_registrations(&mut ctx)
-            .expect_err("duplicate worker registration should fail");
+        let error = match instance.install_registrations(&mut ctx) {
+            Err(error) => error,
+            Ok(()) => panic!("{surface:?}: duplicate worker registration should fail"),
+        };
         assert!(
             error.to_string().contains("duplicate")
                 || error.to_string().contains("already registered"),
@@ -1968,7 +1974,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     };
 
     let llm_continuation = state
-        .insert_continuation(Continuation::Llm(Arc::new(|request| {
+        .insert_continuation(Continuation::llm(Arc::new(|request| {
             Box::pin(async move { Ok(request.content) })
         })))
         .expect("llm continuation should insert");
@@ -1984,7 +1990,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     assert_eq!(wrong_type.code(), tonic::Code::InvalidArgument);
 
     let tool_continuation = state
-        .insert_continuation(Continuation::Tool(Arc::new(|value| {
+        .insert_continuation(Continuation::tool(Arc::new(|value| {
             Box::pin(async move { Ok(value) })
         })))
         .expect("tool continuation should insert");
@@ -2003,7 +2009,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     assert_eq!(invalid_tool_json.code(), tonic::Code::InvalidArgument);
 
     let llm_continuation = state
-        .insert_continuation(Continuation::Llm(Arc::new(|request| {
+        .insert_continuation(Continuation::llm(Arc::new(|request| {
             Box::pin(async move { Ok(request.content) })
         })))
         .expect("llm continuation should insert");
@@ -2022,7 +2028,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     assert_eq!(invalid_llm_json.code(), tonic::Code::InvalidArgument);
 
     let stream_continuation = state
-        .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
                     FlowError::Internal("stream item failed".into()),
@@ -2062,7 +2068,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     }
 
     let stream_continuation = state
-        .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
             Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::empty())) })
         })))
         .expect("stream continuation should insert");
