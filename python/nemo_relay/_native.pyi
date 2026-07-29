@@ -1976,7 +1976,7 @@ def deregister_subscriber(name: str) -> bool:
     ...
 
 def flush_subscribers() -> None:
-    """Wait for subscriber callbacks queued by native event emission.
+    """Wait for queued subscriber callbacks and their transitive publications.
 
     Call this function outside subscribers, event sanitizers, conditional
     guardrails, and request or execution intercepts. The public Python wrapper

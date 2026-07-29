@@ -86,8 +86,9 @@ mod native {
     use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{Arc, Weak};
 
     use super::*;
     #[cfg(test)]
@@ -106,13 +107,39 @@ mod native {
             subscribers: Vec<EventSubscriberFn>,
             scope_stack: ScopeStackHandle,
             publication_context: Option<PublicationContext>,
+            lineage: Option<PublicationPermit>,
         },
         Flush {
             done: Sender<()>,
         },
         Barrier {
             publications: Receiver<Vec<DispatcherMessage>>,
+            lineage: Option<PublicationPermit>,
         },
+    }
+
+    #[derive(Default)]
+    pub(super) struct PublicationLineage {
+        outstanding: AtomicUsize,
+    }
+
+    pub(super) struct PublicationPermit(Arc<PublicationLineage>);
+
+    impl PublicationPermit {
+        pub(super) fn new(lineage: Arc<PublicationLineage>) -> Self {
+            lineage.outstanding.fetch_add(1, Ordering::AcqRel);
+            Self(lineage)
+        }
+
+        fn lineage(&self) -> Arc<PublicationLineage> {
+            Arc::clone(&self.0)
+        }
+    }
+
+    impl Drop for PublicationPermit {
+        fn drop(&mut self) {
+            self.0.outstanding.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 
     type DispatcherState = Option<std::result::Result<Sender<DispatcherMessage>, String>>;
@@ -126,12 +153,14 @@ mod native {
     #[derive(Clone)]
     pub struct PublicationBuffer {
         messages: Arc<Mutex<Option<Vec<DispatcherMessage>>>>,
+        lineage: Option<Arc<PublicationLineage>>,
     }
 
     impl PublicationBuffer {
         fn new(messages: Option<Vec<DispatcherMessage>>) -> Self {
             Self {
                 messages: Arc::new(Mutex::new(messages)),
+                lineage: current_publication_lineage(),
             }
         }
 
@@ -199,6 +228,7 @@ mod native {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
         static PREPARED_FORK_STATE: Cell<*mut ProcessState> = const { Cell::new(std::ptr::null_mut()) };
         static THREAD_PUBLICATION_BUFFER: RefCell<Option<PublicationBuffer>> = const { RefCell::new(None) };
+        static THREAD_PUBLICATION_LINEAGE: RefCell<Option<Arc<PublicationLineage>>> = const { RefCell::new(None) };
     }
     tokio::task_local! {
         static ASYNC_PUBLICATION_BUFFER: PublicationBuffer;
@@ -206,6 +236,7 @@ mod native {
 
     struct DispatchGuard;
     struct ThreadPublicationBufferGuard(Option<PublicationBuffer>);
+    struct ThreadPublicationLineageGuard(Option<Arc<PublicationLineage>>);
 
     pub(crate) struct AsyncPublication {
         pub(super) sender: Sender<Vec<DispatcherMessage>>,
@@ -249,6 +280,58 @@ mod native {
             THREAD_PUBLICATION_BUFFER.with(|current| {
                 current.replace(self.0.take());
             });
+        }
+    }
+
+    impl Drop for ThreadPublicationLineageGuard {
+        fn drop(&mut self) {
+            THREAD_PUBLICATION_LINEAGE.with(|current| {
+                current.replace(self.0.take());
+            });
+        }
+    }
+
+    fn current_publication_lineage() -> Option<Arc<PublicationLineage>> {
+        ASYNC_PUBLICATION_BUFFER
+            .try_with(|buffer| buffer.lineage.clone())
+            .ok()
+            .flatten()
+            .or_else(|| {
+                THREAD_PUBLICATION_BUFFER.with(|buffer| {
+                    buffer
+                        .borrow()
+                        .as_ref()
+                        .and_then(|buffer| buffer.lineage.clone())
+                })
+            })
+            .or_else(|| THREAD_PUBLICATION_LINEAGE.with(|lineage| lineage.borrow().clone()))
+    }
+
+    fn with_publication_lineage<T>(lineage: Arc<PublicationLineage>, f: impl FnOnce() -> T) -> T {
+        let previous = THREAD_PUBLICATION_LINEAGE.with(|current| current.replace(Some(lineage)));
+        let _guard = ThreadPublicationLineageGuard(previous);
+        f()
+    }
+
+    fn attach_publication_lineage(
+        message: &mut DispatcherMessage,
+        inherited: Option<&Arc<PublicationLineage>>,
+    ) -> Arc<PublicationLineage> {
+        let current = inherited
+            .cloned()
+            .or_else(current_publication_lineage)
+            .unwrap_or_default();
+        match message {
+            DispatcherMessage::Deliver { lineage, .. }
+            | DispatcherMessage::Barrier { lineage, .. } => {
+                if let Some(permit) = lineage {
+                    permit.lineage()
+                } else {
+                    *lineage = Some(PublicationPermit::new(Arc::clone(&current)));
+                    current
+                }
+            }
+            DispatcherMessage::Flush { .. } => current,
         }
     }
 
@@ -363,6 +446,7 @@ mod native {
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
+            lineage: None,
         };
         send_dispatch_message(message)
     }
@@ -386,6 +470,7 @@ mod native {
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
+            lineage: None,
         };
         enqueue_dispatch_message(message)
     }
@@ -409,6 +494,7 @@ mod native {
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
+            lineage: None,
         };
         enqueue_dispatch_message(message)
     }
@@ -430,6 +516,7 @@ mod native {
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
+            lineage: None,
         };
         enqueue_dispatch_message(message)
     }
@@ -441,6 +528,7 @@ mod native {
         let (publication_tx, publication_rx) = mpsc::channel();
         enqueue_dispatch_message(DispatcherMessage::Barrier {
             publications: publication_rx,
+            lineage: None,
         })
         .then_some(AsyncPublication {
             sender: publication_tx,
@@ -548,7 +636,8 @@ mod native {
         dispatcher.get_or_insert_with(start_dispatcher).clone()
     }
 
-    fn send_dispatch_message(message: DispatcherMessage) -> bool {
+    fn send_dispatch_message(mut message: DispatcherMessage) -> bool {
+        attach_publication_lineage(&mut message, None);
         match dispatcher_sender() {
             Ok(sender) if sender.send(message).is_ok() => true,
             Ok(_) => {
@@ -576,7 +665,8 @@ mod native {
         }
     }
 
-    pub(super) fn enqueue_dispatch_message(message: DispatcherMessage) -> bool {
+    pub(super) fn enqueue_dispatch_message(mut message: DispatcherMessage) -> bool {
+        attach_publication_lineage(&mut message, None);
         let message = if let Ok(buffer) = ASYNC_PUBLICATION_BUFFER.try_with(Clone::clone) {
             match buffer.push(message) {
                 Ok(()) => return true,
@@ -615,25 +705,85 @@ mod native {
         sender
     }
 
-    fn run_dispatcher(rx: Receiver<DispatcherMessage>) {
-        while let Ok(message) = rx.recv() {
-            match message {
-                DispatcherMessage::Flush { done } => {
-                    let _ = done.send(());
-                }
-                DispatcherMessage::Barrier { publications } => {
-                    if let Ok(publications) = publications.recv() {
-                        for publication in publications {
-                            handle_message(publication);
-                        }
-                    }
-                }
-                message => handle_message(message),
+    pub(super) struct PendingFlush {
+        pub(super) done: Sender<()>,
+        pub(super) lineages: Vec<Arc<PublicationLineage>>,
+    }
+
+    #[derive(Default)]
+    pub(super) struct DispatcherLoopState {
+        pub(super) active_lineages: Vec<Weak<PublicationLineage>>,
+        pub(super) pending_flushes: Vec<PendingFlush>,
+    }
+
+    impl DispatcherLoopState {
+        fn register(&mut self, lineage: &Arc<PublicationLineage>) {
+            if !self.active_lineages.iter().any(|active| {
+                active
+                    .upgrade()
+                    .is_some_and(|active| Arc::ptr_eq(&active, lineage))
+            }) {
+                self.active_lineages.push(Arc::downgrade(lineage));
+            }
+        }
+
+        fn defer_or_complete_flush(&mut self, done: Sender<()>) {
+            let lineages = self
+                .active_lineages
+                .iter()
+                .filter_map(Weak::upgrade)
+                .filter(|lineage| lineage.outstanding.load(Ordering::Acquire) > 0)
+                .collect::<Vec<_>>();
+            if lineages.is_empty() {
+                let _ = done.send(());
+            } else {
+                self.pending_flushes.push(PendingFlush { done, lineages });
+            }
+        }
+
+        pub(super) fn complete_ready_flushes(&mut self) {
+            self.active_lineages.retain(|lineage| {
+                lineage
+                    .upgrade()
+                    .is_some_and(|lineage| lineage.outstanding.load(Ordering::Acquire) > 0)
+            });
+            let ready = self
+                .pending_flushes
+                .iter()
+                .take_while(|flush| {
+                    flush
+                        .lineages
+                        .iter()
+                        .all(|lineage| lineage.outstanding.load(Ordering::Acquire) == 0)
+                })
+                .count();
+            for flush in self.pending_flushes.drain(..ready) {
+                let _ = flush.done.send(());
             }
         }
     }
 
-    fn handle_message(message: DispatcherMessage) {
+    fn run_dispatcher(rx: Receiver<DispatcherMessage>) {
+        let mut state = DispatcherLoopState::default();
+        while let Ok(message) = rx.recv() {
+            handle_message(message, &mut state, None);
+            state.complete_ready_flushes();
+        }
+    }
+
+    fn handle_message(
+        mut message: DispatcherMessage,
+        state: &mut DispatcherLoopState,
+        inherited: Option<&Arc<PublicationLineage>>,
+    ) {
+        let lineage = match message {
+            DispatcherMessage::Flush { done } => {
+                state.defer_or_complete_flush(done);
+                return;
+            }
+            _ => attach_publication_lineage(&mut message, inherited),
+        };
+        state.register(&lineage);
         match message {
             DispatcherMessage::Deliver {
                 event,
@@ -642,25 +792,37 @@ mod native {
                 subscribers,
                 scope_stack,
                 publication_context,
-            } => deliver_event(
-                event,
-                transform,
-                sanitizers,
-                subscribers,
-                scope_stack,
-                publication_context,
-            ),
-            DispatcherMessage::Flush { done } => {
-                let _ = done.send(());
-            }
-            DispatcherMessage::Barrier { publications } => {
-                if let Ok(publications) = publications.recv() {
-                    for publication in publications {
-                        handle_message(publication);
-                    }
+                lineage: permit,
+            } => {
+                let nested_publications = with_publication_lineage(Arc::clone(&lineage), || {
+                    deliver_event(
+                        event,
+                        transform,
+                        sanitizers,
+                        subscribers,
+                        scope_stack,
+                        publication_context,
+                    )
+                });
+                drop(permit);
+                for publication in nested_publications {
+                    handle_message(publication, state, Some(&lineage));
                 }
             }
+            DispatcherMessage::Barrier {
+                publications,
+                lineage: permit,
+            } => {
+                if let Ok(publications) = publications.recv() {
+                    for publication in publications {
+                        handle_message(publication, state, Some(&lineage));
+                    }
+                }
+                drop(permit);
+            }
+            DispatcherMessage::Flush { .. } => unreachable!(),
         }
+        state.complete_ready_flushes();
     }
 
     fn deliver_event(
@@ -670,7 +832,7 @@ mod native {
         subscribers: Vec<EventSubscriberFn>,
         scope_stack: ScopeStackHandle,
         publication_context: Option<PublicationContext>,
-    ) {
+    ) -> Vec<DispatcherMessage> {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         let _dispatch_guard = DispatchGuard::enter();
@@ -688,12 +850,7 @@ mod native {
             }
         }
         restore_thread_scope_stack(previous_scope_stack);
-        // Publications emitted while transforming or sanitizing this event
-        // are causally nested within it. Drain them before the dispatcher
-        // consumes messages that callers may already have queued afterward.
-        for publication in nested_publications {
-            handle_message(publication);
-        }
+        nested_publications
     }
 
     fn run_with_nested_publication_buffer<F: Future>(
@@ -964,7 +1121,8 @@ where
     native::spawn_background_publication(future)
 }
 
-/// Wait for all queued subscriber callbacks submitted before this call.
+/// Wait for all queued subscriber callbacks submitted before this call,
+/// including publications emitted transitively by those callbacks.
 pub fn flush_subscribers() -> Result<()> {
     native::flush_subscribers()
 }

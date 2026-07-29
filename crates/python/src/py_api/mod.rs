@@ -1562,7 +1562,7 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
     core_subscriber_api::deregister_subscriber(name).map_err(to_py_err)
 }
 
-/// Wait for subscriber callbacks queued before this call to finish.
+/// Wait for queued subscriber callbacks and their transitive native publications.
 ///
 /// Call this function outside subscribers, event sanitizers, conditional
 /// guardrails, and request or execution intercepts. The public Python wrapper

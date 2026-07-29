@@ -3242,6 +3242,8 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 ///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
 /// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
+/// Native events emitted later by a JavaScript subscriber are separate publications and may
+/// require another flush after the JavaScript callback runs.
 ///
 /// The Promise rejects if the blocking task fails or the core subscriber flush returns an error.
 /// Callers should handle errors when awaiting it.

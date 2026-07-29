@@ -187,7 +187,7 @@ def deregister(name: str) -> bool:
 
 
 def flush() -> None:
-    """Wait for subscriber callbacks already queued by native event emission.
+    """Wait for queued subscriber callbacks and their transitive publications.
 
     Native NeMo Relay event APIs enqueue subscriber callbacks and return without
     waiting for observer work. Use this barrier in tests and shutdown paths when
@@ -217,7 +217,7 @@ def flush() -> None:
 
 
 async def flush_async() -> None:
-    """Wait asynchronously for subscriber callbacks already queued by Relay.
+    """Wait asynchronously for queued callbacks and transitive publications.
 
     Use this barrier from an ``asyncio`` task. A process-local daemon bridge
     thread coalesces concurrent barriers and waits for the native dispatcher

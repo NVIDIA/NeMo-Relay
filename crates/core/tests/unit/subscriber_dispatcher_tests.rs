@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::EventSubscriberFn;
 use super::native::{
-    DispatcherMessage, dispatcher_sender, enqueue_dispatch_message, flush_subscribers,
-    register_async_publication, sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test,
-    spawn_background_publication,
+    DispatcherLoopState, DispatcherMessage, PendingFlush, PublicationLineage, PublicationPermit,
+    dispatcher_sender, enqueue_dispatch_message, flush_subscribers, register_async_publication,
+    sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test, spawn_background_publication,
 };
 use crate::api::registry::RegistryRecord;
 use crate::api::runtime::EventSanitizeFn;
@@ -45,6 +45,7 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
             subscribers: vec![subscriber.clone()],
             scope_stack: current_scope_stack(),
             publication_context: None,
+            lineage: None,
         })
         .unwrap();
     let (flush_tx, flush_rx) = mpsc::channel();
@@ -76,6 +77,7 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
             subscribers: vec![subscriber],
             scope_stack: current_scope_stack(),
             publication_context: None,
+            lineage: None,
         }])
         .unwrap();
     flush_rx
@@ -125,6 +127,7 @@ fn flush_does_not_wait_for_later_delivery() {
             subscribers: Vec::new(),
             scope_stack: current_scope_stack(),
             publication_context: None,
+            lineage: None,
         })
         .unwrap();
     barrier.sender.send(Vec::new()).unwrap();
@@ -136,6 +139,47 @@ fn flush_does_not_wait_for_later_delivery() {
         flush_result.is_ok(),
         "a delivery queued after a flush must not delay that flush"
     );
+}
+
+#[test]
+fn pending_flushes_do_not_acknowledge_out_of_order() {
+    let first_lineage = Arc::new(PublicationLineage::default());
+    let second_lineage = Arc::new(PublicationLineage::default());
+    let first_permit = PublicationPermit::new(Arc::clone(&first_lineage));
+    let second_permit = PublicationPermit::new(Arc::clone(&second_lineage));
+    let (first_tx, first_rx) = mpsc::channel();
+    let (second_tx, second_rx) = mpsc::channel();
+    let mut state = DispatcherLoopState {
+        active_lineages: Vec::new(),
+        pending_flushes: vec![
+            PendingFlush {
+                done: first_tx,
+                lineages: vec![first_lineage],
+            },
+            PendingFlush {
+                done: second_tx,
+                lineages: vec![second_lineage],
+            },
+        ],
+    };
+
+    drop(second_permit);
+    state.complete_ready_flushes();
+    assert!(matches!(
+        first_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    assert!(
+        matches!(second_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a ready later flush must not overtake an earlier pending flush"
+    );
+
+    drop(first_permit);
+    state.complete_ready_flushes();
+    first_rx.recv().expect("first flush should complete first");
+    second_rx
+        .recv()
+        .expect("second flush should complete afterward");
 }
 
 #[test]
@@ -192,6 +236,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
                         subscribers: vec![nested_subscriber.clone()],
                         scope_stack: nested_scope_stack.clone(),
                         publication_context: None,
+                        lineage: None,
                     }));
                     let publication =
                         register_async_publication().expect("nested publication barrier");
@@ -213,6 +258,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
                             subscribers: vec![nested_subscriber],
                             scope_stack: nested_scope_stack,
                             publication_context: None,
+                            lineage: None,
                         }])
                         .unwrap();
                     event
@@ -222,6 +268,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
             subscribers: vec![subscriber.clone()],
             scope_stack: current_scope_stack(),
             publication_context: None,
+            lineage: None,
         })
         .unwrap();
     started_rx
@@ -235,6 +282,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
             subscribers: vec![subscriber],
             scope_stack: current_scope_stack(),
             publication_context: None,
+            lineage: None,
         })
         .unwrap();
     release_tx.send(()).unwrap();
@@ -242,6 +290,131 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
     assert_eq!(
         *delivered.lock().unwrap_or_else(|error| error.into_inner()),
         ["outer", "nested-start", "nested-end", "later"]
+    );
+}
+
+#[test]
+fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    let sender = dispatcher_sender().expect("dispatcher sender");
+    let delivered = Arc::new(Mutex::new(Vec::new()));
+    let event = |uuid: &str, name: &str| {
+        serde_json::from_value(serde_json::json!({
+            "kind": "mark",
+            "atof_version": "0.1",
+            "uuid": uuid,
+            "timestamp": "2026-07-28T00:00:00Z",
+            "name": name
+        }))
+        .expect("valid event")
+    };
+
+    let grandchild_subscriber: EventSubscriberFn = {
+        let delivered = Arc::clone(&delivered);
+        Arc::new(move |event| {
+            delivered
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(event.name().to_string());
+        })
+    };
+    let child_subscriber: EventSubscriberFn = {
+        let delivered = Arc::clone(&delivered);
+        let grandchild_subscriber = grandchild_subscriber.clone();
+        Arc::new(move |event| {
+            delivered
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(event.name().to_string());
+            assert!(enqueue_dispatch_message(DispatcherMessage::Deliver {
+                event: Box::new(
+                    serde_json::from_value(serde_json::json!({
+                        "kind": "mark",
+                        "atof_version": "0.1",
+                        "uuid": "019c1df6-4a57-7000-8000-000000000010",
+                        "timestamp": "2026-07-28T00:00:00Z",
+                        "name": "grandchild"
+                    }))
+                    .expect("valid event"),
+                ),
+                transform: None,
+                sanitizers: Vec::new(),
+                subscribers: vec![grandchild_subscriber.clone()],
+                scope_stack: current_scope_stack(),
+                publication_context: None,
+                lineage: None,
+            }));
+        })
+    };
+    let outer_subscriber: EventSubscriberFn = {
+        let delivered = Arc::clone(&delivered);
+        let child_subscriber = child_subscriber.clone();
+        Arc::new(move |event| {
+            delivered
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(event.name().to_string());
+            assert!(enqueue_dispatch_message(DispatcherMessage::Deliver {
+                event: Box::new(
+                    serde_json::from_value(serde_json::json!({
+                        "kind": "mark",
+                        "atof_version": "0.1",
+                        "uuid": "019c1df6-4a57-7000-8000-000000000009",
+                        "timestamp": "2026-07-28T00:00:00Z",
+                        "name": "child"
+                    }))
+                    .expect("valid event"),
+                ),
+                transform: None,
+                sanitizers: Vec::new(),
+                subscribers: vec![child_subscriber.clone()],
+                scope_stack: current_scope_stack(),
+                publication_context: None,
+                lineage: None,
+            }));
+        })
+    };
+    let later_subscriber: EventSubscriberFn = {
+        let delivered = Arc::clone(&delivered);
+        Arc::new(move |event| {
+            delivered
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(event.name().to_string());
+        })
+    };
+
+    sender
+        .send(DispatcherMessage::Deliver {
+            event: Box::new(event("019c1df6-4a57-7000-8000-000000000008", "outer")),
+            transform: None,
+            sanitizers: Vec::new(),
+            subscribers: vec![outer_subscriber],
+            scope_stack: current_scope_stack(),
+            publication_context: None,
+            lineage: None,
+        })
+        .unwrap();
+    sender
+        .send(DispatcherMessage::Deliver {
+            event: Box::new(event("019c1df6-4a57-7000-8000-000000000011", "later")),
+            transform: None,
+            sanitizers: Vec::new(),
+            subscribers: vec![later_subscriber],
+            scope_stack: current_scope_stack(),
+            publication_context: None,
+            lineage: None,
+        })
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    assert_eq!(
+        *delivered.lock().unwrap_or_else(|error| error.into_inner()),
+        ["outer", "later", "child", "grandchild"],
+        "subscriber publications retain FIFO position and one flush waits for all descendants"
     );
 }
 
