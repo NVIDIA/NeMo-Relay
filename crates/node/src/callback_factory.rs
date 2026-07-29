@@ -9,7 +9,7 @@ use nemo_relay::api::runtime::ScopeStackHandle;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v2";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v3";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -57,18 +57,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   }
 
   function callPromise(fn, arg0, spread, next, resolve, reject, publication, scopeStack) {
-    const token = { active: publication, scopeStack };
+    const token = { publicationState: { active: publication }, scopeStack };
     const invoke = () => {
       Promise.resolve().then(() => (
         next === undefined
           ? (spread ? fn(...arg0) : fn(arg0))
           : (spread ? fn(...arg0, next) : fn(arg0, next))
       )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
-        token.active = false;
+        token.publicationState.active = false;
         token.scopeStack = null;
         resolve(value);
       }, (error) => {
-        token.active = false;
+        token.publicationState.active = false;
         token.scopeStack = null;
         let message = 'unknown error';
         try {
@@ -117,7 +117,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     },
 
     eventSanitizerCallbackActive() {
-      return eventSanitizerContext.getStore()?.active === true;
+      return eventSanitizerContext.getStore()?.publicationState.active === true;
     },
 
     callbackScopeStack() {
@@ -129,8 +129,12 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       if (current === undefined) {
         return { active: false };
       }
-      const token = { active: current.active, scopeStack };
-      return { active: true, value: eventSanitizerContext.run(token, fn) };
+      const token = { publicationState: current.publicationState, scopeStack };
+      try {
+        return { active: true, value: eventSanitizerContext.run(token, fn) };
+      } finally {
+        token.scopeStack = null;
+      }
     },
 
     setCallbackScopeStack(scopeStack) {

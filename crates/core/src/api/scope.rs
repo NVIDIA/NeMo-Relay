@@ -357,7 +357,8 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 ///   `None`, the current UTC time is used.
 ///
 /// # Returns
-/// A [`Result`] that is `Ok(())` after the event has been emitted.
+/// A [`Result`] that is `Ok(())` after the event has been queued for
+/// sanitization and publication.
 ///
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state

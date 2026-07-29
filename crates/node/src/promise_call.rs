@@ -58,7 +58,7 @@ struct CallArgs {
     spread: bool,
     next: Option<NextFn>,
     publication: bool,
-    /// Scope stack installed by Relay while queued publication middleware runs.
+    /// Scope stack captured when Relay registers or invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
     completion: CallCompletion,
 }

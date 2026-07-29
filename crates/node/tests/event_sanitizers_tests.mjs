@@ -314,6 +314,7 @@ describe('event sanitizer registries', () => {
 
   it('clears sanitizer re-entrancy in async descendants after settlement', async () => {
     const events = capture('node-event-sanitize-descendant-flush-sub');
+    const nestedStack = lib.createScopeStack();
     let secondSanitizerEntered;
     const secondEntered = new Promise((resolve) => {
       secondSanitizerEntered = resolve;
@@ -332,11 +333,13 @@ describe('event sanitizer registries', () => {
     });
     lib.registerMarkSanitizeGuardrail('node-event-descendant-flush', 0, async (event, fields) => {
       if (event.name === 'descendant-flush-origin') {
-        setTimeout(async () => {
-          await secondEntered;
-          lib.flushSubscribers().then(descendantFlush.resolve, descendantFlush.reject);
-          descendantFlushStarted();
-        }, 0);
+        lib.withScopeStack(nestedStack, () => {
+          setTimeout(async () => {
+            await secondEntered;
+            lib.flushSubscribers().then(descendantFlush.resolve, descendantFlush.reject);
+            descendantFlushStarted();
+          }, 0);
+        });
       } else if (event.name === 'descendant-flush-blocked') {
         secondSanitizerEntered();
         await releaseSecond;
