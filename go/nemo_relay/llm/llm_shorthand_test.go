@@ -6,7 +6,6 @@ package llm_test
 import (
 	"encoding/json"
 	"io"
-	"strings"
 	"testing"
 
 	"github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
@@ -121,7 +120,8 @@ func TestLlmShorthands(t *testing.T) {
 
 	stream, err := llmpkg.StreamExecute("llm_stream", makeRequest(),
 		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"` + strings.ReplaceAll("data: {\"chunk\": 1}\n\ndata: [DONE]\n\n", `"`, `\"`) + `"`), nil
+			encoded, err := json.Marshal("data: {\"chunk\": 1}\n\ndata: [DONE]\n\n")
+			return json.RawMessage(encoded), err
 		},
 		nil, nil,
 	)

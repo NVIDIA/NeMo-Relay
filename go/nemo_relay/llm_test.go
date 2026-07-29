@@ -1098,7 +1098,8 @@ func TestLlmStreamCallExecuteBasic(t *testing.T) {
 			chunks := `data: {"chunk": 1}` + "\n\n" +
 				`data: {"chunk": 2}` + "\n\n" +
 				`data: [DONE]` + "\n\n"
-			return json.RawMessage(`"` + strings.ReplaceAll(chunks, `"`, `\"`) + `"`), nil
+			encoded, err := json.Marshal(chunks)
+			return json.RawMessage(encoded), err
 		},
 		nil, nil,
 	)
@@ -1146,7 +1147,8 @@ func TestLlmStreamCallExecuteWithCollectorFinalizer(t *testing.T) {
 		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			chunks := `data: {"token": "hello"}` + "\n\n" +
 				`data: [DONE]` + "\n\n"
-			return json.RawMessage(`"` + strings.ReplaceAll(chunks, `"`, `\"`) + `"`), nil
+			encoded, err := json.Marshal(chunks)
+			return json.RawMessage(encoded), err
 		},
 		collector, finalizer,
 	)
@@ -1412,7 +1414,8 @@ func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {
 			chunks := `data: {"chunk": 1}` + "\n\n" +
 				`data: {"chunk": 2}` + "\n\n" +
 				`data: [DONE]` + "\n\n"
-			return json.RawMessage(`"` + strings.ReplaceAll(chunks, `"`, `\"`) + `"`), nil
+			encoded, err := json.Marshal(chunks)
+			return json.RawMessage(encoded), err
 		},
 		nil, func() string {
 			finalizerCalls++
