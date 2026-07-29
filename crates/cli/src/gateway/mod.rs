@@ -534,7 +534,10 @@ fn build_streaming_func(
             };
             let status = response.status();
             let response_headers = response_headers(response.headers());
-            if retry_aware && !status.is_success() {
+            // A provider error is not an SSE stream. Drain it before returning so the shared
+            // HTTP client can safely reuse the connection, and keep it out of the managed stream
+            // pipeline so a later request cannot inherit an unfinished provider stream.
+            if !status.is_success() {
                 let bytes = response
                     .bytes()
                     .await
