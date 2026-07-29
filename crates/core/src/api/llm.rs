@@ -691,11 +691,13 @@ fn emit_optimization_marks_with<F>(
 ///   the emitted start event. When `None`, the current UTC time is used.
 ///
 /// # Returns
-/// A [`Result`] containing the created [`LlmHandle`].
+/// A [`Result`] containing the created [`LlmHandle`] after its start-event
+/// snapshot has been submitted for queued publication.
 ///
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state
-/// cannot be read safely.
+/// cannot be read safely. Dispatcher submission failures are logged because
+/// observability publication is best effort.
 ///
 /// # Notes
 /// The runtime removes standard credential headers (`authorization`,
@@ -892,9 +894,10 @@ async fn build_llm_end_payload(
 /// sanitization and publication.
 ///
 /// # Errors
-/// Returns an error when the runtime owner check fails, internal state cannot be
-/// read safely, or the event cannot be queued. Sanitizer and response-codec
-/// errors discovered during queued publication are logged and fail open.
+/// Returns an error when the runtime owner check fails or internal state cannot
+/// be read safely. Dispatcher submission failures are logged because
+/// observability publication is best effort. Sanitizer and response-codec errors
+/// discovered during queued publication are also logged and fail open.
 ///
 /// # Notes
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
