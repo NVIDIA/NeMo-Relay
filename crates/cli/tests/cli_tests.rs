@@ -3259,7 +3259,7 @@ fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
 }
 
 #[test]
-fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
+fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     let cwd = temp.path().join("workdir");
@@ -3301,6 +3301,23 @@ fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
         "version = 1\ncomponents = []\n",
     )
     .unwrap();
+    let invalid_project_plugins = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor"])
+        .output()
+        .unwrap();
+    assert!(!invalid_project_plugins.status.success());
+    let stdout = String::from_utf8_lossy(&invalid_project_plugins.stdout);
+    assert!(stdout.contains("invalid plugin TOML"));
+    assert!(stdout.contains(&cwd.join(".nemo-relay/plugins.toml").display().to_string()));
+
+    std::fs::write(
+        cwd.join(".nemo-relay/plugins.toml"),
+        "version = 1\ncomponents = []\n",
+    )
+    .unwrap();
     let valid_config = Command::new(gateway_bin())
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", &xdg)
@@ -3310,10 +3327,21 @@ fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
         .unwrap();
     let report: serde_json::Value = serde_json::from_slice(&valid_config.stdout).unwrap();
     assert_eq!(report["configuration"]["resolution"]["status"], "pass");
-    assert_eq!(
-        report["configuration"]["plugin_configs"][0]["path"],
-        config_dir.join("plugins.toml").display().to_string()
-    );
+    let plugin_configs = report["configuration"]["plugin_configs"]
+        .as_array()
+        .unwrap();
+    for path in [
+        config_dir.join("plugins.toml"),
+        cwd.join(".nemo-relay/plugins.toml").canonicalize().unwrap(),
+    ] {
+        assert!(
+            plugin_configs
+                .iter()
+                .any(|config| config["path"] == path.display().to_string()),
+            "doctor should report layered plugin source {}",
+            path.display()
+        );
+    }
 }
 
 #[test]

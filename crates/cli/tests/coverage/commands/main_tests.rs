@@ -17,7 +17,7 @@ use crate::commands::plugins::{
 use crate::commands::root::AgentArg;
 
 #[test]
-fn plugins_edit_inherits_explicit_plugin_target_unless_scope_is_selected() {
+fn plugins_edit_treats_explicit_target_as_the_user_layer() {
     let config = PathBuf::from("/managed/config.toml");
     let server = crate::server::GatewayOverrides {
         config: Some(config),
@@ -42,6 +42,18 @@ fn plugins_edit_inherits_explicit_plugin_target_unless_scope_is_selected() {
         Some(PathBuf::from("/override/plugins.toml"))
     );
 
+    let user = PluginsEditCommand {
+        scope: PluginsScopeArgs {
+            user: true,
+            ..PluginsScopeArgs::default()
+        },
+    };
+    let request = plugins::edit_request(user, &server);
+    assert_eq!(
+        request.explicit_path,
+        Some(PathBuf::from("/override/plugins.toml"))
+    );
+
     let project = PluginsEditCommand {
         scope: PluginsScopeArgs {
             project: true,
@@ -49,6 +61,15 @@ fn plugins_edit_inherits_explicit_plugin_target_unless_scope_is_selected() {
         },
     };
     let request = plugins::edit_request(project, &server);
+    assert_eq!(request.explicit_path, None);
+
+    let global = PluginsEditCommand {
+        scope: PluginsScopeArgs {
+            global: true,
+            ..PluginsScopeArgs::default()
+        },
+    };
+    let request = plugins::edit_request(global, &server);
     assert_eq!(request.explicit_path, None);
 }
 

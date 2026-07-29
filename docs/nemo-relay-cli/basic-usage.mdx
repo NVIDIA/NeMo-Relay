@@ -165,6 +165,12 @@ plugin configuration. When the top-level command receives
 `--config path/to/config.toml`, the plugin editor instead uses the sibling
 `path/to/plugins.toml`, matching runtime selection.
 
+Plugin files use a separate precedence order from the base `config.toml`:
+explicit-or-user, then the nearest project file, then the system file. An
+explicit `--plugin-config-path`, or the sibling selected by `--config`,
+replaces the ambient XDG user plugin file. It does not suppress project or
+system plugin configuration.
+
 Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with the resume command printed by Relay.
@@ -196,6 +202,10 @@ editor; it does not change runtime discovery, layering, or merge precedence.
 
 Agent command setup remains under `nemo-relay config`; plugin components remain
 under `nemo-relay plugins edit`.
+
+When an explicit plugin file is selected, it becomes the editor's user target:
+the default editor and `--user` open that file. Use `--project` to edit the
+nearest project `plugins.toml`, or `--global` to edit the system file.
 
 Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml`.
 Global plugin configuration is system-readable (`0644` on Unix), so do not

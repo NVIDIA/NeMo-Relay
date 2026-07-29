@@ -56,11 +56,11 @@ Use `type = "file"` with a JSON catalog path or `type = "inline"` with the
 catalog in `plugins.toml`. Relay checks sources and catalog entries in listed
 order, and it uses the first entry that matches the provider and model.
 
-When Relay merges system, project, and user configuration files, it prepends
-higher-priority `sources` instead of replacing lower-priority sources. The
-effective order is user, project, then system. This lets a narrower user catalog
-override a project or enterprise catalog while preserving those catalogs as
-fallbacks.
+When Relay merges explicit-or-user, project, and system configuration files, it
+prepends higher-priority `sources` instead of replacing lower-priority sources.
+The effective order is system, project, then explicit-or-user. This lets an
+enterprise catalog override narrower catalogs while preserving those catalogs
+as fallbacks.
 
 ## Manage Catalog Sources with the CLI
 

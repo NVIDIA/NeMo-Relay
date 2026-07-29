@@ -47,6 +47,57 @@ fn explicit_plugin_config_path_resolves_runtime_target() {
     assert_eq!(explicit_plugin_config_path(None, None), None);
 }
 
+#[test]
+fn plugin_config_paths_layer_explicit_or_user_then_project_then_system() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let child = project.join("nested");
+    let xdg = temp.path().join("xdg");
+    let project_plugins = project.join(".nemo-relay/plugins.toml");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
+    std::fs::write(&project_plugins, "version = 1\n").unwrap();
+    let discovered_project_plugins = project_plugins.canonicalize().unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&child, &xdg);
+    let system_plugins = PathBuf::from("/etc/nemo-relay/plugins.toml");
+
+    assert_eq!(
+        plugin_config_paths_scoped(None, None, false),
+        vec![
+            xdg.join("nemo-relay/plugins.toml"),
+            discovered_project_plugins.clone(),
+            system_plugins.clone(),
+        ]
+    );
+
+    let explicit_config = temp.path().join("managed/config.toml");
+    let explicit_plugins = explicit_config.parent().unwrap().join("plugins.toml");
+    assert_eq!(
+        plugin_config_paths_scoped(Some(&explicit_config), None, false),
+        vec![
+            explicit_plugins.clone(),
+            discovered_project_plugins.clone(),
+            system_plugins.clone(),
+        ]
+    );
+
+    let override_plugins = temp.path().join("override/plugins.toml");
+    assert_eq!(
+        plugin_config_paths_scoped(Some(&explicit_config), Some(&override_plugins), false),
+        vec![
+            override_plugins.clone(),
+            discovered_project_plugins,
+            system_plugins.clone(),
+        ]
+    );
+    assert_eq!(
+        plugin_config_paths_scoped(Some(&explicit_config), None, true),
+        vec![explicit_plugins, system_plugins],
+        "user-only mode suppresses project discovery but retains the system layer"
+    );
+}
+
 struct PluginConfigDiscoveryScope {
     _cwd_guard: crate::test_support::CwdTestScope,
     _guard: MutexGuard<'static, ()>,
@@ -242,7 +293,7 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
 }
 
 #[test]
-fn effective_plugin_toml_sources_scope_to_an_explicit_config_sibling() {
+fn effective_plugin_toml_sources_replace_user_with_explicit_and_include_project() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let xdg = temp.path().join("xdg");
@@ -257,11 +308,18 @@ fn effective_plugin_toml_sources_scope_to_an_explicit_config_sibling() {
     std::fs::write(&explicit_config, "").unwrap();
     std::fs::write(&explicit_plugins, "version = 1\ncomponents = []\n").unwrap();
     std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
-    std::fs::write(project.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
+    let project_plugins = project.join(".nemo-relay/plugins.toml");
+    std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
+    let project_plugins = project_plugins.canonicalize().unwrap();
+    let user_plugins = xdg.join("nemo-relay/plugins.toml");
+    std::fs::create_dir_all(user_plugins.parent().unwrap()).unwrap();
+    std::fs::write(&user_plugins, "components = [\n").unwrap();
 
+    let mut expected = vec![explicit_plugins, project_plugins];
+    expected.sort();
     assert_eq!(
         effective_plugin_toml_sources(Some(&explicit_config), None).unwrap(),
-        vec![explicit_plugins]
+        expected
     );
 }
 
@@ -774,6 +832,46 @@ fn absent_optional_plugin_config_is_ignored() {
 
 #[cfg(unix)]
 #[test]
+fn plugin_config_loader_deduplicates_aliases_at_highest_precedence() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let physical = temp.path().join("system-plugins.toml");
+    let alias = temp.path().join("explicit-plugins.toml");
+    std::fs::write(
+        &physical,
+        r#"
+version = 1
+
+[[components]]
+kind = "pricing"
+enabled = true
+
+[[components.config.sources]]
+type = "file"
+path = "/etc/nemo-relay/pricing.json"
+"#,
+    )
+    .unwrap();
+    symlink(&physical, &alias).unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![alias, physical.clone()])
+        .unwrap()
+        .expect("the physical file exists");
+
+    assert_eq!(resolved.contributing_sources, vec![physical]);
+    assert_eq!(
+        resolved.value.unwrap()["components"][0]["config"]["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "the aliased file must not duplicate list entries"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn unreadable_config_errors_include_the_source_path() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -938,7 +1036,10 @@ fn plugins_toml_path_resolution_tracks_config_scope() {
     let explicit = temp.path().join("custom-config.toml");
     assert_eq!(
         plugin_config_paths(Some(&explicit), None),
-        vec![temp.path().join("plugins.toml")]
+        vec![
+            temp.path().join("plugins.toml"),
+            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+        ]
     );
 
     let project = temp.path().join("workspace");
@@ -957,9 +1058,9 @@ fn plugins_toml_path_resolution_tracks_config_scope() {
     assert_eq!(
         implicit_plugin_config_paths(Some(&nested), Some(user_config.clone())),
         vec![
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
-            project.join(".nemo-relay/plugins.toml"),
             user_config.join("plugins.toml"),
+            project.join(".nemo-relay/plugins.toml"),
+            PathBuf::from("/etc/nemo-relay/plugins.toml"),
         ]
     );
 
@@ -995,8 +1096,8 @@ fn persistent_user_scope_excludes_project_gateway_and_plugin_layers() {
     assert_eq!(
         plugin_config_paths(None, None),
         vec![
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
             xdg.join("nemo-relay/plugins.toml"),
+            PathBuf::from("/etc/nemo-relay/plugins.toml"),
         ]
     );
 }

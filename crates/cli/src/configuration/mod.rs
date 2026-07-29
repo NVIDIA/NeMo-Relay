@@ -1074,9 +1074,8 @@ fn config_paths_scoped(explicit: Option<&PathBuf>, user_only: bool) -> Vec<PathB
     paths
 }
 
-// Returns the plugin config search path. An explicit gateway config path scopes plugins.toml to the
-// same directory so `--config path/to/config.toml` can be extended by `path/to/plugins.toml` without
-// reading unrelated implicit project/user/global plugin files.
+// Returns the plugin config search path from lowest to highest precedence. An explicit plugin
+// target replaces the ambient user file; project discovery and the system layer still apply.
 fn plugin_config_paths(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1089,21 +1088,24 @@ fn plugin_config_paths_scoped(
     plugin_config_path: Option<&PathBuf>,
     user_only: bool,
 ) -> Vec<PathBuf> {
-    if plugin_config_path.is_some() || explicit.is_some() {
-        return explicit_plugin_config_path(explicit, plugin_config_path)
-            .into_iter()
-            .collect();
+    let cwd = if user_only {
+        None
+    } else {
+        std::env::current_dir().ok()
+    };
+    if let Some(path) = explicit_plugin_config_path(explicit, plugin_config_path) {
+        let mut paths = vec![path];
+        paths.extend(implicit_plugin_config_paths(cwd.as_deref(), None));
+        return paths;
     }
-    if user_only {
-        return implicit_plugin_config_paths(None, user_config_dir());
-    }
-    implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
+    implicit_plugin_config_paths(cwd.as_deref(), user_config_dir())
 }
 
-/// Resolves the single plugin document selected by explicit gateway configuration.
+/// Resolves the low-precedence plugin document selected by explicit gateway configuration.
 ///
-/// An explicit plugin path wins. Otherwise an explicit `config.toml` selects its sibling
-/// `plugins.toml`, matching runtime loading. `None` means normal layered discovery applies.
+/// An explicit plugin path wins over the ambient user file. Otherwise an explicit `config.toml`
+/// selects its sibling `plugins.toml`, matching runtime loading. `None` means normal user-layer
+/// discovery applies.
 pub(crate) fn explicit_plugin_config_path(
     config_path: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1294,8 +1296,8 @@ fn load_plugin_toml_config_scoped(
 
 /// Returns the plugin configuration paths selected by the same rules as runtime resolution.
 ///
-/// Diagnostics use this so an explicit gateway configuration reports only its sibling
-/// `plugins.toml`, rather than unrelated discovered plugin configuration.
+/// Diagnostics use this so they report the same explicit-or-user, project, and system layers as
+/// runtime resolution.
 pub(crate) fn diagnostic_plugin_config_paths(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1322,7 +1324,7 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let paths = paths.into_iter().collect::<Vec<_>>();
+    let paths = deduplicate_plugin_config_paths(paths);
     let mut dynamic_plugins = Vec::new();
     let mut dynamic_plugin_policy = DynamicPluginHostPolicy::default();
     let mut seen_plugin_ids = HashSet::new();
@@ -1359,7 +1361,7 @@ where
     }
 
     // Delegate merged runtime plugin config to the shared core primitive after dynamic refs have
-    // been validated independently. File precedence stays unchanged for the generic runtime path.
+    // been validated independently. Documents remain ordered from lowest to highest precedence.
     let resolved = merge_plugin_config_documents(runtime_documents).map_err(|err| match err {
         PluginError::InvalidConfig(message) => CliError::Config(message),
         other => CliError::Config(other.to_string()),
@@ -1385,6 +1387,24 @@ where
             contributing_sources,
         })),
     }
+}
+
+/// Removes physical duplicates while preserving the highest-precedence path.
+fn deduplicate_plugin_config_paths<I>(paths: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let paths = paths.into_iter().collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(paths.len());
+    for path in paths.into_iter().rev() {
+        let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if seen.insert(identity) {
+            unique.push(path);
+        }
+    }
+    unique.reverse();
+    unique
 }
 
 fn apply_plugin_toml_config(resolved: &mut ResolvedConfig, plugin_toml: Option<PluginTomlConfig>) {
