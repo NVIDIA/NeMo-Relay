@@ -441,6 +441,72 @@ class TestToolIntercepts:
 
 
 class TestToolInterceptsAsync:
+    async def test_cancelling_execute_cancels_pending_request_intercept(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+        provider_calls: list[dict] = []
+
+        async def request_intercept(_name, args):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return args
+
+        def provider(args):
+            provider_calls.append(args)
+            return args
+
+        intercepts.register_tool_request("py_tool_cancel_request", 1, False, request_intercept)
+        try:
+            execution = asyncio.ensure_future(tools.execute("cancel_request_tool", {}, provider))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+        finally:
+            intercepts.deregister_tool_request("py_tool_cancel_request")
+
+        assert provider_calls == []
+
+    async def test_cancelling_execute_cancels_pending_execution_intercept(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        cancelled = asyncio.Event()
+        provider_calls: list[dict] = []
+
+        async def middleware(_name, args, next):
+            started.set()
+            try:
+                await release.wait()
+                return ToolExecutionInterceptOutcome(await next(args))
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        def provider(args):
+            provider_calls.append(args)
+            return args
+
+        intercepts.register_tool_execution("py_tool_cancel_intercept", 1, middleware)
+        try:
+            execution = asyncio.ensure_future(tools.execute("cancel_tool", {"ok": True}, provider))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+            release.set()
+            await asyncio.sleep(0)
+        finally:
+            release.set()
+            intercepts.deregister_tool_execution("py_tool_cancel_intercept")
+
+        assert provider_calls == []
+
     async def test_sync_middleware_preserves_async_caller_context(self):
         request_id = contextvars.ContextVar("tool_middleware_request_id", default="registration")
         observed: list[tuple[str, str]] = []

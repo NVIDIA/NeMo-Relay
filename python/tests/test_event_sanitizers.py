@@ -147,6 +147,42 @@ async def test_async_mark_sanitizer_uses_cross_thread_emitter_context(capture_ev
     assert observed == ["emission", "emission"]
 
 
+async def test_sanitizer_descendants_lose_reentrant_flush_after_settlement(capture_events):
+    blocker_entered = asyncio.Event()
+    release_blocker = asyncio.Event()
+    descendant_finished = asyncio.Event()
+    descendant_task: asyncio.Task[None] | None = None
+
+    async def descendant() -> None:
+        await blocker_entered.wait()
+        await subscribers.flush_async()
+        descendant_finished.set()
+
+    async def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        nonlocal descendant_task
+        if event.name == "descendant-origin":
+            descendant_task = asyncio.create_task(descendant())
+        elif event.name == "descendant-blocked":
+            blocker_entered.set()
+            await release_blocker.wait()
+        return fields
+
+    guardrails.register_mark_sanitize("python-descendant-flush-liveness", 0, sanitize)
+    try:
+        scope.event("descendant-origin")
+        scope.event("descendant-blocked")
+        await asyncio.wait_for(blocker_entered.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert not descendant_finished.is_set()
+        release_blocker.set()
+        await asyncio.wait_for(subscribers.flush_async(), timeout=1)
+        assert descendant_task is not None
+        await asyncio.wait_for(descendant_task, timeout=1)
+    finally:
+        release_blocker.set()
+        guardrails.deregister_mark_sanitize("python-descendant-flush-liveness")
+
+
 def test_sync_mark_sanitizer_uses_emitter_context(capture_events):
     request_id = contextvars.ContextVar("request_id", default="registration")
     observed: list[str] = []

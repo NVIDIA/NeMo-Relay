@@ -55,8 +55,78 @@ use crate::py_types::{
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
 
+struct CancellablePyFuture {
+    inner: PyValueFuture,
+    task: Option<Py<PyAny>>,
+    task_locals: TaskLocals,
+}
+
+impl Future for CancellablePyFuture {
+    type Output = PyResult<Py<PyAny>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match this.inner.as_mut().poll(cx) {
+            Poll::Ready(result) => {
+                this.task.take();
+                Poll::Ready(result)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for CancellablePyFuture {
+    fn drop(&mut self) {
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        Python::attach(|py| {
+            let cancel = task.bind(py).getattr("cancel");
+            if let Ok(cancel) = cancel {
+                let _ = self
+                    .task_locals
+                    .event_loop(py)
+                    .call_method1("call_soon_threadsafe", (cancel,));
+            }
+        });
+    }
+}
+
 tokio::task_local! {
     pub(crate) static PY_AWAITABLES_ALLOWED: bool;
+}
+
+fn schedule_python_awaitable(
+    py: Python<'_>,
+    awaitable: &Bound<'_, PyAny>,
+    task_locals: &TaskLocals,
+) -> PyResult<Py<PyAny>> {
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("loop", task_locals.event_loop(py))?;
+    let ensure_future = py.import("asyncio")?.getattr("ensure_future")?;
+    task_locals
+        .context(py)
+        .call_method("run", (ensure_future, awaitable), Some(&kwargs))
+        .map(Bound::unbind)
+}
+
+fn cancellable_future_with_locals(
+    py: Python<'_>,
+    result: Py<PyAny>,
+    task_locals: &TaskLocals,
+) -> FlowResult<PyValueFuture> {
+    let task = schedule_python_awaitable(py, result.bind(py), task_locals)
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let task_for_future = task.clone_ref(py);
+    let inner =
+        pyo3_async_runtimes::into_future_with_locals(task_locals, task_for_future.into_bound(py))
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+    Ok(Box::pin(CancellablePyFuture {
+        inner: Box::pin(inner),
+        task: Some(task),
+        task_locals: task_locals.clone(),
+    }))
 }
 
 fn reject_awaitable_from_sync_caller(result: &Bound<'_, PyAny>) -> FlowResult<()> {
@@ -117,10 +187,7 @@ fn split_json_or_future_with_locals(
     if bound.getattr("__await__").is_ok() {
         reject_awaitable_from_sync_caller(bound)?;
         let future: PyValueFuture = match task_locals {
-            Some(locals) => Box::pin(
-                pyo3_async_runtimes::into_future_with_locals(locals, result.into_bound(py))
-                    .map_err(|error| FlowError::Internal(error.to_string()))?,
-            ),
+            Some(locals) => cancellable_future_with_locals(py, result, locals)?,
             None => Box::pin(
                 pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
                     .map_err(|error| FlowError::Internal(error.to_string()))?,
@@ -160,10 +227,7 @@ fn split_py_object_or_future_with_locals(
     if bound.getattr("__await__").is_ok() {
         reject_awaitable_from_sync_caller(bound)?;
         let future: PyValueFuture = match task_locals {
-            Some(locals) => Box::pin(
-                pyo3_async_runtimes::into_future_with_locals(locals, result.into_bound(py))
-                    .map_err(|e| FlowError::Internal(e.to_string()))?,
-            ),
+            Some(locals) => cancellable_future_with_locals(py, result, locals)?,
             None => {
                 let invocation_context = invocation_context.map(|context| context.clone().unbind());
                 Box::pin(async move {
@@ -322,15 +386,7 @@ fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyA
 fn schedule_async_iter_task(coro: Py<PyAny>) -> FlowResult<Py<PyAny>> {
     Python::attach(|py| {
         pyo3_async_runtimes::tokio::get_current_locals(py)
-            .and_then(|locals| {
-                let kwargs = PyDict::new(py);
-                kwargs.set_item("loop", locals.event_loop(py))?;
-                let ensure_future = py.import("asyncio")?.getattr("ensure_future")?;
-                locals
-                    .context(py)
-                    .call_method("run", (ensure_future, coro), Some(&kwargs))
-            })
-            .map(|task| task.unbind())
+            .and_then(|locals| schedule_python_awaitable(py, coro.bind(py), &locals))
             .map_err(|e| FlowError::Internal(e.to_string()))
     })
 }
