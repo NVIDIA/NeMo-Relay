@@ -5,6 +5,8 @@
 
 import asyncio
 import contextvars
+import gc
+import warnings
 from collections import UserDict, UserList
 from dataclasses import dataclass
 from typing import cast
@@ -441,6 +443,64 @@ class TestToolIntercepts:
 
 
 class TestToolInterceptsAsync:
+    def test_loop_shutdown_cancels_pending_middleware_without_unraisable_errors(self, capsys):
+        async def request_intercept(_name, args):
+            await asyncio.Event().wait()
+            return args
+
+        async def scenario():
+            execution = asyncio.ensure_future(tools.execute("shutdown_tool", {}, lambda args: args))
+            await asyncio.sleep(0.01)
+            assert not execution.done()
+
+        intercepts.register_tool_request("py_tool_shutdown_request", 1, False, request_intercept)
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                asyncio.run(scenario())
+                gc.collect()
+        finally:
+            intercepts.deregister_tool_request("py_tool_shutdown_request")
+
+        diagnostics = capsys.readouterr().err + "\n".join(str(item.message) for item in caught)
+        assert "Event loop is closed" not in diagnostics
+        assert "Task was destroyed but it is pending" not in diagnostics
+        assert "was never awaited" not in diagnostics
+
+    async def test_cancelling_conditional_guardrail_closes_guardrail_scope(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+        events: list[Event] = []
+
+        async def conditional(_name, _args):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        guardrails.register_tool_conditional_execution("py_tool_cancel_conditional", 1, conditional)
+        subscribers.register("py_tool_cancel_conditional_events", events.append)
+        try:
+            execution = asyncio.ensure_future(tools.execute("cancel_conditional_tool", {}, lambda x: x))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+            await subscribers.flush_async()
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_tool_cancel_conditional")
+            subscribers.deregister("py_tool_cancel_conditional_events")
+
+        guardrail_lifecycle = [
+            event.scope_category
+            for event in events
+            if isinstance(event, ScopeEvent) and event.name == "py_tool_cancel_conditional"
+        ]
+        assert guardrail_lifecycle == ["start", "end"]
+
     async def test_cancelling_execute_cancels_pending_request_intercept(self):
         started = asyncio.Event()
         cancelled = asyncio.Event()
@@ -477,6 +537,7 @@ class TestToolInterceptsAsync:
         release = asyncio.Event()
         cancelled = asyncio.Event()
         provider_calls: list[dict] = []
+        events: list[Event] = []
 
         async def middleware(_name, args, next):
             started.set()
@@ -492,6 +553,7 @@ class TestToolInterceptsAsync:
             return args
 
         intercepts.register_tool_execution("py_tool_cancel_intercept", 1, middleware)
+        subscribers.register("py_tool_cancel_events", events.append)
         try:
             execution = asyncio.ensure_future(tools.execute("cancel_tool", {"ok": True}, provider))
             await asyncio.wait_for(started.wait(), timeout=1)
@@ -499,13 +561,17 @@ class TestToolInterceptsAsync:
             with pytest.raises(asyncio.CancelledError):
                 await execution
             await asyncio.wait_for(cancelled.wait(), timeout=1)
-            release.set()
-            await asyncio.sleep(0)
+            await subscribers.flush_async()
         finally:
             release.set()
             intercepts.deregister_tool_execution("py_tool_cancel_intercept")
+            subscribers.deregister("py_tool_cancel_events")
 
         assert provider_calls == []
+        lifecycle = [
+            event.scope_category for event in events if isinstance(event, ScopeEvent) and event.name == "cancel_tool"
+        ]
+        assert lifecycle == ["start", "end"]
 
     async def test_sync_middleware_preserves_async_caller_context(self):
         request_id = contextvars.ContextVar("tool_middleware_request_id", default="registration")

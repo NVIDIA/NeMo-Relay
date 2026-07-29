@@ -562,7 +562,7 @@ async fn tool_call_end_with_pending_marks(
     Ok(())
 }
 
-async fn emit_tool_end_without_output(
+fn emit_tool_end_without_output(
     handle: &ToolHandle,
     metadata: Option<Json>,
     lifecycle_subscribers: &[EventSubscriberFn],
@@ -577,6 +577,40 @@ async fn emit_tool_end_without_output(
     };
     queue_sanitized_event(event, lifecycle_subscribers);
     Ok(())
+}
+
+struct ManagedToolCompletion {
+    handle: Option<ToolHandle>,
+    metadata: Option<Json>,
+    subscribers: Vec<EventSubscriberFn>,
+}
+
+impl ManagedToolCompletion {
+    fn new(handle: &ToolHandle, metadata: Option<Json>, subscribers: &[EventSubscriberFn]) -> Self {
+        Self {
+            handle: Some(handle.clone()),
+            metadata,
+            subscribers: subscribers.to_vec(),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.handle = None;
+    }
+}
+
+impl Drop for ManagedToolCompletion {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let metadata = metadata_with_otel_status(
+            self.metadata.take(),
+            "ERROR",
+            Some("tool execution cancelled".into()),
+        );
+        let _ = emit_tool_end_without_output(&handle, metadata, &self.subscribers);
+    }
 }
 
 /// Execute a tool call through the managed middleware pipeline.
@@ -708,6 +742,8 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         state.tool_build_execution_chain(&name, func, &scope_locals)
     };
 
+    let mut completion =
+        ManagedToolCompletion::new(&handle, metadata.clone(), &lifecycle_subscribers);
     match with_active_event_uuid(handle.uuid, execution(intercepted_args)).await {
         Ok(outcome) => {
             let ToolExecutionInterceptOutcome {
@@ -726,13 +762,14 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
                 Some(&lifecycle_subscribers),
             )
             .await?;
+            completion.disarm();
             Ok(result)
         }
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ =
-                emit_tool_end_without_output(&handle, end_metadata, &lifecycle_subscribers).await;
+            let _ = emit_tool_end_without_output(&handle, end_metadata, &lifecycle_subscribers);
+            completion.disarm();
             Err(error)
         }
     }

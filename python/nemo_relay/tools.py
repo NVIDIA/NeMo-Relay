@@ -188,7 +188,13 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
     """
     ensure_scope_stack()
     return _native_tool_call_execute(
-        name, args, func, handle=handle, attributes=attributes, data=data, metadata=metadata
+        name,
+        args,
+        func,
+        handle=handle,
+        attributes=attributes,
+        data=data,
+        metadata=metadata,
     )
 
 

@@ -315,6 +315,23 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
         .call_method1("set_event_loop", (&event_loop,))
         .unwrap();
     let result = catch_unwind(AssertUnwindSafe(|| f(event_loop.clone().into_any())));
+    let drain = PyModule::from_code(
+        py,
+        &CString::new(
+            "import asyncio\nasync def drain(loop):\n    current = asyncio.current_task(loop)\n    pending = asyncio.all_tasks(loop) - {current}\n    for task in pending:\n        task.cancel()\n    if pending:\n        await asyncio.gather(*pending, return_exceptions=True)\n",
+        )
+        .unwrap(),
+        &CString::new("drain_test_loop.py").unwrap(),
+        &CString::new("drain_test_loop").unwrap(),
+    )
+    .unwrap()
+    .getattr("drain")
+    .unwrap()
+    .call1((&event_loop,))
+    .unwrap();
+    event_loop
+        .call_method1("run_until_complete", (drain,))
+        .unwrap();
     asyncio
         .call_method1("set_event_loop", (py.None(),))
         .unwrap();

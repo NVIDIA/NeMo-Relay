@@ -419,18 +419,6 @@ async def coro_non_json():
         let coro_cancel_fn: Py<PyAny> = module.getattr("coro_cancel").unwrap().unbind();
         let coro_non_json_fn: Py<PyAny> = module.getattr("coro_non_json").unwrap().unbind();
 
-        assert!(
-            next_async_iter_coro(&Arc::new(stop_iter_cls.call0(py).unwrap()))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            next_async_iter_coro(&Arc::new(error_iter_cls.call0(py).unwrap()))
-                .unwrap_err()
-                .to_string()
-                .contains("next boom")
-        );
-
         let value_payload = crate::convert::json_to_py(py, &json!({"x": 1})).unwrap();
         let dropped_payload = crate::convert::json_to_py(py, &json!({"x": 2})).unwrap();
         let no_loop_payload = crate::convert::json_to_py(py, &json!({"x": 3})).unwrap();
@@ -439,6 +427,26 @@ async def coro_non_json():
         with_event_loop(py, |event_loop| {
             let _runtime = tokio::runtime::Runtime::new().unwrap();
             pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
+                let stop = next_async_iter_coro(&Arc::new(Python::attach(|py| {
+                    stop_iter_cls.call0(py).unwrap()
+                })))
+                .unwrap()
+                .unwrap();
+                assert!(await_async_iter_value(stop).await.unwrap().is_none());
+
+                let error = next_async_iter_coro(&Arc::new(Python::attach(|py| {
+                    error_iter_cls.call0(py).unwrap()
+                })))
+                .unwrap()
+                .unwrap();
+                assert!(
+                    await_async_iter_value(error)
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("next boom")
+                );
+
                 let value =
                     await_async_iter_value(Python::attach(|py| coro_value_fn.call0(py).unwrap()))
                         .await

@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::OsString;
+use std::ffi::{CString, OsString};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use pyo3::Python;
+use pyo3::prelude::*;
+use pyo3::types::PyModule;
 
 const BINDING_KIND_ENV: &str = "NEMO_RELAY_BINDING_KIND";
 const RUNTIME_OWNER_ENV: &str = "NEMO_RELAY_RUNTIME_OWNER";
@@ -65,6 +66,38 @@ pub(crate) fn init_python_test_locked(lock: MutexGuard<'static, ()>) -> PythonTe
         std::env::set_var(XDG_CONFIG_HOME_ENV, isolated_config_home);
     }
     Python::initialize();
+    Python::attach(|py| {
+        let sys_modules = py
+            .import("sys")
+            .expect("import sys")
+            .getattr("modules")
+            .expect("sys.modules");
+        if sys_modules
+            .contains("nemo_relay._event_sanitizer_context")
+            .expect("inspect test modules")
+        {
+            return;
+        }
+        let package = PyModule::new(py, "nemo_relay").expect("create test package");
+        package
+            .setattr("__path__", Vec::<String>::new())
+            .expect("mark test package");
+        sys_modules
+            .set_item("nemo_relay", package)
+            .expect("register test package");
+        let source = CString::new(include_str!(
+            "../../../python/nemo_relay/_event_sanitizer_context.py"
+        ))
+        .expect("helper source");
+        let filename = CString::new("_event_sanitizer_context.py").expect("helper filename");
+        let module_name =
+            CString::new("nemo_relay._event_sanitizer_context").expect("helper module name");
+        let helper = PyModule::from_code(py, &source, &filename, &module_name)
+            .expect("load async callback helpers");
+        sys_modules
+            .set_item("nemo_relay._event_sanitizer_context", helper)
+            .expect("register async callback helpers");
+    });
     PythonTestGuard {
         _lock: lock,
         binding_kind,

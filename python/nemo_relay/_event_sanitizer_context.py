@@ -44,6 +44,30 @@ async def await_result(result: Awaitable[Any]) -> Any:
     return await result
 
 
+def loop_affine(callback: Callable[..., Any], *, sanitizer: bool = False) -> Callable[..., Awaitable[Any]]:
+    """Defer a callback's synchronous prelude to the awaiting event-loop task."""
+
+    async def wrapped(*args: Any) -> Any:
+        result = invoke(callback, *args) if sanitizer else callback(*args)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    return wrapped
+
+
+async def async_iter_next(iterator: Any) -> Any:
+    """Invoke and await ``__anext__`` on the current event-loop thread."""
+    return await iterator.__anext__()
+
+
+async def async_iter_close(iterator: Any) -> None:
+    """Invoke and await ``aclose`` on the current event-loop thread when present."""
+    close = getattr(iterator, "aclose", None)
+    if close is not None:
+        await close()
+
+
 def invoke(callback: Callable[..., Any], *args: Any) -> Any:
     """Invoke a sanitizer while marking its sync and async execution contexts."""
     state = _ACTIVE.get()

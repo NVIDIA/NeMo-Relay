@@ -12,6 +12,7 @@ from typing import NoReturn, cast
 import pytest
 
 from nemo_relay import (
+    Event,
     LLMAttributes,
     LLMHandle,
     LLMRequest,
@@ -609,6 +610,7 @@ class TestLLMInterceptsAsync:
         release = asyncio.Event()
         cancelled = asyncio.Event()
         provider_calls: list[LLMRequest] = []
+        events: list[Event] = []
 
         async def middleware(_name, request, next):
             started.set()
@@ -624,6 +626,7 @@ class TestLLMInterceptsAsync:
             return {"ok": True}
 
         intercepts.register_llm_execution("py_llm_cancel_intercept", 1, middleware)
+        subscribers.register("py_llm_cancel_events", events.append)
         try:
             execution = asyncio.ensure_future(llm.execute("cancel_llm", make_request(), provider))
             await asyncio.wait_for(started.wait(), timeout=1)
@@ -631,19 +634,24 @@ class TestLLMInterceptsAsync:
             with pytest.raises(asyncio.CancelledError):
                 await execution
             await asyncio.wait_for(cancelled.wait(), timeout=1)
-            release.set()
-            await asyncio.sleep(0)
+            await subscribers.flush_async()
         finally:
             release.set()
             intercepts.deregister_llm_execution("py_llm_cancel_intercept")
+            subscribers.deregister("py_llm_cancel_events")
 
         assert provider_calls == []
+        lifecycle = [
+            event.scope_category for event in events if isinstance(event, ScopeEvent) and event.name == "cancel_llm"
+        ]
+        assert lifecycle == ["start", "end"]
 
     async def test_cancelling_stream_execute_cancels_pending_stream_intercept(self):
         started = asyncio.Event()
         release = asyncio.Event()
         cancelled = asyncio.Event()
         provider_calls: list[LLMRequest] = []
+        events: list[Event] = []
 
         async def middleware(request, next):
             started.set()
@@ -663,6 +671,7 @@ class TestLLMInterceptsAsync:
             return generate()
 
         intercepts.register_llm_stream_execution("py_llm_stream_cancel_intercept", 1, middleware)
+        subscribers.register("py_llm_stream_cancel_events", events.append)
         try:
             execution = asyncio.ensure_future(
                 llm.stream_execute(
@@ -678,13 +687,19 @@ class TestLLMInterceptsAsync:
             with pytest.raises(asyncio.CancelledError):
                 await execution
             await asyncio.wait_for(cancelled.wait(), timeout=1)
-            release.set()
-            await asyncio.sleep(0)
+            await subscribers.flush_async()
         finally:
             release.set()
             intercepts.deregister_llm_stream_execution("py_llm_stream_cancel_intercept")
+            subscribers.deregister("py_llm_stream_cancel_events")
 
         assert provider_calls == []
+        lifecycle = [
+            event.scope_category
+            for event in events
+            if isinstance(event, ScopeEvent) and event.name == "cancel_stream_llm"
+        ]
+        assert lifecycle == ["start", "end"]
 
     async def test_sync_middleware_preserves_async_caller_context(self):
         request_id = contextvars.ContextVar("llm_middleware_request_id", default="registration")

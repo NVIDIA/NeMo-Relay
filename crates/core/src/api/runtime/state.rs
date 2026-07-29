@@ -49,6 +49,42 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
+struct GuardrailScopeCompletion<'a> {
+    handle: Option<ScopeHandle>,
+    subscribers: &'a [EventSubscriberFn],
+}
+
+impl GuardrailScopeCompletion<'_> {
+    fn new(handle: ScopeHandle, subscribers: &[EventSubscriberFn]) -> GuardrailScopeCompletion<'_> {
+        GuardrailScopeCompletion {
+            handle: Some(handle),
+            subscribers,
+        }
+    }
+
+    fn finish(mut self, output: Json) {
+        let handle = self.handle.take().expect("guardrail scope handle");
+        NemoRelayContextState::emit_guardrail_scope_end(&handle, output, self.subscribers);
+    }
+}
+
+impl Drop for GuardrailScopeCompletion<'_> {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        NemoRelayContextState::emit_guardrail_scope_end(
+            &handle,
+            json!({
+                "allowed": false,
+                "cancelled": true,
+                "error": "guardrail evaluation cancelled",
+            }),
+            self.subscribers,
+        );
+    }
+}
+
 /// Process-global runtime state backing middleware and event emission.
 ///
 /// The public API layer stores one shared instance of this type for the
@@ -560,7 +596,7 @@ impl NemoRelayContextState {
         ))
     }
 
-    async fn emit_guardrail_scope_start(
+    fn emit_guardrail_scope_start(
         name: &str,
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
@@ -598,7 +634,7 @@ impl NemoRelayContextState {
         handle
     }
 
-    async fn emit_guardrail_scope_end(
+    fn emit_guardrail_scope_end(
         handle: &ScopeHandle,
         output: Json,
         subscribers: &[EventSubscriberFn],
@@ -860,8 +896,8 @@ impl NemoRelayContextState {
                     "target_name": name,
                 }),
                 subscribers,
-            )
-            .await;
+            );
+            let completion = GuardrailScopeCompletion::new(handle, subscribers);
             let callback = Arc::clone(&entry.payload);
             let callback_name = name.to_string();
             let callback_args = args.clone();
@@ -891,7 +927,7 @@ impl NemoRelayContextState {
                     "error": error.to_string(),
                 }),
             };
-            Self::emit_guardrail_scope_end(&handle, output, subscribers).await;
+            completion.finish(output);
             if let Some(error) = result? {
                 return Ok(Some(error));
             }
@@ -1237,8 +1273,8 @@ impl NemoRelayContextState {
                     "kind": "llm_conditional_execution",
                 }),
                 subscribers,
-            )
-            .await;
+            );
+            let completion = GuardrailScopeCompletion::new(handle, subscribers);
             let callback = Arc::clone(&entry.payload);
             let callback_request = request.clone();
             let result = match AssertUnwindSafe(async move { callback(callback_request).await })
@@ -1266,7 +1302,7 @@ impl NemoRelayContextState {
                     "error": error.to_string(),
                 }),
             };
-            Self::emit_guardrail_scope_end(&handle, output, subscribers).await;
+            completion.finish(output);
             if let Some(error) = result? {
                 return Ok(Some(error));
             }

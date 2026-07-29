@@ -1203,6 +1203,117 @@ async fn emit_llm_end_without_output(
     Ok(())
 }
 
+struct ManagedLlmCompletion {
+    handle: Option<LlmHandle>,
+    metadata: Option<Json>,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
+    subscribers: Vec<EventSubscriberFn>,
+}
+
+impl ManagedLlmCompletion {
+    fn new(
+        handle: &LlmHandle,
+        metadata: Option<Json>,
+        response_codec: Option<Arc<dyn LlmResponseCodec>>,
+        subscribers: &[EventSubscriberFn],
+    ) -> Self {
+        Self {
+            handle: Some(handle.clone()),
+            metadata,
+            response_codec,
+            subscribers: subscribers.to_vec(),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.handle = None;
+    }
+}
+
+impl Drop for ManagedLlmCompletion {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let metadata = metadata_with_otel_status(
+            self.metadata.take(),
+            "ERROR",
+            Some("LLM execution cancelled".into()),
+        );
+        let scope_stack = handle.captured_scope_stack().clone();
+        let entries = match scope_stack.read() {
+            Ok(scope_guard) => {
+                let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+                    &registries.llm_sanitize_response_guardrails
+                });
+                global_context()
+                    .read()
+                    .map(|state| state.llm_sanitize_response_entries(&scope_locals))
+                    .unwrap_or_default()
+            }
+            Err(_) => Vec::new(),
+        };
+        handle
+            .optimization_recorder
+            .close_for_finalization(Some("execution_cancelled"));
+        enqueue_optimization_marks(&handle, &self.subscribers);
+        let event = global_context()
+            .read()
+            .ok()
+            .map(|state| state.end_llm_handle(&handle, None, metadata.clone(), None));
+        let Some(event) = event else {
+            return;
+        };
+        let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+        let response_codec = self.response_codec.take();
+        let subscribers = std::mem::take(&mut self.subscribers);
+        let fallback_data = handle.data.clone();
+        dispatch_transformed_event(
+            event,
+            Box::new(move |event| {
+                Box::pin(async move {
+                    let Some(data) = fallback_data else {
+                        return event;
+                    };
+                    let data = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+                        data,
+                        LlmSanitizeResponseContext::for_response_codec(response_codec),
+                        &entries,
+                    )
+                    .await;
+                    let annotation_omitted = data.as_ref().is_none_or(Json::is_null);
+                    let annotated_response = (!annotation_omitted)
+                        .then(|| {
+                            let pricing = crate::codec::response::active_pricing_resolver();
+                            finalize_optimization_summary(
+                                &handle.optimization_recorder,
+                                None,
+                                handle.model_name.as_deref(),
+                                &pricing,
+                            )
+                        })
+                        .flatten()
+                        .map(|summary| {
+                            Arc::new(AnnotatedLlmResponse {
+                                optimization_summary: Some(summary),
+                                ..AnnotatedLlmResponse::default()
+                            })
+                        });
+                    global_context()
+                        .read()
+                        .map(|state| {
+                            state.end_llm_handle(&handle, data, metadata, annotated_response)
+                        })
+                        .unwrap_or(event)
+                })
+            }),
+            event_sanitizers,
+            &subscribers,
+            scope_stack,
+        );
+    }
+}
+
 /// Execute an LLM call through the managed middleware pipeline.
 ///
 /// This runs conditional-execution guardrails, request intercepts, and
@@ -1348,6 +1459,12 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         .record_all(optimization_contributions);
     emit_optimization_marks(&handle, &lifecycle_subscribers).await;
 
+    let mut completion = ManagedLlmCompletion::new(
+        &handle,
+        metadata.clone(),
+        response_codec.clone(),
+        &lifecycle_subscribers,
+    );
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
     let execution = with_active_event_uuid(
@@ -1387,6 +1504,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 Some(&lifecycle_subscribers),
             )
             .await?;
+            completion.disarm();
             Ok(response)
         }
         Err(error) => {
@@ -1399,6 +1517,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 Some(&lifecycle_subscribers),
             )
             .await;
+            completion.disarm();
             Err(error)
         }
     }
@@ -1550,6 +1669,12 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         .record_all(optimization_contributions);
     emit_optimization_marks(&handle, &lifecycle_subscribers).await;
 
+    let mut completion = ManagedLlmCompletion::new(
+        &handle,
+        metadata.clone(),
+        response_codec.clone(),
+        &lifecycle_subscribers,
+    );
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
     let execution = with_active_event_uuid(
@@ -1583,6 +1708,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 response_codec,
                 lifecycle_subscribers,
             );
+            completion.disarm();
             Ok(LlmJsonStream::from_closeable(wrapper))
         }
         Err(error) => {
@@ -1595,6 +1721,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 Some(&lifecycle_subscribers),
             )
             .await;
+            completion.disarm();
             Err(error)
         }
     }

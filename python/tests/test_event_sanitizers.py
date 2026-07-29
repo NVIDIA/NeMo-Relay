@@ -13,6 +13,7 @@ import pytest
 
 import nemo_relay
 from nemo_relay import EventSanitizeFields, guardrails, plugin, scope, scope_local, subscribers
+from nemo_relay._event_sanitizer_context import callback_active, loop_affine
 
 
 @pytest.fixture(name="capture_events")
@@ -181,6 +182,34 @@ async def test_sanitizer_descendants_lose_reentrant_flush_after_settlement(captu
     finally:
         release_blocker.set()
         guardrails.deregister_mark_sanitize("python-descendant-flush-liveness")
+
+
+async def test_cancelled_sanitizer_expires_descendant_context():
+    descendant_started = asyncio.Event()
+    release_descendant = asyncio.Event()
+    observed: list[bool] = []
+
+    async def descendant() -> None:
+        descendant_started.set()
+        await release_descendant.wait()
+        observed.append(callback_active())
+
+    async def never() -> None:
+        await asyncio.Event().wait()
+
+    def sanitizer() -> object:
+        asyncio.create_task(descendant())
+        return never()
+
+    execution = asyncio.ensure_future(loop_affine(sanitizer, sanitizer=True)())
+    await asyncio.wait_for(descendant_started.wait(), timeout=1)
+    execution.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await execution
+    release_descendant.set()
+    await asyncio.sleep(0)
+
+    assert observed == [False]
 
 
 def test_sync_mark_sanitizer_uses_emitter_context(capture_events):

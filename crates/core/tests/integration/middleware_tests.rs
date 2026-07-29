@@ -1321,6 +1321,175 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
     deregister_subscriber("tool_concurrent_next_observer").unwrap();
 }
 
+#[tokio::test]
+async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "cancelled_tool_lifecycle",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+    register_tool_execution_intercept(
+        "pending_tool_execution",
+        1,
+        Arc::new(move |_name, _args, _next| {
+            if let Some(sender) = entered_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            Box::pin(std::future::pending())
+        }),
+    )
+    .unwrap();
+
+    let mut execution = Box::pin(tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("cancelled-tool")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    ));
+    tokio::select! {
+        result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
+        result = entered_rx => result.unwrap(),
+    }
+    drop(execution);
+    flush_subscribers().unwrap();
+
+    let lifecycle = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.name() == "cancelled-tool")
+        .filter_map(Event::scope_category)
+        .collect::<Vec<_>>();
+    assert_eq!(lifecycle, [ScopeCategory::Start, ScopeCategory::End]);
+
+    deregister_tool_execution_intercept("pending_tool_execution").unwrap();
+    deregister_subscriber("cancelled_tool_lifecycle").unwrap();
+}
+
+#[tokio::test]
+async fn dropping_pending_conditional_closes_the_guardrail_scope() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "cancelled_guardrail_lifecycle",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+    register_tool_conditional_execution_guardrail(
+        "pending_conditional",
+        1,
+        Arc::new(move |_name, _args| {
+            if let Some(sender) = entered_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            Box::pin(std::future::pending())
+        }),
+    )
+    .unwrap();
+
+    let mut execution = Box::pin(tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("cancelled-conditional-tool")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    ));
+    tokio::select! {
+        result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
+        result = entered_rx => result.unwrap(),
+    }
+    drop(execution);
+    flush_subscribers().unwrap();
+
+    let lifecycle = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.name() == "pending_conditional")
+        .filter_map(Event::scope_category)
+        .collect::<Vec<_>>();
+    assert_eq!(lifecycle, [ScopeCategory::Start, ScopeCategory::End]);
+
+    deregister_tool_conditional_execution_guardrail("pending_conditional").unwrap();
+    deregister_subscriber("cancelled_guardrail_lifecycle").unwrap();
+}
+
+#[tokio::test]
+async fn dropping_pending_llm_execution_closes_the_managed_lifecycle() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "cancelled_llm_lifecycle",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+    register_llm_execution_intercept(
+        "pending_llm_execution",
+        1,
+        Arc::new(move |_name, _request, _next| {
+            if let Some(sender) = entered_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            Box::pin(std::future::pending())
+        }),
+    )
+    .unwrap();
+
+    let mut execution = Box::pin(llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("cancelled-llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"model": "test"}),
+            })
+            .data(json!({"fallback": true}))
+            .func(Arc::new(|_request| Box::pin(async { Ok(json!({})) })))
+            .build(),
+    ));
+    tokio::select! {
+        result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
+        result = entered_rx => result.unwrap(),
+    }
+    drop(execution);
+    flush_subscribers().unwrap();
+
+    let lifecycle = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.name() == "cancelled-llm")
+        .filter_map(Event::scope_category)
+        .collect::<Vec<_>>();
+    assert_eq!(lifecycle, [ScopeCategory::Start, ScopeCategory::End]);
+
+    deregister_llm_execution_intercept("pending_llm_execution").unwrap();
+    deregister_subscriber("cancelled_llm_lifecycle").unwrap();
+}
+
 // =========================================================================
 // Guardrail Conditional Execution Tests
 // =========================================================================
