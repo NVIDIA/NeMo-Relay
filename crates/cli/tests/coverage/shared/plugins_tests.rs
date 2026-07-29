@@ -173,6 +173,19 @@ fn target_scope_defaults_to_user_and_rejects_conflicts() {
 }
 
 #[test]
+fn editor_uses_explicit_plugin_target_without_default_discovery() {
+    let path = PathBuf::from("/managed/plugins.toml");
+    let (scope, target) = resolve_edit_target(PluginsEditRequest {
+        scope: ConfigurationScope::User,
+        explicit_path: Some(path.clone()),
+    })
+    .unwrap();
+
+    assert_eq!(scope, TargetScope::User);
+    assert_eq!(target, path);
+}
+
+#[test]
 fn typed_editor_model_contains_observability_sections() {
     let schema = ObservabilityConfig::editor_schema();
     let atof = schema.field("atof").unwrap().schema().unwrap();

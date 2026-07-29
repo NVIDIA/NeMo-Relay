@@ -161,7 +161,9 @@ The base `config.toml` stores the agent settings. Select **Yes** at the plugin
 prompt to configure optional Relay components and save them separately in
 `plugins.toml`. Project setup uses the project plugin configuration, global
 setup uses the user plugin configuration, and `both` continues with the project
-plugin configuration.
+plugin configuration. When the top-level command receives
+`--config path/to/config.toml`, the plugin editor instead uses the sibling
+`path/to/plugins.toml`, matching runtime selection.
 
 Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can

@@ -1089,19 +1089,28 @@ fn plugin_config_paths_scoped(
     plugin_config_path: Option<&PathBuf>,
     user_only: bool,
 ) -> Vec<PathBuf> {
-    if let Some(path) = plugin_config_path {
-        return vec![path.clone()];
-    }
-    if let Some(path) = explicit {
-        return path
-            .parent()
-            .map(|parent| vec![parent.join(PLUGINS_TOML)])
-            .unwrap_or_default();
+    if plugin_config_path.is_some() || explicit.is_some() {
+        return explicit_plugin_config_path(explicit, plugin_config_path)
+            .into_iter()
+            .collect();
     }
     if user_only {
         return implicit_plugin_config_paths(None, user_config_dir());
     }
     implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
+}
+
+/// Resolves the single plugin document selected by explicit gateway configuration.
+///
+/// An explicit plugin path wins. Otherwise an explicit `config.toml` selects its sibling
+/// `plugins.toml`, matching runtime loading. `None` means normal layered discovery applies.
+pub(crate) fn explicit_plugin_config_path(
+    config_path: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Option<PathBuf> {
+    plugin_config_path.cloned().or_else(|| {
+        config_path.and_then(|path| path.parent().map(|parent| parent.join(PLUGINS_TOML)))
+    })
 }
 
 fn user_config_scope() -> bool {

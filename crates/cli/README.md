@@ -180,6 +180,11 @@ plugin config with:
 nemo-relay plugins edit
 ```
 
+When the top-level CLI receives `--plugin-config-path`, the editor uses that
+exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
+sibling `path/to/plugins.toml`, matching runtime selection. An explicit
+`--user`, `--project`, or `--global` editor flag overrides the inherited target.
+
 The top-level editor menu contains one entry per supported built-in, followed by
 the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
 plugins with a manifest-declared JSON Schema provide structured field controls.

@@ -76,7 +76,7 @@ pub(super) async fn easy_path(
     let explicit_config = inherited.config.as_deref();
     let needs_setup = explicit_config.is_none() && !crate::configuration::any_config_file_exists();
     if needs_setup {
-        super::configure::run(Some(agent)).await?;
+        super::configure::run(Some(agent), None).await?;
     }
     let runtime = crate::process::RunOverrides {
         agent: Some(agent),
