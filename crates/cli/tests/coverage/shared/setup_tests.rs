@@ -546,13 +546,22 @@ fn plugins_edit_command_for_scope_targets_expected_plugin_scope() {
     ];
 
     for (scope, expected) in cases {
-        let command = plugins_edit_command_for_scope(scope);
+        let command = plugins_edit_command_for_scope(scope, None);
         assert_eq!(
             target_scope(&command.scope).unwrap(),
             expected,
             "unexpected plugin target scope for {scope:?}"
         );
     }
+}
+
+#[test]
+fn plugins_edit_command_for_scope_preserves_explicit_plugin_path() {
+    let path = PathBuf::from("/managed/plugins.toml");
+
+    let command = plugins_edit_command_for_scope(ConfigScope::Global, Some(path.clone()));
+
+    assert_eq!(command.explicit_path, Some(path));
 }
 
 #[test]
@@ -565,11 +574,31 @@ fn plugins_resume_command_matches_scope() {
 
     for (scope, expected) in cases {
         assert_eq!(
-            plugins_resume_command(scope),
+            plugins_resume_command(scope, None),
             expected,
             "unexpected resume command for {scope:?}"
         );
     }
+}
+
+#[test]
+fn plugins_resume_command_preserves_explicit_plugin_path() {
+    let path = PathBuf::from("/managed/plugin configs/plugins.toml");
+    #[cfg(windows)]
+    let expected = concat!(
+        "nemo-relay --plugin-config-path ",
+        "\"/managed/plugin configs/plugins.toml\" plugins edit"
+    );
+    #[cfg(not(windows))]
+    let expected = concat!(
+        "nemo-relay --plugin-config-path ",
+        "'/managed/plugin configs/plugins.toml' plugins edit"
+    );
+
+    assert_eq!(
+        plugins_resume_command(ConfigScope::Global, Some(&path)),
+        expected
+    );
 }
 
 #[test]

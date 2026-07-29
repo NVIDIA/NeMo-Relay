@@ -33,8 +33,8 @@ Use the Python binding for the following tasks:
 - **Package policy around callbacks**: Use guardrails and intercepts to block
   work, sanitize observability payloads, rewrite requests, or wrap execution.
 - **Emit one lifecycle stream**: Send runtime events to in-process
-  subscribers, Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
-  OpenInference workflows.
+  subscribers, Agent Trajectory Interchange Format (ATIF), or typed
+  OpenTelemetry workflows.
 - **Integrate without a framework migration**: Wrap framework or provider
   callbacks while preserving the application’s orchestration model.
 
@@ -47,8 +47,9 @@ The Python package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM requests,
   responses, and execution, plus mark and scope event sanitizers for `data`,
   `category_profile`, and `metadata`.
-- **Subscribers and exporters**: Event consumers for observability and
-  diagnostics.
+- **Subscribers and exporters**: `OpenTelemetrySubscriber` accepts one required
+  `full`, `gen_ai`, or `openinference` endpoint configuration. The
+  `nemo_relay.observability` helpers configure plugin-owned endpoint fan-out.
 - **Plugin and typed helpers**: Public modules for plugins, codecs, typed
   wrappers, adaptive runtime behavior, and observability plugin configuration.
 - **Shared Rust runtime semantics**: Python behavior aligned with the Rust

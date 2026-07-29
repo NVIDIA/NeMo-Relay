@@ -8,7 +8,6 @@ use super::*;
 use serde_json::json;
 
 #[test]
-#[cfg(feature = "otel")]
 fn cost_otel_policy_emits_any_currency() {
     let output = json!({"usage": {"cost": {"total": 0.5, "currency": "EUR"}}});
     assert_eq!(
@@ -18,7 +17,6 @@ fn cost_otel_policy_emits_any_currency() {
 }
 
 #[test]
-#[cfg(feature = "openinference")]
 fn cost_openinference_policy_drops_non_usd() {
     let output = json!({"usage": {"cost": {"total": 0.5, "currency": "EUR"}}});
     assert_eq!(
@@ -28,7 +26,6 @@ fn cost_openinference_policy_drops_non_usd() {
 }
 
 #[test]
-#[cfg(feature = "otel")]
 fn cost_component_sum_emits_currency_for_otel() {
     let output = json!({"usage": {"cost": {"input": 0.5, "output": 0.375, "currency": "EUR"}}});
     assert_eq!(
@@ -38,7 +35,6 @@ fn cost_component_sum_emits_currency_for_otel() {
 }
 
 #[test]
-#[cfg(feature = "openinference")]
 fn cost_usd_field_passes_usd_only() {
     let output = json!({"usage": {"cost_usd": 1.25}});
     assert_eq!(
@@ -48,7 +44,6 @@ fn cost_usd_field_passes_usd_only() {
 }
 
 #[test]
-#[cfg(feature = "openinference")]
 fn cost_absent_currency_treated_as_usd() {
     let output = json!({"usage": {"cost": {"total": 0.9}}});
     assert_eq!(
@@ -84,7 +79,6 @@ fn cost_atif_policy_accepts_relay_normalized_component_cost_without_currency() {
 }
 
 #[test]
-#[cfg(feature = "openinference")]
 fn cost_per_map_fallthrough_under_usd_only() {
     // A non-USD `usage` cost is skipped under usd_only; `token_usage` USD wins.
     let output = json!({

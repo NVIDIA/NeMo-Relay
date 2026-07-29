@@ -232,6 +232,57 @@ unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
     stack
 }
 
+#[test]
+fn propagation_context_json_round_trips_through_the_ffi() {
+    let _guard = lock_unpoisoned(&TEST_MUTEX);
+    let root_uuid = "018f13f0-7c1a-7a80-8000-000000000001";
+    let root = CString::new(root_uuid).unwrap();
+    let mut context_json = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            crate::api::nemo_relay_capture_propagation_context_with_root_json(
+                root.as_ptr(),
+                &mut context_json,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let context = unsafe { returned_json(context_json) };
+    assert_eq!(context["version"], 1);
+    assert_eq!(context["root_uuid"], root_uuid);
+
+    let payload = CString::new(context.to_string()).unwrap();
+    let mut stack = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
+                payload.as_ptr(),
+                &mut stack,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(!stack.is_null());
+    unsafe { nemo_relay_scope_stack_free(stack) };
+
+    for invalid_context in [
+        "not-json",
+        r#"{\"version\":2,\"parent_uuid\":\"018f13f0-7c1a-7a80-8000-000000000002\"}"#,
+        r#"{\"version\":1,\"root_uuid\":\"00000000-0000-0000-0000-000000000000\",\"parent_uuid\":\"018f13f0-7c1a-7a80-8000-000000000002\"}"#,
+    ] {
+        let payload = CString::new(invalid_context).unwrap();
+        let mut rejected_stack = ptr::null_mut();
+        let status = unsafe {
+            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
+                payload.as_ptr(),
+                &mut rejected_stack,
+            )
+        };
+        assert_ne!(status, NemoRelayStatus::Ok);
+        assert!(rejected_stack.is_null());
+    }
+}
+
 fn reset_globals() {
     lock_unpoisoned(event_log()).clear();
     lock_unpoisoned(collected_chunks()).clear();

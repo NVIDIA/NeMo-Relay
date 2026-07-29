@@ -74,6 +74,13 @@ impl CompiledBuiltinBackend {
         config: BuiltinBackendConfig,
         codec_name: Option<String>,
     ) -> PluginResult<Self> {
+        for (index, target_path) in config.target_paths.iter().enumerate() {
+            if !is_valid_json_pointer(target_path) {
+                return Err(PluginError::InvalidConfig(format!(
+                    "builtin.target_paths[{index}] must be a valid RFC 6901 JSON pointer"
+                )));
+            }
+        }
         let trajectory = match config.preset.as_deref() {
             Some("trajectory_context") => {
                 if config.detector.is_some()
@@ -605,6 +612,23 @@ pub(super) fn llm_sanitize_response_callback(
             );
         }
         sanitized
+    })
+}
+
+pub(super) fn is_valid_json_pointer(pointer: &str) -> bool {
+    if pointer.is_empty() {
+        return true;
+    }
+    pointer.strip_prefix('/').is_some_and(|path| {
+        path.split('/').all(|segment| {
+            let mut characters = segment.chars();
+            while let Some(character) = characters.next() {
+                if character == '~' && !matches!(characters.next(), Some('0' | '1')) {
+                    return false;
+                }
+            }
+            true
+        })
     })
 }
 

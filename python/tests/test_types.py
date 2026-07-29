@@ -20,8 +20,6 @@ from nemo_relay import (
     LLMAttributes,
     LLMRequest,
     MarkEvent,
-    OpenInferenceConfig,
-    OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
     ScopeAttributes,
@@ -567,17 +565,19 @@ class TestAtofExporterType:
 
 class TestOpenTelemetryTypes:
     def test_config_defaults_mutation_and_repr(self):
-        config = OpenTelemetryConfig()
+        config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 
         assert config.transport == "http_binary"
-        assert config.endpoint is None
-        assert config.service_name == "nemo-relay"
-        assert config.instrumentation_scope == "nemo-relay-otel"
+        assert config.endpoint == "http://localhost:4318/v1/traces"
+        assert config.service_name == "unknown_service"
+        assert config.instrumentation_scope == "opentelemetry"
         assert config.timeout_millis == 3000
         assert config.headers == {}
         assert config.resource_attributes == {}
+        assert config.mark_projection == "inherit"
+        assert config.mark_exclude_names == ["llm.chunk"]
+        assert config.attribute_mappings == []
 
-        config.endpoint = "http://localhost:4318/v1/traces"
         config.service_name = "py-agent"
         config.service_namespace = "agents"
         config.service_version = "1.0.0"
@@ -585,15 +585,19 @@ class TestOpenTelemetryTypes:
         config.timeout_millis = 1250
         config.set_header("authorization", "Bearer token")
         config.set_resource_attribute("deployment.environment", "test")
+        config.mark_projection = "tool"
+        config.mark_exclude_names = ["custom.mark"]
+        config.attribute_mappings = [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
-        config.attribute_mappings = [{"key": "nemo_relay.start.metadata.tenant", "alias": "tenant.id"}]
-        assert config.attribute_mappings == [{"key": "nemo_relay.start.metadata.tenant", "alias": "tenant.id"}]
+        assert config.mark_projection == "tool"
+        assert config.mark_exclude_names == ["custom.mark"]
+        assert config.attribute_mappings == [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
         assert "OpenTelemetryConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
-        config = OpenTelemetryConfig()
+        config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.headers = cast(dict[str, str], [])
@@ -602,20 +606,10 @@ class TestOpenTelemetryTypes:
             config.resource_attributes = cast(dict[str, str], {"env": 1})
 
         with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
-            config.attribute_mappings = [{"key": "", "alias": "tenant.id"}]
-
-        with pytest.raises(ValueError, match="attribute mapping alias must not be blank"):
-            config.attribute_mappings = [{"key": "nemo_relay.mark.metadata.source", "alias": ""}]
-
-        with pytest.raises(ValueError, match=r"attribute mapping alias .* duplicated"):
-            config.attribute_mappings = [
-                {"key": "one", "alias": "tenant.id"},
-                {"key": "two", "alias": "tenant.id"},
-            ]
+            config.attribute_mappings = cast(list[dict[str, str]], [{"key": "", "alias": "x"}])
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
-        config = OpenTelemetryConfig()
-        config.endpoint = "http://localhost:4318/v1/traces"
+        config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
         config.service_name = "py-agent"
 
         subscriber = OpenTelemetrySubscriber(config)
@@ -631,18 +625,31 @@ class TestOpenTelemetryTypes:
         finally:
             subscribers.deregister(subscriber_name)
 
-        bad = OpenTelemetryConfig()
+        bad = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
         bad.transport = "invalid"
         with pytest.raises(ValueError, match="transport must be"):
             OpenTelemetrySubscriber(bad)
 
+    def test_subscriber_rejects_missing_or_invalid_required_fields(self):
+        with pytest.raises(TypeError):
+            OpenTelemetryConfig()  # ty: ignore[missing-argument]
+
+        invalid_type = OpenTelemetryConfig(
+            "invalid",  # ty: ignore[invalid-argument-type]
+            "http://localhost:4318/v1/traces",
+        )
+        with pytest.raises(ValueError, match="type must be"):
+            OpenTelemetrySubscriber(invalid_type)
+
+        blank_endpoint = OpenTelemetryConfig("full", " \t")
+        with pytest.raises(ValueError, match="endpoint is required and must be nonblank"):
+            OpenTelemetrySubscriber(blank_endpoint)
+
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:
             source = "python-é" * 20
-            config = OpenTelemetryConfig()
-            config.endpoint = collector.endpoint
+            config = OpenTelemetryConfig("full", collector.endpoint)
             config.service_name = "py-agent"
-            config.attribute_mappings = [{"key": "nemo_relay.mark.metadata.source", "alias": "tenant.id"}]
 
             subscriber = OpenTelemetrySubscriber(config)
             subscriber_name = f"py_otel_e2e_{uuid4().hex}"
@@ -665,7 +672,28 @@ class TestOpenTelemetryTypes:
                 assert request["path"] == "/v1/traces"
                 assert request["headers"]["content-type"] == "application/x-protobuf"
                 assert request["body"]
-                assert _otlp_string_attribute("tenant.id", source) in request["body"]
+                assert b"nemo_relay.mark.metadata.source" in request["body"]
+            finally:
+                subscriber.deregister(subscriber_name)
+                subscriber.shutdown()
+
+    def test_gen_ai_subscriber_exports_standardized_agent_span(self):
+        with _OtelCollector() as collector:
+            config = OpenTelemetryConfig("gen_ai", collector.endpoint)
+            subscriber = OpenTelemetrySubscriber(config)
+            subscriber_name = f"py_gen_ai_e2e_{uuid4().hex}"
+            subscriber.register(subscriber_name)
+
+            try:
+                handle = scope.push("research-agent", ScopeType.Agent)
+                scope.pop(handle)
+
+                subscriber.force_flush()
+                request = collector.wait_for_request()
+                assert request["path"] == "/v1/traces"
+                assert b"invoke_agent research-agent" in request["body"]
+                assert b"gen_ai.operation.name" in request["body"]
+                assert b"nemo_relay." not in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()
@@ -673,17 +701,15 @@ class TestOpenTelemetryTypes:
 
 class TestOpenInferenceTypes:
     def test_config_defaults_mutation_and_repr(self):
-        config = OpenInferenceConfig()
+        config = OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
 
         assert config.transport == "http_binary"
-        assert config.endpoint is None
-        assert config.service_name == "nemo-relay"
-        assert config.instrumentation_scope == "nemo-relay-openinference"
+        assert config.service_name == "unknown_service"
+        assert config.instrumentation_scope == "opentelemetry"
         assert config.timeout_millis == 3000
         assert config.headers == {}
         assert config.resource_attributes == {}
 
-        config.endpoint = "http://localhost:4318/v1/traces"
         config.service_name = "py-agent"
         config.service_namespace = "agents"
         config.service_version = "1.0.0"
@@ -694,12 +720,10 @@ class TestOpenInferenceTypes:
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
-        config.attribute_mappings = [{"key": "openinference.metadata.tenant", "alias": "tenant.id"}]
-        assert config.attribute_mappings == [{"key": "openinference.metadata.tenant", "alias": "tenant.id"}]
-        assert "OpenInferenceConfig" in repr(config)
+        assert "OpenTelemetryConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
-        config = OpenInferenceConfig()
+        config = OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.headers = cast(dict[str, str], [])
@@ -707,25 +731,12 @@ class TestOpenInferenceTypes:
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
 
-        with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
-            config.attribute_mappings = [{"key": "", "alias": "tenant.id"}]
-
-        with pytest.raises(ValueError, match="attribute mapping alias must not be blank"):
-            config.attribute_mappings = [{"key": "openinference.metadata.tenant", "alias": ""}]
-
-        with pytest.raises(ValueError, match=r"attribute mapping alias .* duplicated"):
-            config.attribute_mappings = [
-                {"key": "one", "alias": "tenant.id"},
-                {"key": "two", "alias": "tenant.id"},
-            ]
-
     def test_subscriber_lifecycle_and_invalid_transport(self):
-        config = OpenInferenceConfig()
-        config.endpoint = "http://localhost:4318/v1/traces"
+        config = OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
         config.service_name = "py-agent"
 
-        subscriber = OpenInferenceSubscriber(config)
-        assert "<OpenInferenceSubscriber>" in repr(subscriber)
+        subscriber = OpenTelemetrySubscriber(config)
+        assert "<OpenTelemetrySubscriber>" in repr(subscriber)
 
         subscriber_name = f"py_openinference_subscriber_{uuid4().hex}"
         subscriber.register(subscriber_name)
@@ -737,27 +748,23 @@ class TestOpenInferenceTypes:
         finally:
             subscribers.deregister(subscriber_name)
 
-        grpc = OpenInferenceConfig()
+        grpc = OpenTelemetryConfig("openinference", "http://127.0.0.1:4317")
         grpc.transport = "grpc"
-        grpc.endpoint = "http://127.0.0.1:4317"
         grpc.service_name = "py-agent-grpc"
-        grpc_subscriber = OpenInferenceSubscriber(grpc)
+        grpc_subscriber = OpenTelemetrySubscriber(grpc)
         grpc_subscriber.shutdown()
 
-        bad = OpenInferenceConfig()
+        bad = OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
         bad.transport = "invalid"
         with pytest.raises(ValueError, match="transport must be"):
-            OpenInferenceSubscriber(bad)
+            OpenTelemetrySubscriber(bad)
 
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:
             source = "python-é" * 20
-            config = OpenInferenceConfig()
-            config.endpoint = collector.endpoint
+            config = OpenTelemetryConfig("openinference", collector.endpoint)
             config.service_name = "py-agent"
-            config.attribute_mappings = [{"key": "nemo_relay.mark.metadata.source", "alias": "tenant.id"}]
-
-            subscriber = OpenInferenceSubscriber(config)
+            subscriber = OpenTelemetrySubscriber(config)
             subscriber_name = f"py_openinference_e2e_{uuid4().hex}"
             subscriber.register(subscriber_name)
 
@@ -782,7 +789,6 @@ class TestOpenInferenceTypes:
                 assert b"AGENT" in request["body"]
                 assert b"metadata" in request["body"]
                 assert b"openinference_mark" in request["body"]
-                assert _otlp_string_attribute("tenant.id", source) in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()

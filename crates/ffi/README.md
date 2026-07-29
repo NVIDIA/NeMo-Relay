@@ -44,6 +44,10 @@ binding consumes it through CGo.
 - **Exported `nemo_relay_*` symbols**: APIs for scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, observability exporters, and scope stack
   isolation.
+- **Typed OpenTelemetry export**:
+  `nemo_relay_otel_subscriber_create` constructs one `full`, `gen_ai`, or
+  `openinference` endpoint subscriber. The endpoint and projection type are
+  required.
 - **Generated header**: A committed `nemo_relay.h` file for C-compatible
   consumers.
 - **Native library outputs**: Shared and static libraries for platform

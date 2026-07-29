@@ -5,8 +5,9 @@ use axum::http::HeaderMap;
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
-use nemo_relay::observability::openinference::OpenInferenceSubscriber;
+use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins_exact};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
@@ -105,7 +106,7 @@ async fn install_test_atif_plugin(output_directory: &Path) {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 2,
+                    "version": 3,
                     "atif": {
                         "enabled": true,
                         "output_directory": output_directory,
@@ -189,14 +190,18 @@ fn make_atof_test_exporter(output_directory: &Path, filename: &str) -> AtofExpor
 fn make_openinference_test_subscriber(
     scope: &str,
 ) -> (
-    OpenInferenceSubscriber,
+    OpenTelemetrySubscriber,
     opentelemetry_sdk::trace::InMemorySpanExporter,
 ) {
     let exporter = InMemorySpanExporterBuilder::new().build();
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
         .build();
-    let subscriber = OpenInferenceSubscriber::from_tracer_provider(provider, scope.to_string());
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        provider,
+        scope.to_string(),
+        OpenTelemetryType::OpenInference,
+    );
     (subscriber, exporter)
 }
 

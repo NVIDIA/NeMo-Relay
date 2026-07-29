@@ -28,8 +28,8 @@ const (
 
 func TestObservabilityConfigHelpers(t *testing.T) {
 	config := NewObservabilityConfig()
-	if config.Version != 2 {
-		t.Fatalf("expected version 2, got %d", config.Version)
+	if config.Version != 3 {
+		t.Fatalf("expected version 3, got %d", config.Version)
 	}
 	atof := NewObservabilityAtofConfig()
 	if atof.Enabled || len(atof.Sinks) != 0 {
@@ -65,15 +65,16 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		s3Storage,
 		httpStorage,
 	}
-	otlp := NewObservabilityOtlpConfig()
-	if otlp.Enabled || otlp.MarkProjection != ObservabilityMarkProjectionInherit || len(otlp.MarkExcludeNames) != 1 || otlp.MarkExcludeNames[0] != "llm.chunk" || otlp.Transport != "http_binary" || otlp.ServiceName != "nemo-relay" || otlp.TimeoutMillis != 3000 {
-		t.Fatalf("unexpected OTLP defaults: %#v", otlp)
+	otel := NewObservabilityOpenTelemetryConfig()
+	otel.Enabled = true
+	otel.Endpoints = []ObservabilityOpenTelemetryEndpointConfig{
+		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces"),
 	}
-	otlp.MarkProjection = ObservabilityMarkProjectionTool
+	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
 
 	config.Atof = &atof
 	config.Atif = &atif
-	config.OpenTelemetry = &otlp
+	config.OpenTelemetry = &otel
 	wrapped := ObservabilityComponent(config)
 	if wrapped.Kind != ObservabilityPluginKind || !wrapped.Enabled {
 		t.Fatalf("unexpected component wrapper: %#v", wrapped)
@@ -130,28 +131,12 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 		t.Fatalf("expected named ATOF endpoint in serialized component, got %s", serialized)
 	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
-	if wrapped.Config["opentelemetry"].(map[string]any)["mark_projection"] != "tool" {
-		t.Fatalf("expected tool mark projection in serialized config: %#v", wrapped.Config)
+	otelEndpoints := wrapped.Config["opentelemetry"].(map[string]any)["endpoints"].([]any)
+	if otelEndpoints[0].(map[string]any)["type"] != "full" {
+		t.Fatalf("expected typed OpenTelemetry endpoint in serialized config: %#v", wrapped.Config)
 	}
-}
-
-func TestObservabilityOtlpConfigPreservesExplicitEmptyMarkExclusions(t *testing.T) {
-	inherited, err := json.Marshal(ObservabilityOtlpConfig{})
-	if err != nil {
-		t.Fatalf("marshal zero-value OTLP config failed: %v", err)
-	}
-	if strings.Contains(string(inherited), `"mark_exclude_names"`) {
-		t.Fatalf("nil exclusions should inherit the core default: %s", inherited)
-	}
-
-	config := NewObservabilityOtlpConfig()
-	config.MarkExcludeNames = []string{}
-	explicitEmpty, err := json.Marshal(config)
-	if err != nil {
-		t.Fatalf("marshal OTLP config with empty exclusions failed: %v", err)
-	}
-	if !strings.Contains(string(explicitEmpty), `"mark_exclude_names":[]`) {
-		t.Fatalf("explicit empty exclusions should be preserved: %s", explicitEmpty)
+	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {
+		t.Fatalf("expected OpenTelemetry header_env in serialized config: %#v", wrapped.Config)
 	}
 }
 

@@ -27,7 +27,7 @@ Top-level exports also include:
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
-  ``OpenTelemetrySubscriber``, and ``OpenInferenceSubscriber``
+  and ``OpenTelemetrySubscriber``
 - JSON and callback type aliases used by middleware, typed wrappers, and
   plugin-facing configuration helpers
 
@@ -80,6 +80,7 @@ from __future__ import annotations
 import contextvars
 import typing
 from collections.abc import Callable as AbcCallable
+from contextlib import contextmanager
 from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias, TypedDict
 
 # Native bitflag classes exported at the top level for user code.
@@ -106,11 +107,10 @@ from nemo_relay._native import (
     LlmSanitizeResponseCodec,
     LlmSanitizeResponseContext,
     MarkEvent,
-    OpenInferenceConfig,
-    OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
     PendingMarkSpec,
+    PropagationContext,
     ScopeAttributes,
     ScopeEvent,
     ScopeHandle,
@@ -120,7 +120,18 @@ from nemo_relay._native import (
     ToolExecutionInterceptOutcome,
     ToolHandle,
 )
+from nemo_relay._native import (
+    capture_propagation_context as _capture_propagation_context,
+)
+from nemo_relay._native import (
+    capture_propagation_context_with_root as _capture_propagation_context_with_root,
+)
+from nemo_relay._native import capture_thread_scope_stack as _capture_thread_scope_stack
 from nemo_relay._native import create_scope_stack as _create_scope_stack
+from nemo_relay._native import (
+    create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
+)
+from nemo_relay._native import restore_thread_scope_stack as _restore_thread_scope_stack
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
 from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
@@ -395,6 +406,36 @@ def create_scope_stack() -> ScopeStack:
     return _create_scope_stack()
 
 
+def capture_propagation_context() -> PropagationContext:
+    """Capture the current Relay causal parent for application-managed transport."""
+    get_scope_stack()
+    return _capture_propagation_context()
+
+
+def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
+    """Capture the current parent with an optional stable application session root."""
+    get_scope_stack()
+    return _capture_propagation_context_with_root(root_uuid)
+
+
+def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack:
+    """Create an isolated stack seeded from a received propagation context."""
+    return _create_scope_stack_from_propagation(context)
+
+
+@contextmanager
+def use_scope_stack(stack: ScopeStack):
+    """Temporarily install ``stack`` in the current Python context."""
+    previous_native_stack = _capture_thread_scope_stack()
+    token = _scope_stack_var.set(stack)
+    _sync_thread_scope_stack(stack)
+    try:
+        yield stack
+    finally:
+        _scope_stack_var.reset(token)
+        _restore_thread_scope_stack(previous_native_stack)
+
+
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Install a scope stack into the current thread's native runtime context.
 
@@ -464,11 +505,16 @@ __all__ = [
     "model_pricing",
     # Scope stack isolation
     "ScopeStack",
+    "PropagationContext",
     "create_scope_stack",
+    "capture_propagation_context",
+    "capture_propagation_context_with_root",
+    "create_scope_stack_from_propagation",
     "get_scope_stack",
     "scope_stack_active",
     "propagate_scope_to_thread",
     "set_thread_scope_stack",
+    "use_scope_stack",
     # Types
     "ScopeAttributes",
     "ToolAttributes",
@@ -491,8 +537,6 @@ __all__ = [
     "AtofExporterMode",
     "AtofExporterConfig",
     "AtofExporter",
-    "OpenInferenceConfig",
-    "OpenInferenceSubscriber",
     "OpenTelemetryConfig",
     "OpenTelemetrySubscriber",
     "JsonPrimitive",

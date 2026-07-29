@@ -40,10 +40,9 @@ pub(crate) fn test_mutex() -> &'static Mutex<()> {
 pub mod atif;
 pub mod atof;
 pub(crate) mod manual;
-#[cfg(feature = "openinference")]
-pub mod openinference;
-#[cfg(feature = "otel")]
+pub(crate) mod openinference;
 pub mod otel;
+mod otel_genai;
 pub mod plugin_component;
 
 /// Export representation for point-in-time mark events.
@@ -66,25 +65,38 @@ pub enum MarkProjection {
     Tool,
 }
 
+/// Semantic projection emitted by an OpenTelemetry exporter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum OpenTelemetryType {
+    /// Relay's complete lifecycle projection, including `nemo_relay.*` attributes.
+    #[default]
+    Full,
+    /// OpenTelemetry GenAI semantic conventions.
+    GenAi,
+    /// OpenInference semantic conventions.
+    #[serde(rename = "openinference")]
+    OpenInference,
+}
+
 /// Default mark names excluded from tool projection because they are emitted
 /// at high volume and are better represented as exporter-native events.
-pub(crate) fn default_mark_exclude_names() -> Vec<String> {
+/// Return the default mark names excluded from OpenTelemetry projections.
+pub fn default_mark_exclude_names() -> Vec<String> {
     vec!["llm.chunk".to_string()]
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn relay_trace_id(uuid: uuid::Uuid) -> opentelemetry::trace::TraceId {
     opentelemetry::trace::TraceId::from_bytes(*uuid.as_bytes())
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn relay_span_id(uuid: uuid::Uuid) -> opentelemetry::trace::SpanId {
     let mut bytes = [0; 8];
     bytes.copy_from_slice(&uuid.as_bytes()[8..]);
     opentelemetry::trace::SpanId::from_bytes(bytes)
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn push_common_optimization_attributes(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &crate::codec::optimization::LlmOptimizationSummary,
@@ -96,7 +108,6 @@ pub(crate) fn push_common_optimization_attributes(
     push_optimization_pricing_provenance(attributes, summary);
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 fn push_optimization_models_and_tokens(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &crate::codec::optimization::LlmOptimizationSummary,
@@ -127,7 +138,6 @@ fn push_optimization_models_and_tokens(
     }
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 fn push_optimization_cost(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     label: &str,
@@ -160,7 +170,6 @@ fn push_optimization_cost(
     }
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 fn push_optimization_savings_and_status(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &crate::codec::optimization::LlmOptimizationSummary,
@@ -193,7 +202,6 @@ fn push_optimization_savings_and_status(
     ));
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 fn push_optimization_pricing_provenance(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &crate::codec::optimization::LlmOptimizationSummary,
@@ -254,7 +262,6 @@ pub fn validate_attribute_mappings(
     Ok(())
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 /// Projects only top-level JSON fields as OTLP attributes.
 ///
 /// Nested objects and arrays remain JSON strings so arbitrary payloads do not
@@ -279,7 +286,6 @@ pub(crate) fn push_top_level_json_attributes(
 
 /// Adds canonical session-correlation attributes from event metadata and the
 /// active scope-stack instance.
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn push_session_identity_attributes(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     event: &crate::api::event::Event,
@@ -316,7 +322,6 @@ pub(crate) fn push_session_identity_attributes(
     }
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 /// Serializes a value and projects its top-level JSON fields as OTLP attributes.
 pub(crate) fn push_serialized_top_level_attributes<T: Serialize + ?Sized>(
     attributes: &mut Vec<opentelemetry::KeyValue>,
@@ -331,7 +336,6 @@ pub(crate) fn push_serialized_top_level_attributes<T: Serialize + ?Sized>(
     }
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 fn push_top_level_json_value(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     key: &str,
@@ -366,7 +370,6 @@ fn push_top_level_json_value(
     }
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn apply_attribute_mappings(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     mappings: &[OtlpAttributeMapping],
@@ -380,7 +383,6 @@ pub(crate) fn apply_attribute_mappings(
 /// retain both mapped source keys and aliases that were already present at
 /// start. The span itself owns all other start attributes and does not need a
 /// second copy in the active-span state.
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn attribute_mapping_inputs(
     attributes: &[opentelemetry::KeyValue],
     mappings: &[OtlpAttributeMapping],
@@ -400,7 +402,6 @@ pub(crate) fn attribute_mapping_inputs(
 ///
 /// Callers that project a span across multiple lifecycle events must pass every
 /// real span attribute so projected fields always take precedence over aliases.
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn attribute_mapping_aliases(
     projected_attributes: &[opentelemetry::KeyValue],
     mappings: &[OtlpAttributeMapping],
@@ -431,7 +432,6 @@ pub(crate) fn attribute_mapping_aliases(
 ///
 /// Agent hook adapters may preserve the canonical event name in metadata while
 /// using a generic mark name, so both representations are matched.
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn mark_name_is_excluded(
     event: &crate::api::event::Event,
     excluded_names: &[String],
@@ -451,7 +451,6 @@ pub(crate) fn mark_name_is_excluded(
 ///
 /// Exclusions only affect tool projection; all other modes retain their
 /// configured exporter-native behavior.
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn effective_mark_projection(
     event: &crate::api::event::Event,
     projection: MarkProjection,
@@ -464,11 +463,10 @@ pub(crate) fn effective_mark_projection(
     }
 }
 
-#[cfg(all(test, feature = "otel", feature = "openinference"))]
+#[cfg(test)]
 #[path = "../../tests/unit/observability/exporter_parity_tests.rs"]
 mod exporter_parity_tests;
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn estimate_cost_for_response_or_requested_model(
     event: &crate::api::event::Event,
     response_model: Option<&str>,
@@ -543,7 +541,6 @@ pub(crate) fn model_name_for_llm_event(event: &crate::api::event::Event) -> Opti
         .or(manual_request_model)
 }
 
-#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn set_span_status_from_event_metadata<S>(span: &mut S, event: &crate::api::event::Event)
 where
     S: opentelemetry::trace::Span,
@@ -581,11 +578,11 @@ where
     span.set_status(status);
 }
 
-#[cfg(all(test, any(feature = "otel", feature = "openinference")))]
+#[cfg(test)]
 #[path = "../../tests/unit/observability/attribute_projection_tests.rs"]
 mod attribute_projection_tests;
 
-#[cfg(all(test, any(feature = "otel", feature = "openinference")))]
+#[cfg(test)]
 mod tests {
     use super::{relay_span_id, relay_trace_id};
     use uuid::Uuid;

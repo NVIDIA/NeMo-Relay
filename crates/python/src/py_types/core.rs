@@ -14,7 +14,10 @@ use super::{
 };
 use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+use nemo_relay::api::runtime::{
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
+    ThreadScopeStackBinding,
+};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 
 /// Structured identity of the codec active during LLM sanitization.
@@ -185,6 +188,75 @@ pub struct PyScopeStack(pub ScopeStackHandle);
 impl PyScopeStack {
     pub(crate) fn __repr__(&self) -> String {
         "<ScopeStack>".to_string()
+    }
+}
+
+/// Opaque captured native thread binding used to restore a Python scope context.
+#[pyclass(name = "_ThreadScopeStackBinding")]
+pub struct PyThreadScopeStackBinding(pub ThreadScopeStackBinding);
+
+#[pymethods]
+impl PyThreadScopeStackBinding {
+    pub(crate) fn __repr__(&self) -> String {
+        "<_ThreadScopeStackBinding>".to_string()
+    }
+}
+
+/// Transport-neutral causal context used to continue Relay work remotely.
+#[pyclass(name = "PropagationContext", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyPropagationContext {
+    pub(crate) inner: PropagationContext,
+}
+
+#[pymethods]
+impl PyPropagationContext {
+    #[new]
+    #[pyo3(signature = (parent_uuid, root_uuid=None, version=1))]
+    fn new(parent_uuid: &str, root_uuid: Option<&str>, version: u16) -> PyResult<Self> {
+        let context = PropagationContext {
+            version,
+            root_uuid: root_uuid
+                .map(uuid::Uuid::parse_str)
+                .transpose()
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+            parent_uuid: uuid::Uuid::parse_str(parent_uuid)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+        };
+        context
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(Self { inner: context })
+    }
+
+    #[getter]
+    fn version(&self) -> u16 {
+        self.inner.version
+    }
+
+    #[getter]
+    fn root_uuid(&self) -> Option<String> {
+        self.inner.root_uuid.map(|uuid| uuid.to_string())
+    }
+
+    #[getter]
+    fn parent_uuid(&self) -> String {
+        self.inner.parent_uuid.to_string()
+    }
+
+    /// Serialize this context to the Relay JSON wire format.
+    fn to_json(&self) -> PyResult<String> {
+        self.inner
+            .to_json()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    }
+
+    /// Deserialize and validate a context from the Relay JSON wire format.
+    #[staticmethod]
+    fn from_json(value: &str) -> PyResult<Self> {
+        PropagationContext::from_json(value)
+            .map(|inner| Self { inner })
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
     }
 }
 

@@ -17,9 +17,14 @@ use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
-    TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
-    current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
-    set_thread_scope_stack as bind_thread_scope_stack,
+    TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
+    capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    capture_thread_scope_stack as capture_thread_scope_stack_handle,
+    create_scope_stack as create_scope_stack_handle,
+    create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
+    current_scope_stack as current_scope_stack_handle,
+    restore_thread_scope_stack as restore_thread_scope_stack_handle,
+    scope_stack_active as scope_stack_is_active, set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
 use nemo_relay::api::scope as core_scope_api;
@@ -38,8 +43,9 @@ use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json
 use crate::py_callable;
 use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest,
-    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyScopeAttributes, PyScopeHandle,
-    PyScopeStack, PyScopeType, PyToolAttributes, PyToolHandle,
+    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
+    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
+    PyToolAttributes, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -162,6 +168,38 @@ pub fn create_scope_stack() -> PyScopeStack {
     PyScopeStack(create_scope_stack_handle())
 }
 
+/// Capture a transport-neutral context from the current Relay scope stack.
+#[pyfunction]
+pub fn capture_propagation_context() -> PyResult<PyPropagationContext> {
+    capture_propagation_context_handle()
+        .map(|inner| PyPropagationContext { inner })
+        .map_err(to_py_err)
+}
+
+/// Capture a context with an application-supplied stable session root UUID.
+#[pyfunction]
+pub fn capture_propagation_context_with_root(
+    root_uuid: Option<&str>,
+) -> PyResult<PyPropagationContext> {
+    let root_uuid = root_uuid
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
+    capture_propagation_context_with_root_handle(root_uuid)
+        .map(|inner| PyPropagationContext { inner })
+        .map_err(to_py_err)
+}
+
+/// Create an isolated scope stack seeded from a received propagation context.
+#[pyfunction]
+pub fn create_scope_stack_from_propagation(
+    context: &PyPropagationContext,
+) -> PyResult<PyScopeStack> {
+    create_scope_stack_from_propagation_handle(&context.inner)
+        .map(PyScopeStack)
+        .map_err(to_py_err)
+}
+
 /// Bind a ``ScopeStack`` to the current thread's thread-local storage.
 ///
 /// This ensures that subsequent NeMo Relay API calls on this thread use the given
@@ -173,6 +211,19 @@ pub fn create_scope_stack() -> PyScopeStack {
 #[pyfunction]
 pub fn set_thread_scope_stack(stack: &PyScopeStack) {
     bind_thread_scope_stack(stack.0.clone());
+}
+
+/// Capture the scope stack currently installed in native thread-local storage.
+#[pyfunction]
+pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
+    PyThreadScopeStackBinding(capture_thread_scope_stack_handle())
+}
+
+/// Restore a complete native thread binding captured by
+/// [`capture_thread_scope_stack`].
+#[pyfunction]
+pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
+    restore_thread_scope_stack_handle(binding.0.clone());
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
@@ -1740,7 +1791,12 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_propagation_context_with_root, m)?)?;
+    m.add_function(wrap_pyfunction!(create_scope_stack_from_propagation, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(restore_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(sync_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(py_scope_stack_active, m)?)?;
 

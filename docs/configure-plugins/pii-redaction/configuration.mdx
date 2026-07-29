@@ -87,8 +87,8 @@ Use either the legacy single-policy fields (`mode`, surface flags, `priority`,
 In profile-array mode, profiles execute by ascending priority and use array
 order to break ties. Relay assigns internal names such as `profile_0`, so
 profiles do not require IDs. Disabled profiles are validated but do not
-register callbacks. The complete array is replaced as one value during config
-layering.
+register callbacks. Profile lists concatenate during config layering, with
+higher-precedence profiles placed before lower-precedence profiles.
 
 ### Mixed-Provider Gateway Example
 
@@ -317,6 +317,12 @@ When `detector` is set and you do not specify `unmasked_prefix` or
 ## Path Semantics
 
 `target_paths` are exact JSON-pointer matches.
+
+Relay validates every configured path as RFC 6901 syntax before activating the
+component. The empty string selects the document root. Every other pointer must
+start with `/`, and `~` escapes must use `~0` for `~` or `~1` for `/`. Invalid
+pointers prevent activation instead of silently leaving the intended values
+unsanitized.
 
 The plugin uses different payload boundaries for tools and LLMs:
 

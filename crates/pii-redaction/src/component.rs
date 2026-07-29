@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
 use super::builtin::{
-    CompiledBuiltinBackend, llm_sanitize_request_callback, llm_sanitize_response_callback,
-    tool_sanitize_callback,
+    CompiledBuiltinBackend, is_valid_json_pointer, llm_sanitize_request_callback,
+    llm_sanitize_response_callback, tool_sanitize_callback,
 };
 #[cfg(test)]
 pub(crate) use super::builtin::{hex_sha256, mask_text};
@@ -187,7 +187,7 @@ pub struct BuiltinBackendConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_action_schema"))]
     pub action: String,
-    /// Exact JSON-pointer paths to sanitize. Empty means every string leaf.
+    /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty means every string leaf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_paths: Vec<String>,
     /// Regex pattern used when `action = "regex_replace"` or `action = "redact"`.
@@ -926,6 +926,19 @@ fn validate_builtin_action_requirements(
     let Some(builtin) = config.builtin.as_ref() else {
         return;
     };
+
+    for (index, target_path) in builtin.target_paths.iter().enumerate() {
+        if !is_valid_json_pointer(target_path) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some(format!("builtin.target_paths[{index}]")),
+                "builtin.target_paths entries must be valid RFC 6901 JSON pointers".to_string(),
+            );
+        }
+    }
 
     if builtin.preset.is_some() {
         validate_builtin_preset_requirements(diagnostics, policy, plugin_config, builtin);

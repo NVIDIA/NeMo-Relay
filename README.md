@@ -32,7 +32,7 @@ evaluation products, see [the Ecosystem guide](https://docs.nvidia.com/nemo/rela
 | Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
-| Export ATOF, ATIF, OpenTelemetry, or OpenInference | [Observability Plugin](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) |
+| Export ATOF, ATIF, or typed OpenTelemetry projections | [Observability Plugin](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) |
 | Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
 | Develop or test this repository from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
@@ -45,14 +45,32 @@ trajectory file, you have concrete data to inspect, debug, and build on.
 ### Local Agent Trajectory
 
 This walkthrough shows an end-to-end quick success setup. Install the
-`nemo-relay-cli`, turn on local exporters, run Codex, Claude Code, or Hermes
+NeMo Relay CLI, turn on local exporters, run Codex, Claude Code, or Hermes
 through Relay, and check that Relay wrote both raw events and normalized
 trajectories.
 
 
 #### 1. Install the CLI
 
-Run the installer for your platform:
+Install the prebuilt CLI from PyPI:
+
+```bash
+pip install nemo-relay-cli-bin
+```
+
+Install the prebuilt CLI from npm:
+
+```bash
+npm install --global nemo-relay-cli-bin
+```
+
+Python API users can install the matching CLI through the optional extra:
+
+```bash
+pip install "nemo-relay[cli]"
+```
+
+Alternatively, run the installer for your platform:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
@@ -196,8 +214,8 @@ and agent-specific diagnostics.
 > [!TIP]
 > Start by trusting the raw Agent Trajectory Observability Format (ATOF) JSONL.
 > It shows the lifecycle events Relay actually captured before anything is
-> translated into Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
-> OpenInference output.
+> translated into Agent Trajectory Interchange Format (ATIF) or typed
+> OpenTelemetry output, including the OpenInference projection.
 
 ## Quick Start Applications
 
@@ -247,8 +265,8 @@ Relay gives those systems:
   route, retry, or replace execution.
 - **Plugins** so reusable observability, guardrail, adaptive, and exporter
   behavior can be turned on from configuration.
-- **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
-  OpenInference output all come from the same runtime stream.
+- **Events and subscribers** so raw ATOF, normalized ATIF, and typed
+  OpenTelemetry projections all come from the same runtime stream.
 
 Relay does not replace frameworks, model provider, application logic,
 observability backend, or guardrail authoring system. It gives those systems a

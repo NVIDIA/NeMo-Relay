@@ -5,20 +5,11 @@ package nemo_relay
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
-)
-
-const (
-	openInferenceServiceName      = "go-agent"
-	tenantAttributeAlias          = "tenant.id"
-	newOpenInferenceErrorFmt      = "NewOpenInferenceSubscriber failed: %v"
-	uniqueSubscriberTimeFormat    = "150405.000000"
-	registerOpenInferenceErrorFmt = "Register failed: %v"
 )
 
 type otelRequest struct {
@@ -27,135 +18,46 @@ type otelRequest struct {
 	Body        []byte
 }
 
-func TestNewOpenInferenceConfigDefaults(t *testing.T) {
-	config := NewOpenInferenceConfig()
-
-	if config.Transport != OpenInferenceTransportHTTPBinary {
-		t.Fatalf("expected default transport http_binary, got %q", config.Transport)
-	}
-	if config.ServiceName != "nemo-relay" {
-		t.Fatalf("expected default service name nemo-relay, got %q", config.ServiceName)
-	}
-	if config.InstrumentationScope != "nemo-relay-openinference" {
-		t.Fatalf("expected default instrumentation scope, got %q", config.InstrumentationScope)
-	}
-	if config.Timeout != 3*time.Second {
-		t.Fatalf("expected default timeout 3s, got %v", config.Timeout)
-	}
-	if config.Headers == nil || len(config.Headers) != 0 {
-		t.Fatalf("expected empty headers map, got %#v", config.Headers)
-	}
-	if config.ResourceAttributes == nil || len(config.ResourceAttributes) != 0 {
-		t.Fatalf("expected empty resource attributes map, got %#v", config.ResourceAttributes)
-	}
-}
-
-func TestOpenInferenceSubscriberLifecycle(t *testing.T) {
-	config := NewOpenInferenceConfig()
-	config.Endpoint = "http://localhost:4318/v1/traces"
-	config.ServiceName = openInferenceServiceName
-	config.ServiceNamespace = "agents"
-	config.ServiceVersion = "1.0.0"
-	config.InstrumentationScope = "go-tests"
-	config.Timeout = 1250 * time.Millisecond
-	config.Headers["authorization"] = "Bearer token"
-	config.ResourceAttributes["deployment.environment"] = "test"
-	config.AttributeMappings = []OtlpAttributeMapping{{
-		Key:   "openinference.metadata.tenant",
-		Alias: tenantAttributeAlias,
-	}}
-
-	subscriber, err := NewOpenInferenceSubscriber(config)
-	if err != nil {
-		t.Fatalf(newOpenInferenceErrorFmt, err)
-	}
-	defer subscriber.Close()
-
-	name := "go_openinference_subscriber_" + time.Now().Format(uniqueSubscriberTimeFormat)
-	if err := subscriber.Register(name); err != nil {
-		t.Fatalf(registerOpenInferenceErrorFmt, err)
-	}
-	if err := subscriber.Deregister(name); err != nil {
-		t.Fatalf("Deregister failed: %v", err)
-	}
-	if err := subscriber.Deregister(name); err != nil {
-		t.Fatalf("repeated Deregister should be safe, got: %v", err)
-	}
-	if err := subscriber.ForceFlush(); err != nil {
-		t.Fatalf("ForceFlush failed: %v", err)
-	}
-	if err := subscriber.Shutdown(); err != nil {
-		t.Fatalf("Shutdown failed: %v", err)
-	}
-}
-
-func TestOpenInferenceSubscriberRejectsInvalidTransport(t *testing.T) {
-	config := NewOpenInferenceConfig()
-	config.Transport = OpenInferenceTransport("invalid")
-
-	_, err := NewOpenInferenceSubscriber(config)
-	if err == nil {
-		t.Fatal("expected invalid transport error")
-	}
-}
-
-func TestOpenInferenceSubscriberRejectsInvalidAttributeMapping(t *testing.T) {
-	config := NewOpenInferenceConfig()
-	config.AttributeMappings = []OtlpAttributeMapping{{Key: "", Alias: tenantAttributeAlias}}
-
-	if _, err := NewOpenInferenceSubscriber(config); err == nil {
-		t.Fatal("expected invalid attribute mapping error")
-	}
-}
-
-func TestOpenInferenceSubscriberExportsScopeLifecycleAndMappedAttributes(t *testing.T) {
-	requests := make(chan otelRequest, 4)
+func TestOpenInferenceUsesTypedOpenTelemetrySubscriber(t *testing.T) {
+	requests := make(chan otelRequest, 1)
 	server := NewOtelTestServer(t, requests)
 	defer server.Close()
 
-	config := NewOpenInferenceConfig()
-	config.Endpoint = server.URL + "/v1/traces"
-	config.ServiceName = openInferenceServiceName
-	config.AttributeMappings = []OtlpAttributeMapping{{
-		Key:   "openinference.metadata.tenant",
-		Alias: tenantAttributeAlias,
-	}}
-	subscriber, err := NewOpenInferenceSubscriber(config)
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeOpenInference, server.URL+"/v1/traces")
+	config.ServiceName = "go-agent"
+
+	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
-		t.Fatalf(newOpenInferenceErrorFmt, err)
+		t.Fatalf("NewOpenTelemetrySubscriber failed: %v", err)
 	}
 	defer subscriber.Close()
-	name := "go_openinference_e2e_" + time.Now().Format(uniqueSubscriberTimeFormat)
+
+	name := "go_openinference_typed"
 	if err := subscriber.Register(name); err != nil {
-		t.Fatalf(registerOpenInferenceErrorFmt, err)
+		t.Fatalf("Register failed: %v", err)
 	}
 	defer func() { _ = subscriber.Deregister(name) }()
 
 	runWithTestScopeStack(t, func() {
 		handle, err := PushScope("openinference_scope", ScopeTypeAgent)
-		if err != nil {
-			t.Fatalf("PushScope failed: %v", err)
-		}
-		requireNoError(t, EmitEvent(
-			"openinference_mark",
-			WithEventParent(handle),
-			WithEventData(json.RawMessage(`{"step":1}`)),
-			WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
-		), "EmitEvent failed")
-		requireNoError(
-			t,
-			PopScope(handle, WithScopeEndMetadata(json.RawMessage(`{"tenant":"go"}`))),
-			"PopScope failed",
-		)
+		requireNoError(t, err, "PushScope failed")
+		requireNoError(t, PopScope(handle), "PopScope failed")
 	})
-	if err := subscriber.ForceFlush(); err != nil {
-		t.Fatalf("ForceFlush failed: %v", err)
-	}
+	requireNoError(t, subscriber.ForceFlush(), "ForceFlush failed")
 
 	select {
 	case request := <-requests:
-		AssertOpenInferenceRequest(t, request)
-		assertOtlpStringAttribute(t, request.Body, tenantAttributeAlias, "go")
+		if request.Path != "/v1/traces" {
+			t.Fatalf("expected /v1/traces path, got %q", request.Path)
+		}
+		if request.ContentType != "application/x-protobuf" {
+			t.Fatalf("expected protobuf content type, got %q", request.ContentType)
+		}
+		for _, needle := range [][]byte{[]byte("openinference.span.kind"), []byte("AGENT")} {
+			if !bytes.Contains(request.Body, needle) {
+				t.Fatalf("expected OTLP request body to contain %q", needle)
+			}
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
 	}
@@ -175,67 +77,4 @@ func NewOtelTestServer(t *testing.T, requests chan<- otelRequest) *httptest.Serv
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-}
-
-func NewRegisteredOpenInferenceSubscriber(t *testing.T, endpoint string) *OpenInferenceSubscriber {
-	t.Helper()
-	config := NewOpenInferenceConfig()
-	config.Endpoint = endpoint
-	config.ServiceName = openInferenceServiceName
-
-	subscriber, err := NewOpenInferenceSubscriber(config)
-	if err != nil {
-		t.Fatalf(newOpenInferenceErrorFmt, err)
-	}
-	name := "go_openinference_e2e_" + time.Now().Format(uniqueSubscriberTimeFormat)
-	if err := subscriber.Register(name); err != nil {
-		t.Fatalf(registerOpenInferenceErrorFmt, err)
-	}
-	t.Cleanup(func() { _ = subscriber.Deregister(name) })
-	return subscriber
-}
-
-func EmitOpenInferenceScopeLifecycle(t *testing.T) {
-	t.Helper()
-	runWithTestScopeStack(t, func() {
-		handle, err := PushScope("openinference_scope", ScopeTypeAgent)
-		if err != nil {
-			t.Fatalf("PushScope failed: %v", err)
-		}
-		requireNoError(t, EmitEvent(
-			"openinference_mark",
-			WithEventParent(handle),
-			WithEventData(json.RawMessage(`{"step":1}`)),
-			WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
-		), "EmitEvent failed")
-		requireNoError(t, PopScope(handle), "PopScope failed")
-	})
-}
-
-func AssertOpenInferenceRequest(t *testing.T, request otelRequest) {
-	t.Helper()
-	if request.Path != "/v1/traces" {
-		t.Fatalf("expected /v1/traces path, got %q", request.Path)
-	}
-	if request.ContentType != "application/x-protobuf" {
-		t.Fatalf("expected protobuf content type, got %q", request.ContentType)
-	}
-	if len(request.Body) == 0 {
-		t.Fatal("expected non-empty OTLP request body")
-	}
-	AssertOpenInferenceBodyContains(t, request.Body)
-}
-
-func AssertOpenInferenceBodyContains(t *testing.T, body []byte) {
-	t.Helper()
-	for _, needle := range [][]byte{
-		[]byte("openinference.span.kind"),
-		[]byte("AGENT"),
-		[]byte("metadata"),
-		[]byte("openinference_mark"),
-	} {
-		if !bytes.Contains(body, needle) {
-			t.Fatalf("expected OTLP request body to contain %q", needle)
-		}
-	}
 }

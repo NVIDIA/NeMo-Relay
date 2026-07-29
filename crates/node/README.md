@@ -32,8 +32,8 @@ Use the Node.js binding for the following tasks:
 - **Put policy around callbacks**: Register guardrails and intercepts for
   request rewriting, blocking, sanitization, and execution wrapping.
 - **Emit one lifecycle stream**: Send runtime events to in-process
-  subscribers, Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
-  OpenInference workflows.
+  subscribers, Agent Trajectory Interchange Format (ATIF), or typed
+  OpenTelemetry workflows.
 - **Use package entry points by need**: Import the main runtime surface plus
   typed, plugin, adaptive, and observability helpers from npm.
 
@@ -48,8 +48,10 @@ The Node.js package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries,
   plus mark and scope event sanitizers for `data`, `categoryProfile`, and
   `metadata`.
-- **Observability exporters**: Subscriber and exporter support for common
-  runtime telemetry flows.
+- **Observability exporters**: `OpenTelemetrySubscriber` accepts one required
+  `full`, `gen_ai`, or `openinference` endpoint configuration. The
+  `nemo-relay-node/observability` helper configures plugin-owned endpoint
+  fan-out.
 - **Additional entry points**: `nemo-relay-node/typed`,
   `nemo-relay-node/plugin`, `nemo-relay-node/adaptive`, and
   `nemo-relay-node/observability`.

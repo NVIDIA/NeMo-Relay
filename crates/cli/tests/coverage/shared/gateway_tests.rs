@@ -998,6 +998,147 @@ async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
 }
 
 #[tokio::test]
+async fn streaming_provider_error_does_not_poison_the_next_request() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let error_body = r#"{"error":{"type":"rate_limit_error"}}"#;
+    let error_response = format!(
+        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 7\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        error_body.len(),
+        error_body
+    );
+    let sse_body = "data: {\"type\":\"message_stop\"}\n\n";
+    let success_response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        sse_body.len(),
+        sse_body
+    );
+    let server = tokio::spawn(async move {
+        for response in [error_response.as_str(), success_response.as_str()] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+
+    let state = AppState::new(GatewayConfig::default());
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/v1/messages".into(),
+        provider: ProviderRoute::AnthropicMessages,
+        upstream_url: format!("http://{address}/v1/messages"),
+        body_bytes: Bytes::from_static(b"{}"),
+        request_json: json!({}),
+        streaming: true,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: false,
+        },
+    };
+    let upstream_info = Arc::new(Mutex::new(None));
+    let upstream_error = Arc::new(Mutex::new(None));
+    let upstream_passthrough = Arc::new(Mutex::new(None));
+    let func = build_streaming_func(
+        state,
+        &prepared,
+        upstream_info.clone(),
+        upstream_error.clone(),
+        upstream_passthrough.clone(),
+    );
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({}),
+    };
+
+    let error = match func(request.clone()).await {
+        Ok(_) => panic!("expected the provider error to terminate managed streaming"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, FlowError::Internal(_)));
+    assert!(upstream_info.lock().unwrap().is_none());
+    assert!(upstream_error.lock().unwrap().is_none());
+    let (status, headers, body) = upstream_passthrough.lock().unwrap().take().unwrap();
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        headers.get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
+    assert_eq!(headers.get(header::RETRY_AFTER).unwrap(), "7");
+    assert_eq!(body, error_body);
+
+    let mut stream = func(request).await.unwrap();
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({"type": "message_stop"})
+    );
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        upstream_info.lock().unwrap().as_ref().unwrap().0,
+        StatusCode::OK
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn retry_aware_streaming_provider_error_stays_structured() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+    });
+
+    let state = AppState::new(GatewayConfig::default());
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/v1/messages".into(),
+        provider: ProviderRoute::AnthropicMessages,
+        upstream_url: format!("http://{address}/v1/messages"),
+        body_bytes: Bytes::from_static(b"{}"),
+        request_json: json!({}),
+        streaming: true,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: false,
+        },
+    };
+    let upstream_passthrough = Arc::new(Mutex::new(None));
+    let func = build_streaming_func(
+        state,
+        &prepared,
+        Arc::new(Mutex::new(None)),
+        Arc::new(Mutex::new(None)),
+        upstream_passthrough.clone(),
+    );
+    let request = LlmRequest {
+        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"))]),
+        content: json!({}),
+    };
+
+    let error = match func(request).await {
+        Ok(_) => panic!("expected a structured provider failure"),
+        Err(error) => error,
+    };
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure, got {error:?}");
+    };
+    assert_eq!(failure.status, Some(429));
+    assert_eq!(failure.class, UpstreamFailureClass::RetryableStatus);
+    assert!(upstream_passthrough.lock().unwrap().is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn retry_aware_buffered_body_read_failure_stays_structured() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

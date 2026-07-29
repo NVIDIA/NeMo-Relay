@@ -5,6 +5,80 @@
 
 use super::*;
 use nemo_relay::plugin::rollback_registrations;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last_request = None;
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    let (header_end, content_length) = loop {
+                        let read = stream.read(&mut buffer).unwrap();
+                        assert!(
+                            read > 0,
+                            "collector connection closed before request headers"
+                        );
+                        request.extend_from_slice(&buffer[..read]);
+                        if let Some(header_end) =
+                            request.windows(4).position(|value| value == b"\r\n\r\n")
+                        {
+                            let header_end = header_end + 4;
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    line.split_once(':').and_then(|(name, value)| {
+                                        name.eq_ignore_ascii_case("content-length")
+                                            .then(|| value.trim().parse::<usize>().unwrap())
+                                    })
+                                })
+                                .expect("OTLP request must include content-length");
+                            break (header_end, content_length);
+                        }
+                    };
+                    while request.len() < header_end + content_length {
+                        let read = stream.read(&mut buffer).unwrap();
+                        assert!(read > 0, "collector connection closed before request body");
+                        request.extend_from_slice(&buffer[..read]);
+                    }
+                    sender
+                        .send(request[header_end..header_end + content_length].to_vec())
+                        .unwrap();
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    last_request = Some(Instant::now());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if last_request.is_some_and(|last| last.elapsed() >= Duration::from_millis(250))
+                    {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("collector accept failed: {error}"),
+            }
+        }
+    });
+    (format!("http://{address}/v1/traces"), receiver, handle)
+}
 
 unsafe extern "C" fn event_sanitize_cb(
     _user_data: *mut libc::c_void,
@@ -449,6 +523,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
 
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -464,6 +539,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         );
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 invalid_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -479,6 +555,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         );
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 invalid_headers.as_ptr(),
@@ -494,6 +571,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         );
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -509,6 +587,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         );
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 grpc_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -527,6 +606,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         subscriber = ptr::null_mut();
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -581,12 +661,129 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
 }
 
 #[test]
+fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = cstring("http://localhost:4318/v1/traces");
+        let blank = cstring(" \t");
+        let unknown = cstring("unknown");
+        let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+
+        for (otel_type, endpoint_ptr) in [
+            (ptr::null(), endpoint.as_ptr()),
+            (c"".as_ptr(), endpoint.as_ptr()),
+            (unknown.as_ptr(), endpoint.as_ptr()),
+            (c"full".as_ptr(), ptr::null()),
+            (c"full".as_ptr(), blank.as_ptr()),
+        ] {
+            assert_eq!(
+                nemo_relay_otel_subscriber_create(
+                    otel_type,
+                    ptr::null(),
+                    endpoint_ptr,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    &mut subscriber,
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+            assert!(subscriber.is_null());
+        }
+
+        let (collector_endpoint, request, collector) = start_otlp_http_collector();
+        let collector_endpoint = cstring(&collector_endpoint);
+        assert_eq!(
+            nemo_relay_otel_subscriber_create(
+                c"gen_ai".as_ptr(),
+                ptr::null(),
+                collector_endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let subscriber_name = cstring(&unique_name("ffi_gen_ai"));
+        assert_eq!(
+            nemo_relay_otel_subscriber_register(subscriber, subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+
+        let stack = fresh_scope_stack();
+        let scope_name = cstring("research-agent");
+        let mut scope = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_eq!(
+            nemo_relay_otel_subscriber_force_flush(subscriber),
+            NemoRelayStatus::Ok
+        );
+
+        let body = request.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            body.windows(b"invoke_agent research-agent".len())
+                .any(|value| value == b"invoke_agent research-agent")
+        );
+        assert!(
+            body.windows(b"gen_ai.operation.name".len())
+                .any(|value| value == b"gen_ai.operation.name")
+        );
+        assert!(
+            !body
+                .windows(b"nemo_relay.".len())
+                .any(|value| value == b"nemo_relay.")
+        );
+
+        assert_eq!(
+            nemo_relay_otel_subscriber_deregister(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_otel_subscriber_shutdown(subscriber),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_otel_subscriber_free(subscriber);
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+        collector.join().unwrap();
+    }
+}
+
+#[test]
 fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
 
     unsafe {
-        let mut subscriber: *mut FfiOpenInferenceSubscriber = ptr::null_mut();
+        let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         let endpoint = cstring("http://localhost:4318/v1/traces");
         let headers = cstring(r#"{"authorization":"Bearer token"}"#);
         let resource_attributes = cstring(r#"{"deployment.environment":"test"}"#);
@@ -600,7 +797,8 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
         let invalid_resource_attributes = cstring(r#"["not-an-object"]"#);
 
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -615,7 +813,8 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 invalid_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -630,7 +829,8 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 invalid_headers.as_ptr(),
@@ -645,7 +845,8 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -660,7 +861,8 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 grpc_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -675,10 +877,11 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             NemoRelayStatus::Ok
         );
         assert!(!subscriber.is_null());
-        nemo_relay_openinference_subscriber_free(subscriber);
+        nemo_relay_otel_subscriber_free(subscriber);
         subscriber = ptr::null_mut();
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
@@ -696,39 +899,39 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
 
         let name = cstring(&unique_name("ffi_openinference"));
         assert_eq!(
-            nemo_relay_openinference_subscriber_register(ptr::null(), name.as_ptr()),
+            nemo_relay_otel_subscriber_register(ptr::null(), name.as_ptr()),
             NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_force_flush(ptr::null()),
+            nemo_relay_otel_subscriber_force_flush(ptr::null()),
             NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_shutdown(ptr::null()),
+            nemo_relay_otel_subscriber_shutdown(ptr::null()),
             NemoRelayStatus::NullPointer
         );
 
         assert_eq!(
-            nemo_relay_openinference_subscriber_register(subscriber, name.as_ptr()),
+            nemo_relay_otel_subscriber_register(subscriber, name.as_ptr()),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_deregister(name.as_ptr()),
+            nemo_relay_otel_subscriber_deregister(name.as_ptr()),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_deregister(name.as_ptr()),
+            nemo_relay_otel_subscriber_deregister(name.as_ptr()),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_force_flush(subscriber),
+            nemo_relay_otel_subscriber_force_flush(subscriber),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_shutdown(subscriber),
+            nemo_relay_otel_subscriber_shutdown(subscriber),
             NemoRelayStatus::Ok
         );
-        nemo_relay_openinference_subscriber_free(subscriber);
+        nemo_relay_otel_subscriber_free(subscriber);
     }
 }
 

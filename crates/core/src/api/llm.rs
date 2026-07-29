@@ -22,6 +22,7 @@ use crate::api::runtime::global_context;
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
+    with_active_event_uuid,
 };
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
@@ -1050,7 +1051,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     emit_optimization_marks(&handle, &lifecycle_subscribers);
 
     let execution_name = name.clone();
-    let execution =
+    let event_uuid = handle.uuid;
+    let execution = with_active_event_uuid(
+        event_uuid,
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
             let execution = {
                 let scope_stack = current_scope_stack();
@@ -1065,8 +1068,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 state.llm_build_execution_chain(&execution_name, func, &scope_locals)
             };
             execution(intercepted_request).await
-        })
-        .await;
+        }),
+    )
+    .await;
 
     match execution {
         Ok(response) => {
@@ -1243,7 +1247,9 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     emit_optimization_marks(&handle, &lifecycle_subscribers);
 
     let execution_name = name.clone();
-    let execution =
+    let event_uuid = handle.uuid;
+    let execution = with_active_event_uuid(
+        event_uuid,
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
             let execution = {
                 let scope_stack = current_scope_stack();
@@ -1258,8 +1264,9 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 state.llm_stream_build_execution_chain(&execution_name, func, &scope_locals)
             };
             execution(intercepted_request).await
-        })
-        .await;
+        }),
+    )
+    .await;
 
     match execution {
         Ok(raw_stream) => {

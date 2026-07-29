@@ -183,11 +183,6 @@ typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
 typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
 
 /**
- * Opaque OpenInference subscriber handle.
- */
-typedef struct FfiOpenInferenceSubscriber FfiOpenInferenceSubscriber;
-
-/**
  * Opaque OpenTelemetry subscriber handle.
  */
 typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
@@ -1445,16 +1440,15 @@ NemoRelayStatus nemo_relay_atof_exporter_shutdown(const struct FfiAtofExporter *
 NemoRelayStatus nemo_relay_atof_exporter_path(const struct FfiAtofExporter *exporter, char **out);
 
 /**
- * Creates a new OpenTelemetry subscriber.
+ * Creates one typed OpenTelemetry exporter subscriber.
  *
- * Nullable strings use crate defaults when omitted. `headers_json` and
- * `resource_attributes_json` must be JSON objects of string values when
- * provided.
+ * `otel_type` must be `full`, `gen_ai`, or `openinference`. `endpoint` is required.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
  */
-NemoRelayStatus nemo_relay_otel_subscriber_create(const char *transport,
+NemoRelayStatus nemo_relay_otel_subscriber_create(const char *otel_type,
+                                                  const char *transport,
                                                   const char *endpoint,
                                                   const char *headers_json,
                                                   const char *resource_attributes_json,
@@ -1466,14 +1460,17 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *transport,
                                                   struct FfiOpenTelemetrySubscriber **out);
 
 /**
- * Creates a new OpenTelemetry subscriber with typed attribute mappings.
+ * Creates one typed OpenTelemetry exporter subscriber with projection controls.
  *
- * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+ * The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
+ * `attribute_mappings: [{"key":"…","alias":"…"}]` shapes. Pass null for either
+ * array to use its default. `mark_projection` is `inherit`, `event`, or `tool`.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
  */
-NemoRelayStatus nemo_relay_otel_subscriber_create_with_attribute_mappings(const char *transport,
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const char *otel_type,
+                                                                          const char *transport,
                                                                           const char *endpoint,
                                                                           const char *headers_json,
                                                                           const char *resource_attributes_json,
@@ -1482,6 +1479,8 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_attribute_mappings(const 
                                                                           const char *service_version,
                                                                           const char *instrumentation_scope,
                                                                           uint64_t timeout_millis,
+                                                                          const char *mark_projection,
+                                                                          const char *mark_exclude_names_json,
                                                                           const char *attribute_mappings_json,
                                                                           struct FfiOpenTelemetrySubscriber **out);
 
@@ -1517,80 +1516,6 @@ NemoRelayStatus nemo_relay_otel_subscriber_force_flush(const struct FfiOpenTelem
  * `subscriber` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_otel_subscriber_shutdown(const struct FfiOpenTelemetrySubscriber *subscriber);
-
-/**
- * Creates a new OpenInference subscriber.
- *
- * Nullable strings use crate defaults when omitted. `headers_json` and
- * `resource_attributes_json` must be JSON objects of string values when
- * provided.
- *
- * # Safety
- * Any non-null C strings must be valid and `out` must be non-null.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_create(const char *transport,
-                                                           const char *endpoint,
-                                                           const char *headers_json,
-                                                           const char *resource_attributes_json,
-                                                           const char *service_name,
-                                                           const char *service_namespace,
-                                                           const char *service_version,
-                                                           const char *instrumentation_scope,
-                                                           uint64_t timeout_millis,
-                                                           struct FfiOpenInferenceSubscriber **out);
-
-/**
- * Creates a new OpenInference subscriber with typed attribute mappings.
- *
- * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
- *
- * # Safety
- * Any non-null C strings must be valid and `out` must be non-null.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_create_with_attribute_mappings(const char *transport,
-                                                                                   const char *endpoint,
-                                                                                   const char *headers_json,
-                                                                                   const char *resource_attributes_json,
-                                                                                   const char *service_name,
-                                                                                   const char *service_namespace,
-                                                                                   const char *service_version,
-                                                                                   const char *instrumentation_scope,
-                                                                                   uint64_t timeout_millis,
-                                                                                   const char *attribute_mappings_json,
-                                                                                   struct FfiOpenInferenceSubscriber **out);
-
-/**
- * Registers the OpenInference subscriber as an event subscriber.
- *
- * # Safety
- * `subscriber` and `name` must be valid, non-null pointers.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_register(const struct FfiOpenInferenceSubscriber *subscriber,
-                                                             const char *name);
-
-/**
- * Deregisters the OpenInference subscriber by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_deregister(const char *name);
-
-/**
- * Forces a flush of finished spans through the exporter.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_force_flush(const struct FfiOpenInferenceSubscriber *subscriber);
-
-/**
- * Shuts down the underlying tracer provider.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpenInferenceSubscriber *subscriber);
 
 /**
  * Load and activate dynamic plugins as one owned transaction.
@@ -2342,6 +2267,39 @@ NemoRelayStatus nemo_relay_scope_deregister_subscriber(const char *scope_uuid, c
 NemoRelayStatus nemo_relay_scope_stack_create(struct FfiScopeStack **out);
 
 /**
+ * Serialize the current causal parent as a versioned propagation context.
+ *
+ * The returned JSON must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_json(char **out);
+
+/**
+ * Serialize the current causal parent with an application-supplied root UUID.
+ *
+ * Pass null for `root_uuid` to omit the root. The returned JSON must be freed
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * When non-null, `root_uuid` must point to a valid NUL-terminated C string;
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_with_root_json(const char *root_uuid,
+                                                                      char **out);
+
+/**
+ * Create an isolated scope stack from propagation-context JSON.
+ *
+ * # Safety
+ * `context_json` must point to a valid NUL-terminated C string and `out` must
+ * be a valid, writable pointer to a scope-stack output slot.
+ */
+NemoRelayStatus nemo_relay_scope_stack_create_from_propagation_json(const char *context_json,
+                                                                    struct FfiScopeStack **out);
+
+/**
  * Bind an isolated scope stack to the current OS thread.
  *
  * After this call, all NeMo Relay scope operations on the current thread
@@ -2681,16 +2639,6 @@ void nemo_relay_atof_exporter_free(struct FfiAtofExporter *ptr);
  * `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
  */
 void nemo_relay_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
-
-/**
- * Free an OpenInference subscriber handle previously returned by
- * `nemo_relay_openinference_subscriber_create`.
- *
- * # Safety
- * `ptr` must be a valid pointer returned by
- * `nemo_relay_openinference_subscriber_create`, or null.
- */
-void nemo_relay_openinference_subscriber_free(struct FfiOpenInferenceSubscriber *ptr);
 
 /**
  * Free an adaptive runtime handle previously returned by

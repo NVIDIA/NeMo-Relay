@@ -3014,6 +3014,228 @@ fn test_ffi_adaptive_runtime_and_cache_helper_paths() {
 }
 
 #[test]
+fn test_ffi_scope_stack_propagation_and_thread_binding_entry_points() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let mut context_json = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_capture_propagation_context_json(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_capture_propagation_context_json(&mut context_json),
+            NemoRelayStatus::Ok
+        );
+        let context = returned_json(context_json);
+        assert_eq!(context["version"], json!(1));
+
+        let root_uuid = cstring("018f13f0-7c1a-7a80-8000-000000000701");
+        assert_eq!(
+            nemo_relay_capture_propagation_context_with_root_json(
+                root_uuid.as_ptr(),
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        let invalid_root = cstring("not-a-uuid");
+        assert_eq!(
+            nemo_relay_capture_propagation_context_with_root_json(
+                invalid_root.as_ptr(),
+                &mut context_json,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            nemo_relay_capture_propagation_context_with_root_json(
+                root_uuid.as_ptr(),
+                &mut context_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            returned_json(context_json)["root_uuid"],
+            root_uuid.to_str().unwrap()
+        );
+        assert_eq!(
+            nemo_relay_capture_propagation_context_with_root_json(ptr::null(), &mut context_json),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(context_json)["root_uuid"], Json::Null);
+
+        let payload = cstring(&context.to_string());
+        let invalid_json = cstring("{");
+        let mut stack = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_scope_stack_create_from_propagation_json(payload.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_scope_stack_create_from_propagation_json(ptr::null(), &mut stack),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_scope_stack_create_from_propagation_json(invalid_json.as_ptr(), &mut stack),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_scope_stack_create_from_propagation_json(payload.as_ptr(), &mut stack),
+            NemoRelayStatus::Ok
+        );
+        assert!(!stack.is_null());
+
+        assert_eq!(
+            nemo_relay_scope_stack_set_thread(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_scope_stack_set_thread(stack),
+            NemoRelayStatus::Ok
+        );
+        assert!(nemo_relay_scope_stack_active());
+
+        let mut binding = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_scope_stack_capture_thread(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_scope_stack_capture_thread(&mut binding),
+            NemoRelayStatus::Ok
+        );
+        assert!(!binding.is_null());
+        assert_eq!(
+            nemo_relay_scope_stack_restore_thread(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_scope_stack_restore_thread(binding),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_observability_exporter_error_lifecycles() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let mut out_json = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_observability_default_config_json(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_observability_component_spec_json(ptr::null(), true, ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        let invalid_config = cstring("{");
+        assert_eq!(
+            nemo_relay_observability_component_spec_json(
+                invalid_config.as_ptr(),
+                true,
+                &mut out_json,
+            ),
+            NemoRelayStatus::InvalidJson
+        );
+
+        let directory = cstring(
+            &std::env::temp_dir()
+                .join(unique_name("ffi_atof"))
+                .display()
+                .to_string(),
+        );
+        let mode = cstring("overwrite");
+        let filename = cstring("events.jsonl");
+        let mut exporter = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_atof_exporter_create(
+                directory.as_ptr(),
+                mode.as_ptr(),
+                filename.as_ptr(),
+                &mut exporter,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_register(ptr::null(), filename.as_ptr()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_path(exporter, ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_force_flush(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_shutdown(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        let subscriber_name = cstring(&unique_name("ffi_atof_subscriber"));
+        assert_eq!(
+            nemo_relay_atof_exporter_register(exporter, subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_register(exporter, subscriber_name.as_ptr()),
+            NemoRelayStatus::AlreadyExists
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_deregister(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_deregister(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_atof_exporter_free(exporter);
+
+        let otel_type = cstring("full");
+        let endpoint = cstring("http://127.0.0.1:4318/v1/traces");
+        let mut subscriber = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_otel_subscriber_create(
+                otel_type.as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_otel_subscriber_shutdown(subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_otel_subscriber_force_flush(subscriber),
+            NemoRelayStatus::Internal
+        );
+        assert_eq!(
+            nemo_relay_otel_subscriber_shutdown(subscriber),
+            NemoRelayStatus::Internal
+        );
+        let missing_name = cstring(&unique_name("missing_otel_subscriber"));
+        assert_eq!(
+            nemo_relay_otel_subscriber_deregister(missing_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_otel_subscriber_free(subscriber);
+    }
+}
+
+#[test]
 fn test_ffi_observability_component_and_constructor_error_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
@@ -3107,11 +3329,13 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
         );
 
         let invalid_map_shape = cstring(r#"["not-an-object"]"#);
+        let endpoint = cstring("http://localhost:4318/v1/traces");
         let mut otel = ptr::null_mut();
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 invalid_map_shape.as_ptr(),
                 ptr::null(),
                 ptr::null(),
@@ -3125,9 +3349,10 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
         );
         let mut openinference = ptr::null_mut();
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 invalid_map_shape.as_ptr(),
                 ptr::null(),
                 ptr::null(),

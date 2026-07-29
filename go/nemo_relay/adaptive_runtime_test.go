@@ -5,6 +5,8 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -167,5 +169,65 @@ func TestAdaptiveRuntimeBindScopeRejectsNilScope(t *testing.T) {
 func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 	if SetLatencySensitivity(0) == nil {
 		t.Fatal("expected SetLatencySensitivity(0) to fail")
+	}
+}
+
+func TestAdaptiveRuntimeLifecycleRejectsUseAfterShutdown(t *testing.T) {
+	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
+	if err != nil {
+		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
+	}
+
+	if err := runtime.Shutdown(); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	assertAdaptiveRuntimeClosed(t, runtime)
+}
+
+func assertAdaptiveRuntimeClosed(t *testing.T, runtime *AdaptiveRuntime) {
+	t.Helper()
+
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "Register", err: runtime.Register()},
+		{name: "Deregister", err: runtime.Deregister()},
+		{name: "WaitForIdle", err: runtime.WaitForIdle()},
+		{name: "BindScope", err: runtime.BindScope(nil)},
+	} {
+		if test.err == nil || !strings.Contains(test.err.Error(), "adaptive runtime is nil or shut down") {
+			t.Fatalf("expected %s to reject a shut down runtime, got %v", test.name, test.err)
+		}
+	}
+
+	if _, err := runtime.Report(); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
+		t.Fatalf("expected Report to reject a shut down runtime, got %v", err)
+	}
+	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{}); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
+		t.Fatalf("expected BuildCacheRequestFacts to reject a shut down runtime, got %v", err)
+	}
+	if err := runtime.Shutdown(); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
+		t.Fatalf("expected repeated Shutdown to reject a shut down runtime, got %v", err)
+	}
+}
+
+func TestAdaptiveRuntimePublicHelpersPropagateJSONMarshalFailures(t *testing.T) {
+	oldMarshal := jsonMarshal
+	t.Cleanup(func() { jsonMarshal = oldMarshal })
+
+	jsonMarshal = func(any) ([]byte, error) {
+		return nil, errors.New("forced adaptive JSON marshal failure")
+	}
+
+	if _, err := ValidateAdaptiveConfig(NewAdaptiveConfig()); err == nil || !strings.Contains(err.Error(), "forced adaptive JSON marshal failure") {
+		t.Fatalf("expected ValidateAdaptiveConfig to return marshal failure, got %v", err)
+	}
+	if _, err := NewAdaptiveRuntime(NewAdaptiveConfig()); err == nil || !strings.Contains(err.Error(), "forced adaptive JSON marshal failure") {
+		t.Fatalf("expected NewAdaptiveRuntime to return marshal failure, got %v", err)
+	}
+	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{}); err == nil || !strings.Contains(err.Error(), "forced adaptive JSON marshal failure") {
+		t.Fatalf("expected BuildCacheTelemetryEvent to return marshal failure, got %v", err)
 	}
 }

@@ -71,3 +71,23 @@ fn test_string_to_c_string_round_trip_and_validation() {
 
     unsafe { nemo_relay_string_free(std::ptr::null_mut()) };
 }
+
+#[test]
+fn test_unix_micros_timestamp_conversion_handles_optional_and_invalid_values() {
+    clear_last_error();
+    assert_eq!(unix_micros_to_opt_timestamp(std::ptr::null()), Some(None));
+
+    let epoch_micros = 0_i64;
+    let timestamp = unix_micros_to_opt_timestamp(&epoch_micros)
+        .expect("epoch timestamp should be valid")
+        .expect("non-null timestamp should be present");
+    assert_eq!(timestamp.timestamp(), 0);
+    assert_eq!(timestamp.timestamp_subsec_micros(), 0);
+
+    let invalid_micros = i64::MAX;
+    assert_eq!(unix_micros_to_opt_timestamp(&invalid_micros), None);
+    assert_eq!(
+        last_error_message(),
+        Some("invalid timestamp: unix microseconds are outside supported range".into())
+    );
+}

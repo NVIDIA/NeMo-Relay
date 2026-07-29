@@ -142,6 +142,31 @@ Use this when:
 - The boundary cannot safely carry a native stack handle
 - You want a clean root scope with isolated scope-local registrations
 
+## Cross-Process Propagation
+
+When work crosses a process or remote-workflow boundary, applications can carry
+the versioned Relay propagation context instead of a native stack handle. The
+context contains an immediate `parent_uuid` and, when the application knows a
+stable session root, an optional `root_uuid`.
+
+The receiver creates a fresh isolated stack from that context and installs it
+only for request handling. Its first local event becomes a child of
+`parent_uuid`; scope-local middleware and subscribers are never transferred.
+The transport is application-owned: authenticate and authorize inbound context
+before importing it. Relay does not send headers, make IPC connections, or
+trust remote identifiers automatically.
+
+Relay context is distinct from W3C propagation. An integration may carry
+`traceparent` and `tracestate` alongside Relay's JSON context when it needs to
+preserve OpenTelemetry sampling or vendor state.
+
+Use the binding's JSON helpers at the transport boundary: Rust
+`PropagationContext::to_json` and `PropagationContext::from_json`, Python
+`context.to_json()` and `PropagationContext.from_json(...)`, Go
+`context.ToJSON()` and `PropagationContextFromJSON(...)`, or Node.js
+`propagationContextToJson(...)` and `propagationContextFromJson(...)`. The
+helpers validate the version and UUIDs before a context is imported.
+
 ## Practical Guidance
 
 Use these practices when applying the concept in application or integration code.

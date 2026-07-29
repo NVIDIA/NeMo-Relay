@@ -137,6 +137,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn register_runtime_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScopeStack>()?;
+    m.add_class::<PyThreadScopeStackBinding>()?;
+    m.add_class::<PyPropagationContext>()?;
     m.add_class::<PyLlmStream>()?;
     m.add_class::<PyScopeAttributes>()?;
     m.add_class::<PyToolAttributes>()?;
@@ -177,8 +179,6 @@ fn register_observability_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAtofExporter>()?;
     m.add_class::<PyOpenTelemetryConfig>()?;
     m.add_class::<PyOpenTelemetrySubscriber>()?;
-    m.add_class::<PyOpenInferenceConfig>()?;
-    m.add_class::<PyOpenInferenceSubscriber>()?;
     Ok(())
 }
 

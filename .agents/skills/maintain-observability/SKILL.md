@@ -1,6 +1,6 @@
 ---
 name: maintain-observability
-description: Maintain or extend NeMo Relay observability surfaces across ATIF, OpenTelemetry, and OpenInference
+description: Maintain or extend NeMo Relay observability surfaces across ATIF and typed OpenTelemetry projections
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -15,7 +15,8 @@ work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
 Use this skill when changing event fields, exporter behavior, subscriber config,
-or binding parity for ATIF, OpenTelemetry, or OpenInference.
+or binding parity for ATIF or the `full`, `gen_ai`, and `openinference`
+OpenTelemetry projections.
 
 ## Surfaces To Keep In Sync
 
@@ -25,16 +26,29 @@ or binding parity for ATIF, OpenTelemetry, or OpenInference.
 - `crates/core/src/observability/openinference.rs`
 - FFI and binding-native wrappers where the config or lifecycle is exposed
 - Python, Go, and Node.js config objects and subscriber/exporter methods
-- Docs under `docs/about/concepts/subscribers.md` and
-  `docs/export-observability-data/about.md`
+- Observability config version 3, where one `opentelemetry` section contains
+  typed endpoints and OpenInference has no standalone public surface
+- Docs under `docs/about-nemo-relay/concepts/subscribers.mdx` and
+  `docs/configure-plugins/observability/`
 
 ## Design Checklist
 
 - [ ] Is this an event-model change, exporter-config change, or lifecycle change?
 - [ ] Do all bindings expose the same logical knobs and semantics?
+- [ ] Does every OpenTelemetry endpoint require a type and nonblank destination?
+- [ ] Does each endpoint resolve `header_env` values at activation and reject
+  missing, blank, or duplicate headers?
+- [ ] Do layered ATOF sink, ATIF storage, and OpenTelemetry endpoint lists
+  concatenate with higher-precedence entries first?
+- [ ] Are OpenTelemetry and OpenInference dependencies unconditional rather
+  than Cargo feature-gated?
+- [ ] Does `gen_ai` avoid `nemo_relay.*` and content-capture attributes while
+  preserving descendants through omitted scopes?
+- [ ] Does Relay derive compliant trace and span IDs consistently across typed
+  OpenTelemetry endpoints while preserving lifecycle parentage?
 - [ ] Are mark events, start/end events, and orphan cases still handled correctly?
-- [ ] Do examples and docs reflect the same lifecycle: create, register, run,
-  deregister, flush, shutdown?
+- [ ] Do examples and docs use each exporter's documented flush/deregister
+  order before shutdown?
 - [ ] Are span or trajectory fields still derived from the intended event data?
 
 ## Validation
@@ -47,9 +61,9 @@ or binding parity for ATIF, OpenTelemetry, or OpenInference.
 
 ## References
 
-- `docs/about/concepts/subscribers.md`
-- `docs/export-observability-data/about.md`
-- `docs/export-observability-data/code-examples.md`
+- `docs/about-nemo-relay/concepts/subscribers.mdx`
+- `docs/configure-plugins/observability/about.mdx`
+- `docs/configure-plugins/observability/opentelemetry.mdx`
 - `crates/core/src/observability/atif.rs`
 - `crates/core/src/observability/otel.rs`
 - `crates/core/src/observability/openinference.rs`

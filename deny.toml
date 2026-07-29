@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-[advisories]
-ignore = [
-    { id = "RUSTSEC-2026-0194", reason = "The released object_store versions still depend on quick-xml before 0.41.0; remove this exception when object_store publishes the fixed dependency." },
-    { id = "RUSTSEC-2026-0195", reason = "The released object_store versions still depend on quick-xml before 0.41.0; remove this exception when object_store publishes the fixed dependency." },
-]
-
 [bans]
 skip = [
     { crate = "getrandom@0.4.2", reason = "build-only duplicate internal to cbindgen's tempfile stack" },
@@ -20,6 +14,7 @@ allow = [
     "Apache-2.0",
     "BSD-3-Clause", # required by redis crate
     "BSL-1.0",      # Boost Software License, required by xxhash-rust
+    "CDLA-Permissive-2.0", # Mozilla root certificate data used by object_store's Rustls transport
     "ISC",
     "MIT",
     "MIT-0",       # required by borrow-or-share through jsonschema/referencing

@@ -229,6 +229,9 @@ extern void nemo_relay_string_free(char* ptr);
 
 // Scope stack isolation
 extern int32_t nemo_relay_scope_stack_create(FfiScopeStack** out);
+extern int32_t nemo_relay_capture_propagation_context_json(char** out);
+extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
+extern int32_t nemo_relay_scope_stack_create_from_propagation_json(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
 extern int32_t nemo_relay_scope_stack_restore_thread(FfiThreadScopeStackBinding* binding);
@@ -254,22 +257,13 @@ extern int32_t nemo_relay_atof_exporter_path(const void*, char**);
 extern void nemo_relay_atof_exporter_free(void*);
 
 // OpenTelemetry subscriber
-extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
-extern int32_t nemo_relay_otel_subscriber_create_with_attribute_mappings(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
+extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
 extern int32_t nemo_relay_otel_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_subscriber_free(void*);
-
-// OpenInference subscriber
-extern int32_t nemo_relay_openinference_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
-extern int32_t nemo_relay_openinference_subscriber_create_with_attribute_mappings(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
-extern int32_t nemo_relay_openinference_subscriber_register(const void*, const char*);
-extern int32_t nemo_relay_openinference_subscriber_deregister(const char*);
-extern int32_t nemo_relay_openinference_subscriber_force_flush(const void*);
-extern int32_t nemo_relay_openinference_subscriber_shutdown(const void*);
-extern void nemo_relay_openinference_subscriber_free(void*);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
@@ -296,6 +290,7 @@ import "C"
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"runtime"
 	"time"
 	"unsafe"
@@ -1567,10 +1562,89 @@ type ScopeStack struct {
 	ptr *C.FfiScopeStack
 }
 
+// PropagationContext is the versioned, transport-neutral causal context used
+// to continue Relay work in another process.
+type PropagationContext struct {
+	Version    uint16  `json:"version"`
+	RootUUID   *string `json:"root_uuid,omitempty"`
+	ParentUUID string  `json:"parent_uuid"`
+}
+
+// ToJSON serializes a validated propagation context for application-managed transport.
+func (context PropagationContext) ToJSON() (string, error) {
+	if err := validatePropagationContext(context); err != nil {
+		return "", err
+	}
+	// PropagationContext has only JSON-native fields, so marshaling cannot fail.
+	payload, _ := json.Marshal(context)
+	return string(payload), nil
+}
+
+// PropagationContextFromJSON deserializes and validates a transport context.
+func PropagationContextFromJSON(value string) (PropagationContext, error) {
+	var context PropagationContext
+	if err := json.Unmarshal([]byte(value), &context); err != nil {
+		return PropagationContext{}, err
+	}
+	if err := validatePropagationContext(context); err != nil {
+		return PropagationContext{}, err
+	}
+	return context, nil
+}
+
+func validatePropagationContext(context PropagationContext) error {
+	stack, err := NewScopeStackFromPropagation(context)
+	if err != nil {
+		return err
+	}
+	stack.Close()
+	return nil
+}
+
+// CapturePropagationContext captures the current Relay causal parent.
+func CapturePropagationContext() (PropagationContext, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_propagation_context_json(&out)); err != nil {
+		return PropagationContext{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+	return PropagationContextFromJSON(C.GoString(out))
+}
+
+// CapturePropagationContextWithRoot captures the current parent with an
+// application-supplied stable session root. Pass nil when no root is known.
+func CapturePropagationContextWithRoot(rootUUID *string) (PropagationContext, error) {
+	var cRoot *C.char
+	if rootUUID != nil {
+		cRoot = C.CString(*rootUUID)
+		defer C.free(unsafe.Pointer(cRoot))
+	}
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_propagation_context_with_root_json(cRoot, &out)); err != nil {
+		return PropagationContext{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+	return PropagationContextFromJSON(C.GoString(out))
+}
+
 // NewScopeStack creates a new isolated scope stack.
 // The caller must call Close() when done.
 func NewScopeStack() (*ScopeStack, error) {
 	return newScopeStackFunc()
+}
+
+// NewScopeStackFromPropagation creates an isolated stack seeded from a
+// received propagation context. The caller must call Close when done.
+func NewScopeStackFromPropagation(context PropagationContext) (*ScopeStack, error) {
+	payload, err := json.Marshal(context)
+	if err != nil {
+		return nil, err
+	}
+	cPayload := C.CString(string(payload))
+	defer C.free(unsafe.Pointer(cPayload))
+	var ptr *C.FfiScopeStack
+	status := C.nemo_relay_scope_stack_create_from_propagation_json(cPayload, &ptr)
+	return checkedValue(int32(status), &ScopeStack{ptr: ptr})
 }
 
 // Close frees the scope stack. After calling Close, the ScopeStack must not be used.
@@ -1685,6 +1759,21 @@ const (
 	// AtofExporterModeOverwrite truncates an existing file when the exporter is created.
 	AtofExporterModeOverwrite AtofExporterMode = "overwrite"
 )
+
+// MarkProjection selects how mark events are represented by full and OpenInference projections.
+type MarkProjection string
+
+const (
+	MarkProjectionInherit MarkProjection = "inherit"
+	MarkProjectionEvent   MarkProjection = "event"
+	MarkProjectionTool    MarkProjection = "tool"
+)
+
+// OtlpAttributeMapping maps a projected OpenTelemetry attribute to an alias.
+type OtlpAttributeMapping struct {
+	Key   string `json:"key"`
+	Alias string `json:"alias"`
+}
 
 // AtofExporterConfig configures one tagged ATOF sink.
 type AtofExporterConfig struct {
@@ -1870,11 +1959,21 @@ const (
 	OpenTelemetryTransportGrpc OpenTelemetryTransport = "grpc"
 )
 
+// OpenTelemetryType selects the semantic projection emitted by an exporter.
+type OpenTelemetryType string
+
+const (
+	OpenTelemetryTypeFull          OpenTelemetryType = "full"
+	OpenTelemetryTypeGenAI         OpenTelemetryType = "gen_ai"
+	OpenTelemetryTypeOpenInference OpenTelemetryType = "openinference"
+)
+
 // OpenTelemetryConfig configures the OpenTelemetry subscriber.
 //
 // Create it with [NewOpenTelemetryConfig], then mutate fields as needed before
 // passing it to [NewOpenTelemetrySubscriber].
 type OpenTelemetryConfig struct {
+	Type                 OpenTelemetryType
 	Transport            OpenTelemetryTransport
 	Endpoint             string
 	Headers              map[string]string
@@ -1884,24 +1983,25 @@ type OpenTelemetryConfig struct {
 	ServiceVersion       string
 	InstrumentationScope string
 	Timeout              time.Duration
+	MarkProjection       MarkProjection
+	MarkExcludeNames     []string
 	AttributeMappings    []OtlpAttributeMapping
 }
 
-// OtlpAttributeMapping copies a projected OTLP attribute to an alias.
-type OtlpAttributeMapping struct {
-	Key   string `json:"key"`
-	Alias string `json:"alias"`
-}
-
-// NewOpenTelemetryConfig returns a config initialized with sensible defaults.
-func NewOpenTelemetryConfig() OpenTelemetryConfig {
+// NewOpenTelemetryConfig returns a typed config for the required endpoint.
+func NewOpenTelemetryConfig(otelType OpenTelemetryType, endpoint string) OpenTelemetryConfig {
 	return OpenTelemetryConfig{
+		Type:                 otelType,
 		Transport:            OpenTelemetryTransportHTTPBinary,
+		Endpoint:             endpoint,
 		Headers:              map[string]string{},
 		ResourceAttributes:   map[string]string{},
-		ServiceName:          defaultServiceName,
-		InstrumentationScope: "nemo-relay-otel",
+		ServiceName:          "unknown_service",
+		InstrumentationScope: "opentelemetry",
 		Timeout:              3 * time.Second,
+		MarkProjection:       MarkProjectionInherit,
+		MarkExcludeNames:     []string{"llm.chunk"},
+		AttributeMappings:    []OtlpAttributeMapping{},
 	}
 }
 
@@ -1915,11 +2015,17 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	if config.Transport == "" {
 		config.Transport = OpenTelemetryTransportHTTPBinary
 	}
+	if config.Type == "" {
+		return nil, fmt.Errorf("type is required")
+	}
+	if config.Endpoint == "" {
+		return nil, fmt.Errorf("endpoint is required")
+	}
 	if config.ServiceName == "" {
-		config.ServiceName = defaultServiceName
+		config.ServiceName = "unknown_service"
 	}
 	if config.InstrumentationScope == "" {
-		config.InstrumentationScope = "nemo-relay-otel"
+		config.InstrumentationScope = "opentelemetry"
 	}
 	if config.Timeout == 0 {
 		config.Timeout = 3 * time.Second
@@ -1930,9 +2036,20 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	if config.ResourceAttributes == nil {
 		config.ResourceAttributes = map[string]string{}
 	}
+	if config.MarkProjection == "" {
+		config.MarkProjection = MarkProjectionInherit
+	}
+	if config.MarkExcludeNames == nil {
+		config.MarkExcludeNames = []string{"llm.chunk"}
+	}
+	if config.AttributeMappings == nil {
+		config.AttributeMappings = []OtlpAttributeMapping{}
+	}
 
 	cTransport := C.CString(string(config.Transport))
 	defer C.free(unsafe.Pointer(cTransport))
+	cType := C.CString(string(config.Type))
+	defer C.free(unsafe.Pointer(cType))
 
 	var cEndpoint *C.char
 	if config.Endpoint != "" {
@@ -1954,16 +2071,6 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
 	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
 
-	var cAttributeMappingsJSON *C.char
-	if config.AttributeMappings != nil {
-		attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
-		if err != nil {
-			return nil, err
-		}
-		cAttributeMappingsJSON = C.CString(string(attributeMappingsJSON))
-		defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
-	}
-
 	cServiceName := C.CString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 
@@ -1981,9 +2088,24 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 
 	cInstrumentationScope := C.CString(config.InstrumentationScope)
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
+	cMarkProjection := C.CString(string(config.MarkProjection))
+	defer C.free(unsafe.Pointer(cMarkProjection))
+	markExcludeNamesJSON, err := jsonMarshal(config.MarkExcludeNames)
+	if err != nil {
+		return nil, err
+	}
+	cMarkExcludeNamesJSON := C.CString(string(markExcludeNamesJSON))
+	defer C.free(unsafe.Pointer(cMarkExcludeNamesJSON))
+	attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
+	if err != nil {
+		return nil, err
+	}
+	cAttributeMappingsJSON := C.CString(string(attributeMappingsJSON))
+	defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_attribute_mappings(
+	status := C.nemo_relay_otel_subscriber_create_with_projection_options(
+		cType,
 		cTransport,
 		cEndpoint,
 		cHeadersJSON,
@@ -1993,6 +2115,8 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cServiceVersion,
 		cInstrumentationScope,
 		C.uint64_t(config.Timeout/time.Millisecond),
+		cMarkProjection,
+		cMarkExcludeNamesJSON,
 		cAttributeMappingsJSON,
 		&ptr,
 	)
@@ -2034,182 +2158,6 @@ func (s *OpenTelemetrySubscriber) Shutdown() error {
 func (s *OpenTelemetrySubscriber) Close() {
 	if s.ptr != nil {
 		C.nemo_relay_otel_subscriber_free(s.ptr)
-		s.ptr = nil
-	}
-}
-
-// ---------------------------------------------------------------------------
-// OpenInference subscriber
-// ---------------------------------------------------------------------------
-
-// OpenInferenceTransport configures which OTLP transport to use.
-type OpenInferenceTransport string
-
-const (
-	// OpenInferenceTransportHTTPBinary uses OTLP/HTTP protobuf export.
-	OpenInferenceTransportHTTPBinary OpenInferenceTransport = "http_binary"
-	// OpenInferenceTransportGrpc uses OTLP/gRPC export.
-	OpenInferenceTransportGrpc OpenInferenceTransport = "grpc"
-)
-
-// OpenInferenceConfig configures the OpenInference subscriber.
-//
-// Create it with [NewOpenInferenceConfig], then mutate fields as needed before
-// passing it to [NewOpenInferenceSubscriber].
-type OpenInferenceConfig struct {
-	Transport            OpenInferenceTransport
-	Endpoint             string
-	Headers              map[string]string
-	ResourceAttributes   map[string]string
-	ServiceName          string
-	ServiceNamespace     string
-	ServiceVersion       string
-	InstrumentationScope string
-	Timeout              time.Duration
-	AttributeMappings    []OtlpAttributeMapping
-}
-
-// NewOpenInferenceConfig returns a config initialized with sensible defaults.
-func NewOpenInferenceConfig() OpenInferenceConfig {
-	return OpenInferenceConfig{
-		Transport:            OpenInferenceTransportHTTPBinary,
-		Headers:              map[string]string{},
-		ResourceAttributes:   map[string]string{},
-		ServiceName:          defaultServiceName,
-		InstrumentationScope: "nemo-relay-openinference",
-		Timeout:              3 * time.Second,
-	}
-}
-
-// OpenInferenceSubscriber exports NeMo Relay lifecycle events with OpenInference semantics.
-type OpenInferenceSubscriber struct {
-	ptr unsafe.Pointer
-}
-
-// NewOpenInferenceSubscriber creates a new OpenInference subscriber from config.
-func NewOpenInferenceSubscriber(config OpenInferenceConfig) (*OpenInferenceSubscriber, error) {
-	if config.Transport == "" {
-		config.Transport = OpenInferenceTransportHTTPBinary
-	}
-	if config.ServiceName == "" {
-		config.ServiceName = defaultServiceName
-	}
-	if config.InstrumentationScope == "" {
-		config.InstrumentationScope = "nemo-relay-openinference"
-	}
-	if config.Timeout == 0 {
-		config.Timeout = 3 * time.Second
-	}
-	if config.Headers == nil {
-		config.Headers = map[string]string{}
-	}
-	if config.ResourceAttributes == nil {
-		config.ResourceAttributes = map[string]string{}
-	}
-
-	cTransport := C.CString(string(config.Transport))
-	defer C.free(unsafe.Pointer(cTransport))
-
-	var cEndpoint *C.char
-	if config.Endpoint != "" {
-		cEndpoint = C.CString(config.Endpoint)
-		defer C.free(unsafe.Pointer(cEndpoint))
-	}
-
-	headersJSON, err := jsonMarshal(config.Headers)
-	if err != nil {
-		return nil, err
-	}
-	cHeadersJSON := C.CString(string(headersJSON))
-	defer C.free(unsafe.Pointer(cHeadersJSON))
-
-	resourceAttrsJSON, err := jsonMarshal(config.ResourceAttributes)
-	if err != nil {
-		return nil, err
-	}
-	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
-	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
-
-	var cAttributeMappingsJSON *C.char
-	if config.AttributeMappings != nil {
-		attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
-		if err != nil {
-			return nil, err
-		}
-		cAttributeMappingsJSON = C.CString(string(attributeMappingsJSON))
-		defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
-	}
-
-	cServiceName := C.CString(config.ServiceName)
-	defer C.free(unsafe.Pointer(cServiceName))
-
-	var cServiceNamespace *C.char
-	if config.ServiceNamespace != "" {
-		cServiceNamespace = C.CString(config.ServiceNamespace)
-		defer C.free(unsafe.Pointer(cServiceNamespace))
-	}
-
-	var cServiceVersion *C.char
-	if config.ServiceVersion != "" {
-		cServiceVersion = C.CString(config.ServiceVersion)
-		defer C.free(unsafe.Pointer(cServiceVersion))
-	}
-
-	cInstrumentationScope := C.CString(config.InstrumentationScope)
-	defer C.free(unsafe.Pointer(cInstrumentationScope))
-
-	var ptr unsafe.Pointer
-	status := C.nemo_relay_openinference_subscriber_create_with_attribute_mappings(
-		cTransport,
-		cEndpoint,
-		cHeadersJSON,
-		cResourceAttrsJSON,
-		cServiceName,
-		cServiceNamespace,
-		cServiceVersion,
-		cInstrumentationScope,
-		C.uint64_t(config.Timeout/time.Millisecond),
-		cAttributeMappingsJSON,
-		&ptr,
-	)
-	if err := checkStatus(status); err != nil {
-		return nil, err
-	}
-	return &OpenInferenceSubscriber{ptr: ptr}, nil
-}
-
-// Register registers the subscriber globally with the given name.
-func (s *OpenInferenceSubscriber) Register(name string) error {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_openinference_subscriber_register(s.ptr, cName)
-	return checkStatus(status)
-}
-
-// Deregister removes the subscriber by name.
-func (s *OpenInferenceSubscriber) Deregister(name string) error {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_openinference_subscriber_deregister(cName)
-	return checkStatus(status)
-}
-
-// ForceFlush flushes finished spans through the underlying exporter.
-func (s *OpenInferenceSubscriber) ForceFlush() error {
-	status := C.nemo_relay_openinference_subscriber_force_flush(s.ptr)
-	return checkStatus(status)
-}
-
-// Shutdown shuts down the underlying tracer provider.
-func (s *OpenInferenceSubscriber) Shutdown() error {
-	status := C.nemo_relay_openinference_subscriber_shutdown(s.ptr)
-	return checkStatus(status)
-}
-
-// Close frees the subscriber handle.
-func (s *OpenInferenceSubscriber) Close() {
-	if s.ptr != nil {
-		C.nemo_relay_openinference_subscriber_free(s.ptr)
 		s.ptr = nil
 	}
 }

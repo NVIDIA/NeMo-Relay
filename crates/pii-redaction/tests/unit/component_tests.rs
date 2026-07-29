@@ -34,9 +34,9 @@ use crate::plugin::{
     list_plugin_kinds, rollback_registrations, validate_plugin_config,
 };
 use futures::StreamExt;
+use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
@@ -1768,6 +1768,129 @@ fn validate_rejects_invalid_builtin_pattern_regex() {
 }
 
 #[test]
+fn validate_rejects_malformed_builtin_target_paths() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "builtin": {
+            "action": "remove",
+            "target_paths": [
+                "messages/0/content",
+                "/messages/~2content",
+                "/messages/trailing~"
+            ]
+        }
+    })));
+
+    for index in 0..3 {
+        let expected_field = format!("builtin.target_paths[{index}]");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some(expected_field.as_str())
+                && diagnostic.message.contains("RFC 6901")
+        }));
+    }
+}
+
+#[test]
+fn validate_accepts_valid_builtin_target_paths() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "builtin": {
+            "action": "remove",
+            "target_paths": [
+                "",
+                "/",
+                "//empty-segment",
+                "/messages/0/content",
+                "/metadata/~0owner",
+                "/metadata/a~1b"
+            ]
+        }
+    })));
+
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+}
+
+#[test]
+fn profile_validation_reports_malformed_target_path_index() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "action": "remove",
+                "target_paths": ["/messages/0/content", "message"]
+            }
+        }]
+    })));
+
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("profiles[0].builtin.target_paths[1]")
+            && diagnostic.message.contains("RFC 6901")
+    }));
+}
+
+#[test]
+fn activation_rejects_malformed_target_path_when_diagnostic_is_downgraded() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    let activation = futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "builtin": {
+            "action": "remove",
+            "target_paths": ["messages/0/content"]
+        },
+        "policy": {
+            "unsupported_value": "warn"
+        }
+    }))));
+
+    let error = activation.expect_err("malformed target path must fail plugin activation");
+    assert!(error.to_string().contains("builtin.target_paths[0]"));
+}
+
+#[test]
+fn preset_does_not_bypass_malformed_target_path_validation() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let config = json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "builtin": {
+            "preset": "trajectory_context",
+            "target_paths": ["messages/0/content"]
+        },
+        "policy": {
+            "unsupported_value": "warn"
+        }
+    });
+    let report = validate_plugin_config(&plugin_config(config.clone()));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("builtin.target_paths[0]")
+            && diagnostic.message.contains("RFC 6901")
+    }));
+
+    setup_isolated_thread();
+    let activation = futures::executor::block_on(initialize_plugins(plugin_config(config)));
+    let error = activation.expect_err("preset must not bypass malformed target path validation");
+    assert!(error.to_string().contains("builtin.target_paths[0]"));
+}
+
+#[test]
 fn validate_rejects_mask_with_empty_mask_char() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -2060,8 +2183,11 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
         .build();
-    let openinference =
-        OpenInferenceSubscriber::from_tracer_provider(openinference_provider, "pii-regression");
+    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        openinference_provider,
+        "pii-regression",
+        OpenTelemetryType::OpenInference,
+    );
     openinference
         .register("pii-regression-openinference")
         .unwrap();

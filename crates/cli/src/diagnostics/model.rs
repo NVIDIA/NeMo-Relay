@@ -50,6 +50,8 @@ pub(crate) struct EnvironmentInfo {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ConfigurationInfo {
+    #[serde(skip)]
+    pub explicit_config: bool,
     pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,

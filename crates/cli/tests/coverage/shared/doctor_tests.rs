@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::configuration::ResolvedDynamicPluginConfig;
-use crate::test_support::{EnvScope, accept_bounded};
+use crate::server::GatewayOverrides;
+use crate::test_support::{EnvScope, accept_bounded, read_headers};
 
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -55,6 +56,7 @@ fn empty_report() -> DoctorReport {
             shell: Some("zsh".into()),
         },
         configuration: ConfigurationInfo {
+            explicit_config: false,
             workspace: ConfigLayer {
                 path: PathBuf::from("/x/.nemo-relay/config.toml"),
                 status: Status::Info,
@@ -565,6 +567,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
     let configuration = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &GatewayOverrides::default(),
         Check {
             name: "Resolution",
             status: Status::Warn,
@@ -839,6 +842,7 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
     let info = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &GatewayOverrides::default(),
         Check {
             name: "Resolution",
             status: Status::Pass,
@@ -917,11 +921,14 @@ fn observability_component_helpers_cover_disabled_and_default_paths() {
             "kind": OBSERVABILITY_PLUGIN_KIND,
             "enabled": true,
             "config": {
-                "version": 1,
+                "version": 3,
                 "atof": { "enabled": true },
-                "openinference": {
+                "opentelemetry": {
                     "enabled": true,
-                    "endpoint": "http://127.0.0.1:1"
+                    "endpoints": [{
+                        "type": "openinference",
+                        "endpoint": "http://127.0.0.1:1"
+                    }]
                 }
             }
         }]
@@ -930,8 +937,8 @@ fn observability_component_helpers_cover_disabled_and_default_paths() {
     assert!(section_enabled(config, "atof"));
     assert_eq!(section_output_directory(config, "atof"), None);
     assert_eq!(
-        section_endpoint(config, "openinference").as_deref(),
-        Some("http://127.0.0.1:1")
+        config["opentelemetry"]["endpoints"][0]["endpoint"],
+        "http://127.0.0.1:1"
     );
     assert!(
         observability_component_config(&serde_json::json!({
@@ -943,6 +950,75 @@ fn observability_component_helpers_cover_disabled_and_default_paths() {
     let default_dir = observability_file_exporter_check(config, "atof").unwrap();
     assert_eq!(default_dir.status, Status::Info);
     assert!(default_dir.details.contains("runtime default"));
+}
+
+#[tokio::test]
+async fn opentelemetry_doctor_uses_tcp_probe_for_grpc_endpoints() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let accept = std::thread::spawn(move || {
+        let _ = accept_bounded(&listener);
+    });
+    let config = serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "gen_ai",
+                "transport": "grpc",
+                "endpoint": endpoint
+            }]
+        }
+    });
+
+    let checks = observability_http_exporter_checks(&config).await;
+
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(checks[0].details.contains("gRPC TCP connection succeeded"));
+    assert!(checks[0].details.contains("endpoints[0] (gen_ai)"));
+    accept.join().unwrap();
+}
+
+#[tokio::test]
+async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
+    assert!(
+        observability_http_exporter_checks(&serde_json::json!({
+            "opentelemetry": {"enabled": true, "endpoints": "not-a-list"}
+        }))
+        .await
+        .is_empty()
+    );
+
+    let missing = observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "openinference"}]
+        }
+    }))
+    .await;
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].status, Status::Fail);
+    assert!(missing[0].details.contains("endpoint is required"));
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let accept = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&listener);
+        let _ = read_headers(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let checks = observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": endpoint}]
+        }
+    }))
+    .await;
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(checks[0].details.contains("endpoints[0] (full)"));
+    accept.join().unwrap();
 }
 
 #[test]
@@ -1130,7 +1206,7 @@ async fn collect_observability_probes_atof_streaming_endpoint() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 2,
+                    "version": 3,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -1215,7 +1291,7 @@ async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 2,
+                    "version": 3,
                     "atof": {
                         "enabled": true,
                         "sinks": [{

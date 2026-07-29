@@ -896,6 +896,7 @@ fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
 }
 
 fn write_test_tls_identity(bootstrap_dir: &Path) -> Arc<rustls::ServerConfig> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     std::fs::create_dir_all(bootstrap_dir).unwrap();
     std::fs::write(
@@ -1916,10 +1917,18 @@ fn cli_plugins_validate_rejects_malformed_python_entrypoints_by_path_and_id() {
 #[test]
 fn cli_plugins_list_json_emits_empty_versioned_success_output() {
     let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
     let output = Command::new(gateway_bin())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "list", "--json"])
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "plugins",
+            "list",
+            "--json",
+        ])
         .output()
         .unwrap();
 
@@ -3138,6 +3147,205 @@ fn cli_bare_invocation_reports_invalid_config_resolution() {
 }
 
 #[test]
+fn cli_doctor_reports_a_missing_explicit_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/config.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Configuration"));
+    assert!(stdout.contains("Resolution"));
+    assert!(stdout.contains(config.to_str().unwrap()));
+    assert!(stdout.contains("repair or recreate"));
+    assert!(stdout.contains("Some checks FAILED"));
+    assert!(!stderr.contains("explicit configuration file"));
+}
+
+#[test]
+fn cli_doctor_json_reports_a_missing_explicit_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/config.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let resolution = &report["configuration"]["resolution"];
+    assert_eq!(resolution["status"], "fail");
+    assert!(
+        resolution["details"]
+            .as_str()
+            .unwrap()
+            .contains(config.to_str().unwrap())
+    );
+}
+
+#[test]
+fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("explicit/config.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream\n").unwrap();
+    std::fs::write(&config, "[upstream]\n").unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "explicit config should ignore invalid workspace config: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["configuration"]["workspace"]["path"],
+        config.display().to_string()
+    );
+    assert_eq!(report["configuration"]["workspace"]["status"], "pass");
+    assert_eq!(report["configuration"]["workspace"]["active"], true);
+    assert_eq!(report["configuration"]["global"]["status"], "info");
+    assert_eq!(report["configuration"]["global"]["active"], false);
+    assert!(
+        report["configuration"]["global"]["details"]
+            .as_str()
+            .unwrap()
+            .contains("--config scopes configuration")
+    );
+
+    let human_output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor"])
+        .output()
+        .unwrap();
+    assert!(human_output.status.success());
+    let stdout = String::from_utf8_lossy(&human_output.stdout);
+    assert!(stdout.contains("Explicit"));
+    assert!(stdout.contains(config.to_str().unwrap()));
+    assert!(stdout.contains("not selected because --config scopes configuration"));
+}
+
+#[test]
+fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config_dir = temp.path().join("explicit");
+    let config = config_dir.join("config.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
+    std::fs::write(cwd.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
+
+    std::fs::write(&config, "[upstream\n").unwrap();
+    let invalid_config = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor"])
+        .output()
+        .unwrap();
+    assert!(!invalid_config.status.success());
+    assert!(String::from_utf8_lossy(&invalid_config.stdout).contains("invalid TOML"));
+
+    std::fs::write(&config, "[upstream]\n").unwrap();
+    std::fs::write(config_dir.join("plugins.toml"), "components = [\n").unwrap();
+    let invalid_plugins = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor"])
+        .output()
+        .unwrap();
+    assert!(!invalid_plugins.status.success());
+    let stdout = String::from_utf8_lossy(&invalid_plugins.stdout);
+    assert!(stdout.contains("invalid plugin TOML"));
+    assert!(stdout.contains(&config_dir.join("plugins.toml").display().to_string()));
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        "version = 1\ncomponents = []\n",
+    )
+    .unwrap();
+    let valid_config = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&valid_config.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "pass");
+    assert_eq!(
+        report["configuration"]["plugin_configs"][0]["path"],
+        config_dir.join("plugins.toml").display().to_string()
+    );
+}
+
+#[test]
+fn cli_plugin_doctor_is_not_preempted_by_a_missing_runtime_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/config.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "doctor",
+            "--plugin",
+            "all",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no installed Claude Code, Codex, or Hermes integration state"));
+    assert!(!stderr.contains("explicit configuration file"));
+}
+
+#[test]
 fn cli_run_dry_run_resolves_config_and_command() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config.toml");
@@ -3242,7 +3450,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 3
 
 [components.config.atof]
 enabled = true

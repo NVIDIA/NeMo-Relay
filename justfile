@@ -13,6 +13,8 @@ output_dir := ""
 ref_name := ""
 # Linux package artifacts target this minimum glibc version for compatibility.
 linux_glibc_version := "2.17"
+# Supported Node package platform key. CI sets this from its package matrix.
+node_platform := ""
 
 bash_helpers := '''
 set -euo pipefail
@@ -562,6 +564,7 @@ set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
+    set_npm_package_version packages/cli-bin/package.json package-lock.json "$version" packages/cli-bin
     set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
 }
 
@@ -689,6 +692,35 @@ else:
 if updated != text:
     path.write_text(updated)
 print("crates/python/Cargo.toml uses the workspace version")
+
+path = Path("python/cli-bin/pyproject.toml")
+text = path.read_text()
+updated, count = re.subn(
+    r'^version = "(.*)"$',
+    f'version = "{version}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count != 1:
+    raise SystemExit("Failed to update version in python/cli-bin/pyproject.toml")
+if updated != text:
+    path.write_text(updated)
+print(f"python/cli-bin/pyproject.toml version updated to {version}")
+
+path = Path("pyproject.toml")
+text = path.read_text()
+updated, count = re.subn(
+    r'("nemo-relay-cli-bin==)[^"]+(")',
+    rf'\g<1>{version}\g<2>',
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("Failed to update the nemo-relay CLI extra version")
+if updated != text:
+    path.write_text(updated)
+print(f"nemo-relay CLI extra updated to {version}")
 PY
 }
 
@@ -1530,6 +1562,11 @@ package-node:
     # If `ref_name` is empty, append the current short HEAD SHA to the version.
     # If `ref_name` is set, write it as the exact package version before packing.
     linux_glibc_version="{{ linux_glibc_version }}"
+    node_platform="{{ node_platform }}"
+    python_executable="python"
+    if ! command -v "$python_executable" >/dev/null 2>&1; then
+        python_executable="python3"
+    fi
     output_dir="{{ output_dir }}"
     cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir npm)"
@@ -1557,7 +1594,34 @@ package-node:
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     npm run --workspace=nemo-relay-node "${build_args[@]}"
-    npm pack --workspace=nemo-relay-node --pack-destination "$package_dir"
+    if [[ -z "$node_platform" ]]; then
+        case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) node_platform="linux-amd64" ;;
+            Linux-aarch64|Linux-arm64) node_platform="linux-arm64" ;;
+            Darwin-arm64) node_platform="macos-arm64" ;;
+            MINGW*|MSYS*|CYGWIN*)
+                if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                    node_platform="windows-arm64"
+                else
+                    node_platform="windows-amd64"
+                fi
+                ;;
+            *)
+                echo "Error: unsupported Node package host $(uname -s)/$(uname -m)" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    package_args=(
+        --node-dir crates/node
+        --platform "$node_platform"
+        --version "$package_version"
+        --output-dir "$package_dir"
+    )
+    if [[ "$node_platform" == "linux-amd64" ]]; then
+        package_args+=(--metapackage)
+    fi
+    "$python_executable" scripts/package-node-bin.py "${package_args[@]}"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then
@@ -1674,3 +1738,19 @@ package-python-plugin:
         echo "Error: No Python plugin wheels found in $package_dir"
         exit 1
     fi
+
+# Package a prebuilt CLI binary for PyPI and npm.
+package-cli-bin binary target version package_dir npm_launcher="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$NEMO_RELAY_REPO_ROOT"
+    args=(
+        --binary "{{ binary }}"
+        --target "{{ target }}"
+        --version "{{ version }}"
+        --output-dir "{{ package_dir }}"
+    )
+    if [[ "{{ npm_launcher }}" == "true" ]]; then
+        args+=(--npm-launcher)
+    fi
+    uv run --no-project python scripts/package-cli-bin.py "${args[@]}"

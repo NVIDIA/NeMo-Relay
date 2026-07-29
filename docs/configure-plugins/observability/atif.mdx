@@ -28,7 +28,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 3
 
 [components.config.atif]
 enabled = true
@@ -259,7 +259,7 @@ writes the partial trajectory. Terminating the process before root-scope
 closure or plugin teardown completes can leave the trajectory absent or
 incomplete.
 
-To correlate ATIF with OpenTelemetry or OpenInference traces from the same run,
+To correlate ATIF with typed OpenTelemetry traces from the same run,
 join on NeMo Relay UUIDs. The plugin-managed ATIF `session_id` is the
 top-level trajectory root scope UUID. Each step's `extra.ancestry.function_id` is the event UUID,
 and `extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the
@@ -340,7 +340,7 @@ void (async () => {
   version: 1,
   components: [
     observability.ComponentSpec({
-      version: 2,
+  version: 3,
       atif: observability.atifConfig({
         enabled: true,
         agent_name: "Planner",

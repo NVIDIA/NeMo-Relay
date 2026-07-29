@@ -92,12 +92,6 @@ from nemo_relay._native import (
     MarkEvent as MarkEvent,
 )
 from nemo_relay._native import (
-    OpenInferenceConfig as OpenInferenceConfig,
-)
-from nemo_relay._native import (
-    OpenInferenceSubscriber as OpenInferenceSubscriber,
-)
-from nemo_relay._native import (
     OpenTelemetryConfig as OpenTelemetryConfig,
 )
 from nemo_relay._native import (
@@ -105,6 +99,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     PendingMarkSpec as PendingMarkSpec,
+)
+from nemo_relay._native import (
+    PropagationContext as PropagationContext,
 )
 from nemo_relay._native import (
     ScopeAttributes as ScopeAttributes,
@@ -368,6 +365,10 @@ def create_scope_stack() -> ScopeStack:
     """
     ...
 
+def capture_propagation_context() -> PropagationContext: ...
+def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext: ...
+def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack: ...
+def use_scope_stack(stack: ScopeStack): ...
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Install a scope stack into the current thread's native runtime context.
 

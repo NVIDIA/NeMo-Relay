@@ -90,6 +90,9 @@ type UpstreamResponseInfo = Arc<Mutex<Option<(StatusCode, HeaderMap)>>>;
 // `FlowError::Internal`, which would otherwise map to a generic 400.
 type UpstreamErrorSlot = Arc<Mutex<Option<reqwest::Error>>>;
 
+// Captures a non-SSE provider error response so ordinary dispatch can preserve proxy semantics.
+type UpstreamPassthroughSlot = Arc<Mutex<Option<(StatusCode, HeaderMap, Bytes)>>>;
+
 // Runs the managed pipeline for a prepared gateway request. Streaming and non-streaming branches
 // share the same prep + codec dispatch but diverge in how the runtime drives the upstream call.
 async fn run_managed_gateway(
@@ -390,11 +393,13 @@ async fn run_managed_streaming(
 ) -> Result<Response<Body>, CliError> {
     let upstream_info: UpstreamResponseInfo = Arc::new(Mutex::new(None));
     let upstream_error: UpstreamErrorSlot = Arc::new(Mutex::new(None));
+    let upstream_passthrough: UpstreamPassthroughSlot = Arc::new(Mutex::new(None));
     let func = build_streaming_func(
         state.clone(),
         &prepared,
         upstream_info.clone(),
         upstream_error.clone(),
+        upstream_passthrough.clone(),
     );
     let provider_route = prepared.provider;
 
@@ -456,10 +461,17 @@ async fn run_managed_streaming(
     let json_stream = match json_stream_result {
         Ok(json_stream) => json_stream,
         Err(error) => {
+            let passthrough = upstream_passthrough
+                .lock()
+                .expect("upstream passthrough lock poisoned")
+                .take();
             state
                 .sessions
                 .finish_gateway_call(&session_id, session_finish)
                 .await;
+            if let Some((status, headers, body)) = passthrough {
+                return build_response(status, headers, Body::from(body));
+            }
             return Err(translate_runtime_error(error, &upstream_error));
         }
     };
@@ -492,6 +504,7 @@ fn build_streaming_func(
     prepared: &PreparedGatewayRequest,
     upstream_info: UpstreamResponseInfo,
     upstream_error: UpstreamErrorSlot,
+    upstream_passthrough: UpstreamPassthroughSlot,
 ) -> LlmStreamExecutionNextFn {
     let http = state.http.clone();
     let method = prepared.method.clone();
@@ -509,6 +522,7 @@ fn build_streaming_func(
         let headers = headers.clone();
         let upstream_info = upstream_info.clone();
         let upstream_error = upstream_error.clone();
+        let upstream_passthrough = upstream_passthrough.clone();
         Box::pin(async move {
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
@@ -534,15 +548,31 @@ fn build_streaming_func(
             };
             let status = response.status();
             let response_headers = response_headers(response.headers());
-            if retry_aware && !status.is_success() {
-                let bytes = response
-                    .bytes()
-                    .await
-                    .map_err(|error| FlowError::Upstream(transport_failure(&error)))?;
-                return Err(FlowError::Upstream(http_failure(
-                    status,
-                    &response_headers,
-                    &bytes,
+            if !status.is_success() {
+                let bytes = match response.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(error) if retry_aware => {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
+                        return Err(FlowError::Internal(message));
+                    }
+                };
+                if retry_aware {
+                    return Err(FlowError::Upstream(http_failure(
+                        status,
+                        &response_headers,
+                        &bytes,
+                    )));
+                }
+                *upstream_passthrough
+                    .lock()
+                    .expect("upstream passthrough lock poisoned") =
+                    Some((status, response_headers, bytes));
+                return Err(FlowError::Internal(format!(
+                    "upstream provider returned HTTP {status}"
                 )));
             }
             *upstream_info.lock().expect("upstream info lock poisoned") =

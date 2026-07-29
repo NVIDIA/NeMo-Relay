@@ -257,8 +257,8 @@ jobs:
             exit 1
           fi
 
-  release-cli-artifacts:
-    name: Release CLI Artifacts
+  release-distribution-artifacts:
+    name: Release Distribution Artifacts
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest
@@ -269,28 +269,77 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Download CLI binary artifacts
+      - name: Download CLI distribution artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: cli-*
           merge-multiple: true
           path: release-assets/
 
-      - name: Generate CLI release checksums
+      - name: Download Node distribution artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: node-npm-package-*
+          merge-multiple: true
+          path: release-assets/
+
+      - name: Download Python API wheel artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: release-assets/
+
+      - name: Generate distribution checksums
         run: |
           set -euo pipefail
 
           (
             cd release-assets
-            cli_assets=(nemo-relay-cli-*)
-            sha256sum "${cli_assets[@]}" > SHA256SUMS
+            expect_count() {
+              local expected="$1"
+              local label="$2"
+              shift 2
+              local actual="$#"
+              if [ "$actual" -ne "$expected" ]; then
+                echo "Error: expected ${expected} ${label} artifacts, found ${actual}" >&2
+                exit 1
+              fi
+            }
+
+            cli_binaries=(nemo-relay-cli-*)
+            cli_wheels=(nemo_relay_cli_bin-*.whl)
+            python_api_wheels=(nemo_relay-*.whl)
+            cli_npm=(nemo-relay-bin-npm-*.tgz)
+            node_npm=(nemo-relay-node-npm-*.tgz)
+            expect_count 5 "CLI binary" "${cli_binaries[@]}"
+            expect_count 5 "CLI wheel" "${cli_wheels[@]}"
+            expect_count 5 "Python API wheel" "${python_api_wheels[@]}"
+            expect_count 6 "CLI npm" "${cli_npm[@]}"
+            expect_count 6 "Node npm" "${node_npm[@]}"
+
+            mapfile -t distribution_assets < <(
+              find . -maxdepth 1 -type f \
+                ! -name 'SHA256SUMS' \
+                ! -name '*.sha256' \
+                -printf '%f\n' |
+                sort
+            )
+            if [ "${#distribution_assets[@]}" -eq 0 ]; then
+              echo "Error: no distribution artifacts were collected" >&2
+              exit 1
+            fi
+            sha256sum "${distribution_assets[@]}" > SHA256SUMS
             sha256sum --check SHA256SUMS
 
-            while read -r digest filename; do
-              printf '%s  %s\n' "$digest" "$filename" > "${filename}.sha256"
-            done < SHA256SUMS
+            for filename in nemo-relay-cli-*; do
+              if [[ "$filename" == *.tgz || "$filename" == *.whl || "$filename" == *.sha256 ]]; then
+                continue
+              fi
+              sha256sum "$filename" > "${filename}.sha256"
+            done
 
-            printf 'CLI release assets:\n'
+            printf 'Distribution release assets:\n'
             printf '  release-assets/%s\n' *
           )
 
@@ -298,7 +347,7 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
+          prerelease: ${{ contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
           overwrite_files: true
           fail_on_unmatched_files: true
           files: release-assets/*
@@ -400,6 +449,13 @@ jobs:
           name: plugin-wheel
           path: dist/
 
+      - name: Download CLI wheel artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cli-python-wheel-*
+          merge-multiple: true
+          path: dist/
+
       - name: Publish to PyPI with trusted publishing
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
@@ -428,17 +484,25 @@ jobs:
           node-version: ${{ steps.ci-config.outputs.node_version }}
           registry-url: "https://registry.npmjs.org"
 
-      - name: Download consolidated Node package artifact
+      - name: Download split Node package artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: npm-consolidated
-          path: .
+          pattern: node-npm-package-*
+          merge-multiple: true
+          path: node-packages/
 
       - name: Download OpenClaw plugin artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: openclaw-npm
           path: openclaw-package/
+
+      - name: Download CLI npm artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cli-npm-package-*
+          merge-multiple: true
+          path: cli-packages/
 
       - name: Select npm dist-tag
         run: |
@@ -453,14 +517,39 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ github.ref_name }}"
+          for pkg in node-packages/nemo-relay-node-npm-{linux-x64,linux-arm64,darwin-arm64,win32-x64,win32-arm64}-${version}.tgz; do
+            name="$(tar xOf "$pkg" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')"
+            if npm view "${name}@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+              echo "${name} ${version} already exists on npm; skipping"
+              continue
+            fi
+            npm publish "$pkg" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+          done
+          metapackage="node-packages/nemo-relay-node-npm-${version}.tgz"
           if npm view "nemo-relay-node@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
             echo "nemo-relay-node ${version} already exists on npm; skipping"
-            exit 0
+          else
+            npm publish "$metapackage" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           fi
-          unzip -q ./consolidated.zip -d combined
-          echo "Platform binaries included:"
-          ls -la combined/package/*.node
-          npm publish ./combined/package --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+
+      - name: Publish CLI packages to npm
+        run: |
+          set -euo pipefail
+          version="${{ github.ref_name }}"
+          for pkg in cli-packages/nemo-relay-bin-npm-{linux-x64,linux-arm64,darwin-arm64,win32-x64,win32-arm64}-${version}.tgz; do
+            name="$(tar xOf "$pkg" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')"
+            if npm view "${name}@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+              echo "${name} ${version} already exists on npm; skipping"
+              continue
+            fi
+            npm publish "$pkg" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+          done
+          launcher="cli-packages/nemo-relay-bin-npm-${version}.tgz"
+          if npm view "nemo-relay-cli-bin@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "nemo-relay-cli-bin ${version} already exists on npm; skipping"
+          else
+            npm publish "$launcher" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+          fi
 
       - name: Publish OpenClaw plugin package to npm
         run: |

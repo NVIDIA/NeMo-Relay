@@ -1,60 +1,23 @@
 ---
-title: "Observability Configuration"
-sidebar-title: "Configuration"
-description: "Configure ATOF, ATIF, OpenTelemetry, and OpenInference exporters together."
+title: "Configuration"
+description: "Configure the built-in NeMo Relay observability plugin."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+The observability plugin consumes the canonical NeMo Relay event stream and
+can install ATOF, ATIF, and OpenTelemetry exporters.
 
-Use this page when an application should install standard observability
-exporters from one plugin configuration document instead of manually registering
-each subscriber.
-
-The plugin kind is `observability`. The core runtime registers it, so
-applications do not need to register a plugin implementation before validation
-or initialization.
-
-For plugin file discovery, precedence, merge behavior, editor controls, and
-gateway conflict rules, refer to
-[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
-
-<Note>
-Observability plugin configuration uses the generic NeMo Relay plugin document
-shape, so field names are `snake_case` in every binding. This differs from
-Node.js runtime classes such as `OpenTelemetrySubscriber`, which use
-Node-native `camelCase` option names outside the plugin system.
-
-</Note>
-
-## What It Installs
-
-Every exporter section is optional and defaults to disabled. A section is active
-only when it includes `enabled = true`.
-
-The following table lists the runtime behavior that each section installs:
-
-| Section | Runtime Behavior |
+| Section | Purpose |
 |---|---|
-| `atof` | Registers a global Agent Trajectory Observability Format (ATOF) exporter with file and stream sinks for raw lifecycle events. |
-| `atif` | Registers one Agent Trajectory Interchange Format (ATIF) dispatcher that writes one trajectory file for each top-level Agent scope or supported coding-agent turn scope. |
-| `opentelemetry` | Registers a global OpenTelemetry OTLP subscriber. |
-| `openinference` | Registers a global OpenInference OTLP subscriber. |
+| `atof` | Writes or streams raw ATOF lifecycle events. |
+| `atif` | Writes completed ATIF agent trajectories. |
+| `opentelemetry` | Fans out events to typed `full`, `gen_ai`, or `openinference` OTLP endpoints. |
 
-`subscriber_name` is not part of this config. The runtime infers
-component-local subscriber names and registers them under the observability
-plugin namespace:
+Observability component configuration uses `version = 3`.
 
-- Agent Trajectory Observability Format (ATOF): `__nemo_relay_plugin__observability__atof`
-- Agent Trajectory Interchange Format (ATIF) dispatcher: `__nemo_relay_plugin__observability__atif`
-- Per-trajectory-root ATIF scope subscriber: `__nemo_relay_plugin__observability__atif-{root_scope_uuid}`
-- OpenTelemetry: `__nemo_relay_plugin__observability__opentelemetry`
-- OpenInference: `__nemo_relay_plugin__observability__openinference`
-
-## `plugins.toml` Example
-
-Add the following observability component configuration to `plugins.toml`:
+## Complete Example
 
 ```toml
 version = 1
@@ -64,396 +27,173 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 3
 
 [components.config.atof]
 enabled = true
 
 [[components.config.atof.sinks]]
 type = "file"
-output_directory = "logs"
+output_directory = "./observability"
 filename = "events.jsonl"
-mode = "overwrite"
-
-[[components.config.atof.sinks]]
-type = "stream"
-name = "archive"
-url = "http://localhost:8080/events"
-transport = "http_post"
-timeout_millis = 3000
-
-[components.config.atof.sinks.header_env]
-authorization = "NEMO_RELAY_ATOF_AUTH_HEADER"
+mode = "append"
 
 [components.config.atif]
 enabled = true
-output_directory = "logs"
+agent_name = "NeMo Relay"
+model_name = "unknown"
+output_directory = "./observability"
 filename_template = "trajectory-{session_id}.json"
 
 [components.config.opentelemetry]
 enabled = true
-transport = "http_binary"
+
+[[components.config.opentelemetry.endpoints]]
+type = "full"
 endpoint = "http://localhost:4318/v1/traces"
-service_name = "nemo-relay"
-service_namespace = "agent"
-service_version = "0.7.0"
-instrumentation_scope = "nemo-relay-observability"
-timeout_millis = 3000
+service_name = "agent-service"
 
-[components.config.opentelemetry.headers]
-authorization = "Bearer <token>"
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+service_name = "agent-service"
 
-[components.config.opentelemetry.resource_attributes]
-"deployment.environment" = "dev"
-"service.instance.id" = "local"
-
-[components.config.openinference]
-enabled = true
-transport = "http_binary"
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
 endpoint = "http://localhost:6006/v1/traces"
-service_name = "nemo-relay"
-service_namespace = "agent"
-service_version = "0.7.0"
-instrumentation_scope = "nemo-relay-openinference"
-timeout_millis = 3000
-
-[components.config.openinference.headers]
-authorization = "Bearer <token>"
-
-[components.config.openinference.resource_attributes]
-"deployment.environment" = "dev"
-"service.instance.id" = "local"
-
-[components.config.policy]
-unknown_component = "warn"
-unknown_field = "warn"
-unsupported_value = "error"
+service_name = "agent-service"
 ```
 
-Observability component configuration requires `version = 2`. To update an
-older ATOF configuration, follow [Migrate From Version 1](/configure-plugins/observability/atof#migrate-from-version-1).
+When OpenTelemetry is enabled, `endpoints` must contain at least one entry.
+Endpoint types can be combined or repeated with independent destinations. All
+endpoints are constructed before the plugin registers its fan-out subscriber.
 
-This example reads its ATOF authorization header from
-`NEMO_RELAY_ATOF_AUTH_HEADER`. Set that variable to the complete header value
-before validation or activation; NeMo Relay rejects missing or blank values.
+## Multi-Endpoint Lifecycle
 
-Include only the sections you want to configure. In layered `plugins.toml`
-files, omission inherits lower-precedence values; write `enabled = false` to
-disable an inherited section.
+OpenTelemetry endpoint construction is transactional. If validation or
+construction fails for any endpoint, plugin activation fails before the
+fan-out subscriber is registered. A previous active plugin configuration is
+preserved when possible; the plugin host attempts to restore it if replacement
+fails after teardown begins.
 
-## Failure Behavior
+After activation, each event is delivered to every endpoint. A runtime delivery
+failure in one exporter does not stop application work or delivery to the other
+exporters. During teardown, NeMo Relay attempts to shut down every endpoint and
+returns the first teardown error after all attempts finish. Clear the plugin
+during graceful shutdown so queued subscriber work can drain and every
+exporter receives a teardown attempt.
 
-NeMo Relay treats exporter configuration and exporter delivery failures
-differently. Configuration and activation failures are fail-closed for the
-observability setup: validation or initialization returns an error before the
-new plugin configuration becomes active. Runtime delivery failures are
-fail-open for application work: the tool, LLM, or agent run continues while the
-affected exporter records, logs, or reports the delivery problem.
+Top-level component `config` lists concatenate across configuration layers,
+with higher-precedence entries first. The observability destination lists
+`atof.sinks`, `opentelemetry.endpoints`, and `atif.storage` follow the same
+rule, so system, project, user, and programmatic layers can contribute
+destinations. Arbitrary lists nested inside structured values retain
+replacement semantics. List entries are not merged item by item.
+To change or remove an inherited endpoint, edit the layer that declares it.
+For complete layering rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
 
-The following table describes how each failure affects application work:
+For exporter-specific fields and behavior, refer to:
 
-| Failure | Behavior |
-|---|---|
-| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, unavailable exporter features, ATOF file-open failures, invalid ATOF stream sink configuration, unavailable ATOF streaming support, or ATOF stream worker startup failures | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
-| ATOF event serialization or file write/flush failure after activation | Application work continues. The exporter stores the failure, stops accepting later events for that file, and returns the stored error from `force_flush()` or `shutdown()`. |
-| ATOF stream sink connection or send failure after activation | File output and other already-started sinks continue. Stream sink failures are logged with the sink index; flush and close timeouts are logged instead of blocking shutdown indefinitely. |
-| ATIF local file write, HTTP storage, or S3-compatible storage failure | Application work continues. The ATIF exporter records the failed sink as unhealthy and skips it for later trajectories. Other configured sinks continue to receive writes. |
-| ATIF dispatcher serialization or subscriber-management failure | The ATIF dispatcher records a fatal exporter error and stops observing later ATIF events. Other observability sections continue to run. |
-| OpenTelemetry or OpenInference construction failure | Plugin initialization fails before the subscriber is registered. |
-| OpenTelemetry or OpenInference export failure after registration | Application work continues. The OTLP exporter reports failures through its runtime logging and flush or shutdown path. |
-| Process termination before plugin teardown completes | The output can omit events that were still in the subscriber queue or an exporter-owned worker. NeMo Relay does not backfill those events after restart, and the process can end before an exporter reports an error. |
+- [ATOF](/configure-plugins/observability/atof)
+- [ATIF](/configure-plugins/observability/atif)
+- [OpenTelemetry](/configure-plugins/observability/opentelemetry)
+- [OpenInference](/configure-plugins/observability/openinference)
 
-Missing or delayed telemetry is represented as absence of exporter output, not
-as synthetic success or failure events. NeMo Relay does not backfill events for
-subscribers that register late. If the plugin is cleared while an Agent scope
-or supported coding-agent turn scope is still open, the ATIF dispatcher writes
-the partial trajectory it has already observed.
-
-Use `nemo-relay doctor` to validate local ATOF and ATIF output directories,
-OTLP HTTP endpoints, and ATOF stream sinks. Validate ATIF remote storage
-destinations, including HTTP storage and S3-compatible storage, with exporter
-logs and backend-side checks because `nemo-relay doctor` does not probe
-`atif.storage`. For local artifact paths, verify that the running process can
-create the output directory and that teardown calls `plugin.clear()` or
-`clear_plugin_configuration()` before the process exits.
-
-## Per-Language Plugin Configuration
-
-The following examples configure and activate the observability component
-through each supported language binding:
-
-`validate()` checks only the supplied in-memory object. `initialize()` also
-layers discovered `plugins.toml` configuration. For effective file-backed
-validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
-and run the gateway with the same configuration path that production uses.
+## Programmatic Configuration
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-import asyncio
-
-from nemo_relay import plugin, scope, ScopeType
+from nemo_relay import plugin
 from nemo_relay.observability import (
-    AtifConfig,
-    AtofConfig,
-    AtofFileSinkConfig,
-    AtofStreamSinkConfig,
     ComponentSpec,
     ObservabilityConfig,
-    OtlpConfig,
+    OpenTelemetrySectionConfig,
+    OpenTelemetryEndpointConfig,
 )
 
 config = plugin.PluginConfig(
     components=[
         ComponentSpec(
             ObservabilityConfig(
-                atof=AtofConfig(
+                opentelemetry=OpenTelemetrySectionConfig(
                     enabled=True,
-                    sinks=[
-                        AtofFileSinkConfig(
-                            output_directory="logs",
-                            filename="events.jsonl",
-                            mode="overwrite",
-                        ),
-                        AtofStreamSinkConfig(
-                            name="archive",
-                            url="http://localhost:8080/events",
-                            transport="http_post",
-                            header_env={
-                                "authorization": "NEMO_RELAY_ATOF_AUTH_HEADER"
-                            },
-                        ),
+                    endpoints=[
+                        OpenTelemetryEndpointConfig(
+                            type="gen_ai",
+                            endpoint="http://localhost:4318/v1/traces",
+                            service_name="agent-service",
+                        )
                     ],
-                ),
-                atif=AtifConfig(
-                    enabled=True,
-                    output_directory="logs",
-                    filename_template="trajectory-{session_id}.json",
-                ),
-                opentelemetry=OtlpConfig(
-                    enabled=True,
-                    endpoint="http://localhost:4318/v1/traces",
-                    service_name="nemo-relay",
-                    service_namespace="agent",
-                    service_version="0.7.0",
-                    instrumentation_scope="nemo-relay-observability",
-                    resource_attributes={"deployment.environment": "dev"},
-                ),
-                openinference=OtlpConfig(
-                    enabled=True,
-                    endpoint="http://localhost:6006/v1/traces",
-                    service_name="nemo-relay",
-                    service_namespace="agent",
-                    service_version="0.7.0",
-                    instrumentation_scope="nemo-relay-openinference",
-                    resource_attributes={"deployment.environment": "dev"},
-                ),
+                )
             )
         )
     ]
 )
-
-report = plugin.validate(config)
-if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
-    raise RuntimeError(report["diagnostics"])
-
-async def arun():
-    async with plugin.plugin(config):
-        with scope.scope("agent", ScopeType.Agent):
-            pass
-
-asyncio.run(arun())
 ```
-
 </Tab>
-
-<Tab title="Node.js" language="node">
-```js
-const plugin = require("nemo-relay-node/plugin");
+<Tab title="Node.js" language="javascript">
+```javascript
 const observability = require("nemo-relay-node/observability");
 
-void (async () => {
-  await plugin.initialize({
-    version: 1,
-    components: [
-      observability.ComponentSpec({
-        version: 2,
-        atof: observability.atofConfig({
-          enabled: true,
-          sinks: [
-            {
-              type: "file",
-              output_directory: "logs",
-              filename: "events.jsonl",
-              mode: "overwrite",
-            },
-            {
-              type: "stream",
-              name: "archive",
-              url: "http://localhost:8080/events",
-              transport: "http_post",
-              header_env: {
-                authorization: "NEMO_RELAY_ATOF_AUTH_HEADER",
-              },
-            },
-          ],
-        }),
-        atif: observability.atifConfig({
-          enabled: true,
-          output_directory: "logs",
-          filename_template: "trajectory-{session_id}.json",
-        }),
-        opentelemetry: observability.otlpConfig({
-          enabled: true,
-          endpoint: "http://localhost:4318/v1/traces",
-          service_name: "nemo-relay",
-          service_namespace: "agent",
-          service_version: "0.7.0",
-          instrumentation_scope: "nemo-relay-observability",
-          resource_attributes: {
-            "deployment.environment": "dev",
-          },
-        }),
-        openinference: observability.otlpConfig({
-          enabled: true,
-          endpoint: "http://localhost:6006/v1/traces",
-          service_name: "nemo-relay",
-          service_namespace: "agent",
-          service_version: "0.7.0",
-          instrumentation_scope: "nemo-relay-openinference",
-          resource_attributes: {
-            "deployment.environment": "dev",
-          },
-        }),
+const component = observability.ComponentSpec({
+  version: 3,
+  opentelemetry: observability.openTelemetryConfig({
+    enabled: true,
+    endpoints: [
+      observability.openTelemetryEndpoint({
+        type: "gen_ai",
+        endpoint: "http://localhost:4318/v1/traces",
+        service_name: "agent-service",
       }),
     ],
-  });
-
-  try {
-    // Run instrumented application work here.
-  } finally {
-    plugin.clear();
-  }
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
+  }),
 });
 ```
-
 </Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay::observability::plugin_component::{
-    AtifSectionConfig, AtofFileSinkSectionConfig, AtofSectionConfig,
-    AtofSinkSectionConfig, AtofStreamSinkSectionConfig, ComponentSpec,
-    ObservabilityConfig, OtlpSectionConfig,
-};
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
-};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let component = ComponentSpec::new(ObservabilityConfig {
-        atof: Some(AtofSectionConfig {
-            enabled: true,
-            sinks: vec![
-                AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
-                    output_directory: Some("logs".into()),
-                    filename: Some("events.jsonl".into()),
-                    mode: "overwrite".into(),
-                }),
-                AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
-                    url: "http://localhost:8080/events".into(),
-                    transport: "http_post".into(),
-                    headers: Default::default(),
-                    header_env: [(
-                        "authorization".into(),
-                        "NEMO_RELAY_ATOF_AUTH_HEADER".into(),
-                    )]
-                    .into(),
-                    timeout_millis: 3000,
-                    field_name_policy: "preserve".into(),
-                    name: Some("archive".into()),
-                }),
-            ],
-        }),
-        atif: Some(AtifSectionConfig {
-            enabled: true,
-            output_directory: Some("logs".into()),
-            filename_template: "trajectory-{session_id}.json".into(),
-            ..AtifSectionConfig::default()
-        }),
-        opentelemetry: Some(OtlpSectionConfig {
-            enabled: true,
-            endpoint: Some("http://localhost:4318/v1/traces".into()),
-            service_name: "nemo-relay".into(),
-            service_namespace: Some("agent".into()),
-            service_version: Some("0.7.0".into()),
-            instrumentation_scope: Some("nemo-relay-observability".into()),
-            resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
-            ..OtlpSectionConfig::default()
-        }),
-        openinference: Some(OtlpSectionConfig {
-            enabled: true,
-            endpoint: Some("http://localhost:6006/v1/traces".into()),
-            service_name: "nemo-relay".into(),
-            service_namespace: Some("agent".into()),
-            service_version: Some("0.7.0".into()),
-            instrumentation_scope: Some("nemo-relay-openinference".into()),
-            resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
-            ..OtlpSectionConfig::default()
-        }),
-        ..ObservabilityConfig::default()
-    });
-
-    let config = PluginConfig {
-        version: 1,
-        components: vec![component.into()],
-        policy: Default::default(),
-    };
-
-    let report = validate_plugin_config(&config);
-    assert!(!report.has_errors());
-
-    let _active = initialize_plugins(config).await?;
-
-    // Run instrumented application work here.
-
-    clear_plugin_configuration()?;
-    Ok(())
+<Tab title="Go" language="go">
+```go
+config := nemo_relay.NewObservabilityConfig()
+otel := nemo_relay.NewObservabilityOpenTelemetryConfig()
+otel.Enabled = true
+otel.Endpoints = []nemo_relay.ObservabilityOpenTelemetryEndpointConfig{
+    nemo_relay.NewObservabilityOpenTelemetryEndpointConfig(
+        nemo_relay.OpenTelemetryTypeGenAI,
+        "http://localhost:4318/v1/traces",
+    ),
 }
+config.OpenTelemetry = &otel
+component := nemo_relay.NewObservabilityComponentSpec(config)
 ```
-
 </Tab>
-
 </Tabs>
 
-## Validation and Teardown
+Validate programmatic configuration before initialization. Clear the plugin
+during graceful shutdown so every exporter gets a teardown attempt.
 
-Validate plugin configuration before activating it. The plugin reports
-unsupported transports, unsupported ATOF modes, invalid ATOF stream sink URLs,
-non-string stream sink headers, non-positive stream sink timeouts, unsafe ATIF
-filename templates, unknown fields according to policy, and enabled exporters
-that are unavailable in the current build or target.
+## Migrating from Version 2
 
-Call `plugin.clear()` or `clear_plugin_configuration()` during teardown.
-Clearing the plugin configuration waits for previously queued subscriber
-callbacks, runs exporter-specific shutdown work, and removes plugin-owned
-registrations. That work flushes file exporters, asks ATOF stream sink workers
-to drain and close within their configured timeout, writes any eligible partial
-ATIF trajectories, and shuts down owned OTLP subscribers. If an ATOF stream
-worker times out, NeMo Relay logs a warning and continues teardown; clearing
-the plugin can still return successfully without confirming that worker drained
-or closed.
+Version 2 used independent `opentelemetry` and `openinference` sections.
+Version 3 replaces them with typed endpoints:
 
-This is a graceful teardown barrier, not a crash-durability guarantee. If the
-process terminates before clearing begins or finishes, the output can omit
-telemetry for application work that completed successfully. Telemetry delivery
-failures remain fail-open and do not retroactively change the application
-result.
+- Convert the old `opentelemetry` section to a `full` endpoint.
+- Convert the old `openinference` section to an `openinference` endpoint.
+- Add a `gen_ai` endpoint for the standardized GenAI projection.
 
-Use manual subscriber/exporter APIs instead of the plugin when you need custom
-subscriber names, explicit per-run exporter objects, or direct control over the
-collection window.
+Move `mark_projection`, `mark_exclude_names`, and `attribute_mappings` into
+each `full` or `openinference` endpoint; their legacy behavior is preserved.
+The `gen_ai` projection ignores those controls. `semantic_selector` and
+`capture_content` are unsupported. Version-2 OTLP shapes are rejected under
+version 3.
+
+The version change also makes `type` and `endpoint` required for every
+OpenTelemetry endpoint. The default `service_name` changes from `nemo-relay`
+to `unknown_service`, and the default instrumentation scope becomes
+`opentelemetry`. Move each old section's `headers` and `resource_attributes`
+maps into its new endpoint. Use `header_env` when a header value comes from an
+environment variable.
+
+For before-and-after TOML and Rust, Python, Node.js, Go, and C API changes,
+refer to
+[Migration Guides](/reference/migration-guides#observability-configuration-version-3).
