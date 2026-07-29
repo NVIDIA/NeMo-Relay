@@ -374,10 +374,33 @@ impl RampartSanitizer {
         surface: ProviderSurface,
         payload: Json,
     ) -> Option<Json> {
+        if surface == ProviderSurface::OpenAIChat
+            && payload
+                .get("choices")
+                .and_then(Json::as_array)
+                .is_some_and(|choices| choices.len() > 1)
+            && self.targets_normalized_openai_chat_choice()
+        {
+            return None;
+        }
         let codec_name = BuiltinCodecName::from_provider_surface(surface);
         let annotated = codec.decode_response(&payload).ok()?;
         let sanitized = sanitize_serializable(self, annotated).ok()?;
         Some(codec_name.overlay_response_payload(payload, &sanitized))
+    }
+
+    fn targets_normalized_openai_chat_choice(&self) -> bool {
+        const CHOICE_ROOTS: [&str; 4] = ["message", "tool_calls", "finish_reason", "api_specific"];
+
+        self.target_paths
+            .iter()
+            .filter_map(|path| path.first())
+            .chain(
+                self.target_path_patterns
+                    .iter()
+                    .filter_map(|pattern| pattern.segments.first()),
+            )
+            .any(|root| root == "*" || CHOICE_ROOTS.contains(&root.as_str()))
     }
 
     fn selected_surface(&self, codec: &LlmCodecIdentity) -> Option<ProviderSurface> {
@@ -733,5 +756,79 @@ mod tests {
         assert_eq!(sanitized["id"], "chatcmpl-José");
         assert_eq!(sanitized["model"], "model-José");
         assert_eq!(sanitized["vendor_trace"], "trace-José");
+    }
+
+    #[test]
+    fn openai_chat_response_projection_omits_multiple_choices_for_choice_targets() {
+        let exact = RampartSanitizer::new(
+            RampartPiiConfig {
+                model_path: "/tmp/rampart".into(),
+                target_paths: vec!["/message".into()],
+                ..RampartPiiConfig::default()
+            },
+            Arc::new(NameDetector),
+        )
+        .unwrap();
+        let wildcard = sanitizer(Arc::new(NameDetector), vec!["/*"]);
+        let payload = serde_json::json!({
+            "id": "chatcmpl-multi",
+            "model": "model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello José"},
+                    "finish_reason": "stop"
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": "Private José"},
+                    "finish_reason": "stop"
+                }
+            ]
+        });
+        let codec = build_response_codec(ProviderSurface::OpenAIChat);
+
+        assert!(
+            exact
+                .sanitize_response_with_codec(
+                    codec.as_ref(),
+                    ProviderSurface::OpenAIChat,
+                    payload.clone(),
+                )
+                .is_none()
+        );
+        assert!(
+            wildcard
+                .sanitize_response_with_codec(codec.as_ref(), ProviderSurface::OpenAIChat, payload)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn openai_chat_response_projection_keeps_multiple_choices_for_response_targets() {
+        let sanitizer = sanitizer(Arc::new(NameDetector), vec!["/model"]);
+        let payload = serde_json::json!({
+            "id": "chatcmpl-multi",
+            "model": "model-José",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "first"},
+                    "finish_reason": "stop"
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": "second"},
+                    "finish_reason": "stop"
+                }
+            ]
+        });
+        let codec = build_response_codec(ProviderSurface::OpenAIChat);
+        let sanitized = sanitizer
+            .sanitize_response_with_codec(codec.as_ref(), ProviderSurface::OpenAIChat, payload)
+            .unwrap();
+
+        assert_eq!(sanitized["model"], "model-[REDACTED]");
+        assert_eq!(sanitized["choices"][1]["message"]["content"], "second");
     }
 }
