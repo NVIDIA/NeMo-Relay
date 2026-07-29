@@ -854,9 +854,11 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
 /// Wrap a Python callable `(LlmRequest, LlmSanitizeRequestContext) -> Optional<LlmRequest>`.
 fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
             let py_fn = py_fn.clone();
+            let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
             Box::pin(async move {
                 let result = resolve_py_object_or_future(Python::attach(|py| {
                     let result = py_fn
@@ -868,7 +870,7 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
                             ),
                         )
                         .map_err(|e| FlowError::Internal(e.to_string()))?;
-                    split_py_object_or_future(py, result)
+                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
                 }))
                 .await?;
                 Python::attach(|py| {
@@ -893,14 +895,16 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
 /// Wrap a Python callable `(LlmRequest) -> Optional[str]` for LLM conditional guardrails.
 pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(move |request: LlmRequest| {
         let py_fn = py_fn.clone();
+        let task_locals = capture_python_task_locals().or_else(|| task_locals.clone());
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let result = py_fn
                     .call1(py, (PyLLMRequest { inner: request },))
                     .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_py_object_or_future(py, result)
+                split_py_object_or_future_with_locals(py, result, task_locals.as_ref())
             }))
             .await?;
             Python::attach(|py| {

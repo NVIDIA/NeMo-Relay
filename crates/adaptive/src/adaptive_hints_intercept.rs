@@ -178,9 +178,9 @@ impl AdaptiveHintsIntercept {
                   mut request: LlmRequest,
                   mut annotated: Option<AnnotatedLlmRequest>| {
                 let this = this.clone();
+                let scope_path = extract_scope_path();
+                let manual_ls = read_manual_latency_sensitivity();
                 Box::pin(async move {
-                    let scope_path = extract_scope_path();
-                    let manual_ls = read_manual_latency_sensitivity();
                     let scope_depth = scope_path.len();
                     let call_index = this.call_counter.fetch_add(1, Ordering::Relaxed);
 
