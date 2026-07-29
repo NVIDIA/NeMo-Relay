@@ -13,6 +13,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tract_onnx::prelude::*;
 
+use super::prefilter::PreparedText;
 use super::tokenizer::RampartTokenizer;
 
 const MODEL_MAX_TOKENS: usize = 512;
@@ -95,6 +96,13 @@ struct Span {
     end: usize,
     label: String,
     score: f64,
+    source: SpanSource,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SpanSource {
+    Model,
+    Deterministic,
 }
 
 struct SpanAccumulator {
@@ -112,6 +120,7 @@ impl SpanAccumulator {
             end: self.end,
             label: self.label,
             score: self.score_total / self.token_count as f64,
+            source: SpanSource::Model,
         }
     }
 }
@@ -189,17 +198,37 @@ impl RampartDetector {
         let _guard = self.inference_lock.lock().map_err(|error| {
             PluginError::Internal(format!("Rampart inference lock poisoned: {error}"))
         })?;
-        let windows = self.build_windows(texts)?;
+        let prepared = texts
+            .iter()
+            .map(|text| PreparedText::new(text))
+            .collect::<Vec<_>>();
+        let masked_texts = prepared
+            .iter()
+            .map(PreparedText::masked)
+            .collect::<Vec<_>>();
+        let windows = self.build_windows(&masked_texts)?;
         if windows.is_empty() {
-            return Ok(Vec::new());
+            return Ok(prepared
+                .iter()
+                .enumerate()
+                .flat_map(|(text_index, text)| {
+                    text.spans().iter().map(move |span| Detection {
+                        text_index,
+                        start_utf8: span.start,
+                        end_utf8: span.end,
+                        label: span.label.into(),
+                        score: 1.0,
+                    })
+                })
+                .collect());
         }
 
-        let mut spans_by_text = vec![Vec::new(); texts.len()];
+        let mut model_spans_by_text = vec![Vec::new(); texts.len()];
         for batch in inference_batches(&windows, self.inference_batch_size) {
             let logits = self.infer_batch(&windows, &batch)?;
             for (batch_index, window_index) in batch.iter().copied().enumerate() {
                 let window = &windows[window_index];
-                spans_by_text[window.text_index].extend(self.decode_window(
+                model_spans_by_text[window.text_index].extend(self.decode_window(
                     window,
                     &logits,
                     batch_index,
@@ -208,7 +237,28 @@ impl RampartDetector {
         }
 
         let mut detections = Vec::new();
-        for (text_index, spans) in spans_by_text.into_iter().enumerate() {
+        for (text_index, model_spans) in model_spans_by_text.into_iter().enumerate() {
+            let mut spans = prepared[text_index]
+                .spans()
+                .iter()
+                .map(|span| Span {
+                    start: span.start,
+                    end: span.end,
+                    label: span.label.into(),
+                    score: 1.0,
+                    source: SpanSource::Deterministic,
+                })
+                .collect::<Vec<_>>();
+            for mut span in model_spans {
+                let Some((start, end)) = prepared[text_index].project(span.start, span.end) else {
+                    return Err(inference_error(
+                        "Rampart prefilter returned an invalid UTF-8 span",
+                    ));
+                };
+                span.start = start;
+                span.end = end;
+                spans.push(span);
+            }
             for span in merge_overlapping_spans(spans) {
                 let text = texts[text_index];
                 if span.start >= span.end
@@ -510,12 +560,17 @@ fn merge_overlapping_spans(mut spans: Vec<Span>) -> Vec<Span> {
             merged.push(span);
             continue;
         }
-        let span_wins = (span.score, span.end - span.start, span.label.as_str())
-            > (
-                previous.score,
-                previous.end - previous.start,
-                previous.label.as_str(),
-            );
+        let span_wins = (
+            span.score,
+            span.end - span.start,
+            span.source,
+            span.label.as_str(),
+        ) > (
+            previous.score,
+            previous.end - previous.start,
+            previous.source,
+            previous.label.as_str(),
+        );
         previous.start = previous.start.min(span.start);
         previous.end = previous.end.max(span.end);
         previous.score = previous.score.max(span.score);
@@ -640,30 +695,56 @@ mod tests {
                 end: 10,
                 label: "GIVEN_NAME".into(),
                 score: 0.8,
+                source: SpanSource::Model,
             },
             Span {
                 start: 5,
                 end: 12,
                 label: "SURNAME".into(),
                 score: 0.9,
+                source: SpanSource::Model,
             },
             Span {
                 start: 20,
                 end: 24,
                 label: "PHONE".into(),
                 score: 0.7,
+                source: SpanSource::Model,
             },
             Span {
                 start: 24,
                 end: 28,
                 label: "PHONE".into(),
                 score: 0.8,
+                source: SpanSource::Model,
             },
         ]);
         assert_eq!(merged.len(), 2);
         assert_eq!((merged[0].start, merged[0].end), (0, 12));
         assert_eq!(merged[0].label, "SURNAME");
         assert_eq!((merged[1].start, merged[1].end), (20, 28));
+    }
+
+    #[test]
+    fn deterministic_span_wins_an_equal_model_tie() {
+        let merged = merge_overlapping_spans(vec![
+            Span {
+                start: 0,
+                end: 11,
+                label: "GOVERNMENT_ID".into(),
+                score: 1.0,
+                source: SpanSource::Model,
+            },
+            Span {
+                start: 0,
+                end: 11,
+                label: "SSN".into(),
+                score: 1.0,
+                source: SpanSource::Deterministic,
+            },
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].label, "SSN");
     }
 
     #[test]

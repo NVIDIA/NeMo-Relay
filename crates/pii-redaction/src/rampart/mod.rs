@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
 mod model;
+mod prefilter;
 mod sanitizer;
 mod tokenizer;
 
