@@ -20,6 +20,9 @@ use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
+use nemo_relay::api::runtime::subscriber_dispatcher::{
+    PublicationBuffer, capture_nested_publication_buffer, with_task_nested_publication_buffer,
+};
 use nemo_relay::api::runtime::{ScopeStackHandle, TASK_SCOPE_STACK, current_scope_stack};
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
@@ -32,11 +35,14 @@ tokio::task_local! {
 
 pub(crate) async fn with_publication_callback_context<F: Future>(
     context_id: Option<String>,
+    publication_buffer: Option<PublicationBuffer>,
     future: F,
 ) -> F::Output {
-    PUBLICATION_CALLBACK_CONTEXT_ID
-        .scope(context_id, future)
-        .await
+    with_task_nested_publication_buffer(
+        publication_buffer,
+        PUBLICATION_CALLBACK_CONTEXT_ID.scope(context_id, future),
+    )
+    .await
 }
 
 fn publication_callback_context_id() -> Option<String> {
@@ -80,6 +86,7 @@ struct CallArgs {
     publication_context_id: Option<String>,
     /// Scope stack captured when Relay invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
+    publication_buffer: Option<PublicationBuffer>,
     completion: CallCompletion,
 }
 
@@ -156,6 +163,7 @@ fn build_next_unknown(
     next: NextFn,
     scope_stack: ScopeStackHandle,
     publication_context_id: Option<String>,
+    publication_buffer: Option<PublicationBuffer>,
 ) -> napi::Result<JsUnknown> {
     let next_fn = match next {
         NextFn::Json(next) => {
@@ -164,17 +172,22 @@ fn build_next_unknown(
                 let next = next.clone();
                 let scope_stack = scope_stack.clone();
                 let publication_context_id = publication_context_id.clone();
+                let publication_buffer = publication_buffer.clone();
                 ctx.env.execute_tokio_future(
                     async move {
-                        with_publication_callback_context(publication_context_id, async move {
-                            TASK_SCOPE_STACK
-                                .scope(scope_stack, async move {
-                                    next(arg)
-                                        .await
-                                        .map_err(|e| napi::Error::from_reason(e.to_string()))
-                                })
-                                .await
-                        })
+                        with_publication_callback_context(
+                            publication_context_id,
+                            publication_buffer,
+                            async move {
+                                TASK_SCOPE_STACK
+                                    .scope(scope_stack, async move {
+                                        next(arg)
+                                            .await
+                                            .map_err(|e| napi::Error::from_reason(e.to_string()))
+                                    })
+                                    .await
+                            },
+                        )
                         .await
                     },
                     |_env, value| Ok(value),
@@ -187,17 +200,22 @@ fn build_next_unknown(
                 let next = next.clone();
                 let scope_stack = scope_stack.clone();
                 let publication_context_id = publication_context_id.clone();
+                let publication_buffer = publication_buffer.clone();
                 ctx.env.execute_tokio_future(
                     async move {
-                        with_publication_callback_context(publication_context_id, async move {
-                            TASK_SCOPE_STACK
-                                .scope(scope_stack, async move {
-                                    next(arg)
-                                        .await
-                                        .map_err(|e| napi::Error::from_reason(e.to_string()))
-                                })
-                                .await
-                        })
+                        with_publication_callback_context(
+                            publication_context_id,
+                            publication_buffer,
+                            async move {
+                                TASK_SCOPE_STACK
+                                    .scope(scope_stack, async move {
+                                        next(arg)
+                                            .await
+                                            .map_err(|e| napi::Error::from_reason(e.to_string()))
+                                    })
+                                    .await
+                            },
+                        )
                         .await
                     },
                     |_env, value| Ok(value),
@@ -271,6 +289,7 @@ impl PromiseAwareFn {
                             next,
                             scope_stack,
                             ctx.value.publication_context_id.clone(),
+                            ctx.value.publication_buffer.clone(),
                         )?
                     }
                     None => undefined_to_unknown(&ctx.env)?,
@@ -299,7 +318,11 @@ impl PromiseAwareFn {
                 };
                 let scope_stack = match ctx.value.scope_stack {
                     Some(scope_stack) => {
-                        let scope_stack = ScopeStack::from(scope_stack).into_instance(ctx.env)?;
+                        let scope_stack = ScopeStack {
+                            inner: scope_stack,
+                            publication_buffer: ctx.value.publication_buffer,
+                        }
+                        .into_instance(ctx.env)?;
                         unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) }
                     }
                     None => undefined_to_unknown(&ctx.env)?,
@@ -438,6 +461,7 @@ impl PromiseAwareFn {
                 // Scope identity applies to every middleware callback. The
                 // publication bit controls only re-entrant flush behavior.
                 scope_stack: Some(current_scope_stack()),
+                publication_buffer: capture_nested_publication_buffer(),
                 completion: CallCompletion::new(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,

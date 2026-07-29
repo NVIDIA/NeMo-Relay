@@ -25,7 +25,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use nemo_relay::api::runtime::subscriber_dispatcher::{PublicationContext, publication_context};
+use nemo_relay::api::runtime::subscriber_dispatcher::{
+    PublicationBuffer, PublicationContext, capture_nested_publication_buffer, publication_context,
+};
 use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
@@ -410,8 +412,28 @@ fn copy_publication_invocation<'py>(
     context: &PythonPublicationContext,
     fallback_task_locals: Option<TaskLocals>,
 ) -> PyResult<(Bound<'py, PyAny>, Option<TaskLocals>)> {
+    copy_publication_invocation_with_buffer(
+        py,
+        context,
+        fallback_task_locals,
+        capture_nested_publication_buffer(),
+    )
+}
+
+fn copy_publication_invocation_with_buffer<'py>(
+    py: Python<'py>,
+    context: &PythonPublicationContext,
+    fallback_task_locals: Option<TaskLocals>,
+    publication_buffer: Option<PublicationBuffer>,
+) -> PyResult<(Bound<'py, PyAny>, Option<TaskLocals>)> {
     let invocation_context = context.context.bind(py).call_method0("copy")?;
-    let scope_stack = Py::new(py, PyScopeStack(context.scope_stack.clone()))?;
+    let scope_stack = Py::new(
+        py,
+        PyScopeStack {
+            inner: context.scope_stack.clone(),
+            publication_buffer,
+        },
+    )?;
     let nemo_relay = py.import("nemo_relay")?;
     if let Ok(scope_stack_var) = nemo_relay.getattr("_scope_stack_var") {
         invocation_context.call_method1("run", (scope_stack_var.getattr("set")?, scope_stack))?;
@@ -750,17 +772,23 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
         let py_fn = py_fn.clone();
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         let publication_context = publication_context::<PythonPublicationContext>();
+        let publication_buffer = capture_nested_publication_buffer();
         let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let (invocation_context, task_locals) = match publication_context.as_ref() {
                     Some(context) => {
                         let (context, publication_task_locals) =
-                            copy_publication_invocation(py, context, task_locals)
-                                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                            copy_publication_invocation_with_buffer(
+                                py,
+                                context,
+                                task_locals,
+                                publication_buffer.clone(),
+                            )
+                            .map_err(|error| FlowError::Internal(error.to_string()))?;
                         (Some(context), publication_task_locals)
                     }
-                    None => copy_middleware_invocation(py, task_locals)
+                    None => { copy_middleware_invocation(py, task_locals) }
                         .map_err(|error| FlowError::Internal(error.to_string()))?,
                 };
                 let py_args = json_to_py(py, &args)
@@ -1186,6 +1214,7 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
             let py_fn = py_fn.clone();
             let task_locals = task_locals_with_running_loop(task_locals.as_ref());
             let publication_context = publication_context::<PythonPublicationContext>();
+            let publication_buffer = capture_nested_publication_buffer();
             let publication =
                 nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
             Box::pin(async move {
@@ -1193,11 +1222,16 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
                     let (invocation_context, task_locals) = match publication_context.as_ref() {
                         Some(context) => {
                             let (context, publication_task_locals) =
-                                copy_publication_invocation(py, context, task_locals)
-                                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                                copy_publication_invocation_with_buffer(
+                                    py,
+                                    context,
+                                    task_locals,
+                                    publication_buffer.clone(),
+                                )
+                                .map_err(|error| FlowError::Internal(error.to_string()))?;
                             (Some(context), publication_task_locals)
                         }
-                        None => copy_middleware_invocation(py, task_locals)
+                        None => { copy_middleware_invocation(py, task_locals) }
                             .map_err(|error| FlowError::Internal(error.to_string()))?,
                     };
                     let args = (
@@ -1499,17 +1533,23 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
         let py_fn = py_fn.clone();
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         let publication_context = publication_context::<PythonPublicationContext>();
+        let publication_buffer = capture_nested_publication_buffer();
         let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let (invocation_context, task_locals) = match publication_context.as_ref() {
                     Some(context) => {
                         let (context, publication_task_locals) =
-                            copy_publication_invocation(py, context, task_locals)
-                                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                            copy_publication_invocation_with_buffer(
+                                py,
+                                context,
+                                task_locals,
+                                publication_buffer.clone(),
+                            )
+                            .map_err(|error| FlowError::Internal(error.to_string()))?;
                         (Some(context), publication_task_locals)
                     }
-                    None => copy_middleware_invocation(py, task_locals)
+                    None => { copy_middleware_invocation(py, task_locals) }
                         .map_err(|error| FlowError::Internal(error.to_string()))?,
                 };
                 let py_context = PyLlmSanitizeResponseContext { inner: context };
@@ -1607,17 +1647,23 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
         let py_fn = py_fn.clone();
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         let publication_context = publication_context::<PythonPublicationContext>();
+        let publication_buffer = capture_nested_publication_buffer();
         Box::pin(async move {
             let result = Python::attach(
                 |py| -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
                     let (invocation_context, task_locals) = match publication_context.as_ref() {
                         Some(context) => {
                             let (context, publication_task_locals) =
-                                copy_publication_invocation(py, context, task_locals)
-                                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                                copy_publication_invocation_with_buffer(
+                                    py,
+                                    context,
+                                    task_locals,
+                                    publication_buffer.clone(),
+                                )
+                                .map_err(|error| FlowError::Internal(error.to_string()))?;
                             (Some(context), publication_task_locals)
                         }
-                        None => copy_middleware_invocation(py, task_locals)
+                        None => { copy_middleware_invocation(py, task_locals) }
                             .map_err(|error| FlowError::Internal(error.to_string()))?,
                     };
                     let py_event = match event.as_ref() {

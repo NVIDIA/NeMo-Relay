@@ -129,6 +129,45 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(events.at(-1).data, { sanitized: true });
   });
 
+  it('publishes nested Promise sanitizer events before already queued events', async () => {
+    const events = capture('node-event-sanitize-nested-order-sub');
+    let sanitizerEntered;
+    const entered = new Promise((resolve) => {
+      sanitizerEntered = resolve;
+    });
+    let releaseSanitizer;
+    const release = new Promise((resolve) => {
+      releaseSanitizer = resolve;
+    });
+    lib.registerMarkSanitizeGuardrail(
+      'node-event-sanitize-nested-order',
+      0,
+      async (event, fields) => {
+        if (event.name === 'node-outer-event') {
+          sanitizerEntered();
+          await release;
+          lib.withScopeStack(lib.createScopeStack(), () => lib.event('node-nested-event'));
+        }
+        return fields;
+      },
+    );
+    try {
+      lib.event('node-outer-event');
+      await entered;
+      lib.event('node-later-event');
+      releaseSanitizer();
+      await lib.flushSubscribers();
+      await waitFor(events, 3);
+    } finally {
+      lib.deregisterMarkSanitizeGuardrail('node-event-sanitize-nested-order');
+      lib.deregisterSubscriber('node-event-sanitize-nested-order-sub');
+    }
+    assert.deepEqual(
+      events.map((event) => event.name),
+      ['node-outer-event', 'node-nested-event', 'node-later-event'],
+    );
+  });
+
   it('preserves the emitting scope stack across queued sanitizer awaits', async () => {
     const events = capture('node-event-sanitize-scope-context-sub');
     const originalStack = lib.currentScopeStack();

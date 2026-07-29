@@ -100,6 +100,36 @@ async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
     assert events[-1].data == {"async": True}
 
 
+async def test_nested_async_sanitizer_event_precedes_already_queued_event(capture_events):
+    _capture_name, events = capture_events
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        if event.name == "python-outer-event":
+            entered.set()
+            await release.wait()
+            with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+                scope.event("python-nested-event")
+        return fields
+
+    guardrails.register_mark_sanitize("python-nested-event-order", 0, sanitize)
+    try:
+        scope.event("python-outer-event")
+        await entered.wait()
+        scope.event("python-later-event")
+        release.set()
+        await subscribers.flush_async()
+    finally:
+        guardrails.deregister_mark_sanitize("python-nested-event-order")
+
+    assert [event.name for event in events] == [
+        "python-outer-event",
+        "python-nested-event",
+        "python-later-event",
+    ]
+
+
 async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events):
     request_id = contextvars.ContextVar("request_id", default="registration")
     observed: dict[str, str] = {}

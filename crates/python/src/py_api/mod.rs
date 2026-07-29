@@ -16,7 +16,8 @@ use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::runtime::subscriber_dispatcher::{
-    with_publication_context, with_task_publication_context,
+    capture_nested_publication_buffer, sync_thread_publication_buffer, with_publication_context,
+    with_task_nested_publication_buffer, with_task_publication_context,
 };
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
@@ -102,6 +103,7 @@ where
 {
     let scope_stack = current_scope_stack_handle();
     let publication_context = py_callable::capture_python_publication_context();
+    let publication_buffer = capture_nested_publication_buffer();
     if !python_event_loop_running(py)? {
         let result = py
             .detach(|| {
@@ -114,9 +116,12 @@ where
         return convert(py, result).map(|value| value.into_bound(py));
     }
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = with_task_publication_context(
-            publication_context,
-            TASK_SCOPE_STACK.scope(scope_stack, future),
+        let result = with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, future),
+            ),
         )
         .await
         .map_err(to_py_err)?;
@@ -234,7 +239,10 @@ pub(crate) async fn forward_stream_to_channel(
 ///     A ``ScopeStack`` that can be used for per-request or per-task isolation.
 #[pyfunction]
 pub fn create_scope_stack() -> PyScopeStack {
-    PyScopeStack(create_scope_stack_handle())
+    PyScopeStack {
+        inner: create_scope_stack_handle(),
+        publication_buffer: None,
+    }
 }
 
 /// Capture a transport-neutral context from the current Relay scope stack.
@@ -265,7 +273,10 @@ pub fn create_scope_stack_from_propagation(
     context: &PyPropagationContext,
 ) -> PyResult<PyScopeStack> {
     create_scope_stack_from_propagation_handle(&context.inner)
-        .map(PyScopeStack)
+        .map(|inner| PyScopeStack {
+            inner,
+            publication_buffer: None,
+        })
         .map_err(to_py_err)
 }
 
@@ -279,20 +290,30 @@ pub fn create_scope_stack_from_propagation(
 ///     stack: The ``ScopeStack`` to bind to the current thread.
 #[pyfunction]
 pub fn set_thread_scope_stack(stack: &PyScopeStack) {
-    bind_thread_scope_stack(stack.0.clone());
+    bind_thread_scope_stack(stack.inner.clone());
+    sync_thread_publication_buffer(
+        stack
+            .publication_buffer
+            .clone()
+            .or_else(capture_nested_publication_buffer),
+    );
 }
 
 /// Capture the scope stack currently installed in native thread-local storage.
 #[pyfunction]
 pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
-    PyThreadScopeStackBinding(capture_thread_scope_stack_handle())
+    PyThreadScopeStackBinding {
+        inner: capture_thread_scope_stack_handle(),
+        publication_buffer: capture_nested_publication_buffer(),
+    }
 }
 
 /// Restore a complete native thread binding captured by
 /// [`capture_thread_scope_stack`].
 #[pyfunction]
 pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
-    restore_thread_scope_stack_handle(binding.0.clone());
+    restore_thread_scope_stack_handle(binding.inner.clone());
+    sync_thread_publication_buffer(binding.publication_buffer.clone());
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
@@ -303,7 +324,13 @@ pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
 /// affecting ``scope_stack_active()``.
 #[pyfunction]
 pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
-    sync_bound_thread_scope_stack(stack.0.clone());
+    sync_bound_thread_scope_stack(stack.inner.clone());
+    sync_thread_publication_buffer(
+        stack
+            .publication_buffer
+            .clone()
+            .or_else(capture_nested_publication_buffer),
+    );
 }
 
 /// Return whether the current execution context has an explicitly-initialized
@@ -687,25 +714,29 @@ fn tool_call_execute<'py>(
 
     let scope_stack = current_scope_stack_handle();
     let publication_context = py_callable::capture_python_publication_context();
+    let publication_buffer = capture_nested_publication_buffer();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        with_task_publication_context(
-            publication_context,
-            TASK_SCOPE_STACK.scope(scope_stack, async move {
-                let result = core_tool_api::tool_call_execute(
-                    core_tool_api::ToolCallExecuteParams::builder()
-                        .name(name)
-                        .args(args_json)
-                        .func(default_fn)
-                        .parent(parent_handle)
-                        .attributes(attrs)
-                        .data_opt(data_json)
-                        .metadata_opt(metadata_json)
-                        .build(),
-                )
-                .await
-                .map_err(to_py_err)?;
-                Python::attach(|py| json_to_py(py, &result))
-            }),
+        with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, async move {
+                    let result = core_tool_api::tool_call_execute(
+                        core_tool_api::ToolCallExecuteParams::builder()
+                            .name(name)
+                            .args(args_json)
+                            .func(default_fn)
+                            .parent(parent_handle)
+                            .attributes(attrs)
+                            .data_opt(data_json)
+                            .metadata_opt(metadata_json)
+                            .build(),
+                    )
+                    .await
+                    .map_err(to_py_err)?;
+                    Python::attach(|py| json_to_py(py, &result))
+                }),
+            ),
         )
         .await
     })
@@ -919,27 +950,31 @@ fn llm_call_execute<'py>(
 
     let scope_stack = current_scope_stack_handle();
     let publication_context = py_callable::capture_python_publication_context();
+    let publication_buffer = capture_nested_publication_buffer();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        with_task_publication_context(
-            publication_context,
-            TASK_SCOPE_STACK.scope(scope_stack, async move {
-                let params = core_llm_api::LlmCallExecuteParams::builder()
-                    .name(name)
-                    .request(request.inner)
-                    .func(default_fn)
-                    .parent(parent_handle)
-                    .attributes(attrs)
-                    .data_opt(data_json)
-                    .metadata_opt(metadata_json)
-                    .model_name_opt(model_name)
-                    .codec_opt(codec_arc)
-                    .response_codec_opt(response_codec_arc)
-                    .build();
-                let result = core_llm_api::llm_call_execute(params)
-                    .await
-                    .map_err(to_py_err)?;
-                Python::attach(|py| json_to_py(py, &result))
-            }),
+        with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, async move {
+                    let params = core_llm_api::LlmCallExecuteParams::builder()
+                        .name(name)
+                        .request(request.inner)
+                        .func(default_fn)
+                        .parent(parent_handle)
+                        .attributes(attrs)
+                        .data_opt(data_json)
+                        .metadata_opt(metadata_json)
+                        .model_name_opt(model_name)
+                        .codec_opt(codec_arc)
+                        .response_codec_opt(response_codec_arc)
+                        .build();
+                    let result = core_llm_api::llm_call_execute(params)
+                        .await
+                        .map_err(to_py_err)?;
+                    Python::attach(|py| json_to_py(py, &result))
+                }),
+            ),
         )
         .await
     })
@@ -1024,43 +1059,51 @@ fn llm_stream_call_execute<'py>(
     let scope_stack = current_scope_stack_handle();
     let publication_context = py_callable::capture_python_publication_context();
     let stream_publication_context = publication_context.clone();
+    let publication_buffer = capture_nested_publication_buffer();
+    let stream_publication_buffer = publication_buffer.clone();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        with_task_publication_context(
-            publication_context,
-            TASK_SCOPE_STACK.scope(scope_stack, async move {
-                let params = core_llm_api::LlmStreamCallExecuteParams::builder()
-                    .name(name)
-                    .request(request.inner)
-                    .func(default_fn)
-                    .collector(collector_fn)
-                    .finalizer(finalizer_fn)
-                    .parent(parent_handle)
-                    .attributes(attrs)
-                    .data_opt(data_json)
-                    .metadata_opt(metadata_json)
-                    .model_name_opt(model_name)
-                    .codec_opt(codec_arc)
-                    .response_codec_opt(response_codec_arc)
-                    .build();
-                let rust_stream = core_llm_api::llm_stream_call_execute(params)
-                    .await
-                    .map_err(to_py_err)?;
+        with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, async move {
+                    let params = core_llm_api::LlmStreamCallExecuteParams::builder()
+                        .name(name)
+                        .request(request.inner)
+                        .func(default_fn)
+                        .collector(collector_fn)
+                        .finalizer(finalizer_fn)
+                        .parent(parent_handle)
+                        .attributes(attrs)
+                        .data_opt(data_json)
+                        .metadata_opt(metadata_json)
+                        .model_name_opt(model_name)
+                        .codec_opt(codec_arc)
+                        .response_codec_opt(response_codec_arc)
+                        .build();
+                    let rust_stream = core_llm_api::llm_stream_call_execute(params)
+                        .await
+                        .map_err(to_py_err)?;
 
-                // Spawn a tokio task that drains the Rust stream into an mpsc channel
-                let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
-                let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-                let (closed, closed_rx) = tokio::sync::watch::channel(None);
-                tokio::spawn(with_task_publication_context(
-                    stream_publication_context,
-                    forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
-                ));
+                    // Spawn a tokio task that drains the Rust stream into an mpsc channel
+                    let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
+                    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                    let (closed, closed_rx) = tokio::sync::watch::channel(None);
+                    tokio::spawn(with_task_nested_publication_buffer(
+                        stream_publication_buffer,
+                        with_task_publication_context(
+                            stream_publication_context,
+                            forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
+                        ),
+                    ));
 
-                Ok(PyLlmStream {
-                    receiver: Arc::new(tokio::sync::Mutex::new(rx)),
-                    cancel,
-                    closed: closed_rx,
-                })
-            }),
+                    Ok(PyLlmStream {
+                        receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+                        cancel,
+                        closed: closed_rx,
+                    })
+                }),
+            ),
         )
         .await
     })

@@ -431,6 +431,9 @@ def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeSta
 @contextmanager
 def use_scope_stack(stack: ScopeStack):
     """Temporarily install ``stack`` in the current Python context."""
+    current_stack = _scope_stack_var.get(None)
+    if current_stack is not None:
+        _sync_thread_scope_stack(current_stack)
     previous_native_stack = _capture_thread_scope_stack()
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)

@@ -83,7 +83,6 @@ pub(crate) type EventTransformFn = Box<
 >;
 
 mod native {
-    use futures_util::FutureExt;
     use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Mutex;
@@ -99,7 +98,7 @@ mod native {
     };
     use crate::error::FlowError;
 
-    enum DispatcherMessage {
+    pub(super) enum DispatcherMessage {
         Deliver {
             event: Box<Event>,
             transform: Option<EventTransformFn>,
@@ -122,6 +121,53 @@ mod native {
     type BackgroundPublicationState = Option<
         std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String>,
     >;
+
+    /// Opaque routing handle for publications emitted on foreign callback threads.
+    #[derive(Clone)]
+    pub struct PublicationBuffer {
+        messages: Arc<Mutex<Option<Vec<DispatcherMessage>>>>,
+    }
+
+    impl PublicationBuffer {
+        fn new(messages: Option<Vec<DispatcherMessage>>) -> Self {
+            Self {
+                messages: Arc::new(Mutex::new(messages)),
+            }
+        }
+
+        fn enabled() -> Self {
+            Self::new(Some(Vec::new()))
+        }
+
+        fn push(&self, message: DispatcherMessage) -> std::result::Result<(), DispatcherMessage> {
+            let mut messages = self
+                .messages
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match messages.as_mut() {
+                Some(messages) => {
+                    messages.push(message);
+                    Ok(())
+                }
+                None => Err(message),
+            }
+        }
+
+        fn take(&self) -> Vec<DispatcherMessage> {
+            self.messages
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+                .unwrap_or_default()
+        }
+
+        fn is_active(&self) -> bool {
+            self.messages
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_some()
+        }
+    }
 
     struct ProcessState {
         dispatcher: Mutex<DispatcherState>,
@@ -152,15 +198,17 @@ mod native {
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
         static PREPARED_FORK_STATE: Cell<*mut ProcessState> = const { Cell::new(std::ptr::null_mut()) };
+        static THREAD_PUBLICATION_BUFFER: RefCell<Option<PublicationBuffer>> = const { RefCell::new(None) };
     }
     tokio::task_local! {
-        static ASYNC_PUBLICATION_MESSAGES: RefCell<Option<Vec<DispatcherMessage>>>;
+        static ASYNC_PUBLICATION_BUFFER: PublicationBuffer;
     }
 
     struct DispatchGuard;
+    struct ThreadPublicationBufferGuard(Option<PublicationBuffer>);
 
     pub(crate) struct AsyncPublication {
-        sender: Sender<Vec<DispatcherMessage>>,
+        pub(super) sender: Sender<Vec<DispatcherMessage>>,
     }
 
     fn process_state() -> &'static ProcessState {
@@ -193,6 +241,14 @@ mod native {
     impl Drop for DispatchGuard {
         fn drop(&mut self) {
             IN_DISPATCHER.with(|flag| flag.set(false));
+        }
+    }
+
+    impl Drop for ThreadPublicationBufferGuard {
+        fn drop(&mut self) {
+            THREAD_PUBLICATION_BUFFER.with(|current| {
+                current.replace(self.0.take());
+            });
         }
     }
 
@@ -382,16 +438,13 @@ mod native {
     /// A later flush waits for the task and drains its buffered publications
     /// at the reserved position before acknowledging the flush.
     pub(super) fn register_async_publication() -> Option<AsyncPublication> {
-        let sender = dispatcher_sender().ok()?;
         let (publication_tx, publication_rx) = mpsc::channel();
-        sender
-            .send(DispatcherMessage::Barrier {
-                publications: publication_rx,
-            })
-            .ok()
-            .map(|_| AsyncPublication {
-                sender: publication_tx,
-            })
+        enqueue_dispatch_message(DispatcherMessage::Barrier {
+            publications: publication_rx,
+        })
+        .then_some(AsyncPublication {
+            sender: publication_tx,
+        })
     }
 
     pub(super) fn flush_subscribers() -> Result<()> {
@@ -424,35 +477,70 @@ mod native {
     }
 
     pub(super) fn in_dispatcher_callback() -> bool {
-        IN_DISPATCHER.with(Cell::get) || ASYNC_PUBLICATION_MESSAGES.try_with(|_| ()).is_ok()
+        IN_DISPATCHER.with(Cell::get)
+            || ASYNC_PUBLICATION_BUFFER.try_with(|_| ()).is_ok()
+            || THREAD_PUBLICATION_BUFFER.with(|buffer| {
+                buffer
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(PublicationBuffer::is_active)
+            })
+    }
+
+    pub(super) fn capture_nested_publication_buffer() -> Option<PublicationBuffer> {
+        ASYNC_PUBLICATION_BUFFER
+            .try_with(Clone::clone)
+            .ok()
+            .filter(PublicationBuffer::is_active)
+            .or_else(|| {
+                THREAD_PUBLICATION_BUFFER
+                    .with(|buffer| buffer.borrow().clone())
+                    .filter(PublicationBuffer::is_active)
+            })
+    }
+
+    pub(super) fn with_nested_publication_buffer<T>(
+        buffer: Option<PublicationBuffer>,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let previous = THREAD_PUBLICATION_BUFFER.with(|current| current.replace(buffer));
+        let _guard = ThreadPublicationBufferGuard(previous);
+        f()
+    }
+
+    pub(super) fn sync_thread_publication_buffer(buffer: Option<PublicationBuffer>) {
+        THREAD_PUBLICATION_BUFFER.with(|current| {
+            current.replace(buffer);
+        });
+    }
+
+    pub(super) async fn with_task_nested_publication_buffer<F: Future>(
+        buffer: Option<PublicationBuffer>,
+        future: F,
+    ) -> F::Output {
+        match buffer {
+            Some(buffer) => ASYNC_PUBLICATION_BUFFER.scope(buffer, future).await,
+            None => future.await,
+        }
     }
 
     pub(super) async fn with_async_publication_context<F: Future>(
         publication: Option<AsyncPublication>,
         future: F,
     ) -> F::Output {
-        if ASYNC_PUBLICATION_MESSAGES.try_with(|_| ()).is_ok() {
+        if ASYNC_PUBLICATION_BUFFER.try_with(|_| ()).is_ok() {
             future.await
         } else {
-            let (output, publications) = ASYNC_PUBLICATION_MESSAGES
-                .scope(
-                    RefCell::new(publication.as_ref().map(|_| Vec::new())),
-                    async {
-                        let output = future.await;
-                        let publications = ASYNC_PUBLICATION_MESSAGES
-                            .with(|messages| messages.borrow_mut().take());
-                        (output, publications)
-                    },
-                )
-                .await;
-            if let (Some(publication), Some(publications)) = (publication, publications) {
-                let _ = publication.sender.send(publications);
+            let buffer = PublicationBuffer::new(publication.as_ref().map(|_| Vec::new()));
+            let output = ASYNC_PUBLICATION_BUFFER.scope(buffer.clone(), future).await;
+            if let Some(publication) = publication {
+                let _ = publication.sender.send(buffer.take());
             }
             output
         }
     }
 
-    fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
+    pub(super) fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
         let mut dispatcher = process_state()
             .dispatcher
             .lock()
@@ -488,21 +576,26 @@ mod native {
         }
     }
 
-    fn enqueue_dispatch_message(message: DispatcherMessage) -> bool {
-        let mut message = Some(message);
-        let buffered = ASYNC_PUBLICATION_MESSAGES
-            .try_with(|messages| {
-                let mut messages = messages.borrow_mut();
-                match messages.as_mut() {
-                    Some(messages) => {
-                        messages.push(message.take().expect("message is buffered once"));
-                        true
-                    }
-                    None => false,
-                }
-            })
-            .unwrap_or(false);
-        buffered || send_dispatch_message(message.expect("unbuffered message remains available"))
+    pub(super) fn enqueue_dispatch_message(message: DispatcherMessage) -> bool {
+        let message = if let Ok(buffer) = ASYNC_PUBLICATION_BUFFER.try_with(Clone::clone) {
+            match buffer.push(message) {
+                Ok(()) => return true,
+                Err(message) => message,
+            }
+        } else {
+            message
+        };
+        let message = if let Some(buffer) =
+            THREAD_PUBLICATION_BUFFER.with(|buffer| buffer.borrow().clone())
+        {
+            match buffer.push(message) {
+                Ok(()) => return true,
+                Err(message) => message,
+            }
+        } else {
+            message
+        };
+        send_dispatch_message(message)
     }
 
     fn start_dispatcher() -> std::result::Result<Sender<DispatcherMessage>, String> {
@@ -608,19 +701,14 @@ mod native {
         publication_context: Option<PublicationContext>,
         future: F,
     ) -> (std::thread::Result<F::Output>, Vec<DispatcherMessage>) {
-        runtime.block_on(ASYNC_PUBLICATION_MESSAGES.scope(
-            RefCell::new(Some(Vec::new())),
-            async move {
-                let output =
-                    AssertUnwindSafe(TASK_PUBLICATION_CONTEXT.scope(publication_context, future))
-                        .catch_unwind()
-                        .await;
-                let publications = ASYNC_PUBLICATION_MESSAGES
-                    .with(|messages| messages.borrow_mut().take())
-                    .unwrap_or_default();
-                (output, publications)
-            },
-        ))
+        let buffer = PublicationBuffer::enabled();
+        let output = catch_unwind(AssertUnwindSafe(|| {
+            runtime.block_on(ASYNC_PUBLICATION_BUFFER.scope(
+                buffer.clone(),
+                TASK_PUBLICATION_CONTEXT.scope(publication_context, future),
+            ))
+        }));
+        (output, buffer.take())
     }
 
     /// Apply a transform and sanitizers on the dispatcher thread. A transform
@@ -732,171 +820,46 @@ mod native {
             PROCESS_STATE.store(state, Ordering::Release);
         });
     }
+}
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
+#[cfg(test)]
+#[path = "../../../tests/unit/subscriber_dispatcher_tests.rs"]
+mod tests;
 
-        #[test]
-        fn flush_waits_for_active_but_not_later_publication_barriers() {
-            let _lock = crate::shared_runtime::runtime_owner_test_mutex()
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            flush_subscribers().unwrap();
-            let first = register_async_publication().expect("first publication barrier");
-            let sender = dispatcher_sender().expect("dispatcher sender");
-            let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let subscriber: EventSubscriberFn = {
-                let delivered = delivered.clone();
-                std::sync::Arc::new(move |event| {
-                    delivered
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .push(event.name().to_string());
-                })
-            };
-            let queued_event = serde_json::from_value(serde_json::json!({
-                "kind": "mark",
-                "atof_version": "0.1",
-                "uuid": "019c1df6-4a57-7000-8000-000000000001",
-                "timestamp": "2026-07-28T00:00:00Z",
-                "name": "queued-before-flush"
-            }))
-            .expect("valid event");
-            sender
-                .send(DispatcherMessage::Deliver {
-                    event: Box::new(queued_event),
-                    transform: None,
-                    sanitizers: Vec::new(),
-                    subscribers: vec![subscriber.clone()],
-                    scope_stack: current_scope_stack(),
-                    publication_context: None,
-                })
-                .unwrap();
-            let (flush_tx, flush_rx) = mpsc::channel();
-            sender
-                .send(DispatcherMessage::Flush { done: flush_tx })
-                .unwrap();
-            let later = register_async_publication().expect("later publication barrier");
+#[doc(hidden)]
+pub use native::PublicationBuffer;
 
-            assert!(
-                flush_rx
-                    .recv_timeout(std::time::Duration::from_millis(50))
-                    .is_err(),
-                "flush must wait for an active publication barrier"
-            );
-            let deferred_event = serde_json::from_value(serde_json::json!({
-                "kind": "mark",
-                "atof_version": "0.1",
-                "uuid": "019c1df6-4a57-7000-8000-000000000002",
-                "timestamp": "2026-07-28T00:00:00Z",
-                "name": "deferred-at-barrier"
-            }))
-            .expect("valid event");
-            first
-                .sender
-                .send(vec![DispatcherMessage::Deliver {
-                    event: Box::new(deferred_event),
-                    transform: None,
-                    sanitizers: Vec::new(),
-                    subscribers: vec![subscriber],
-                    scope_stack: current_scope_stack(),
-                    publication_context: None,
-                }])
-                .unwrap();
-            flush_rx
-                .recv_timeout(std::time::Duration::from_secs(1))
-                .expect("flush queued before the later barrier must complete");
-            assert_eq!(
-                *delivered.lock().unwrap_or_else(|error| error.into_inner()),
-                ["deferred-at-barrier", "queued-before-flush"],
-                "the barrier must publish deferred work at its reserved FIFO position"
-            );
-            later.sender.send(Vec::new()).unwrap();
-            flush_subscribers().unwrap();
-        }
+/// Capture the active nested-publication buffer for a foreign callback thread.
+#[doc(hidden)]
+pub fn capture_nested_publication_buffer() -> Option<PublicationBuffer> {
+    native::capture_nested_publication_buffer()
+}
 
-        #[test]
-        fn flush_does_not_wait_for_later_delivery() {
-            let _lock = crate::shared_runtime::runtime_owner_test_mutex()
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            flush_subscribers().unwrap();
-            let barrier = register_async_publication().expect("publication barrier");
-            let sender = dispatcher_sender().expect("dispatcher sender");
-            let (flush_tx, flush_rx) = mpsc::channel();
-            sender
-                .send(DispatcherMessage::Flush { done: flush_tx })
-                .unwrap();
+/// Route synchronous publications on a foreign callback thread into the
+/// dispatcher invocation that scheduled the callback.
+#[doc(hidden)]
+pub fn with_nested_publication_buffer<T>(
+    buffer: Option<PublicationBuffer>,
+    f: impl FnOnce() -> T,
+) -> T {
+    native::with_nested_publication_buffer(buffer, f)
+}
 
-            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-            let event = serde_json::from_value(serde_json::json!({
-                "kind": "mark",
-                "atof_version": "0.1",
-                "uuid": "019c1df6-4a57-7000-8000-000000000003",
-                "timestamp": "2026-07-28T00:00:00Z",
-                "name": "queued-after-flush"
-            }))
-            .expect("valid event");
-            sender
-                .send(DispatcherMessage::Deliver {
-                    event: Box::new(event),
-                    transform: Some(Box::new(move |event| {
-                        Box::pin(async move {
-                            let _ = release_rx.await;
-                            event
-                        })
-                    })),
-                    sanitizers: Vec::new(),
-                    subscribers: Vec::new(),
-                    scope_stack: current_scope_stack(),
-                    publication_context: None,
-                })
-                .unwrap();
-            barrier.sender.send(Vec::new()).unwrap();
+/// Route publications from a foreign async callback task into the dispatcher
+/// invocation that scheduled the callback.
+#[doc(hidden)]
+pub async fn with_task_nested_publication_buffer<F: Future>(
+    buffer: Option<PublicationBuffer>,
+    future: F,
+) -> F::Output {
+    native::with_task_nested_publication_buffer(buffer, future).await
+}
 
-            let flush_result = flush_rx.recv_timeout(std::time::Duration::from_millis(100));
-            let _ = release_tx.send(());
-            flush_subscribers().unwrap();
-            assert!(
-                flush_result.is_ok(),
-                "a delivery queued after a flush must not delay that flush"
-            );
-        }
-
-        #[test]
-        fn detached_publications_share_one_background_executor_thread() {
-            let _lock = crate::shared_runtime::runtime_owner_test_mutex()
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let (started_tx, started_rx) = mpsc::channel();
-            let (release_tx, release_rx) = tokio::sync::watch::channel(false);
-            for _ in 0..32 {
-                let started_tx = started_tx.clone();
-                let mut release_rx = release_rx.clone();
-                assert!(spawn_background_publication(async move {
-                    started_tx.send(std::thread::current().id()).unwrap();
-                    while !*release_rx.borrow() {
-                        release_rx.changed().await.unwrap();
-                    }
-                }));
-            }
-            drop(started_tx);
-            let threads = (0..32)
-                .map(|_| {
-                    started_rx
-                        .recv_timeout(std::time::Duration::from_secs(2))
-                        .expect("background publication should start")
-                })
-                .collect::<std::collections::HashSet<_>>();
-            assert_eq!(
-                threads.len(),
-                1,
-                "detached publications must not allocate one OS thread per future"
-            );
-            release_tx.send(true).unwrap();
-        }
-    }
+/// Synchronize a foreign runtime's current callback publication buffer into
+/// Relay's thread-local fallback.
+#[doc(hidden)]
+pub fn sync_thread_publication_buffer(buffer: Option<PublicationBuffer>) {
+    native::sync_thread_publication_buffer(buffer);
 }
 
 #[cfg(test)]

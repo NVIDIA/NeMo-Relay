@@ -6,6 +6,7 @@
 use napi::bindgen_prelude::FromNapiValue;
 use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue, ValueType};
 use nemo_relay::api::runtime::ScopeStackHandle;
+use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
@@ -290,7 +291,9 @@ pub(crate) fn event_sanitizer_callback_context_id(env: &Env) -> napi::Result<Opt
         .map(Some)
 }
 
-pub(crate) fn callback_scope_stack(env: &Env) -> napi::Result<Option<ScopeStackHandle>> {
+pub(crate) fn callback_scope_stack(
+    env: &Env,
+) -> napi::Result<Option<(ScopeStackHandle, Option<PublicationBuffer>)>> {
     let factories = callback_factories(env)?;
     let callback: JsFunction = factories.get_named_property("callbackScopeStack")?;
     let value = callback.call::<JsUnknown>(None, &[])?;
@@ -298,7 +301,10 @@ pub(crate) fn callback_scope_stack(env: &Env) -> napi::Result<Option<ScopeStackH
         return Ok(None);
     }
     let stack = unsafe { <&ScopeStack as FromNapiValue>::from_napi_value(env.raw(), value.raw())? };
-    Ok(Some(stack.inner.clone()))
+    Ok(Some((
+        stack.inner.clone(),
+        stack.publication_buffer.clone(),
+    )))
 }
 
 pub(crate) fn with_callback_scope_stack(
@@ -308,7 +314,14 @@ pub(crate) fn with_callback_scope_stack(
 ) -> napi::Result<Option<JsUnknown>> {
     let factories = callback_factories(env)?;
     let with_stack: JsFunction = factories.get_named_property("withCallbackScopeStack")?;
-    let stack = ScopeStack::from(stack.inner.clone()).into_instance(*env)?;
+    let publication_buffer = callback_scope_stack(env)?
+        .and_then(|(_, buffer)| buffer)
+        .or_else(|| stack.publication_buffer.clone());
+    let stack = ScopeStack {
+        inner: stack.inner.clone(),
+        publication_buffer,
+    }
+    .into_instance(*env)?;
     let outcome = with_stack.call(None, &[as_unknown(env, &stack), as_unknown(env, callback)])?;
     let outcome = unsafe { JsObject::from_raw_unchecked(env.raw(), outcome.raw()) };
     if !outcome.get_named_property::<bool>("active")? {
@@ -320,7 +333,14 @@ pub(crate) fn with_callback_scope_stack(
 pub(crate) fn set_callback_scope_stack(env: &Env, stack: &ScopeStack) -> napi::Result<bool> {
     let factories = callback_factories(env)?;
     let set_stack: JsFunction = factories.get_named_property("setCallbackScopeStack")?;
-    let stack = ScopeStack::from(stack.inner.clone()).into_instance(*env)?;
+    let publication_buffer = callback_scope_stack(env)?
+        .and_then(|(_, buffer)| buffer)
+        .or_else(|| stack.publication_buffer.clone());
+    let stack = ScopeStack {
+        inner: stack.inner.clone(),
+        publication_buffer,
+    }
+    .into_instance(*env)?;
     set_stack
         .call::<JsUnknown>(None, &[as_unknown(env, &stack)])?
         .coerce_to_bool()?
