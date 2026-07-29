@@ -1631,8 +1631,9 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
 // Upstream credentials are bound to the exact configured base URL, which is the identity of the
 // provider's singleton upstream. A higher-priority layer that changes that identity without
 // supplying a replacement credential must not inherit the credential for the old endpoint.
-fn merge_gateway_config_toml(left: &mut toml::Value, right: toml::Value) {
+fn merge_gateway_config_toml(left: &mut toml::Value, mut right: toml::Value) {
     clear_credentials_for_replaced_upstreams(left, &right);
+    merge_logging_sinks_by_path(left, &mut right);
     merge_toml(left, right);
 }
 
@@ -1653,6 +1654,80 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
             }
         }
     }
+}
+
+fn merge_logging_sinks_by_path(left: &toml::Value, right: &mut toml::Value) {
+    let lower = left
+        .get("logging")
+        .and_then(|logging| logging.get("sinks"))
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(higher_value) = right
+        .get_mut("logging")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|logging| logging.get_mut("sinks"))
+    else {
+        return;
+    };
+    let Some(higher) = higher_value.as_array().cloned() else {
+        return;
+    };
+    *higher_value = toml::Value::Array(merge_logging_sink_lists(lower, higher));
+}
+
+fn merge_logging_sink_lists(lower: Vec<toml::Value>, higher: Vec<toml::Value>) -> Vec<toml::Value> {
+    let lower = coalesce_logging_sinks(lower);
+    let higher = coalesce_logging_sinks(higher);
+    let mut lower_used = vec![false; lower.len()];
+    let mut merged = Vec::with_capacity(lower.len() + higher.len());
+
+    for higher_sink in higher {
+        let identity = logging_sink_path(&higher_sink).map(str::to_owned);
+        let lower_match = identity.as_deref().and_then(|path| {
+            lower
+                .iter()
+                .position(|sink| logging_sink_path(sink) == Some(path))
+        });
+        if let Some(index) = lower_match {
+            let mut sink = lower[index].clone();
+            merge_toml(&mut sink, higher_sink);
+            lower_used[index] = true;
+            merged.push(sink);
+        } else {
+            merged.push(higher_sink);
+        }
+    }
+
+    merged.extend(
+        lower
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, sink)| (!lower_used[index]).then_some(sink)),
+    );
+    merged
+}
+
+fn coalesce_logging_sinks(sinks: Vec<toml::Value>) -> Vec<toml::Value> {
+    let mut coalesced: Vec<toml::Value> = Vec::with_capacity(sinks.len());
+    for sink in sinks {
+        let identity = logging_sink_path(&sink).map(str::to_owned);
+        let existing = identity.as_deref().and_then(|path| {
+            coalesced
+                .iter()
+                .position(|candidate| logging_sink_path(candidate) == Some(path))
+        });
+        if let Some(index) = existing {
+            merge_toml(&mut coalesced[index], sink);
+        } else {
+            coalesced.push(sink);
+        }
+    }
+    coalesced
+}
+
+fn logging_sink_path(sink: &toml::Value) -> Option<&str> {
+    sink.as_table()?.get("path")?.as_str()
 }
 
 fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {

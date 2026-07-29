@@ -3475,6 +3475,92 @@ openai_auth_header = "Bearer replacement"
     );
 }
 
+#[test]
+fn logging_sinks_aggregate_by_path_with_higher_layers_first() {
+    let layers = [
+        r#"
+[[logging.sinks]]
+path = "shared.log"
+level = "debug"
+queue_capacity = 128
+
+[[logging.sinks]]
+path = "user.log"
+level = "debug"
+"#,
+        r#"
+[[logging.sinks]]
+path = "shared.log"
+level = "info"
+format = "jsonl"
+
+[[logging.sinks]]
+path = "project.log"
+level = "info"
+"#,
+        r#"
+[[logging.sinks]]
+path = "system.log"
+level = "warn"
+
+[[logging.sinks]]
+path = "shared.log"
+format = "human"
+"#,
+    ];
+    let mut merged = toml::Value::Table(toml::map::Map::new());
+    for layer in layers {
+        let layer = layer
+            .parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .unwrap();
+        merge_gateway_config_toml(&mut merged, layer);
+    }
+
+    let sinks = merged["logging"]["sinks"].as_array().unwrap();
+    let paths = sinks
+        .iter()
+        .map(|sink| logging_sink_path(sink).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        vec!["system.log", "shared.log", "project.log", "user.log"]
+    );
+
+    let shared = sinks
+        .iter()
+        .find(|sink| logging_sink_path(sink) == Some("shared.log"))
+        .unwrap();
+    assert_eq!(shared["level"].as_str(), Some("info"));
+    assert_eq!(shared["format"].as_str(), Some("human"));
+    assert_eq!(shared["queue_capacity"].as_integer(), Some(128));
+}
+
+#[test]
+fn empty_higher_logging_sink_list_preserves_lower_sinks() {
+    let mut merged = r#"
+[[logging.sinks]]
+path = "lower.log"
+level = "info"
+"#
+    .parse::<toml::Table>()
+    .map(toml::Value::Table)
+    .unwrap();
+    let higher = r#"
+[logging]
+sinks = []
+"#
+    .parse::<toml::Table>()
+    .map(toml::Value::Table)
+    .unwrap();
+
+    merge_gateway_config_toml(&mut merged, higher);
+
+    let sinks = merged["logging"]["sinks"].as_array().unwrap();
+    assert_eq!(sinks.len(), 1);
+    assert_eq!(logging_sink_path(&sinks[0]), Some("lower.log"));
+}
+
 #[cfg(windows)]
 fn set_test_windows_dacl(path: &std::path::Path, sddl: &str) {
     use std::os::windows::ffi::OsStrExt;
