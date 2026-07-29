@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,12 @@ func asyncMiddlewareNoop(context.Context, json.RawMessage) (any, error) {
 
 func asyncExecutionNoop(context.Context, json.RawMessage, AsyncNext) (any, error) {
 	return nil, nil
+}
+
+func asyncStreamExecutionNoop(context.Context, json.RawMessage, AsyncStreamNext) (<-chan AsyncStreamItem, error) {
+	ch := make(chan AsyncStreamItem)
+	close(ch)
+	return ch, nil
 }
 
 func TestAsyncMiddlewareGlobalRegistrationParity(t *testing.T) {
@@ -50,7 +57,9 @@ func TestAsyncMiddlewareGlobalRegistrationParity(t *testing.T) {
 		}, DeregisterLlmConditionalExecutionGuardrail},
 		{"llm-request", func(name string) error { return RegisterLlmRequestInterceptAsync(name, 0, false, asyncMiddlewareNoop) }, DeregisterLlmRequestIntercept},
 		{"llm-execution", func(name string) error { return RegisterLlmExecutionInterceptAsync(name, 0, asyncExecutionNoop) }, DeregisterLlmExecutionIntercept},
-		{"llm-stream-execution", func(name string) error { return RegisterLlmStreamExecutionInterceptAsync(name, 0, asyncExecutionNoop) }, DeregisterLlmStreamExecutionIntercept},
+		{"llm-stream-execution", func(name string) error {
+			return RegisterLlmStreamExecutionInterceptAsync(name, 0, asyncStreamExecutionNoop)
+		}, DeregisterLlmStreamExecutionIntercept},
 	}
 
 	for _, registration := range registrations {
@@ -131,7 +140,7 @@ func TestAsyncMiddlewareScopeLocalRegistrationParity(t *testing.T) {
 				return ScopeRegisterLlmExecutionInterceptAsync(scopeUUID, name, 0, asyncExecutionNoop)
 			}, func(name string) error { return ScopeDeregisterLlmExecutionIntercept(scopeUUID, name) }},
 			{"llm-stream-execution", func(name string) error {
-				return ScopeRegisterLlmStreamExecutionInterceptAsync(scopeUUID, name, 0, asyncExecutionNoop)
+				return ScopeRegisterLlmStreamExecutionInterceptAsync(scopeUUID, name, 0, asyncStreamExecutionNoop)
 			}, func(name string) error { return ScopeDeregisterLlmStreamExecutionIntercept(scopeUUID, name) }},
 		}
 
@@ -222,6 +231,173 @@ func TestAsyncToolMiddlewareCompletionAndNext(t *testing.T) {
 		}
 		if string(result) != `{"value":1}` {
 			t.Fatalf("tool result = %s, want original result", result)
+		}
+	})
+}
+
+func TestAsyncLlmStreamExecutionInterceptEmitsChunksIncrementally(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		const name = "go-async-llm-stream-execution"
+		err := RegisterLlmStreamExecutionInterceptAsync(name, 0,
+			func(ctx context.Context, _ json.RawMessage, _ AsyncStreamNext) (<-chan AsyncStreamItem, error) {
+				chunks := make(chan AsyncStreamItem)
+				go func() {
+					defer close(chunks)
+					for _, chunk := range []json.RawMessage{json.RawMessage(`{"chunk":1}`), json.RawMessage(`{"chunk":2}`)} {
+						select {
+						case chunks <- AsyncStreamItem{Chunk: chunk}:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}()
+				return chunks, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("register stream execution intercept: %v", err)
+		}
+		t.Cleanup(func() { _ = DeregisterLlmStreamExecutionIntercept(name) })
+
+		stream, err := LlmStreamCallExecute(
+			"go-async-stream",
+			makeRequest(),
+			func(json.RawMessage) (json.RawMessage, error) {
+				return json.Marshal("data: {\"chunk\":1}\n\ndata: {\"chunk\":2}\n\ndata: [DONE]\n\n")
+			},
+			nil,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("execute stream: %v", err)
+		}
+		defer stream.Close()
+
+		var chunks []json.RawMessage
+		for {
+			chunk, err := stream.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("read stream: %v", err)
+			}
+			chunks = append(chunks, append(json.RawMessage(nil), chunk...))
+		}
+		if len(chunks) != 2 {
+			t.Fatalf("chunks = %q, want two incremental chunks", chunks)
+		}
+	})
+}
+
+func TestAsyncLlmStreamExecutionNextPreservesTerminalError(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		const name = "go-async-llm-stream-next-error"
+		err := RegisterLlmStreamExecutionInterceptAsync(name, 0,
+			func(ctx context.Context, invocation json.RawMessage, next AsyncStreamNext) (<-chan AsyncStreamItem, error) {
+				var payload struct {
+					Request json.RawMessage `json:"request"`
+				}
+				if err := json.Unmarshal(invocation, &payload); err != nil {
+					return nil, err
+				}
+				return next(ctx, payload.Request)
+			},
+		)
+		if err != nil {
+			t.Fatalf("register stream execution intercept: %v", err)
+		}
+		t.Cleanup(func() { _ = DeregisterLlmStreamExecutionIntercept(name) })
+
+		stream, err := LlmStreamCallExecute(
+			name,
+			makeRequest(),
+			func(json.RawMessage) (json.RawMessage, error) {
+				return nil, errors.New("downstream stream failed")
+			},
+			nil,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("execute stream: %v", err)
+		}
+		defer stream.Close()
+
+		_, err = stream.Next()
+		if err == nil || !strings.Contains(err.Error(), "downstream stream failed") {
+			t.Fatalf("stream error = %v, want downstream terminal error", err)
+		}
+	})
+}
+
+func TestAsyncLlmStreamExecutionNextCancellationStopsIdleDownstream(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		const outerName = "go-async-llm-stream-next-cancel"
+		const innerName = "go-async-llm-stream-idle-downstream"
+
+		err := RegisterLlmStreamExecutionInterceptAsync(innerName, 10,
+			func(ctx context.Context, _ json.RawMessage, _ AsyncStreamNext) (<-chan AsyncStreamItem, error) {
+				ch := make(chan AsyncStreamItem)
+				go func() {
+					<-ctx.Done()
+					close(ch)
+				}()
+				return ch, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("register idle downstream intercept: %v", err)
+		}
+		t.Cleanup(func() { _ = DeregisterLlmStreamExecutionIntercept(innerName) })
+
+		err = RegisterLlmStreamExecutionInterceptAsync(outerName, 0,
+			func(ctx context.Context, invocation json.RawMessage, next AsyncStreamNext) (<-chan AsyncStreamItem, error) {
+				var payload struct {
+					Request json.RawMessage `json:"request"`
+				}
+				if err := json.Unmarshal(invocation, &payload); err != nil {
+					return nil, err
+				}
+				nextCtx, cancelNext := context.WithCancel(ctx)
+				downstream, err := next(nextCtx, payload.Request)
+				if err != nil {
+					cancelNext()
+					return nil, err
+				}
+				cancelNext()
+				select {
+				case _, ok := <-downstream:
+					if ok {
+						return nil, errors.New("cancelled downstream produced an item")
+					}
+				case <-time.After(2 * time.Second):
+					return nil, errors.New("cancelled idle downstream did not close")
+				}
+				ch := make(chan AsyncStreamItem)
+				close(ch)
+				return ch, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("register outer stream intercept: %v", err)
+		}
+		t.Cleanup(func() { _ = DeregisterLlmStreamExecutionIntercept(outerName) })
+
+		stream, err := LlmStreamCallExecute(
+			outerName,
+			makeRequest(),
+			func(json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"unused":true}`), nil
+			},
+			nil,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("execute stream: %v", err)
+		}
+		defer stream.Close()
+		if _, err := stream.Next(); err != io.EOF {
+			t.Fatalf("stream result = %v, want EOF after cancellation", err)
 		}
 	})
 }

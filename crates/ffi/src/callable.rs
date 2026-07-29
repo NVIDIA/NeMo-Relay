@@ -21,7 +21,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
@@ -32,7 +33,7 @@ use nemo_relay::api::runtime::{
     ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
@@ -112,48 +113,6 @@ enum AsyncNextInner {
     LlmStream(LlmStreamExecutionNextFn),
 }
 
-const ASYNC_STREAM_MAX_CHUNKS: usize = 4096;
-const ASYNC_STREAM_MAX_SERIALIZED_BYTES: usize = 16 * 1024 * 1024;
-
-#[derive(Default)]
-struct SerializedByteCounter {
-    bytes: usize,
-}
-
-impl std::io::Write for SerializedByteCounter {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.bytes = self.bytes.saturating_add(buffer.len());
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-async fn collect_async_stream_for_completion(mut stream: LlmJsonStream) -> Result<Json> {
-    let mut chunks = Vec::new();
-    let mut serialized_bytes = SerializedByteCounter::default();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        if chunks.len() >= ASYNC_STREAM_MAX_CHUNKS {
-            return Err(FlowError::Internal(format!(
-                "async stream continuation exceeded the {ASYNC_STREAM_MAX_CHUNKS}-chunk completion limit"
-            )));
-        }
-        serde_json::to_writer(&mut serialized_bytes, &chunk).map_err(|error| {
-            FlowError::Internal(format!("failed to measure async stream chunk: {error}"))
-        })?;
-        if serialized_bytes.bytes > ASYNC_STREAM_MAX_SERIALIZED_BYTES {
-            return Err(FlowError::Internal(format!(
-                "async stream continuation exceeded the {ASYNC_STREAM_MAX_SERIALIZED_BYTES}-byte completion limit"
-            )));
-        }
-        chunks.push(chunk);
-    }
-    Ok(Json::Array(chunks))
-}
-
 /// Completion-based execution-intercept callback.
 ///
 /// A callback returning `Complete` must not release either `completion` or
@@ -167,6 +126,37 @@ pub type NemoRelayAsyncInterceptCb = unsafe extern "C" fn(
     completion: *const NemoRelayAsyncCompletion,
 ) -> u32;
 
+/// Callback-owned incremental output stream for async stream intercepts.
+pub struct NemoRelayAsyncStream {
+    sender: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Result<Json>>>>,
+    cancelled: AtomicBool,
+    _callback_user_data: Option<Arc<UserData>>,
+}
+
+/// Caller-owned handle for one asynchronous streaming `next` invocation.
+pub struct NemoRelayAsyncStreamInvocation {
+    state: Arc<AsyncStreamInvocationState>,
+    abort_handle: tokio::task::AbortHandle,
+}
+
+struct AsyncStreamInvocationState {
+    cancelled: AtomicBool,
+    callback_gate: std::sync::Mutex<()>,
+}
+
+/// Completion-based streaming execution-intercept callback.
+///
+/// The callback emits replacement chunks with
+/// [`nemo_relay_async_stream_push_json`] and completes with
+/// [`nemo_relay_async_stream_finish`] or [`nemo_relay_async_stream_reject`].
+/// A pending callback must release `stream` and `next` exactly once.
+pub type NemoRelayAsyncStreamInterceptCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    invocation_json: *const c_char,
+    next: *const NemoRelayAsyncNext,
+    stream: *const NemoRelayAsyncStream,
+) -> u32;
+
 /// Result callback used by channel/future-style async `next` wrappers.
 ///
 /// Invoked on a Tokio runtime worker thread, not necessarily the thread that
@@ -178,6 +168,17 @@ pub type NemoRelayAsyncNextResultCb = unsafe extern "C" fn(
     value_json: *const c_char,
     error_message: *const c_char,
 );
+
+/// Incremental result callback used by streaming async `next` wrappers.
+///
+/// `chunk_json` is non-null for a chunk. The final invocation sets `done` and
+/// may carry `error_message`. Return false to cancel the downstream stream.
+pub type NemoRelayAsyncNextStreamResultCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    chunk_json: *const c_char,
+    error_message: *const c_char,
+    done: bool,
+) -> bool;
 
 struct SendUserData(*mut libc::c_void);
 
@@ -194,27 +195,6 @@ impl SendUserData {
 struct CompletionWait {
     completion: Arc<NemoRelayAsyncCompletion>,
     receiver: tokio::sync::oneshot::Receiver<Result<Json>>,
-}
-
-static ACTIVE_EVENT_SANITIZER_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-
-struct ActiveEventSanitizerCallback;
-
-impl ActiveEventSanitizerCallback {
-    fn enter() -> Self {
-        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_add(1, Ordering::AcqRel);
-        Self
-    }
-}
-
-impl Drop for ActiveEventSanitizerCallback {
-    fn drop(&mut self) {
-        ACTIVE_EVENT_SANITIZER_CALLBACKS.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-pub(crate) fn event_sanitizer_callback_active() -> bool {
-    ACTIVE_EVENT_SANITIZER_CALLBACKS.load(Ordering::Acquire) != 0
 }
 
 impl Drop for CompletionWait {
@@ -375,14 +355,7 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke(
             let next = next.clone();
             Box::pin(async move { next(request).await })
         }
-        AsyncNextInner::LlmStream(next) => {
-            let request = match serde_json::from_value(invocation) {
-                Ok(request) => request,
-                Err(_) => return NemoRelayStatus::InvalidJson,
-            };
-            let next = next.clone();
-            Box::pin(async move { collect_async_stream_for_completion(next(request).await?).await })
-        }
+        AsyncNextInner::LlmStream(_) => return NemoRelayStatus::InvalidArg,
     };
     unsafe { Arc::increment_strong_count(completion) };
     let completion = unsafe { Arc::from_raw(completion) };
@@ -434,14 +407,7 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke_callback(
             let next = next.clone();
             Box::pin(async move { next(request).await })
         }
-        AsyncNextInner::LlmStream(next) => {
-            let request = match serde_json::from_value(invocation) {
-                Ok(request) => request,
-                Err(_) => return NemoRelayStatus::InvalidJson,
-            };
-            let next = next.clone();
-            Box::pin(async move { collect_async_stream_for_completion(next(request).await?).await })
-        }
+        AsyncNextInner::LlmStream(_) => return NemoRelayStatus::InvalidArg,
     };
     let user_data = SendUserData(user_data);
     next.runtime.spawn(async move {
@@ -458,6 +424,277 @@ pub unsafe extern "C" fn nemo_relay_async_next_invoke_callback(
         }
     });
     NemoRelayStatus::Ok
+}
+
+fn invoke_async_next_stream_callback(
+    invocation: &AsyncStreamInvocationState,
+    callback: NemoRelayAsyncNextStreamResultCb,
+    user_data: *mut libc::c_void,
+    chunk_json: *const c_char,
+    error_message: *const c_char,
+    done: bool,
+) -> bool {
+    let _callback_guard = invocation
+        .callback_gate
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if invocation.cancelled.load(Ordering::Acquire) {
+        return false;
+    }
+    unsafe { callback(user_data, chunk_json, error_message, done) }
+}
+
+/// Invoke a streaming continuation and report chunks incrementally.
+///
+/// The callback runs on a Relay Tokio worker thread and receives one final
+/// invocation with `done=true`. Returning false from a chunk callback cancels
+/// and closes the downstream stream. On success, `out_invocation` receives one
+/// caller-owned reference. Cancel it to stop an idle continuation, and release
+/// it exactly once after the final callback or cancellation. Cancellation does
+/// not return while a result callback is active, so callback `user_data` is no
+/// longer reachable when it returns. Do not call cancellation from inside the
+/// result callback; return `false` instead.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_next_invoke_stream_callback(
+    next: *const NemoRelayAsyncNext,
+    invocation_json: *const c_char,
+    callback: NemoRelayAsyncNextStreamResultCb,
+    user_data: *mut libc::c_void,
+    out_invocation: *mut *const NemoRelayAsyncStreamInvocation,
+) -> NemoRelayStatus {
+    if out_invocation.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_invocation = ptr::null() };
+    let Some(next) = (unsafe { next.as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let Some(invocation) = c_str_to_json(invocation_json) else {
+        return NemoRelayStatus::InvalidJson;
+    };
+    let AsyncNextInner::LlmStream(next_fn) = &next.inner else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    let request = match serde_json::from_value(invocation) {
+        Ok(request) => request,
+        Err(_) => return NemoRelayStatus::InvalidJson,
+    };
+    let next_fn = next_fn.clone();
+    let user_data = SendUserData(user_data);
+    let invocation_state = Arc::new(AsyncStreamInvocationState {
+        cancelled: AtomicBool::new(false),
+        callback_gate: std::sync::Mutex::new(()),
+    });
+    let task_invocation_state = invocation_state.clone();
+    let task = next.runtime.spawn(async move {
+        match next_fn(request).await {
+            Ok(mut stream) => {
+                while let Some(result) = stream.next().await {
+                    match result {
+                        Ok(chunk) => {
+                            let chunk = json_to_c_string(&chunk);
+                            let keep_going = invoke_async_next_stream_callback(
+                                &task_invocation_state,
+                                callback,
+                                user_data.as_ptr(),
+                                chunk,
+                                ptr::null(),
+                                false,
+                            );
+                            unsafe { nemo_relay_string_free_internal(chunk) };
+                            if !keep_going {
+                                let _ = stream.close().await;
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            let error = CString::new(error.to_string()).unwrap_or_default();
+                            invoke_async_next_stream_callback(
+                                &task_invocation_state,
+                                callback,
+                                user_data.as_ptr(),
+                                ptr::null(),
+                                error.as_ptr(),
+                                true,
+                            );
+                            return;
+                        }
+                    }
+                }
+                if let Err(error) = stream.close().await {
+                    let error = CString::new(error.to_string()).unwrap_or_default();
+                    invoke_async_next_stream_callback(
+                        &task_invocation_state,
+                        callback,
+                        user_data.as_ptr(),
+                        ptr::null(),
+                        error.as_ptr(),
+                        true,
+                    );
+                } else {
+                    invoke_async_next_stream_callback(
+                        &task_invocation_state,
+                        callback,
+                        user_data.as_ptr(),
+                        ptr::null(),
+                        ptr::null(),
+                        true,
+                    );
+                }
+            }
+            Err(error) => {
+                let error = CString::new(error.to_string()).unwrap_or_default();
+                invoke_async_next_stream_callback(
+                    &task_invocation_state,
+                    callback,
+                    user_data.as_ptr(),
+                    ptr::null(),
+                    error.as_ptr(),
+                    true,
+                );
+            }
+        }
+    });
+    let invocation = Arc::new(NemoRelayAsyncStreamInvocation {
+        state: invocation_state,
+        abort_handle: task.abort_handle(),
+    });
+    unsafe { *out_invocation = Arc::into_raw(invocation) };
+    NemoRelayStatus::Ok
+}
+
+/// Cancel one asynchronous streaming `next` invocation and wait for any active
+/// result callback to return.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_stream_invocation_cancel(
+    invocation: *const NemoRelayAsyncStreamInvocation,
+) -> NemoRelayStatus {
+    let Some(invocation) = (unsafe { invocation.as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if !invocation.state.cancelled.swap(true, Ordering::AcqRel) {
+        invocation.abort_handle.abort();
+    }
+    let _callback_guard = invocation
+        .state
+        .callback_gate
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    NemoRelayStatus::Ok
+}
+
+/// Release one caller-owned asynchronous streaming invocation reference.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_stream_invocation_release(
+    invocation: *const NemoRelayAsyncStreamInvocation,
+) {
+    if !invocation.is_null() {
+        unsafe { drop(Arc::from_raw(invocation)) };
+    }
+}
+
+/// Push one JSON chunk to an asynchronous stream-intercept output.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_stream_push_json(
+    stream: *const NemoRelayAsyncStream,
+    chunk_json: *const c_char,
+) -> NemoRelayStatus {
+    let Some(stream) = (unsafe { stream.as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if stream.cancelled.load(Ordering::Acquire) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let Some(chunk) = c_str_to_json(chunk_json) else {
+        return NemoRelayStatus::InvalidJson;
+    };
+    let sender = stream
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    match sender.as_ref() {
+        Some(sender) if sender.send(Ok(chunk)).is_ok() => NemoRelayStatus::Ok,
+        _ => NemoRelayStatus::InvalidArg,
+    }
+}
+
+/// Finish an asynchronous stream-intercept output.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_stream_finish(
+    stream: *const NemoRelayAsyncStream,
+) -> NemoRelayStatus {
+    let Some(stream) = (unsafe { stream.as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if stream.cancelled.load(Ordering::Acquire) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    match stream
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    {
+        Some(_) => NemoRelayStatus::Ok,
+        None => NemoRelayStatus::InvalidArg,
+    }
+}
+
+/// Reject an asynchronous stream-intercept output.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_stream_reject(
+    stream: *const NemoRelayAsyncStream,
+    message: *const c_char,
+) -> NemoRelayStatus {
+    let Some(stream) = (unsafe { stream.as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if stream.cancelled.load(Ordering::Acquire) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let message = if message.is_null() {
+        "async C stream callback rejected".to_string()
+    } else {
+        unsafe { CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let sender = stream
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    match sender {
+        Some(sender) => {
+            let _ = sender.send(Err(FlowError::Internal(message)));
+            NemoRelayStatus::Ok
+        }
+        None => NemoRelayStatus::InvalidArg,
+    }
+}
+
+/// Return whether the consumer cancelled an asynchronous stream output.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_stream_is_cancelled(
+    stream: *const NemoRelayAsyncStream,
+) -> bool {
+    unsafe { stream.as_ref() }.is_none_or(|stream| stream.cancelled.load(Ordering::Acquire))
+}
+
+/// Release a callback-owned asynchronous stream reference.
+#[allow(clippy::missing_safety_doc)] // The shared C ABI safety contract applies.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_async_stream_release(stream: *const NemoRelayAsyncStream) {
+    if !stream.is_null() {
+        unsafe { drop(Arc::from_raw(stream)) };
+    }
 }
 
 /// Resolve an async C callback with owned JSON.
@@ -862,7 +1099,6 @@ pub fn wrap_async_event_sanitize_fn(
     Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let user_data = user_data.clone();
         Box::pin(async move {
-            let _active_callback = ActiveEventSanitizerCallback::enter();
             let value = invoke_async_json(
                 cb,
                 user_data,
@@ -1026,15 +1262,33 @@ pub fn wrap_async_llm_execution_intercept_fn(
     )
 }
 
-/// Wrap a completion-based C LLM stream execution intercept.
-///
-/// The completion ABI resolves one JSON value, so a stream intercept must
-/// resolve to an array of chunks. Relay replays that array as a stream after
-/// completion; incremental chunk delivery is not available through this ABI.
-/// When the callback invokes `next`, Relay rejects more than 4096 chunks or
-/// 16 MiB of serialized chunk data while collecting that continuation.
+struct AsyncCallbackOutputStream {
+    receiver: tokio::sync::mpsc::UnboundedReceiver<Result<Json>>,
+    state: Arc<NemoRelayAsyncStream>,
+}
+
+impl Stream for AsyncCallbackOutputStream {
+    type Item = Result<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.receiver).poll_recv(cx)
+    }
+}
+
+impl Drop for AsyncCallbackOutputStream {
+    fn drop(&mut self) {
+        self.state.cancelled.store(true, Ordering::Release);
+        self.state
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
+}
+
+/// Wrap an incremental completion-based C LLM stream execution intercept.
 pub fn wrap_async_llm_stream_execution_intercept_fn(
-    cb: NemoRelayAsyncInterceptCb,
+    cb: NemoRelayAsyncStreamInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> LlmStreamExecutionFn {
@@ -1044,19 +1298,55 @@ pub fn wrap_async_llm_stream_execution_intercept_fn(
             let user_data = user_data.clone();
             let invocation = serde_json::json!({"name": name, "request": request});
             Box::pin(async move {
-                let value = invoke_async_intercept(
-                    cb,
-                    user_data,
-                    invocation,
-                    AsyncNextInner::LlmStream(next),
-                )
-                .await?;
-                let chunks = value.as_array().cloned().ok_or_else(|| {
-                    FlowError::Internal("async stream intercept must resolve to an array".into())
+                let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+                    FlowError::Internal(format!(
+                        "async C stream intercept requires a Tokio runtime: {error}"
+                    ))
                 })?;
-                Ok(LlmJsonStream::new(tokio_stream::iter(
-                    chunks.into_iter().map(Ok),
-                )))
+                let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+                let stream = Arc::new(NemoRelayAsyncStream {
+                    sender: std::sync::Mutex::new(Some(sender)),
+                    cancelled: AtomicBool::new(false),
+                    _callback_user_data: Some(user_data.clone()),
+                });
+                let stream_ref = Arc::into_raw(stream.clone());
+                let next = Arc::new(NemoRelayAsyncNext {
+                    inner: AsyncNextInner::LlmStream(next),
+                    runtime,
+                    _callback_user_data: Some(user_data.clone()),
+                });
+                let next_ref = Arc::into_raw(next);
+                let invocation = json_to_c_string(&invocation);
+                let state = unsafe { cb(user_data.ptr, invocation, next_ref, stream_ref) };
+                unsafe { nemo_relay_string_free_internal(invocation) };
+                let state = match NemoRelayAsyncCallbackState::try_from(state) {
+                    Ok(state) => state,
+                    Err(state) => {
+                        unsafe { drop(Arc::from_raw(stream_ref)) };
+                        unsafe { drop(Arc::from_raw(next_ref)) };
+                        return Err(FlowError::Internal(format!(
+                            "async C stream intercept returned invalid state {state}"
+                        )));
+                    }
+                };
+                if state == NemoRelayAsyncCallbackState::Complete {
+                    unsafe { drop(Arc::from_raw(stream_ref)) };
+                    unsafe { drop(Arc::from_raw(next_ref)) };
+                    if stream
+                        .sender
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .is_some()
+                    {
+                        return Err(FlowError::Internal(
+                            "async C stream intercept returned Complete without finishing".into(),
+                        ));
+                    }
+                }
+                Ok(LlmJsonStream::new(AsyncCallbackOutputStream {
+                    receiver,
+                    state: stream,
+                }))
             })
         },
     )

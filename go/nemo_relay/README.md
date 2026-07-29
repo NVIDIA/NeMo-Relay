@@ -61,6 +61,36 @@ The Go package provides the following capabilities:
 - **Local source-first workflow**: Build the FFI library locally, then test or
   consume the Go module from the checkout.
 
+## Async Middleware
+
+Every asynchronous registration has a global and scope-local Go wrapper.
+`AsyncMiddlewareFunc` receives one of these JSON envelopes and returns the
+corresponding value:
+
+| Middleware | Invocation | Result |
+| --- | --- | --- |
+| Event sanitizer | `{"event": Event, "fields": EventSanitizeFields}` | `EventSanitizeFields` |
+| Tool sanitizer or request intercept | `{"name": string, "value": JSON}` | JSON |
+| Tool conditional guardrail | `{"name": string, "value": JSON}` | `string` or `null` |
+| LLM request sanitizer | `{"request": LlmRequest, "context": LlmCodecIdentity}` | `LlmRequest` or `null` |
+| LLM response sanitizer | `{"response": JSON, "context": LlmCodecIdentity}` | JSON or `null` |
+| LLM conditional guardrail | `{"request": LlmRequest}` | `string` or `null` |
+| LLM request intercept | `{"name": string, "request": LlmRequest, "annotated": AnnotatedLlmRequest \| null}` | `LlmRequestInterceptOutcome` |
+
+Execution intercepts also receive a `next` function. Tool execution uses the
+`{"name": string, "value": JSON}` envelope and returns a
+`ToolExecutionInterceptOutcome`; LLM execution uses
+`{"name": string, "request": LlmRequest}` and returns JSON.
+`AsyncStreamExecutionInterceptFunc` uses the LLM envelope and produces an
+`AsyncStreamItem` channel. Its `next` helper streams downstream chunks
+incrementally instead of collecting the response.
+
+Callbacks run in goroutines and may be entered from Relay runtime or publication
+threads. Callback values must therefore be safe for concurrent use. The
+callback context is cancelled when Relay abandons the native invocation, and
+stream producers must stop when that context is cancelled. Relay does not add
+an implicit middleware timeout.
+
 ## Installation
 
 Build the FFI library from a repository checkout before using the Go binding:

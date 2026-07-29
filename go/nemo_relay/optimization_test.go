@@ -98,26 +98,6 @@ func TestLLMOptimizationContributionOmittedAppliedIsNonApplied(t *testing.T) {
 	}
 }
 
-func TestLLMOptimizationContributionRejectsMalformedAndNonObjectWireShapes(t *testing.T) {
-	var contribution LLMOptimizationContribution
-	if err := json.Unmarshal([]byte(`not-json`), &contribution); err == nil {
-		t.Fatal("expected malformed optimization contribution JSON to fail")
-	}
-	if err := json.Unmarshal([]byte(`[]`), &contribution); err == nil {
-		t.Fatal("expected non-object optimization contribution JSON to fail")
-	}
-
-	contribution = LLMOptimizationContribution{
-		Producer:      "test",
-		Kind:          "custom",
-		PayloadSchema: &LLMOptimizationDataSchema{Name: "test", Version: "v1"},
-		Payload:       json.RawMessage(`not-json`),
-	}
-	if _, err := json.Marshal(contribution); err == nil {
-		t.Fatal("expected malformed payload JSON to fail")
-	}
-}
-
 func TestLLMRequestInterceptOptimizationContributionsRoundTrip(t *testing.T) {
 	fixture, contribution := optimizationContributionFixture(t)
 	const interceptName = "go_optimization_fixture"

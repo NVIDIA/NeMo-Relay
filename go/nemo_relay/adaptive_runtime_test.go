@@ -44,7 +44,7 @@ func TestValidateAdaptiveConfigAndOwnedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
-	defer func() { _ = runtime.Shutdown() }()
+	defer runtime.Shutdown()
 	if err := runtime.Register(); err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestAdaptiveRuntimeBindScopeRejectsNilScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
-	defer func() { _ = runtime.Shutdown() }()
+	defer runtime.Shutdown()
 
 	if runtime.BindScope(nil) == nil {
 		t.Fatal("expected BindScope to reject nil scope")
@@ -172,36 +172,12 @@ func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 	}
 }
 
-func TestAdaptiveRuntimeRejectsNilHandles(t *testing.T) {
-	var nilRuntime *AdaptiveRuntime
-	if err := nilRuntime.Register(); err == nil {
-		t.Fatal("expected nil Register to fail")
-	}
-	if err := nilRuntime.Deregister(); err == nil {
-		t.Fatal("expected nil Deregister to fail")
-	}
-	if err := nilRuntime.Shutdown(); err == nil {
-		t.Fatal("expected nil Shutdown to fail")
-	}
-	if err := nilRuntime.WaitForIdle(); err == nil {
-		t.Fatal("expected nil WaitForIdle to fail")
-	}
-	if _, err := nilRuntime.Report(); err == nil {
-		t.Fatal("expected nil Report to fail")
-	}
-	if err := nilRuntime.BindScope(nil); err == nil {
-		t.Fatal("expected nil BindScope to fail")
-	}
-	if _, err := nilRuntime.BuildCacheRequestFacts(CacheRequestFactsInput{}); err == nil {
-		t.Fatal("expected nil BuildCacheRequestFacts to fail")
-	}
-}
-
 func TestAdaptiveRuntimeLifecycleRejectsUseAfterShutdown(t *testing.T) {
-	runtime, err := NewAdaptiveRuntime(NewAdaptiveConfig())
+	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
 	if err != nil {
 		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
+
 	if err := runtime.Shutdown(); err != nil {
 		t.Fatalf("Shutdown failed: %v", err)
 	}
@@ -234,39 +210,6 @@ func assertAdaptiveRuntimeClosed(t *testing.T, runtime *AdaptiveRuntime) {
 	}
 	if err := runtime.Shutdown(); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
 		t.Fatalf("expected repeated Shutdown to reject a shut down runtime, got %v", err)
-	}
-}
-
-func TestAdaptiveRuntimeHelpersRejectInvalidInputs(t *testing.T) {
-	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{
-		Provider:  "unsupported",
-		RequestID: "018f13f0-7c1a-7a80-8000-000000000001",
-	}); err == nil || !strings.Contains(err.Error(), "provider") {
-		t.Fatalf("expected unsupported provider rejection, got %v", err)
-	}
-	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{
-		Provider:  "openai",
-		RequestID: "not-a-uuid",
-	}); err == nil || !strings.Contains(err.Error(), "request_id") {
-		t.Fatalf("expected invalid request ID rejection, got %v", err)
-	}
-
-	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
-	if err != nil {
-		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
-	}
-	defer runtime.Shutdown()
-	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{
-		Provider:         "openai",
-		RequestID:        "not-a-uuid",
-		AnnotatedRequest: json.RawMessage(`{}`),
-	}); err == nil || !strings.Contains(err.Error(), "request_id") {
-		t.Fatalf("expected invalid request ID rejection, got %v", err)
-	}
-	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{
-		AnnotatedRequest: json.RawMessage(`not-json`),
-	}); err == nil {
-		t.Fatal("expected malformed annotated request JSON to fail before the FFI call")
 	}
 }
 

@@ -52,14 +52,26 @@ typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event
 typedef struct FfiPluginContext FfiPluginContext;
 typedef struct NemoRelayAsyncCompletion NemoRelayAsyncCompletion;
 typedef struct NemoRelayAsyncNext NemoRelayAsyncNext;
+typedef struct NemoRelayAsyncStream NemoRelayAsyncStream;
+typedef struct NemoRelayAsyncStreamInvocation NemoRelayAsyncStreamInvocation;
 typedef void (*NemoRelayAsyncNextResultCb)(void*, const char*, const char*);
+typedef bool (*NemoRelayAsyncNextStreamResultCb)(void*, const char*, const char*, bool);
 extern int32_t nemo_relay_async_completion_resolve_json(const NemoRelayAsyncCompletion*, const char*);
 extern int32_t nemo_relay_async_completion_reject(const NemoRelayAsyncCompletion*, const char*);
 extern bool nemo_relay_async_completion_is_cancelled(const NemoRelayAsyncCompletion*);
 extern void nemo_relay_async_completion_release(const NemoRelayAsyncCompletion*);
 extern int32_t nemo_relay_async_next_invoke_callback(const NemoRelayAsyncNext*, const char*, NemoRelayAsyncNextResultCb, void*);
+extern int32_t nemo_relay_async_next_invoke_stream_callback(const NemoRelayAsyncNext*, const char*, NemoRelayAsyncNextStreamResultCb, void*, const NemoRelayAsyncStreamInvocation**);
+extern int32_t nemo_relay_async_stream_invocation_cancel(const NemoRelayAsyncStreamInvocation*);
+extern void nemo_relay_async_stream_invocation_release(const NemoRelayAsyncStreamInvocation*);
 extern void nemo_relay_async_next_release(const NemoRelayAsyncNext*);
+extern int32_t nemo_relay_async_stream_push_json(const NemoRelayAsyncStream*, const char*);
+extern int32_t nemo_relay_async_stream_finish(const NemoRelayAsyncStream*);
+extern int32_t nemo_relay_async_stream_reject(const NemoRelayAsyncStream*, const char*);
+extern bool nemo_relay_async_stream_is_cancelled(const NemoRelayAsyncStream*);
+extern void nemo_relay_async_stream_release(const NemoRelayAsyncStream*);
 extern void goAsyncNextResultTrampoline(void*, char*, char*);
+extern bool goAsyncNextStreamResultTrampoline(void*, char*, char*, bool);
 
 // Middleware chain next function types
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
@@ -190,14 +202,36 @@ type ToolSanitizeFunc func(name string, args json.RawMessage) json.RawMessage
 type ToolConditionalFunc func(name string, args json.RawMessage) *string
 
 // AsyncMiddlewareFunc is the common completion-based middleware callback.
-// The JSON envelope identifies the middleware family and invocation fields.
+//
+// Relay invokes the callback from a goroutine and cancels ctx if the native
+// invocation is abandoned. There is no implicit timeout. The invocation and
+// result JSON contracts are documented in the Async Middleware section of the
+// package README.
 type AsyncMiddlewareFunc func(ctx context.Context, invocation json.RawMessage) (any, error)
 
-// AsyncNext invokes the remaining execution chain and returns its eventual result.
+// AsyncNext invokes the remaining execution chain and returns its eventual
+// result. It is valid only while its enclosing intercept callback is running.
 type AsyncNext func(ctx context.Context, invocation json.RawMessage) (json.RawMessage, error)
 
-// AsyncExecutionInterceptFunc is an asynchronous execution intercept with an awaitable next helper.
+// AsyncExecutionInterceptFunc is an asynchronous execution intercept with an
+// awaitable next helper.
 type AsyncExecutionInterceptFunc func(ctx context.Context, invocation json.RawMessage, next AsyncNext) (any, error)
+
+// AsyncStreamItem is one chunk or terminal error from an asynchronous stream.
+// A channel producer must stop when its callback context is cancelled.
+type AsyncStreamItem struct {
+	Chunk json.RawMessage
+	Err   error
+}
+
+// AsyncStreamNext invokes the remaining streaming execution chain without
+// collecting it into a single result. It is valid only while its enclosing
+// intercept callback is running.
+type AsyncStreamNext func(ctx context.Context, invocation json.RawMessage) (<-chan AsyncStreamItem, error)
+
+// AsyncStreamExecutionInterceptFunc produces chunks incrementally. Returning
+// the channel from next preserves the downstream stream without buffering it.
+type AsyncStreamExecutionInterceptFunc func(ctx context.Context, invocation json.RawMessage, next AsyncStreamNext) (<-chan AsyncStreamItem, error)
 
 const asyncCallbackPending = C.uint32_t(1)
 
@@ -860,6 +894,237 @@ func goAsyncExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON
 		result := C.CString(string(encoded))
 		C.nemo_relay_async_completion_resolve_json(completion, result)
 		C.free(unsafe.Pointer(result))
+	}()
+	return asyncCallbackPending
+}
+
+type asyncNextStreamState struct {
+	ch     chan AsyncStreamItem
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	done   chan struct{}
+	closed bool
+}
+
+func (state *asyncNextStreamState) deliver(item AsyncStreamItem) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.closed {
+		return false
+	}
+	select {
+	case state.ch <- item:
+		return true
+	case <-state.ctx.Done():
+		return false
+	}
+}
+
+func (state *asyncNextStreamState) finish(item *AsyncStreamItem) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.closed {
+		return
+	}
+	state.closed = true
+	if item != nil {
+		select {
+		case state.ch <- *item:
+		case <-state.ctx.Done():
+		}
+	}
+	close(state.ch)
+	close(state.done)
+	state.cancel()
+}
+
+//export goAsyncNextStreamResultTrampoline
+func goAsyncNextStreamResultTrampoline(userData unsafe.Pointer, chunkJSON *C.char, errorMessage *C.char, done C.bool) C.bool {
+	state, ok := lookupClosure(userData).(*asyncNextStreamState)
+	if !ok {
+		unregisterClosure(userData)
+		return C.bool(false)
+	}
+	if bool(done) {
+		var terminal *AsyncStreamItem
+		if errorMessage != nil {
+			item := AsyncStreamItem{Err: errors.New(C.GoString(errorMessage))}
+			terminal = &item
+		}
+		state.finish(terminal)
+		unregisterClosure(userData)
+		return C.bool(true)
+	}
+	chunk := append(json.RawMessage(nil), []byte(C.GoString(chunkJSON))...)
+	if state.deliver(AsyncStreamItem{Chunk: chunk}) {
+		return C.bool(true)
+	}
+	state.finish(nil)
+	unregisterClosure(userData)
+	return C.bool(false)
+}
+
+func contextForAsyncStream(stream *C.NemoRelayAsyncStream) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(asyncCancellationPollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if bool(C.nemo_relay_async_stream_is_cancelled(stream)) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			close(done)
+			<-finished
+			cancel()
+		})
+	}
+}
+
+func rejectAsyncStreamPanic(stream *C.NemoRelayAsyncStream) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	message := C.CString(fmt.Sprintf("panic in async stream execution intercept: %v", recovered))
+	defer C.free(unsafe.Pointer(message))
+	C.nemo_relay_async_stream_reject(stream, message)
+}
+
+//export goAsyncStreamExecutionInterceptTrampoline
+func goAsyncStreamExecutionInterceptTrampoline(userData unsafe.Pointer, invocationJSON *C.char, next *C.NemoRelayAsyncNext, stream *C.NemoRelayAsyncStream) C.uint32_t {
+	fn, ok := lookupClosure(userData).(AsyncStreamExecutionInterceptFunc)
+	if !ok {
+		message := C.CString("nemo_relay: async stream execution intercept callback is not registered")
+		defer C.free(unsafe.Pointer(message))
+		C.nemo_relay_async_stream_reject(stream, message)
+		C.nemo_relay_async_stream_release(stream)
+		C.nemo_relay_async_next_release(next)
+		return asyncCallbackPending
+	}
+	invocation := append(json.RawMessage(nil), []byte(C.GoString(invocationJSON))...)
+	go func() {
+		defer C.nemo_relay_async_stream_release(stream)
+		defer rejectAsyncStreamPanic(stream)
+		ctx, cancel := contextForAsyncStream(stream)
+		defer cancel()
+		var nextMu sync.RWMutex
+		nextOpen := true
+		defer func() {
+			cancel()
+			nextMu.Lock()
+			nextOpen = false
+			nextMu.Unlock()
+			C.nemo_relay_async_next_release(next)
+		}()
+		nextFn := func(nextCtx context.Context, payload json.RawMessage) (<-chan AsyncStreamItem, error) {
+			nextMu.RLock()
+			defer nextMu.RUnlock()
+			if !nextOpen {
+				return nil, context.Canceled
+			}
+			combinedCtx, combinedCancel := context.WithCancel(ctx)
+			go func() {
+				select {
+				case <-nextCtx.Done():
+					combinedCancel()
+				case <-combinedCtx.Done():
+				}
+			}()
+			// Keep one terminal slot so a downstream error can be delivered
+			// before cancellation closes the stream.
+			ch := make(chan AsyncStreamItem, 1)
+			state := &asyncNextStreamState{
+				ch:     ch,
+				ctx:    combinedCtx,
+				cancel: combinedCancel,
+				done:   make(chan struct{}),
+			}
+			token := registerClosure(state)
+			cPayload := C.CString(string(payload))
+			var invocation *C.NemoRelayAsyncStreamInvocation
+			status := C.nemo_relay_async_next_invoke_stream_callback(
+				next, cPayload,
+				(C.NemoRelayAsyncNextStreamResultCb)(C.goAsyncNextStreamResultTrampoline), token,
+				&invocation,
+			)
+			C.free(unsafe.Pointer(cPayload))
+			if err := checkStatus(status); err != nil {
+				state.finish(nil)
+				unregisterClosure(token)
+				return nil, err
+			}
+			go func() {
+				select {
+				case <-state.done:
+				case <-combinedCtx.Done():
+					select {
+					case <-state.done:
+					default:
+						C.nemo_relay_async_stream_invocation_cancel(invocation)
+						state.finish(nil)
+						unregisterClosure(token)
+					}
+				}
+				C.nemo_relay_async_stream_invocation_release(invocation)
+			}()
+			return ch, nil
+		}
+		output, err := fn(ctx, invocation, nextFn)
+		if err != nil {
+			message := C.CString(err.Error())
+			C.nemo_relay_async_stream_reject(stream, message)
+			C.free(unsafe.Pointer(message))
+			return
+		}
+		if output == nil {
+			message := C.CString("async stream execution intercept returned a nil channel")
+			C.nemo_relay_async_stream_reject(stream, message)
+			C.free(unsafe.Pointer(message))
+			return
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case item, ok := <-output:
+				if !ok {
+					C.nemo_relay_async_stream_finish(stream)
+					return
+				}
+				if item.Err != nil {
+					message := C.CString(item.Err.Error())
+					C.nemo_relay_async_stream_reject(stream, message)
+					C.free(unsafe.Pointer(message))
+					return
+				}
+				chunk := C.CString(string(item.Chunk))
+				status := C.nemo_relay_async_stream_push_json(stream, chunk)
+				C.free(unsafe.Pointer(chunk))
+				if err := checkStatus(status); err != nil {
+					if !bool(C.nemo_relay_async_stream_is_cancelled(stream)) {
+						message := C.CString(err.Error())
+						C.nemo_relay_async_stream_reject(stream, message)
+						C.free(unsafe.Pointer(message))
+					}
+					return
+				}
+			}
+		}
 	}()
 	return asyncCallbackPending
 }

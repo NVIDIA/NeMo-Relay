@@ -4,6 +4,7 @@
 //! Unit tests for callable private in the NeMo Relay FFI crate.
 
 use super::*;
+use std::sync::atomic::AtomicUsize;
 
 unsafe extern "C" fn complete_without_settling(
     _user_data: *mut libc::c_void,
@@ -86,6 +87,42 @@ unsafe extern "C" fn send_next_result(
     let _ = sender.send(result);
 }
 
+unsafe extern "C" fn send_next_stream_result(
+    user_data: *mut libc::c_void,
+    chunk_json: *const c_char,
+    error_message: *const c_char,
+    done: bool,
+) -> bool {
+    let state = unsafe {
+        &*user_data
+            .cast::<tokio::sync::mpsc::UnboundedSender<std::result::Result<Option<Json>, String>>>()
+    };
+    let result = if !error_message.is_null() {
+        Err(unsafe { CStr::from_ptr(error_message) }
+            .to_string_lossy()
+            .into_owned())
+    } else if done {
+        Ok(None)
+    } else {
+        serde_json::from_str(unsafe { CStr::from_ptr(chunk_json) }.to_str().unwrap())
+            .map(Some)
+            .map_err(|error| error.to_string())
+    };
+    let keep_going = state.send(result).is_ok();
+    if done || !keep_going {
+        unsafe {
+            drop(
+                Box::from_raw(
+                    user_data.cast::<tokio::sync::mpsc::UnboundedSender<
+                        std::result::Result<Option<Json>, String>,
+                    >>(),
+                ),
+            )
+        };
+    }
+    keep_going
+}
+
 #[test]
 fn test_callable_private_helper_paths() {
     clear_last_error();
@@ -97,22 +134,6 @@ fn test_callable_private_helper_paths() {
     let raw = CString::new("ffi-string").unwrap().into_raw();
     assert_eq!(ptr_to_opt_string(raw), Some("ffi-string".into()));
     unsafe { nemo_relay_string_free_internal(raw) };
-}
-
-#[test]
-fn serialized_byte_counter_accumulates_json_without_buffering() {
-    let values = [serde_json::json!({"chunk": 1}), serde_json::json!("two")];
-    let expected: usize = values
-        .iter()
-        .map(|value| serde_json::to_vec(value).unwrap().len())
-        .sum();
-    let mut counter = SerializedByteCounter::default();
-
-    for value in &values {
-        serde_json::to_writer(&mut counter, value).unwrap();
-    }
-
-    assert_eq!(counter.bytes, expected);
 }
 
 #[test]
@@ -314,7 +335,7 @@ fn async_callbacks_reject_invalid_foreign_states() {
 }
 
 #[test]
-fn async_next_invocation_supports_tool_llm_and_stream_continuations() {
+fn async_next_invocation_supports_tool_and_llm_continuations() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -339,25 +360,6 @@ fn async_next_invocation_supports_tool_llm_and_stream_continuations() {
             )
             .unwrap(),
             serde_json::json!({"llm": true}),
-        ),
-        (
-            AsyncNextInner::LlmStream(Arc::new(|_request| {
-                Box::pin(async {
-                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![
-                        Ok(serde_json::json!({"chunk": 1})),
-                        Ok(serde_json::json!({"chunk": 2})),
-                    ])))
-                })
-            })),
-            CString::new(
-                serde_json::to_string(&LlmRequest {
-                    headers: serde_json::Map::new(),
-                    content: serde_json::json!({"stream": true}),
-                })
-                .unwrap(),
-            )
-            .unwrap(),
-            serde_json::json!([{"chunk": 1}, {"chunk": 2}]),
         ),
     ];
 
@@ -420,7 +422,7 @@ fn async_next_invocation_supports_tool_llm_and_stream_continuations() {
 }
 
 #[test]
-fn async_next_callback_reports_tool_llm_and_stream_results() {
+fn async_next_callback_reports_tool_and_llm_results() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -437,17 +439,6 @@ fn async_next_callback_reports_tool_llm_and_stream_results() {
             })),
             CString::new(r#"{"headers":{},"content":{"llm":true}}"#).unwrap(),
             serde_json::json!({"llm": true}),
-        ),
-        (
-            AsyncNextInner::LlmStream(Arc::new(|_request| {
-                Box::pin(async {
-                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
-                        serde_json::json!({"stream": true}),
-                    )])))
-                })
-            })),
-            CString::new(r#"{"headers":{},"content":{}}"#).unwrap(),
-            serde_json::json!([{ "stream": true }]),
         ),
     ];
     for (inner, invocation, expected) in cases {
@@ -503,4 +494,242 @@ fn async_next_callback_reports_tool_llm_and_stream_results() {
             .contains("next failed")
     );
     unsafe { nemo_relay_async_next_release(next_ref) };
+}
+
+#[test]
+fn async_next_stream_callback_reports_chunks_incrementally() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let next = Arc::new(NemoRelayAsyncNext {
+        inner: AsyncNextInner::LlmStream(Arc::new(|_request| {
+            Box::pin(async {
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                    Ok(serde_json::json!({"chunk": 1})),
+                    Ok(serde_json::json!({"chunk": 2})),
+                ])))
+            })
+        })),
+        runtime: runtime.handle().clone(),
+        _callback_user_data: None,
+    });
+    let next_ref = Arc::into_raw(next);
+    let invocation = CString::new(r#"{"headers":{},"content":{}}"#).unwrap();
+    let (sender, mut receiver) =
+        tokio::sync::mpsc::unbounded_channel::<std::result::Result<Option<Json>, String>>();
+    let mut stream_invocation = std::ptr::null();
+    assert_eq!(
+        unsafe {
+            nemo_relay_async_next_invoke_stream_callback(
+                next_ref,
+                invocation.as_ptr(),
+                send_next_stream_result,
+                Box::into_raw(Box::new(sender)).cast(),
+                &raw mut stream_invocation,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let values = runtime.block_on(async move {
+        let mut values = Vec::new();
+        while let Some(result) = receiver.recv().await {
+            match result.unwrap() {
+                Some(value) => values.push(value),
+                None => break,
+            }
+        }
+        values
+    });
+    assert_eq!(
+        values,
+        vec![
+            serde_json::json!({"chunk": 1}),
+            serde_json::json!({"chunk": 2})
+        ]
+    );
+    unsafe { nemo_relay_async_stream_invocation_release(stream_invocation) };
+    unsafe { nemo_relay_async_next_release(next_ref) };
+}
+
+#[test]
+fn async_next_stream_invocation_cancellation_aborts_idle_continuation() {
+    struct DropSignal(Arc<AtomicBool>);
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    unsafe extern "C" fn record_unexpected_callback(
+        user_data: *mut libc::c_void,
+        _chunk_json: *const c_char,
+        _error_message: *const c_char,
+        _done: bool,
+    ) -> bool {
+        unsafe { &*user_data.cast::<AtomicBool>() }.store(true, Ordering::Release);
+        false
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(std::sync::Mutex::new(Some(started_tx)));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let next = Arc::new(NemoRelayAsyncNext {
+        inner: AsyncNextInner::LlmStream(Arc::new({
+            let started_tx = started_tx.clone();
+            let dropped = dropped.clone();
+            move |_request| {
+                let started_tx = started_tx.clone();
+                let guard = DropSignal(dropped.clone());
+                Box::pin(async move {
+                    let _guard = guard;
+                    if let Some(started_tx) = started_tx
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                    {
+                        let _ = started_tx.send(());
+                    }
+                    std::future::pending::<Result<LlmJsonStream>>().await
+                })
+            }
+        })),
+        runtime: runtime.handle().clone(),
+        _callback_user_data: None,
+    });
+    let next_ref = Arc::into_raw(next);
+    let invocation = CString::new(r#"{"headers":{},"content":{}}"#).unwrap();
+    let callback_called = AtomicBool::new(false);
+    let mut stream_invocation = std::ptr::null();
+    assert_eq!(
+        unsafe {
+            nemo_relay_async_next_invoke_stream_callback(
+                next_ref,
+                invocation.as_ptr(),
+                record_unexpected_callback,
+                std::ptr::from_ref(&callback_called).cast_mut().cast(),
+                &raw mut stream_invocation,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    runtime.block_on(started_rx).unwrap();
+    assert_eq!(
+        unsafe { nemo_relay_async_stream_invocation_cancel(stream_invocation) },
+        NemoRelayStatus::Ok
+    );
+    runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !dropped.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("idle continuation was not aborted");
+    });
+    assert!(!callback_called.load(Ordering::Acquire));
+    unsafe {
+        nemo_relay_async_stream_invocation_release(stream_invocation);
+        nemo_relay_async_next_release(next_ref);
+    }
+}
+
+#[test]
+fn async_next_stream_cancellation_waits_for_active_callback() {
+    struct BlockingCallback {
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    unsafe extern "C" fn block_in_callback(
+        user_data: *mut libc::c_void,
+        _chunk_json: *const c_char,
+        _error_message: *const c_char,
+        _done: bool,
+    ) -> bool {
+        let state = unsafe { &*user_data.cast::<BlockingCallback>() };
+        let _ = state.entered.send(());
+        let _ = state
+            .release
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .recv();
+        true
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let next = Arc::new(NemoRelayAsyncNext {
+        inner: AsyncNextInner::LlmStream(Arc::new(|_request| {
+            Box::pin(async {
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    serde_json::json!({"chunk": 1}),
+                )])))
+            })
+        })),
+        runtime: runtime.handle().clone(),
+        _callback_user_data: None,
+    });
+    let next_ref = Arc::into_raw(next);
+    let invocation_json = CString::new(r#"{"headers":{},"content":{}}"#).unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let callback_state = Box::into_raw(Box::new(BlockingCallback {
+        entered: entered_tx,
+        release: std::sync::Mutex::new(release_rx),
+    }));
+    let mut stream_invocation = std::ptr::null();
+    assert_eq!(
+        unsafe {
+            nemo_relay_async_next_invoke_stream_callback(
+                next_ref,
+                invocation_json.as_ptr(),
+                block_in_callback,
+                callback_state.cast(),
+                &raw mut stream_invocation,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("stream callback did not start");
+
+    let (cancel_done_tx, cancel_done_rx) = std::sync::mpsc::channel();
+    let invocation_address = stream_invocation as usize;
+    let cancel_thread = std::thread::spawn(move || {
+        let status = unsafe {
+            nemo_relay_async_stream_invocation_cancel(
+                invocation_address as *const NemoRelayAsyncStreamInvocation,
+            )
+        };
+        let _ = cancel_done_tx.send(status);
+    });
+    assert!(
+        cancel_done_rx
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err(),
+        "cancellation returned while callback user_data was still active"
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        cancel_done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("cancellation did not finish after callback returned"),
+        NemoRelayStatus::Ok
+    );
+    cancel_thread.join().unwrap();
+
+    unsafe {
+        drop(Box::from_raw(callback_state));
+        nemo_relay_async_stream_invocation_release(stream_invocation);
+        nemo_relay_async_next_release(next_ref);
+    }
 }

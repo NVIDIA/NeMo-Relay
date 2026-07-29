@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayEventSubscriberCb, NemoRelayFreeFn,
-    NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb,
-    NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb, NemoRelayStatus,
-    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, c_char,
-    c_str_to_string, clear_last_error, core_registry_api, core_subscriber_api, set_last_error,
-    status_from_error, wrap_async_llm_conditional_fn, wrap_async_llm_execution_intercept_fn,
+    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayAsyncStreamInterceptCb,
+    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb,
+    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb,
+    NemoRelayLlmSanitizeResponseCb, NemoRelayStatus, NemoRelayToolConditionalCb,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, c_char, c_str_to_string,
+    clear_last_error, core_registry_api, core_subscriber_api, set_last_error, status_from_error,
+    wrap_async_llm_conditional_fn, wrap_async_llm_execution_intercept_fn,
     wrap_async_llm_request_intercept_fn, wrap_async_llm_sanitize_request_fn,
     wrap_async_llm_sanitize_response_fn, wrap_async_llm_stream_execution_intercept_fn,
     wrap_async_tool_conditional_fn, wrap_async_tool_execution_intercept_fn,
@@ -95,7 +96,7 @@ scope_async_registration!(
 );
 scope_async_registration!(
     nemo_relay_scope_register_llm_stream_execution_intercept_async,
-    NemoRelayAsyncInterceptCb,
+    NemoRelayAsyncStreamInterceptCb,
     core_registry_api::scope_register_llm_stream_execution_intercept,
     wrap_async_llm_stream_execution_intercept_fn
 );

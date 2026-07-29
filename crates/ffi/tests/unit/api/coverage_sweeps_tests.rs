@@ -30,6 +30,15 @@ unsafe extern "C" fn async_intercept_registration_callback(
     callable::NemoRelayAsyncCallbackState::Pending as u32
 }
 
+unsafe extern "C" fn async_stream_intercept_registration_callback(
+    _user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    _next: *const callable::NemoRelayAsyncNext,
+    _stream: *const callable::NemoRelayAsyncStream,
+) -> u32 {
+    callable::NemoRelayAsyncCallbackState::Pending as u32
+}
+
 #[test]
 fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -81,6 +90,24 @@ fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
                         name.as_ptr(),
                         0,
                         async_intercept_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(unsafe { $deregister(name.as_ptr()) }, NemoRelayStatus::Ok);
+        }};
+    }
+    macro_rules! global_stream_intercept {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        name.as_ptr(),
+                        0,
+                        async_stream_intercept_registration_callback,
                         ptr::null_mut(),
                         None,
                     )
@@ -143,7 +170,7 @@ fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
         nemo_relay_register_llm_execution_intercept_async,
         nemo_relay_deregister_llm_execution_intercept
     );
-    global_intercept!(
+    global_stream_intercept!(
         nemo_relay_register_llm_stream_execution_intercept_async,
         nemo_relay_deregister_llm_stream_execution_intercept
     );
@@ -226,6 +253,28 @@ fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
             );
         }};
     }
+    macro_rules! scope_stream_intercept {
+        ($register:ident, $deregister:ident) => {{
+            let name = cstring(&unique_name(stringify!($register)));
+            assert_eq!(
+                unsafe {
+                    $register(
+                        scope_uuid.as_ptr(),
+                        name.as_ptr(),
+                        0,
+                        async_stream_intercept_registration_callback,
+                        ptr::null_mut(),
+                        None,
+                    )
+                },
+                NemoRelayStatus::Ok
+            );
+            assert_eq!(
+                unsafe { $deregister(scope_uuid.as_ptr(), name.as_ptr()) },
+                NemoRelayStatus::Ok
+            );
+        }};
+    }
 
     scope_json!(
         nemo_relay_scope_register_mark_sanitize_guardrail_async,
@@ -279,7 +328,7 @@ fn test_ffi_async_registration_entrypoints_cover_global_and_scope_surfaces() {
         nemo_relay_scope_register_llm_execution_intercept_async,
         nemo_relay_scope_deregister_llm_execution_intercept
     );
-    scope_intercept!(
+    scope_stream_intercept!(
         nemo_relay_scope_register_llm_stream_execution_intercept_async,
         nemo_relay_scope_deregister_llm_stream_execution_intercept
     );

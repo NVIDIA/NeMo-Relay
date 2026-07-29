@@ -245,6 +245,16 @@ typedef struct NemoRelayAsyncCompletion NemoRelayAsyncCompletion;
  */
 typedef struct NemoRelayAsyncNext NemoRelayAsyncNext;
 
+/**
+ * Callback-owned incremental output stream for async stream intercepts.
+ */
+typedef struct NemoRelayAsyncStream NemoRelayAsyncStream;
+
+/**
+ * Caller-owned handle for one asynchronous streaming `next` invocation.
+ */
+typedef struct NemoRelayAsyncStreamInvocation NemoRelayAsyncStreamInvocation;
+
 typedef struct Option_NemoRelayCollectorCb Option_NemoRelayCollectorCb;
 
 typedef struct Option_NemoRelayFinalizerCb Option_NemoRelayFinalizerCb;
@@ -466,6 +476,17 @@ typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 typedef void (*NemoRelayAsyncNextResultCb)(void *user_data,
                                            const char *value_json,
                                            const char *error_message);
+
+/**
+ * Incremental result callback used by streaming async `next` wrappers.
+ *
+ * `chunk_json` is non-null for a chunk. The final invocation sets `done` and
+ * may carry `error_message`. Return false to cancel the downstream stream.
+ */
+typedef bool (*NemoRelayAsyncNextStreamResultCb)(void *user_data,
+                                                 const char *chunk_json,
+                                                 const char *error_message,
+                                                 bool done);
 
 /**
  * Run the registered tool request intercept chain on the given arguments.
@@ -1291,9 +1312,9 @@ NemoRelayStatus nemo_relay_deregister_subscriber(const char *name);
 /**
  * Wait for subscriber callbacks queued before this call to finish.
  *
- * A call made while an asynchronous C event sanitizer is pending returns `Internal` with a
- * would-block error instead of waiting. Completion callbacks may resume on arbitrary threads, so
- * callers that are not inside the sanitizer can retry after it settles.
+ * A call made while an asynchronous publication boundary is active may return
+ * before that boundary and later queued callbacks finish. Call this function
+ * again after the middleware settles to wait for the remaining work.
  */
 NemoRelayStatus nemo_relay_flush_subscribers(void);
 
@@ -2595,6 +2616,62 @@ NemoRelayStatus nemo_relay_async_next_invoke_callback(const struct NemoRelayAsyn
                                                       void *user_data);
 
 /**
+ * Invoke a streaming continuation and report chunks incrementally.
+ *
+ * The callback runs on a Relay Tokio worker thread and receives one final
+ * invocation with `done=true`. Returning false from a chunk callback cancels
+ * and closes the downstream stream. On success, `out_invocation` receives one
+ * caller-owned reference. Cancel it to stop an idle continuation, and release
+ * it exactly once after the final callback or cancellation. Cancellation does
+ * not return while a result callback is active, so callback `user_data` is no
+ * longer reachable when it returns. Do not call cancellation from inside the
+ * result callback; return `false` instead.
+ */
+NemoRelayStatus nemo_relay_async_next_invoke_stream_callback(const struct NemoRelayAsyncNext *next,
+                                                             const char *invocation_json,
+                                                             NemoRelayAsyncNextStreamResultCb callback,
+                                                             void *user_data,
+                                                             const struct NemoRelayAsyncStreamInvocation **out_invocation);
+
+/**
+ * Cancel one asynchronous streaming `next` invocation and wait for any active
+ * result callback to return.
+ */
+NemoRelayStatus nemo_relay_async_stream_invocation_cancel(const struct NemoRelayAsyncStreamInvocation *invocation);
+
+/**
+ * Release one caller-owned asynchronous streaming invocation reference.
+ */
+void nemo_relay_async_stream_invocation_release(const struct NemoRelayAsyncStreamInvocation *invocation);
+
+/**
+ * Push one JSON chunk to an asynchronous stream-intercept output.
+ */
+NemoRelayStatus nemo_relay_async_stream_push_json(const struct NemoRelayAsyncStream *stream,
+                                                  const char *chunk_json);
+
+/**
+ * Finish an asynchronous stream-intercept output.
+ */
+NemoRelayStatus nemo_relay_async_stream_finish(const struct NemoRelayAsyncStream *stream);
+
+/**
+ * Reject an asynchronous stream-intercept output.
+ */
+NemoRelayStatus nemo_relay_async_stream_reject(const struct NemoRelayAsyncStream *stream,
+                                               const char *message);
+
+/**
+ * Return whether the consumer cancelled an asynchronous stream output.
+ */
+bool nemo_relay_async_stream_is_cancelled(const struct NemoRelayAsyncStream *stream);
+
+/**
+ * Release a callback-owned asynchronous stream reference.
+ */
+void nemo_relay_async_stream_release(const struct NemoRelayAsyncStream *stream);
+
+/**
  * Resolve an async C callback with owned JSON.
  */
 NemoRelayStatus nemo_relay_async_completion_resolve_json(const struct NemoRelayAsyncCompletion *completion,
@@ -3110,7 +3187,46 @@ char *nemo_relay_event_annotated_request(const struct FfiEvent *ptr);
 char *nemo_relay_event_annotated_response(const struct FfiEvent *ptr);
 
 
-/* Completion-based async middleware registrations generated from Rust macros. */
+/*
+ * Completion-based async middleware registrations generated from Rust macros.
+ *
+ * Callbacks can run on Relay runtime or publication threads. invocation_json
+ * and result-callback strings are borrowed only for the callback invocation;
+ * user_data must remain valid and thread-safe until free_fn runs.
+ *
+ * A callback returning COMPLETE must settle its completion, or finish/reject
+ * its stream, before returning. The runtime then releases the callback-owned
+ * handles. A callback returning PENDING owns its completion/stream and next
+ * references until it settles and releases each handle exactly once. While a
+ * handle reference remains valid, duplicate settlement returns
+ * NEMO_RELAY_STATUS_INVALID_ARG. After release, callers must not access the
+ * handle; doing so is undefined behavior. Relay introduces no
+ * implicit timeout; pending work must settle or observe cancellation through
+ * nemo_relay_async_completion_is_cancelled or
+ * nemo_relay_async_stream_is_cancelled. Each successful streaming next
+ * invocation returns a caller-owned invocation handle; cancel it to stop an
+ * idle continuation and release it exactly once after completion or
+ * cancellation. Cancellation waits for any active result callback, making its
+ * user_data unreachable before returning. Result callbacks must return false
+ * instead of cancelling their own invocation.
+ *
+ * invocation_json/result contracts:
+ * - event sanitizers: {"event":Event,"fields":EventSanitizeFields}
+ *   -> EventSanitizeFields
+ * - tool sanitizers, conditional guardrails, and request intercepts:
+ *   {"name":string,"value":JSON} -> JSON, string|null, or JSON respectively
+ * - tool execution intercepts: {"name":string,"value":JSON}
+ *   -> ToolExecutionInterceptOutcome
+ * - LLM request/response sanitizers:
+ *   {"request":LlmRequest,"context":LlmCodecIdentity} -> LlmRequest|null, or
+ *   {"response":JSON,"context":LlmCodecIdentity} -> JSON|null
+ * - LLM conditional guardrails: {"request":LlmRequest} -> string|null
+ * - LLM request intercepts:
+ *   {"name":string,"request":LlmRequest,"annotated":AnnotatedLlmRequest|null}
+ *   -> LlmRequestInterceptOutcome
+ * - LLM execution and stream execution intercepts:
+ *   {"name":string,"request":LlmRequest} -> JSON or incremental stream chunks
+ */
 typedef uint32_t NemoRelayAsyncCallbackState;
 enum {
   NEMO_RELAY_ASYNC_CALLBACK_STATE_COMPLETE = 0,
@@ -3118,6 +3234,7 @@ enum {
 };
 typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncJsonCb)(void *user_data, const char *invocation_json, const struct NemoRelayAsyncCompletion *completion);
 typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncInterceptCb)(void *user_data, const char *invocation_json, const struct NemoRelayAsyncNext *next, const struct NemoRelayAsyncCompletion *completion);
+typedef NemoRelayAsyncCallbackState (*NemoRelayAsyncStreamInterceptCb)(void *user_data, const char *invocation_json, const struct NemoRelayAsyncNext *next, const struct NemoRelayAsyncStream *stream);
 NemoRelayStatus nemo_relay_register_mark_sanitize_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_register_scope_sanitize_start_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_register_scope_sanitize_end_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
@@ -3134,7 +3251,7 @@ NemoRelayStatus nemo_relay_register_llm_sanitize_response_guardrail_async(const 
 NemoRelayStatus nemo_relay_register_llm_conditional_execution_guardrail_async(const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_register_llm_request_intercept_async(const char *name, int32_t priority, bool break_chain, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_register_llm_execution_intercept_async(const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
-NemoRelayStatus nemo_relay_register_llm_stream_execution_intercept_async(const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_register_llm_stream_execution_intercept_async(const char *name, int32_t priority, NemoRelayAsyncStreamInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_scope_register_tool_sanitize_request_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_scope_register_tool_sanitize_response_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_scope_register_tool_conditional_execution_guardrail_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
@@ -3145,6 +3262,6 @@ NemoRelayStatus nemo_relay_scope_register_llm_conditional_execution_guardrail_as
 NemoRelayStatus nemo_relay_scope_register_llm_request_intercept_async(const char *scope_uuid, const char *name, int32_t priority, bool break_chain, NemoRelayAsyncJsonCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_scope_register_tool_execution_intercept_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
 NemoRelayStatus nemo_relay_scope_register_llm_execution_intercept_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
-NemoRelayStatus nemo_relay_scope_register_llm_stream_execution_intercept_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
+NemoRelayStatus nemo_relay_scope_register_llm_stream_execution_intercept_async(const char *scope_uuid, const char *name, int32_t priority, NemoRelayAsyncStreamInterceptCb cb, void *user_data, NemoRelayFreeFn free_fn);
 
 #endif  /* NEMO_RELAY_H */

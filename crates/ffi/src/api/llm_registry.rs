@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayEventSubscriberCb, NemoRelayFreeFn,
-    NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb,
-    NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb, NemoRelayStatus, c_char,
-    c_str_to_string, clear_last_error, core_registry_api, core_subscriber_api, status_from_error,
-    wrap_async_llm_conditional_fn, wrap_async_llm_execution_intercept_fn,
-    wrap_async_llm_request_intercept_fn, wrap_async_llm_sanitize_request_fn,
-    wrap_async_llm_sanitize_response_fn, wrap_async_llm_stream_execution_intercept_fn,
-    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
-    wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn,
-    wrap_llm_stream_exec_intercept_fn,
+    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayAsyncStreamInterceptCb,
+    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb,
+    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb,
+    NemoRelayLlmSanitizeResponseCb, NemoRelayStatus, c_char, c_str_to_string, clear_last_error,
+    core_registry_api, core_subscriber_api, status_from_error, wrap_async_llm_conditional_fn,
+    wrap_async_llm_execution_intercept_fn, wrap_async_llm_request_intercept_fn,
+    wrap_async_llm_sanitize_request_fn, wrap_async_llm_sanitize_response_fn,
+    wrap_async_llm_stream_execution_intercept_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn,
 };
 
 global_async_registration!(
@@ -29,7 +29,7 @@ global_async_registration!(
 );
 global_async_registration!(
     nemo_relay_register_llm_stream_execution_intercept_async,
-    NemoRelayAsyncInterceptCb,
+    NemoRelayAsyncStreamInterceptCb,
     core_registry_api::register_llm_stream_execution_intercept,
     wrap_async_llm_stream_execution_intercept_fn
 );
@@ -434,18 +434,12 @@ pub unsafe extern "C" fn nemo_relay_deregister_subscriber(name: *const c_char) -
 
 /// Wait for subscriber callbacks queued before this call to finish.
 ///
-/// A call made while an asynchronous C event sanitizer is pending returns `Internal` with a
-/// would-block error instead of waiting. Completion callbacks may resume on arbitrary threads, so
-/// callers that are not inside the sanitizer can retry after it settles.
+/// A call made while an asynchronous publication boundary is active may return
+/// before that boundary and later queued callbacks finish. Call this function
+/// again after the middleware settles to wait for the remaining work.
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_flush_subscribers() -> NemoRelayStatus {
     clear_last_error();
-    if crate::callable::event_sanitizer_callback_active() {
-        crate::error::set_last_error(
-            "subscriber flush would block while an asynchronous event sanitizer is pending",
-        );
-        return NemoRelayStatus::Internal;
-    }
     match core_subscriber_api::flush_subscribers() {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),

@@ -14,8 +14,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayCodecDecodeFn,
-    NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
+    NemoRelayAsyncInterceptCb, NemoRelayAsyncJsonCb, NemoRelayAsyncStreamInterceptCb,
+    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
     NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb,
     NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb,
     NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb, NemoRelayPluginRegisterCb,

@@ -46,8 +46,10 @@ typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef struct NemoRelayAsyncCompletion NemoRelayAsyncCompletion;
 typedef struct NemoRelayAsyncNext NemoRelayAsyncNext;
+typedef struct NemoRelayAsyncStream NemoRelayAsyncStream;
 typedef uint32_t (*NemoRelayAsyncJsonCb)(void*, const char*, const NemoRelayAsyncCompletion*);
 typedef uint32_t (*NemoRelayAsyncInterceptCb)(void*, const char*, const NemoRelayAsyncNext*, const NemoRelayAsyncCompletion*);
+typedef uint32_t (*NemoRelayAsyncStreamInterceptCb)(void*, const char*, const NemoRelayAsyncNext*, const NemoRelayAsyncStream*);
 
 // Core API
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
@@ -175,7 +177,7 @@ extern int32_t nemo_relay_register_llm_execution_intercept(const char* name, int
 extern int32_t nemo_relay_register_llm_execution_intercept_async(const char*, int32_t, NemoRelayAsyncInterceptCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_execution_intercept(const char* name);
 extern int32_t nemo_relay_register_llm_stream_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
-extern int32_t nemo_relay_register_llm_stream_execution_intercept_async(const char*, int32_t, NemoRelayAsyncInterceptCb, void*, NemoRelayFreeFn);
+extern int32_t nemo_relay_register_llm_stream_execution_intercept_async(const char*, int32_t, NemoRelayAsyncStreamInterceptCb, void*, NemoRelayFreeFn);
 extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* name);
 
 // Subscribers
@@ -241,7 +243,7 @@ extern int32_t nemo_relay_scope_register_llm_execution_intercept(const char* sco
 extern int32_t nemo_relay_scope_register_llm_execution_intercept_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_execution_intercept(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_llm_stream_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
-extern int32_t nemo_relay_scope_register_llm_stream_execution_intercept_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_register_llm_stream_execution_intercept_async(const char* scope_uuid, const char* name, int32_t priority, NemoRelayAsyncStreamInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_llm_stream_execution_intercept(const char* scope_uuid, const char* name);
 
 // Scope-local subscribers
@@ -301,6 +303,7 @@ extern void nemo_relay_otel_subscriber_free(void*);
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern uint32_t goAsyncMiddlewareTrampoline(void*, const char*, const NemoRelayAsyncCompletion*);
 extern uint32_t goAsyncExecutionInterceptTrampoline(void*, const char*, const NemoRelayAsyncNext*, const NemoRelayAsyncCompletion*);
+extern uint32_t goAsyncStreamExecutionInterceptTrampoline(void*, const char*, const NemoRelayAsyncNext*, const NemoRelayAsyncStream*);
 extern char* goEventSanitizeTrampoline(void*, const FfiEvent*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
@@ -1638,9 +1641,9 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLM
 }
 
 // RegisterLlmStreamExecutionInterceptAsync registers an asynchronous streaming LLM intercept.
-func RegisterLlmStreamExecutionInterceptAsync(name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+func RegisterLlmStreamExecutionInterceptAsync(name string, priority int32, fn AsyncStreamExecutionInterceptFunc) error {
 	return withGlobalAsyncMiddleware(name, priority, fn, func(name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
-		return C.nemo_relay_register_llm_stream_execution_intercept_async(name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+		return C.nemo_relay_register_llm_stream_execution_intercept_async(name, priority, C.NemoRelayAsyncStreamInterceptCb(C.goAsyncStreamExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
 	})
 }
 
@@ -1686,9 +1689,10 @@ func DeregisterSubscriber(name string) error {
 // FlushSubscribers waits for subscriber callbacks queued before this call to
 // finish. Native event-producing APIs enqueue subscriber work and return
 // without waiting for observer callbacks. Call this function outside native
-// subscriber callbacks. A re-entrant call returns without waiting to avoid
-// blocking the dispatcher, so callbacks later in the same dispatch snapshot
-// can still run.
+// subscriber callbacks. A call made while an asynchronous publication
+// boundary is active may return before that boundary and later queued
+// callbacks finish. Call FlushSubscribers again after the middleware settles
+// to wait for the remaining work.
 func FlushSubscribers() error {
 	return checkStatus(C.nemo_relay_flush_subscribers())
 }
@@ -2308,7 +2312,7 @@ func (s *OpenTelemetrySubscriber) Close() {
 // ---------------------------------------------------------------------------
 
 type asyncMiddlewareCallback interface {
-	AsyncMiddlewareFunc | AsyncExecutionInterceptFunc
+	AsyncMiddlewareFunc | AsyncExecutionInterceptFunc | AsyncStreamExecutionInterceptFunc
 }
 
 func withGlobalAsyncMiddleware[T asyncMiddlewareCallback](name string, priority int32, fn T, call func(*C.char, C.int32_t, unsafe.Pointer) C.int32_t) error {
@@ -2621,9 +2625,9 @@ func ScopeRegisterLlmExecutionInterceptAsync(scopeUUID, name string, priority in
 }
 
 // ScopeRegisterLlmStreamExecutionInterceptAsync registers an asynchronous scope-local streaming LLM intercept.
-func ScopeRegisterLlmStreamExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncExecutionInterceptFunc) error {
+func ScopeRegisterLlmStreamExecutionInterceptAsync(scopeUUID, name string, priority int32, fn AsyncStreamExecutionInterceptFunc) error {
 	return withScopeAsyncMiddleware(scopeUUID, name, priority, fn, func(scope, name *C.char, priority C.int32_t, id unsafe.Pointer) C.int32_t {
-		return C.nemo_relay_scope_register_llm_stream_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncInterceptCb(C.goAsyncExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+		return C.nemo_relay_scope_register_llm_stream_execution_intercept_async(scope, name, priority, C.NemoRelayAsyncStreamInterceptCb(C.goAsyncStreamExecutionInterceptTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
 	})
 }
 

@@ -44,8 +44,8 @@ unsafe extern "C" fn async_json_passthrough_callback(
         7 => {
             assert_eq!(
                 crate::api::nemo_relay_flush_subscribers(),
-                NemoRelayStatus::Internal,
-                "flush inside an async event sanitizer must report would-block"
+                NemoRelayStatus::Ok,
+                "flush inside event publication must return without waiting"
             );
             invocation["fields"].clone()
         }
@@ -61,15 +61,30 @@ unsafe extern "C" fn async_json_passthrough_callback(
     NemoRelayAsyncCallbackState::Complete as u32
 }
 
-unsafe extern "C" fn async_invalid_stream_callback(
+unsafe extern "C" fn async_unfinished_stream_callback(
     _user_data: *mut libc::c_void,
     _invocation_json: *const c_char,
     _next: *const NemoRelayAsyncNext,
-    completion: *const NemoRelayAsyncCompletion,
+    _stream: *const NemoRelayAsyncStream,
 ) -> u32 {
-    let value = CString::new(json!({"not": "an array"}).to_string()).expect("JSON has no NUL");
+    NemoRelayAsyncCallbackState::Complete as u32
+}
+
+unsafe extern "C" fn async_immediate_stream_callback(
+    _user_data: *mut libc::c_void,
+    _invocation_json: *const c_char,
+    _next: *const NemoRelayAsyncNext,
+    stream: *const NemoRelayAsyncStream,
+) -> u32 {
+    for chunk in [json!({"chunk": 1}), json!({"chunk": 2})] {
+        let chunk = CString::new(chunk.to_string()).expect("JSON has no NUL");
+        assert_eq!(
+            unsafe { nemo_relay_async_stream_push_json(stream, chunk.as_ptr()) },
+            NemoRelayStatus::Ok
+        );
+    }
     assert_eq!(
-        unsafe { nemo_relay_async_completion_resolve_json(completion, value.as_ptr()) },
+        unsafe { nemo_relay_async_stream_finish(stream) },
         NemoRelayStatus::Ok
     );
     NemoRelayAsyncCallbackState::Complete as u32
@@ -275,7 +290,7 @@ fn async_conditional_and_stream_wrappers_validate_callback_results() {
     );
 
     let stream_intercept = wrap_async_llm_stream_execution_intercept_fn(
-        async_invalid_stream_callback,
+        async_unfinished_stream_callback,
         std::ptr::null_mut(),
         None,
     );
@@ -288,9 +303,9 @@ fn async_conditional_and_stream_wrappers_validate_callback_results() {
     });
     let result = resolve(stream_intercept("llm", make_request(), next));
     let Err(error) = result else {
-        panic!("a non-array async stream result must fail");
+        panic!("an unfinished immediate stream callback must fail");
     };
-    assert!(error.to_string().contains("must resolve to an array"));
+    assert!(error.to_string().contains("without finishing"));
 }
 
 #[test]
@@ -319,9 +334,9 @@ fn async_execution_wrappers_continue_tool_and_llm_calls() {
 }
 
 #[test]
-fn async_stream_execution_wrapper_collects_the_continued_stream() {
+fn async_stream_execution_wrapper_delivers_chunks_incrementally() {
     let intercept = wrap_async_llm_stream_execution_intercept_fn(
-        async_next_callback,
+        async_immediate_stream_callback,
         std::ptr::null_mut(),
         None,
     );
@@ -339,7 +354,7 @@ fn async_stream_execution_wrapper_collects_the_continued_stream() {
     let mut stream = resolve(intercept("llm", make_request(), next)).unwrap();
     assert_eq!(
         resolve(async { stream.next().await.unwrap().unwrap() }),
-        json!({"model": "test-model", "chunk": 1})
+        json!({"chunk": 1})
     );
     assert_eq!(
         resolve(async { stream.next().await.unwrap().unwrap() }),
