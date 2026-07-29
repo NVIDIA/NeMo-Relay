@@ -55,6 +55,7 @@ use crate::observability::otel::{
 };
 use crate::observability::{
     MarkProjection, OpenTelemetryType, OtlpAttributeMapping, default_mark_exclude_names,
+    validate_attribute_mappings,
 };
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
@@ -2218,6 +2219,16 @@ fn validate_opentelemetry_section(
                 Some("opentelemetry".to_string()),
                 Some(format!("endpoints[{index}].transport")),
                 "OpenTelemetry endpoint transport must be 'http_binary' or 'grpc'".to_string(),
+            );
+        }
+        if let Err(error) = validate_attribute_mappings(&endpoint.attribute_mappings) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("endpoints[{index}].attribute_mappings")),
+                error,
             );
         }
         validate_opentelemetry_headers(diagnostics, policy, index, endpoint);

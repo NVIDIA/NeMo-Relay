@@ -730,6 +730,71 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
 }
 
 #[test]
+fn opentelemetry_endpoint_rejects_invalid_attribute_mappings() {
+    let invalid_mappings = [
+        (
+            json!([{"key": "", "alias": "some.alias"}]),
+            "attribute mapping key must not be blank",
+        ),
+        (
+            json!([{"key": "nemo_relay.mark.metadata.source", "alias": " "}]),
+            "attribute mapping alias must not be blank",
+        ),
+        (
+            json!([
+                {"key": "nemo_relay.model_name", "alias": "duplicate.alias"},
+                {"key": "nemo_relay.tool.name", "alias": "duplicate.alias"}
+            ]),
+            "attribute mapping alias \"duplicate.alias\" is duplicated",
+        ),
+    ];
+
+    for (attribute_mappings, expected_message) in invalid_mappings {
+        let config = plugin_config(json!({
+            "opentelemetry": {
+                "enabled": true,
+                "endpoints": [{
+                    "type": "full",
+                    "endpoint": "http://localhost:4318/v1/traces",
+                    "attribute_mappings": attribute_mappings
+                }]
+            }
+        }));
+        let report = validate_plugin_config(&config);
+        assert!(report.has_errors());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "observability.unsupported_value"
+                && diagnostic.field.as_deref() == Some("endpoints[0].attribute_mappings")
+                && diagnostic.message.contains(expected_message)
+        }));
+        assert!(futures::executor::block_on(initialize_plugins_exact(config)).is_err());
+    }
+}
+
+#[test]
+fn opentelemetry_endpoint_accepts_valid_attribute_mappings() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://localhost:4318/v1/traces",
+                "attribute_mappings": [{
+                    "key": "nemo_relay.model_name",
+                    "alias": "model.alias"
+                }]
+            }]
+        }
+    })));
+
+    assert!(
+        !report.has_errors(),
+        "valid attribute mapping produced diagnostics: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn opentelemetry_endpoint_rejects_invalid_and_case_duplicate_headers() {
     let report = validate_plugin_config(&plugin_config(json!({
         "opentelemetry": {
