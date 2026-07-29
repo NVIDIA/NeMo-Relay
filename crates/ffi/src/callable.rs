@@ -101,9 +101,25 @@ enum AsyncNextInner {
 const ASYNC_STREAM_MAX_CHUNKS: usize = 4096;
 const ASYNC_STREAM_MAX_SERIALIZED_BYTES: usize = 16 * 1024 * 1024;
 
+#[derive(Default)]
+struct SerializedByteCounter {
+    bytes: usize,
+}
+
+impl std::io::Write for SerializedByteCounter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 async fn collect_async_stream_for_completion(mut stream: LlmJsonStream) -> Result<Json> {
     let mut chunks = Vec::new();
-    let mut serialized_bytes = 0usize;
+    let mut serialized_bytes = SerializedByteCounter::default();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         if chunks.len() >= ASYNC_STREAM_MAX_CHUNKS {
@@ -111,14 +127,10 @@ async fn collect_async_stream_for_completion(mut stream: LlmJsonStream) -> Resul
                 "async stream continuation exceeded the {ASYNC_STREAM_MAX_CHUNKS}-chunk completion limit"
             )));
         }
-        serialized_bytes = serialized_bytes.saturating_add(
-            serde_json::to_vec(&chunk)
-                .map_err(|error| {
-                    FlowError::Internal(format!("failed to measure async stream chunk: {error}"))
-                })?
-                .len(),
-        );
-        if serialized_bytes > ASYNC_STREAM_MAX_SERIALIZED_BYTES {
+        serde_json::to_writer(&mut serialized_bytes, &chunk).map_err(|error| {
+            FlowError::Internal(format!("failed to measure async stream chunk: {error}"))
+        })?;
+        if serialized_bytes.bytes > ASYNC_STREAM_MAX_SERIALIZED_BYTES {
             return Err(FlowError::Internal(format!(
                 "async stream continuation exceeded the {ASYNC_STREAM_MAX_SERIALIZED_BYTES}-byte completion limit"
             )));

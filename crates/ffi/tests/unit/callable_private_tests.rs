@@ -58,6 +58,22 @@ fn test_callable_private_helper_paths() {
 }
 
 #[test]
+fn serialized_byte_counter_accumulates_json_without_buffering() {
+    let values = [serde_json::json!({"chunk": 1}), serde_json::json!("two")];
+    let expected: usize = values
+        .iter()
+        .map(|value| serde_json::to_vec(value).unwrap().len())
+        .sum();
+    let mut counter = SerializedByteCounter::default();
+
+    for value in &values {
+        serde_json::to_writer(&mut counter, value).unwrap();
+    }
+
+    assert_eq!(counter.bytes, expected);
+}
+
+#[test]
 fn async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlements() {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let completion = Arc::new(NemoRelayAsyncCompletion {
