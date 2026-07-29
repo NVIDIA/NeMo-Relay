@@ -303,13 +303,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
     host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_plugin::export_plugin(
-            host,
-            out,
-            FixtureAsyncPlugin { host: None },
-        )
-    }
+    unsafe { nemo_relay_plugin::export_plugin(host, out, FixtureAsyncPlugin { host: None }) }
 }
 
 #[unsafe(no_mangle)]
@@ -631,105 +625,105 @@ impl NativePlugin for FixtureAsyncPlugin {
             .map(|host| (host as *const NemoRelayNativeHostApiV3).cast_mut().cast())
             .expect("fixture async host was initialized");
 
-    let registrations: [(
-        NemoRelayNativeAsyncMiddlewareKind,
-        &str,
-        NemoRelayNativeAsyncMiddlewareCb,
-    ); 13] = [
-        (
-            NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest,
-            "fixture_async_tool_sanitize_request",
-            raw_async_passthrough_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeResponse,
-            "fixture_async_tool_sanitize_response",
-            raw_async_passthrough_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::ToolConditionalExecution,
-            "fixture_async_tool_conditional",
-            raw_async_allow_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept,
-            "fixture_async_request",
-            raw_async_tool_request_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept,
-            "fixture_async_execution",
-            raw_async_tool_execution_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest,
-            "fixture_async_llm_sanitize_request",
-            raw_async_passthrough_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeResponse,
-            "fixture_async_llm_sanitize_response",
-            raw_async_passthrough_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::LlmConditionalExecution,
-            "fixture_async_llm_conditional",
-            raw_async_allow_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept,
-            "fixture_async_llm_request",
-            raw_async_passthrough_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
-            "fixture_async_llm_execution",
-            raw_async_tool_execution_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
-            "fixture_async_mark",
-            raw_async_passthrough_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart,
-            "fixture_async_scope_start",
-            raw_async_passthrough_callback,
-        ),
-        (
-            NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd,
-            "fixture_async_scope_end",
-            raw_async_passthrough_callback,
-        ),
-    ];
-    for (kind, registration_name, callback) in registrations {
+        let registrations: [(
+            NemoRelayNativeAsyncMiddlewareKind,
+            &str,
+            NemoRelayNativeAsyncMiddlewareCb,
+        ); 13] = [
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest,
+                "fixture_async_tool_sanitize_request",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeResponse,
+                "fixture_async_tool_sanitize_response",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolConditionalExecution,
+                "fixture_async_tool_conditional",
+                raw_async_allow_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept,
+                "fixture_async_request",
+                raw_async_tool_request_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept,
+                "fixture_async_execution",
+                raw_async_tool_execution_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest,
+                "fixture_async_llm_sanitize_request",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeResponse,
+                "fixture_async_llm_sanitize_response",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmConditionalExecution,
+                "fixture_async_llm_conditional",
+                raw_async_allow_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept,
+                "fixture_async_llm_request",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
+                "fixture_async_llm_execution",
+                raw_async_tool_execution_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
+                "fixture_async_mark",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart,
+                "fixture_async_scope_start",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd,
+                "fixture_async_scope_end",
+                raw_async_passthrough_callback,
+            ),
+        ];
+        for (kind, registration_name, callback) in registrations {
+            let status = unsafe {
+                ctx.register_async_middleware_raw(
+                    kind,
+                    registration_name,
+                    0,
+                    false,
+                    callback,
+                    user_data,
+                    None,
+                )
+            };
+            if status != NemoRelayStatus::Ok {
+                return Err(format!("async registration failed: {status:?}"));
+            }
+        }
         let status = unsafe {
-            ctx.register_async_middleware_raw(
-                kind,
-                registration_name,
+            ctx.register_async_stream_middleware_raw(
+                "fixture_async_llm_stream",
                 0,
-                false,
-                callback,
+                raw_async_stream_callback,
                 user_data,
                 None,
             )
         };
         if status != NemoRelayStatus::Ok {
-            return Err(format!("async registration failed: {status:?}"));
+            return Err(format!("async stream registration failed: {status:?}"));
         }
-    }
-    let status = unsafe {
-        ctx.register_async_stream_middleware_raw(
-            "fixture_async_llm_stream",
-            0,
-            raw_async_stream_callback,
-            user_data,
-            None,
-        )
-    };
-    if status != NemoRelayStatus::Ok {
-        return Err(format!("async stream registration failed: {status:?}"));
-    }
         Ok(())
     }
 }
