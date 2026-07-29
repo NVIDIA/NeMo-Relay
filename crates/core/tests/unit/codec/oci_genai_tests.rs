@@ -301,8 +301,10 @@ fn test_usage_cached_tokens_mapped_to_cache_read() {
 fn test_cohere_v2_chat_result() {
     // Shape per the OCI `CohereChatResponseV2` schema (apiFormat COHEREV2):
     // a single assistant message with typed content parts and nested-function
-    // tool calls. Not yet accepted by the live service in us-chicago-1
-    // (probed 2026-07-28: HTTP 400), so this fixture mirrors the spec.
+    // tool calls. Confirmed against the live service (us-chicago-1,
+    // 2026-07-29): the wire matches this schema, including provider-supplied
+    // nested-function tool-call ids, JSON-encoded string arguments, and
+    // message-level toolPlan/citations.
     let response = json!({
         "modelId": "cohere.command-a-03-2025",
         "modelVersion": "2.0",
