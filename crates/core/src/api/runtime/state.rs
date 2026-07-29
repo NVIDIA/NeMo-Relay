@@ -32,7 +32,7 @@ use crate::api::runtime::callbacks::{
 };
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
-use crate::api::shared::sanitize_event;
+use crate::api::shared::snapshot_event_sanitizers;
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{
     CreateToolHandleParams, EndToolHandleParams, ToolExecutionInterceptOutcome,
@@ -194,17 +194,9 @@ impl NemoRelayContextState {
     /// # Parameters
     /// - `event`: Fully constructed lifecycle event to deliver.
     /// - `subscribers`: Subscribers that should observe the event.
+    #[cfg(test)]
     pub(crate) fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
         let _ = subscriber_dispatcher::dispatch_event(event, subscribers);
-    }
-
-    /// Queue an event and report whether the asynchronous dispatcher accepted it.
-    ///
-    /// Subscriber callbacks still run asynchronously. This acknowledgement only
-    /// covers queue acceptance and is used by bounded observability cursors so a
-    /// transient dispatcher failure does not permanently discard evidence.
-    pub(crate) fn try_emit_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
-        subscriber_dispatcher::dispatch_event(event, subscribers)
     }
 
     /// Build a standalone mark event.
@@ -595,9 +587,14 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        if let Some(event) = sanitize_event(event).await {
-            Self::emit_event(&event, subscribers);
-        }
+        let scope_stack = super::current_scope_stack();
+        let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+        subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            subscribers,
+            scope_stack,
+        );
         handle
     }
 
@@ -620,9 +617,14 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        if let Some(event) = sanitize_event(event).await {
-            Self::emit_event(&event, subscribers);
-        }
+        let scope_stack = super::current_scope_stack();
+        let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+        subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            subscribers,
+            scope_stack,
+        );
     }
 
     /// Snapshot event sanitizer entries in priority order.

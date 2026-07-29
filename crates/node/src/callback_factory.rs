@@ -3,7 +3,11 @@
 
 //! Cached JavaScript callback wrapper factories for the Node binding.
 
-use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
+use napi::bindgen_prelude::FromNapiValue;
+use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue, ValueType};
+use nemo_relay::api::runtime::ScopeStackHandle;
+
+use crate::types::ScopeStack;
 
 const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v2";
 
@@ -52,8 +56,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return result;
   }
 
-  function callPromise(fn, arg0, spread, next, resolve, reject, publication) {
-    const token = { active: publication };
+  function callPromise(fn, arg0, spread, next, resolve, reject, publication, scopeStack) {
+    const token = { active: publication, scopeStack };
     const invoke = () => {
       Promise.resolve().then(() => (
         next === undefined
@@ -61,9 +65,11 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           : (spread ? fn(...arg0, next) : fn(arg0, next))
       )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
         token.active = false;
+        token.scopeStack = null;
         resolve(value);
       }, (error) => {
         token.active = false;
+        token.scopeStack = null;
         let message = 'unknown error';
         try {
           if (typeof error === 'string') {
@@ -97,7 +103,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     },
 
     promise(fn) {
-      return function __nemo_relay_promise_wrapper(error, arg0, spread, next, resolve, reject, publication) {
+      return function __nemo_relay_promise_wrapper(error, arg0, spread, next, resolve, reject, publication, scopeStack) {
         if (error != null) {
           let message = 'unknown error';
           try {
@@ -106,12 +112,16 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           reject(message);
           return;
         }
-        callPromise(fn, arg0, spread, next, resolve, reject, publication);
+        callPromise(fn, arg0, spread, next, resolve, reject, publication, scopeStack);
       };
     },
 
     eventSanitizerCallbackActive() {
       return eventSanitizerContext.getStore()?.active === true;
+    },
+
+    callbackScopeStack() {
+      return eventSanitizerContext.getStore()?.scopeStack;
     },
   };
 })()"#;
@@ -167,4 +177,15 @@ pub(crate) fn event_sanitizer_callback_active(env: &Env) -> napi::Result<bool> {
         .call::<JsUnknown>(None, &[])?
         .coerce_to_bool()?
         .get_value()
+}
+
+pub(crate) fn callback_scope_stack(env: &Env) -> napi::Result<Option<ScopeStackHandle>> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("callbackScopeStack")?;
+    let value = callback.call::<JsUnknown>(None, &[])?;
+    if matches!(value.get_type()?, ValueType::Undefined | ValueType::Null) {
+        return Ok(None);
+    }
+    let stack = unsafe { <&ScopeStack as FromNapiValue>::from_napi_value(env.raw(), value.raw())? };
+    Ok(Some(stack.inner.clone()))
 }

@@ -33,8 +33,8 @@ use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_status,
-    resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
-    sanitize_event_with_scope_stack, snapshot_event_sanitizers, snapshot_event_subscribers,
+    resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -56,6 +56,15 @@ const OBSERVABILITY_CREDENTIAL_HEADERS: [&str; 7] = [
     "anthropic-api-key",
     "x-goog-api-key",
 ];
+
+fn queue_sanitized_event_with_scope_stack(
+    event: Event,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: &ScopeStackHandle,
+) -> bool {
+    let sanitizers = snapshot_event_sanitizers(&event, scope_stack).unwrap_or_default();
+    dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack.clone())
+}
 
 #[derive(Clone)]
 struct CapturedLlmScopeStack(ScopeStackHandle);
@@ -464,9 +473,7 @@ async fn emit_llm_start_with_subscribers(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.build_llm_start_event(handle, input, annotated_request)
     };
-    if let Some(event) = sanitize_event_with_scope_stack(event, scope_stack).await {
-        NemoRelayContextState::emit_event(&event, subscribers);
-    }
+    queue_sanitized_event_with_scope_stack(event, subscribers, scope_stack);
     Ok(())
 }
 
@@ -528,11 +535,7 @@ async fn emit_pending_request_marks(
             mark.category,
             mark.category_profile,
         ));
-        if let Some(event) =
-            sanitize_event_with_scope_stack(event, handle.captured_scope_stack()).await
-        {
-            NemoRelayContextState::emit_event(&event, subscribers);
-        }
+        queue_sanitized_event_with_scope_stack(event, subscribers, handle.captured_scope_stack());
     }
     Ok(())
 }
@@ -541,8 +544,14 @@ pub(crate) async fn emit_optimization_marks(handle: &LlmHandle, subscribers: &[E
     emit_optimization_marks_with_async(
         handle,
         subscribers,
-        |event| sanitize_event_with_scope_stack(event, handle.captured_scope_stack()),
-        |event, subscribers| NemoRelayContextState::try_emit_event(event, subscribers),
+        |event| async { Some(event) },
+        |event, subscribers| {
+            queue_sanitized_event_with_scope_stack(
+                event.clone(),
+                subscribers,
+                handle.captured_scope_stack(),
+            )
+        },
     )
     .await;
 }
@@ -554,11 +563,13 @@ pub(crate) async fn emit_reserved_optimization_marks(
     emit_optimization_marks_with_async(
         handle,
         subscribers,
-        |event| sanitize_event_with_scope_stack(event, handle.captured_scope_stack()),
+        |event| async { Some(event) },
         |event, subscribers| {
+            let sanitizers =
+                snapshot_event_sanitizers(event, handle.captured_scope_stack()).unwrap_or_default();
             dispatch_reserved_sanitized_event(
                 event.clone(),
-                Vec::new(),
+                sanitizers,
                 subscribers,
                 handle.captured_scope_stack().clone(),
             )
@@ -1076,10 +1087,7 @@ async fn llm_call_end_with_behavior(
                 .build(),
         )
     };
-    if let Some(event) = sanitize_event_with_scope_stack(event, handle.captured_scope_stack()).await
-    {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    queue_sanitized_event_with_scope_stack(event, &subscribers, handle.captured_scope_stack());
     if let Some(error) = payload.decode_error
         && behavior.response_codec_errors_fatal
     {
@@ -1193,10 +1201,7 @@ async fn emit_llm_end_without_output(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.end_llm_handle(handle, data, metadata, annotated_response)
     };
-    if let Some(event) = sanitize_event_with_scope_stack(event, handle.captured_scope_stack()).await
-    {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    queue_sanitized_event_with_scope_stack(event, &subscribers, handle.captured_scope_stack());
     Ok(())
 }
 

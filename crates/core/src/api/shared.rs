@@ -44,20 +44,6 @@ pub(crate) fn snapshot_event_subscribers(
     Ok(state.collect_event_subscribers(&scope_local_subscribers))
 }
 
-/// Apply the event sanitizer chain visible on the current scope stack.
-pub(crate) async fn sanitize_event(event: Event) -> Option<Event> {
-    sanitize_event_with_scope_stack(event, &current_scope_stack()).await
-}
-
-/// Apply the event sanitizer chain visible on a captured scope stack.
-pub(crate) async fn sanitize_event_with_scope_stack(
-    event: Event,
-    scope_stack: &ScopeStackHandle,
-) -> Option<Event> {
-    let entries = snapshot_event_sanitizers(&event, scope_stack).unwrap_or_default();
-    Some(NemoRelayContextState::event_sanitize_snapshot_chain(event, &entries).await)
-}
-
 /// Snapshot the event sanitizers visible to an event without invoking them.
 ///
 /// Scope and mark emission use this to capture middleware ownership while the
@@ -75,7 +61,7 @@ pub(crate) fn snapshot_event_sanitizers(
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_snapshot_failed";
-                    "Event was dropped because the scope stack lock is poisoned: {error}"
+                    "Event sanitizer snapshot failed open because the scope stack lock is poisoned; publishing without event sanitizers: {error}"
                 );
                 return None;
             }
@@ -87,7 +73,7 @@ pub(crate) fn snapshot_event_sanitizers(
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_snapshot_failed";
-                    "Event was dropped because the runtime context lock is poisoned: {error}"
+                    "Event sanitizer snapshot failed open because the runtime context lock is poisoned; publishing without event sanitizers: {error}"
                 );
                 return None;
             }

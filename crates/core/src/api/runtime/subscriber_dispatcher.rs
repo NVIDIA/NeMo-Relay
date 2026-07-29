@@ -79,14 +79,16 @@ pub(crate) type EventTransformFn = Box<
 mod native {
     use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::{LazyLock, Mutex, MutexGuard};
 
     use super::*;
+    #[cfg(test)]
+    use crate::api::runtime::scope_stack::current_scope_stack;
     use crate::api::runtime::scope_stack::{
-        ScopeStackHandle, capture_thread_scope_stack, current_scope_stack,
-        restore_thread_scope_stack, set_thread_scope_stack,
+        ScopeStackHandle, capture_thread_scope_stack, restore_thread_scope_stack,
+        set_thread_scope_stack,
     };
     use crate::error::FlowError;
 
@@ -110,14 +112,31 @@ mod native {
     type DispatcherState = Option<std::result::Result<Sender<DispatcherMessage>, String>>;
     type SanitizerRuntimeState = Option<std::result::Result<tokio::runtime::Runtime, String>>;
 
-    static DISPATCHER: LazyLock<Mutex<DispatcherState>> = LazyLock::new(|| Mutex::new(None));
-    static SANITIZER_RUNTIME: LazyLock<Mutex<SanitizerRuntimeState>> =
-        LazyLock::new(|| Mutex::new(None));
-    static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
-    static SANITIZER_RUNTIME_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+    struct ProcessState {
+        dispatcher: Mutex<DispatcherState>,
+        sanitizer_runtime: Mutex<SanitizerRuntimeState>,
+        dispatcher_failure_logged: AtomicBool,
+        sanitizer_runtime_failure_logged: AtomicBool,
+    }
+
+    impl ProcessState {
+        fn new() -> Self {
+            Self {
+                dispatcher: Mutex::new(None),
+                sanitizer_runtime: Mutex::new(None),
+                dispatcher_failure_logged: AtomicBool::new(false),
+                sanitizer_runtime_failure_logged: AtomicBool::new(false),
+            }
+        }
+    }
+
+    // Process states are intentionally never reclaimed after becoming active.
+    // A forked child cannot safely drop the inherited state because another
+    // vanished parent thread may have held one of its mutexes at fork time.
+    static PROCESS_STATE: AtomicPtr<ProcessState> = AtomicPtr::new(std::ptr::null_mut());
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
-        static FORK_GUARDS: RefCell<Option<ForkGuards>> = const { RefCell::new(None) };
+        static PREPARED_FORK_STATE: Cell<*mut ProcessState> = const { Cell::new(std::ptr::null_mut()) };
     }
     tokio::task_local! {
         static ASYNC_PUBLICATION_MESSAGES: RefCell<Option<Vec<DispatcherMessage>>>;
@@ -125,13 +144,28 @@ mod native {
 
     struct DispatchGuard;
 
-    struct ForkGuards {
-        sanitizer_runtime: MutexGuard<'static, SanitizerRuntimeState>,
-        dispatcher: MutexGuard<'static, DispatcherState>,
-    }
-
     pub(crate) struct AsyncPublication {
         sender: Sender<Vec<DispatcherMessage>>,
+    }
+
+    fn process_state() -> &'static ProcessState {
+        let mut state = PROCESS_STATE.load(Ordering::Acquire);
+        if state.is_null() {
+            let fresh = Box::into_raw(Box::new(ProcessState::new()));
+            match PROCESS_STATE.compare_exchange(
+                std::ptr::null_mut(),
+                fresh,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => state = fresh,
+                Err(existing) => {
+                    state = existing;
+                    unsafe { drop(Box::from_raw(fresh)) };
+                }
+            }
+        }
+        unsafe { &*state }
     }
 
     impl DispatchGuard {
@@ -151,7 +185,8 @@ mod native {
     pub(super) fn block_on_sanitizer_future<F: Future>(
         future: F,
     ) -> std::result::Result<F::Output, String> {
-        let mut runtime = SANITIZER_RUNTIME
+        let mut runtime = process_state()
+            .sanitizer_runtime
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let runtime = runtime.get_or_insert_with(build_sanitizer_runtime);
@@ -168,6 +203,7 @@ mod native {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(test)]
     pub(super) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
         if subscribers.is_empty() {
             return true;
@@ -276,7 +312,10 @@ mod native {
             return Ok(());
         }
         let sender = {
-            let dispatcher = DISPATCHER.lock().unwrap_or_else(|error| error.into_inner());
+            let dispatcher = process_state()
+                .dispatcher
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let Some(sender_result) = dispatcher.as_ref() else {
                 return Ok(());
             };
@@ -327,7 +366,10 @@ mod native {
     }
 
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
-        let mut dispatcher = DISPATCHER.lock().unwrap_or_else(|error| error.into_inner());
+        let mut dispatcher = process_state()
+            .dispatcher
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         dispatcher.get_or_insert_with(start_dispatcher).clone()
     }
 
@@ -343,7 +385,11 @@ mod native {
                 );
                 false
             }
-            Err(error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
+            Err(error)
+                if !process_state()
+                    .dispatcher_failure_logged
+                    .swap(true, Ordering::AcqRel) =>
+            {
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "subscriber_dispatcher_failed";
@@ -459,14 +505,19 @@ mod native {
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         publication_context: Option<PublicationContext>,
     ) -> Option<Event> {
-        let mut runtime = SANITIZER_RUNTIME
+        let state = process_state();
+        let mut runtime = state
+            .sanitizer_runtime
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let runtime = runtime.get_or_insert_with(build_sanitizer_runtime);
         let runtime = match runtime.as_ref() {
             Ok(runtime) => runtime,
             Err(error) => {
-                if !SANITIZER_RUNTIME_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
+                if !state
+                    .sanitizer_runtime_failure_logged
+                    .swap(true, Ordering::AcqRel)
+                {
                     log::error!(
                         target: "nemo_relay.runtime",
                         event = "event_sanitizer_runtime_failed";
@@ -520,41 +571,38 @@ mod native {
     }
 
     pub(super) fn prepare_for_fork() {
-        // Lock in the same order used by publication: sanitizer execution can
-        // enqueue another event and therefore acquire the dispatcher lock.
-        let sanitizer_runtime = SANITIZER_RUNTIME
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let dispatcher = DISPATCHER.lock().unwrap_or_else(|error| error.into_inner());
-        FORK_GUARDS.with(|guards| {
-            let previous = guards.replace(Some(ForkGuards {
-                sanitizer_runtime,
-                dispatcher,
-            }));
-            assert!(previous.is_none(), "subscriber fork preparation is nested");
+        // Allocate the child's fresh state before fork. Do not lock active
+        // dispatcher state here: a pending Python sanitizer may require the
+        // forking event-loop thread to make progress.
+        PREPARED_FORK_STATE.with(|prepared| {
+            assert!(
+                prepared.get().is_null(),
+                "subscriber fork preparation is nested"
+            );
+            prepared.set(Box::into_raw(Box::new(ProcessState::new())));
         });
     }
 
     pub(super) fn resume_after_fork_parent() {
-        FORK_GUARDS.with(|guards| {
-            guards
-                .borrow_mut()
-                .take()
-                .expect("subscriber fork parent hook ran without preparation");
+        PREPARED_FORK_STATE.with(|prepared| {
+            let state = prepared.replace(std::ptr::null_mut());
+            assert!(
+                !state.is_null(),
+                "subscriber fork parent hook ran without preparation"
+            );
+            unsafe { drop(Box::from_raw(state)) };
         });
     }
 
     pub(super) fn reset_after_fork_child() {
-        FORK_GUARDS.with(|guards| {
-            let mut guards = guards
-                .borrow_mut()
-                .take()
-                .expect("subscriber fork child hook ran without preparation");
-            *guards.dispatcher = None;
-            *guards.sanitizer_runtime = None;
+        PREPARED_FORK_STATE.with(|prepared| {
+            let state = prepared.replace(std::ptr::null_mut());
+            assert!(
+                !state.is_null(),
+                "subscriber fork child hook ran without preparation"
+            );
+            PROCESS_STATE.store(state, Ordering::Release);
         });
-        DISPATCHER_FAILURE_LOGGED.store(false, Ordering::Release);
-        SANITIZER_RUNTIME_FAILURE_LOGGED.store(false, Ordering::Release);
     }
 
     #[cfg(test)]
@@ -698,6 +746,7 @@ pub(crate) fn block_on_sanitizer_future<F: Future>(
 }
 
 /// Queue an event for subscriber delivery.
+#[cfg(test)]
 pub(crate) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
     native::dispatch_event(event, subscribers)
 }

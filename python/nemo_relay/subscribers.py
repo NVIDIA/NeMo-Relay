@@ -51,11 +51,90 @@ from nemo_relay._native import (
 if TYPE_CHECKING:
     from nemo_relay import Event
 
+
+def _finish_flush(completed: asyncio.Future[None], error: BaseException | None) -> None:
+    if completed.done():
+        return
+    if error is None:
+        completed.set_result(None)
+    else:
+        completed.set_exception(error)
+
+
+class _FlushBridge:
+    """Coalesce asynchronous flush barriers onto one native-wait thread."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._pending: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = {}
+        self._next_token = 0
+        self._thread: threading.Thread | None = None
+
+    def submit(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        completed: asyncio.Future[None],
+    ) -> None:
+        thread_to_start: threading.Thread | None = None
+        with self._lock:
+            token = self._next_token
+            self._next_token += 1
+            self._pending[token] = (loop, completed)
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run,
+                    name="nemo-relay-flush",
+                    daemon=True,
+                )
+                thread_to_start = self._thread
+            self._wake.set()
+        completed.add_done_callback(lambda _future: self._discard(token))
+        if thread_to_start is not None:
+            thread_to_start.start()
+
+    def _discard(self, token: int) -> None:
+        with self._lock:
+            self._pending.pop(token, None)
+
+    def _run(self) -> None:
+        while True:
+            self._wake.wait()
+            with self._lock:
+                batch = list(self._pending.values())
+                self._pending.clear()
+                self._wake.clear()
+            if not batch:
+                continue
+            try:
+                _native_flush()
+            except BaseException as error:
+                result = error
+            else:
+                result = None
+            for loop, completed in batch:
+                try:
+                    loop.call_soon_threadsafe(_finish_flush, completed, result)
+                except RuntimeError:
+                    pass
+
+
+_flush_bridge = _FlushBridge()
+
+
+def _after_fork_child() -> None:
+    global _flush_bridge
+    _native_after_fork_child()
+    # Never inspect the inherited bridge: its lock may have been held by a
+    # thread that does not exist in the child.
+    _flush_bridge = _FlushBridge()
+
+
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(
         before=_native_before_fork,
         after_in_parent=_native_after_fork_parent,
-        after_in_child=_native_after_fork_child,
+        after_in_child=_after_fork_child,
     )
 
 
@@ -139,40 +218,15 @@ def flush() -> None:
 async def flush_async() -> None:
     """Wait asynchronously for subscriber callbacks already queued by Relay.
 
-    Use this barrier from an ``asyncio`` task. A daemon bridge thread waits for
-    the native dispatcher without blocking the Python event loop or process
-    shutdown when this coroutine is cancelled.
+    Use this barrier from an ``asyncio`` task. A process-local daemon bridge
+    thread coalesces concurrent barriers and waits for the native dispatcher
+    without blocking the Python event loop.
     """
     if _event_sanitizer_callback_active():
         return None
     loop = asyncio.get_running_loop()
     completed: asyncio.Future[None] = loop.create_future()
-
-    def finish(error: BaseException | None) -> None:
-        if completed.done():
-            return
-        if error is None:
-            completed.set_result(None)
-        else:
-            completed.set_exception(error)
-
-    def wait_for_dispatcher() -> None:
-        try:
-            _native_flush()
-        except BaseException as error:
-            result = error
-        else:
-            result = None
-        try:
-            loop.call_soon_threadsafe(finish, result)
-        except RuntimeError:
-            pass
-
-    threading.Thread(
-        target=wait_for_dispatcher,
-        name="nemo-relay-flush",
-        daemon=True,
-    ).start()
+    _flush_bridge.submit(loop, completed)
     await completed
 
 

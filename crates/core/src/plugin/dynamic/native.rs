@@ -1386,6 +1386,7 @@ const NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY: usize = 64;
 struct NativeAsyncCompletion {
     sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>,
     cancelled: AtomicBool,
+    next_invoked: AtomicBool,
     next_abort: Mutex<Option<tokio::task::AbortHandle>>,
     // A pending native callback can continue running after its completion
     // wakes the awaiting task. Keep the callback's dynamic-library instance
@@ -1517,6 +1518,7 @@ async fn invoke_native_async_callback(
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         _callback_user_data: Some(user_data.clone()),
     });
@@ -1851,7 +1853,12 @@ unsafe extern "C" fn native_async_next_invoke(
         .next_abort
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    if abort_guard.is_some() {
+    let unsettled = completion
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_some();
+    if !unsettled || completion.next_invoked.swap(true, Ordering::AcqRel) {
         set_native_last_error("native async next was already invoked for this completion");
         return NemoRelayStatus::InvalidArg;
     }

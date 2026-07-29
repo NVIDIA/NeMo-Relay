@@ -832,6 +832,72 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cancelling_worker_sanitizer_expires_codec_capability() {
+    enable_operational_logs();
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, _cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = Arc::clone(&started_tx);
+            move |request| {
+                let started_tx = Arc::clone(&started_tx);
+                Box::pin(async move {
+                    let invocation_id = request.invocation_id;
+                    let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload
+                    else {
+                        panic!("LLM sanitizer must receive an LLM invocation");
+                    };
+                    let Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) =
+                        invocation.sanitize_context
+                    else {
+                        panic!("request sanitizer context must be present");
+                    };
+                    let capability_id = context
+                        .codec_capability_id
+                        .expect("request codec capability must be present");
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send((capability_id, invocation_id));
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move {
+        callback_task
+            .invoke_llm_sanitize_request(
+                "cancel-codec",
+                valid_llm_request(),
+                LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIChatCodec))),
+            )
+            .await
+    });
+    let (capability_id, invocation_id) =
+        tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+            .await
+            .expect("worker sanitizer should start")
+            .expect("worker sanitizer should publish its capability");
+    callback
+        .host_state
+        .request_codec(&capability_id, &invocation_id)
+        .expect("capability must be active while the sanitizer is pending");
+
+    task.abort();
+    let _ = task.await;
+    let error = match callback
+        .host_state
+        .request_codec(&capability_id, &invocation_id)
+    {
+        Ok(_) => panic!("cancelled sanitizer must expire its codec capability"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn callback_stream_transport_error_surfaces_to_host_stream() {
     enable_operational_logs();
     let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {

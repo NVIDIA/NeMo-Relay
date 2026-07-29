@@ -43,9 +43,7 @@ use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
     EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, current_scope_stack,
 };
-use crate::api::shared::{
-    metadata_with_otel_status, sanitize_event_with_scope_stack, snapshot_event_sanitizers,
-};
+use crate::api::shared::{metadata_with_otel_status, snapshot_event_sanitizers};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::{FlowError, Result};
@@ -324,12 +322,12 @@ impl LlmStreamWrapper {
                     Err(_) => None,
                 }
             };
-            if let Some(event) = event_snapshot
-                && let Some(event) = sanitize_event_with_scope_stack(event, &scope_stack).await
-            {
+            if let Some(event) = event_snapshot {
+                let sanitizers =
+                    snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
                 let _ = subscriber_dispatcher::dispatch_reserved_sanitized_event(
                     event,
-                    Vec::new(),
+                    sanitizers,
                     &subscribers,
                     scope_stack.clone(),
                 );

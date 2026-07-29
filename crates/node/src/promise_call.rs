@@ -20,9 +20,11 @@ use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
+use nemo_relay::api::runtime::{ScopeStackHandle, current_scope_stack};
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
 use crate::callback_factory;
+use crate::types::ScopeStack;
 
 pub type JsonNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
@@ -56,6 +58,8 @@ struct CallArgs {
     spread: bool,
     next: Option<NextFn>,
     publication: bool,
+    /// Scope stack installed by Relay while queued publication middleware runs.
+    scope_stack: Option<ScopeStackHandle>,
     completion: CallCompletion,
 }
 
@@ -234,7 +238,22 @@ impl PromiseAwareFn {
                         ctx.env.get_boolean(ctx.value.publication)?.raw(),
                     )
                 };
-                let args = vec![arg0, spread, next, resolve, reject, publication];
+                let scope_stack = match ctx.value.scope_stack {
+                    Some(scope_stack) => {
+                        let scope_stack = ScopeStack::from(scope_stack).into_instance(ctx.env)?;
+                        unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) }
+                    }
+                    None => undefined_to_unknown(&ctx.env)?,
+                };
+                let args = vec![
+                    arg0,
+                    spread,
+                    next,
+                    resolve,
+                    reject,
+                    publication,
+                    scope_stack,
+                ];
                 Ok(args)
             })?;
 
@@ -355,6 +374,7 @@ impl PromiseAwareFn {
                 spread: mode.spread,
                 next,
                 publication: mode.publication,
+                scope_stack: mode.publication.then(current_scope_stack),
                 completion: CallCompletion::new(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,

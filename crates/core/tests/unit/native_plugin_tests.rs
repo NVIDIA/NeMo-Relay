@@ -298,6 +298,7 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
         let completion = Arc::new(NativeAsyncCompletion {
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
+            next_invoked: AtomicBool::new(false),
             next_abort: Mutex::new(None),
             _callback_user_data: None,
         });
@@ -334,6 +335,7 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         _callback_user_data: None,
     });
@@ -360,6 +362,60 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
 }
 
 #[test]
+fn native_async_next_is_permanently_one_shot() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let next = Arc::new(NativeAsyncNext {
+        inner: NativeAsyncNextInner::Tool({
+            let calls = Arc::clone(&calls);
+            Arc::new(move |value| {
+                let calls = Arc::clone(&calls);
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(value)
+                })
+            })
+        }),
+        runtime: runtime.handle().clone(),
+        scope_stack: current_scope_stack(),
+        _callback_user_data: None,
+    });
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
+        _callback_user_data: None,
+    });
+    let completion_ref =
+        Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
+    let invocation = native_string_from_json(&json!({"value": 1})).unwrap();
+
+    assert_eq!(
+        unsafe { native_async_next_invoke(next_ref, invocation, completion_ref) },
+        NemoRelayStatus::Ok
+    );
+    runtime.block_on(receiver).unwrap().unwrap();
+    assert_eq!(
+        unsafe { native_async_next_invoke(next_ref, invocation, completion_ref) },
+        NemoRelayStatus::InvalidArg
+    );
+    runtime.block_on(tokio::task::yield_now());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    unsafe {
+        native_string_free(invocation);
+        native_async_next_release(next_ref);
+        native_async_completion_release(completion_ref);
+    }
+}
+
+#[test]
 fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlement() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -369,6 +425,7 @@ fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlemen
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         _callback_user_data: None,
     });
@@ -402,6 +459,7 @@ fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlemen
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(true),
+        next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         _callback_user_data: None,
     });
@@ -456,6 +514,7 @@ fn cancelling_completion_aborts_pending_native_next() {
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         _callback_user_data: None,
     });

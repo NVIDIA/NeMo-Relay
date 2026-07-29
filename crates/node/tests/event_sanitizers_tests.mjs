@@ -129,6 +129,48 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(events.at(-1).data, { sanitized: true });
   });
 
+  it('preserves the emitting scope stack across queued sanitizer awaits', async () => {
+    const events = capture('node-event-sanitize-scope-context-sub');
+    const originalStack = lib.currentScopeStack();
+    const emitterStack = lib.createScopeStack();
+    const unrelatedStack = lib.createScopeStack();
+    let emitterScopeUuid;
+    const observedParents = [];
+
+    lib.registerMarkSanitizeGuardrail('node-event-scope-context', 0, async (event, fields) => {
+      if (event.name !== 'scope-context-original') {
+        return fields;
+      }
+      observedParents.push(lib.getHandle().uuid);
+      await new Promise((resolve) => setImmediate(resolve));
+      observedParents.push(lib.getHandle().uuid);
+      lib.event('scope-context-nested', null, { originalParent: event.parent_uuid });
+      return fields;
+    });
+
+    try {
+      lib.withScopeStack(emitterStack, () => {
+        emitterScopeUuid = lib.pushScope('scope-context-emitter', lib.ScopeType.Agent).uuid;
+        lib.event('scope-context-original', null, {});
+      });
+      lib.setThreadScopeStack(unrelatedStack);
+      const unrelatedRootUuid = lib.getHandle().uuid;
+
+      await lib.flushSubscribers();
+      await lib.flushSubscribers();
+      await waitFor(events, 2);
+
+      assert.deepEqual(observedParents, [emitterScopeUuid, emitterScopeUuid]);
+      const nested = events.find((event) => event.name === 'scope-context-nested');
+      assert.equal(nested.parent_uuid, emitterScopeUuid);
+      assert.notEqual(nested.parent_uuid, unrelatedRootUuid);
+    } finally {
+      lib.setThreadScopeStack(originalStack);
+      lib.deregisterMarkSanitizeGuardrail('node-event-scope-context');
+      lib.deregisterSubscriber('node-event-sanitize-scope-context-sub');
+    }
+  });
+
   it('preserves snapshotted sanitizers after deregistration', async () => {
     const events = capture('node-event-sanitize-snapshot-sub');
     let blockerEntered;
@@ -216,7 +258,7 @@ describe('event sanitizer registries', () => {
     }
   });
 
-  it('treats inline managed sanitizers as real flush barriers', async () => {
+  it('queues managed event sanitizers without blocking execution', async () => {
     lib.registerSubscriber('node-event-inline-flush-sub', () => {});
     let blockerEntered;
     const entered = new Promise((resolve) => {
@@ -243,12 +285,15 @@ describe('event sanitizer registries', () => {
       lib.event('inline-flush-blocker', null, { raw: true });
       await entered;
       const execution = lib.toolCallExecute('inline-flush-tool', {}, (args) => args);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      const executionState = await Promise.race([
+        execution.then(() => 'executed'),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 250)),
+      ]);
+      assert.equal(executionState, 'executed');
       assert.equal(inlineFlushReturned, false);
       releaseBlocker();
-      await execution;
-      assert.equal(inlineFlushReturned, true);
       await lib.flushSubscribers();
+      assert.equal(inlineFlushReturned, true);
     } finally {
       releaseBlocker();
       lib.deregisterMarkSanitizeGuardrail('node-event-inline-flush-blocker');

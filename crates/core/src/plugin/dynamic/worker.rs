@@ -1622,10 +1622,10 @@ impl WorkerPluginCallback {
             context.codec_capability_id = Some(capability_id.clone());
             capability_id
         });
+        let _capability_guard = capability_id.as_ref().map(|capability_id| {
+            WorkerCodecCapabilityGuard::new(Arc::clone(&self.host_state), capability_id.clone())
+        });
         let response = self.invoke_async(invoke).await;
-        if let Some(capability_id) = capability_id {
-            self.host_state.remove_codec(&capability_id);
-        }
         optional_json_from_invoke_response(response?)?
             .map(serde_json::from_value)
             .transpose()
@@ -1672,10 +1672,10 @@ impl WorkerPluginCallback {
             context.codec_capability_id = Some(capability_id.clone());
             capability_id
         });
+        let _capability_guard = capability_id.as_ref().map(|capability_id| {
+            WorkerCodecCapabilityGuard::new(Arc::clone(&self.host_state), capability_id.clone())
+        });
         let response = self.invoke_async(invoke).await;
-        if let Some(capability_id) = capability_id {
-            self.host_state.remove_codec(&capability_id);
-        }
         optional_json_from_invoke_response(response?)
     }
 
@@ -2073,6 +2073,26 @@ struct WorkerHostRuntimeState {
 struct WorkerCodecCapability {
     invocation_id: String,
     direction: WorkerCodecDirection,
+}
+
+struct WorkerCodecCapabilityGuard {
+    host_state: Arc<WorkerHostRuntimeState>,
+    capability_id: String,
+}
+
+impl WorkerCodecCapabilityGuard {
+    fn new(host_state: Arc<WorkerHostRuntimeState>, capability_id: String) -> Self {
+        Self {
+            host_state,
+            capability_id,
+        }
+    }
+}
+
+impl Drop for WorkerCodecCapabilityGuard {
+    fn drop(&mut self) {
+        self.host_state.remove_codec(&self.capability_id);
+    }
 }
 
 enum WorkerCodecDirection {

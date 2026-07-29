@@ -31,13 +31,14 @@ use nemo_relay::api::registry::{
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
     deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
-    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
-    register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-    register_llm_stream_execution_intercept, register_mark_sanitize_guardrail,
-    register_scope_sanitize_end_guardrail, register_tool_conditional_execution_guardrail,
+    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
+    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
+    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
     scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
@@ -3348,6 +3349,86 @@ async fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain
     for name in ["pending_first", "pending_break", "pending_skipped"] {
         deregister_llm_request_intercept(name).unwrap();
     }
+}
+
+#[tokio::test]
+async fn test_managed_llm_event_sanitizers_run_off_execution_path_in_fifo_order() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let sanitizer_started = Arc::new(tokio::sync::Notify::new());
+    let sanitizer_release = Arc::new(tokio::sync::Notify::new());
+    register_scope_sanitize_start_guardrail(
+        "managed_async_publication_sanitizer",
+        1,
+        Arc::new({
+            let sanitizer_started = Arc::clone(&sanitizer_started);
+            let sanitizer_release = Arc::clone(&sanitizer_release);
+            move |_event, fields| {
+                let sanitizer_started = Arc::clone(&sanitizer_started);
+                let sanitizer_release = Arc::clone(&sanitizer_release);
+                Box::pin(async move {
+                    sanitizer_started.notify_one();
+                    sanitizer_release.notified().await;
+                    Ok(fields)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "managed_async_publication_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let call = tokio::spawn(async {
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("managed-async-publication")
+                .request(LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"prompt": "hello"}),
+                })
+                .func(Arc::new(|_| {
+                    Box::pin(async { Ok(json!({"response": "done"})) })
+                }))
+                .build(),
+        )
+        .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sanitizer_started.notified(),
+    )
+    .await
+    .expect("managed start sanitizer did not run on the dispatcher");
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), call)
+        .await
+        .expect("event sanitizer blocked managed provider execution")
+        .expect("managed call task should join")
+        .expect("managed call should succeed");
+    assert_eq!(result, json!({"response": "done"}));
+
+    sanitizer_release.notify_one();
+    flush_subscribers().unwrap();
+    let events = events.lock().unwrap();
+    let lifecycle = events
+        .iter()
+        .filter(|event| event.name() == "managed-async-publication")
+        .map(|event| event.scope_category())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle,
+        [Some(ScopeCategory::Start), Some(ScopeCategory::End),]
+    );
+    drop(events);
+
+    deregister_scope_sanitize_start_guardrail("managed_async_publication_sanitizer").unwrap();
+    deregister_subscriber("managed_async_publication_observer").unwrap();
 }
 
 #[tokio::test]

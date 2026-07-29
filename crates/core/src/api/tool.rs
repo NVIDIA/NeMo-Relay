@@ -14,7 +14,7 @@ use crate::api::runtime::{EventSubscriberFn, ToolExecutionNextFn, with_active_ev
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid, sanitize_event,
+    ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid,
     snapshot_event_sanitizers, snapshot_event_subscribers,
 };
 use crate::api::skill_load;
@@ -26,6 +26,12 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
+
+fn queue_sanitized_event(event: Event, subscribers: &[EventSubscriberFn]) -> bool {
+    let scope_stack = current_scope_stack();
+    let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
+}
 
 /// Runtime-owned handle identifying an active or completed tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
@@ -381,13 +387,9 @@ async fn tool_call_with_subscriber_snapshot(
             .collect::<Vec<_>>();
         (handle, event, marks)
     };
-    if let Some(event) = sanitize_event(event).await {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    queue_sanitized_event(event, &subscribers);
     for mark in marks {
-        if let Some(mark) = sanitize_event(mark).await {
-            NemoRelayContextState::emit_event(&mark, &subscribers);
-        }
+        queue_sanitized_event(mark, &subscribers);
     }
     Ok((handle, subscribers))
 }
@@ -553,13 +555,9 @@ async fn tool_call_end_with_pending_marks(
             ))
         })
         .collect::<Vec<_>>();
-    if let Some(event) = sanitize_event(event).await {
-        NemoRelayContextState::emit_event(&event, subscribers);
-    }
+    queue_sanitized_event(event, subscribers);
     for mark in marks {
-        if let Some(mark) = sanitize_event(mark).await {
-            NemoRelayContextState::emit_event(&mark, subscribers);
-        }
+        queue_sanitized_event(mark, subscribers);
     }
     Ok(())
 }
@@ -577,9 +575,7 @@ async fn emit_tool_end_without_output(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.end_tool_handle(handle, handle.data.clone(), metadata)
     };
-    if let Some(event) = sanitize_event(event).await {
-        NemoRelayContextState::emit_event(&event, lifecycle_subscribers);
-    }
+    queue_sanitized_event(event, lifecycle_subscribers);
     Ok(())
 }
 

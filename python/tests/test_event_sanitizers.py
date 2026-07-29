@@ -125,6 +125,28 @@ async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events):
     assert observed == {"request-a": "request-a", "request-b": "request-b"}
 
 
+def test_sync_mark_sanitizer_uses_emitter_context(capture_events):
+    request_id = contextvars.ContextVar("request_id", default="registration")
+    observed: list[str] = []
+
+    def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        observed.append(request_id.get())
+        return fields
+
+    guardrails.register_mark_sanitize("python-sync-emitter-context", 0, sanitize)
+    try:
+        token = request_id.set("emission")
+        try:
+            scope.event("sync-emitter-context")
+        finally:
+            request_id.reset(token)
+        subscribers.flush()
+    finally:
+        guardrails.deregister_mark_sanitize("python-sync-emitter-context")
+
+    assert observed == ["emission"]
+
+
 async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_events):
     _capture_name, events = capture_events
 

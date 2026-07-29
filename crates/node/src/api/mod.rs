@@ -74,6 +74,7 @@ use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 use crate::callable;
+use crate::callback_factory;
 use crate::convert::{
     callback_json, clear_last_callback_error as clear_recorded_callback_error,
     get_last_callback_error as get_recorded_callback_error, opt_json, parse_timestamp_micros,
@@ -82,6 +83,21 @@ use crate::convert::{
 use crate::promise_call::PromiseAwareFn;
 use crate::stream::LlmStream;
 use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
+
+fn effective_scope_stack(env: &Env) -> napi::Result<nemo_relay::api::runtime::ScopeStackHandle> {
+    Ok(callback_factory::callback_scope_stack(env)?.unwrap_or_else(current_scope_stack_handle))
+}
+
+fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> napi::Result<T> {
+    let scope_stack = effective_scope_stack(env)?;
+    Ok(with_scope_stack_handle(scope_stack, callback))
+}
+
+fn effective_scope_top(
+    scope_stack: &nemo_relay::api::runtime::ScopeStackHandle,
+) -> nemo_relay::api::scope::ScopeHandle {
+    with_scope_stack_handle(scope_stack.clone(), task_scope_top)
+}
 
 #[napi::module_init]
 fn init() {
@@ -1576,8 +1592,8 @@ pub fn create_scope_stack() -> ScopeStack {
 
 /// Capture the current Relay causal parent for application-managed transport.
 #[napi]
-pub fn capture_propagation_context() -> napi::Result<PropagationContext> {
-    capture_propagation_context_handle()
+pub fn capture_propagation_context(env: Env) -> napi::Result<PropagationContext> {
+    with_effective_scope_stack(&env, capture_propagation_context_handle)?
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
@@ -1585,6 +1601,7 @@ pub fn capture_propagation_context() -> napi::Result<PropagationContext> {
 /// Capture the current parent with an optional stable application session root.
 #[napi]
 pub fn capture_propagation_context_with_root(
+    env: Env,
     root_uuid: Option<String>,
 ) -> napi::Result<PropagationContext> {
     let root_uuid = root_uuid
@@ -1592,9 +1609,11 @@ pub fn capture_propagation_context_with_root(
         .map(uuid::Uuid::parse_str)
         .transpose()
         .map_err(|error| napi::Error::from_reason(format!("invalid root UUID: {error}")))?;
-    capture_propagation_context_with_root_handle(root_uuid)
-        .map(propagation_context_to_napi)
-        .map_err(|error| napi::Error::from_reason(error.to_string()))
+    with_effective_scope_stack(&env, || {
+        capture_propagation_context_with_root_handle(root_uuid)
+    })?
+    .map(propagation_context_to_napi)
+    .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 /// Serialize a Relay causal context to the JSON wire format.
@@ -1636,10 +1655,10 @@ pub fn with_scope_stack(stack: &ScopeStack, callback: JsFunction) -> napi::Resul
 
 /// Returns the current execution context's scope stack handle.
 #[napi]
-pub fn current_scope_stack() -> ScopeStack {
-    ScopeStack {
-        inner: current_scope_stack_handle(),
-    }
+pub fn current_scope_stack(env: Env) -> napi::Result<ScopeStack> {
+    Ok(ScopeStack {
+        inner: effective_scope_stack(&env)?,
+    })
 }
 
 /// Binds a scope stack to the current thread.
@@ -1655,8 +1674,11 @@ pub fn set_thread_scope_stack(stack: &ScopeStack) {
 /// thread, or the caller is inside a task-local scope. Returns `false` when
 /// only the auto-created default is present.
 #[napi]
-pub fn scope_stack_active() -> bool {
-    scope_stack_is_active()
+pub fn scope_stack_active(env: Env) -> napi::Result<bool> {
+    if callback_factory::callback_scope_stack(&env)?.is_some() {
+        return Ok(true);
+    }
+    Ok(scope_stack_is_active())
 }
 
 /// Returns the most recent callback error that could not be surfaced through a direct exception.
@@ -1773,8 +1795,8 @@ pub fn test_closed_promise_aware_call(env: Env, func: JsFunction) -> Result<JsOb
 /// Returns the `ScopeHandle` for the innermost active scope on the current task's scope stack.
 /// Throws if the scope stack is empty.
 #[napi]
-pub fn get_handle() -> Result<ScopeHandle> {
-    core_scope_api::get_handle()
+pub fn get_handle(env: Env) -> Result<ScopeHandle> {
+    with_effective_scope_stack(&env, core_scope_api::get_handle)?
         .map(ScopeHandle::from)
         .map_err(to_napi_err)
 }
@@ -1794,6 +1816,7 @@ pub fn get_handle() -> Result<ScopeHandle> {
 #[napi]
 #[allow(clippy::too_many_arguments)]
 pub fn push_scope(
+    env: Env,
     name: String,
     scope_type: ScopeType,
     handle: Option<&ScopeHandle>,
@@ -1805,18 +1828,20 @@ pub fn push_scope(
 ) -> Result<ScopeHandle> {
     let attrs = ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let timestamp = parse_timestamp_micros(timestamp)?;
-    core_scope_api::push_scope(
-        core_scope_api::PushScopeParams::builder()
-            .name(name.as_str())
-            .scope_type(scope_type.into())
-            .parent_opt(handle.map(|h| &h.inner))
-            .attributes(attrs)
-            .data_opt(opt_json(data))
-            .metadata_opt(opt_json(metadata))
-            .input_opt(opt_json(input))
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_effective_scope_stack(&env, || {
+        core_scope_api::push_scope(
+            core_scope_api::PushScopeParams::builder()
+                .name(name.as_str())
+                .scope_type(scope_type.into())
+                .parent_opt(handle.map(|h| &h.inner))
+                .attributes(attrs)
+                .data_opt(opt_json(data))
+                .metadata_opt(opt_json(metadata))
+                .input_opt(opt_json(input))
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })?
     .map(ScopeHandle::from)
     .map_err(to_napi_err)
 }
@@ -1831,20 +1856,23 @@ pub fn push_scope(
 /// Throws if the handle does not match the current top scope.
 #[napi]
 pub fn pop_scope(
+    env: Env,
     handle: &ScopeHandle,
     output: Option<Json>,
     timestamp: Option<f64>,
     metadata: Option<Json>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
-    core_scope_api::pop_scope(
-        core_scope_api::PopScopeParams::builder()
-            .handle_uuid(&handle.inner.uuid)
-            .output_opt(opt_json(output))
-            .timestamp_opt(timestamp)
-            .metadata_opt(opt_json(metadata))
-            .build(),
-    )
+    with_effective_scope_stack(&env, || {
+        core_scope_api::pop_scope(
+            core_scope_api::PopScopeParams::builder()
+                .handle_uuid(&handle.inner.uuid)
+                .output_opt(opt_json(output))
+                .timestamp_opt(timestamp)
+                .metadata_opt(opt_json(metadata))
+                .build(),
+        )
+    })?
     .map_err(to_napi_err)?;
     Ok(())
 }
@@ -1876,21 +1904,23 @@ pub fn with_scope(
     input: Option<Json>,
 ) -> Result<JsObject> {
     let attrs = ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let scope_handle = core_scope_api::push_scope(
-        core_scope_api::PushScopeParams::builder()
-            .name(name.as_str())
-            .scope_type(scope_type.into())
-            .parent_opt(handle.map(|h| &h.inner))
-            .attributes(attrs)
-            .data_opt(opt_json(data))
-            .metadata_opt(opt_json(metadata))
-            .input_opt(opt_json(input))
-            .build(),
-    )
+    let scope_stack = effective_scope_stack(&env)?;
+    let scope_handle = with_scope_stack_handle(scope_stack.clone(), || {
+        core_scope_api::push_scope(
+            core_scope_api::PushScopeParams::builder()
+                .name(name.as_str())
+                .scope_type(scope_type.into())
+                .parent_opt(handle.map(|h| &h.inner))
+                .attributes(attrs)
+                .data_opt(opt_json(data))
+                .metadata_opt(opt_json(metadata))
+                .input_opt(opt_json(input))
+                .build(),
+        )
+    })
     .map(ScopeHandle::from)
     .map_err(to_napi_err)?;
 
-    let scope_stack = current_scope_stack_handle();
     let scope_uuid = scope_handle.inner.uuid;
     // Hand the callback a real `ScopeHandle` instance, matching the Rust,
     // Python bindings, so it can be passed back into `event`,
@@ -1903,15 +1933,17 @@ pub fn with_scope(
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &callback).map_err(|e| {
             let status_message = format!("failed to create PromiseAwareFn: {e}");
-            let _ = core_scope_api::pop_scope(
-                core_scope_api::PopScopeParams::builder()
-                    .handle_uuid(&scope_uuid)
-                    .metadata_opt(Some(otel_status_metadata(
-                        "ERROR",
-                        Some(status_message.clone()),
-                    )))
-                    .build(),
-            );
+            let _ = with_scope_stack_handle(scope_stack.clone(), || {
+                core_scope_api::pop_scope(
+                    core_scope_api::PopScopeParams::builder()
+                        .handle_uuid(&scope_uuid)
+                        .metadata_opt(Some(otel_status_metadata(
+                            "ERROR",
+                            Some(status_message.clone()),
+                        )))
+                        .build(),
+                )
+            });
             napi::Error::from_reason(status_message)
         })?,
     );
@@ -1959,6 +1991,7 @@ pub fn with_scope(
 /// It must be a safe integer number; omit it to use the current runtime time.
 #[napi]
 pub fn event(
+    env: Env,
     name: String,
     handle: Option<&ScopeHandle>,
     data: Option<Json>,
@@ -1966,15 +1999,17 @@ pub fn event(
     timestamp: Option<f64>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
-    core_scope_api::event(
-        core_scope_api::EmitMarkEventParams::builder()
-            .name(&name)
-            .parent_opt(handle.map(|h| &h.inner))
-            .data_opt(opt_json(data))
-            .metadata_opt(opt_json(metadata))
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_effective_scope_stack(&env, || {
+        core_scope_api::event(
+            core_scope_api::EmitMarkEventParams::builder()
+                .name(&name)
+                .parent_opt(handle.map(|h| &h.inner))
+                .data_opt(opt_json(data))
+                .metadata_opt(opt_json(metadata))
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })?
     .map_err(to_napi_err)
 }
 
@@ -1996,6 +2031,7 @@ pub fn event(
 #[napi]
 #[allow(clippy::too_many_arguments)]
 pub fn tool_call(
+    env: Env,
     name: String,
     args: Json,
     handle: Option<&ScopeHandle>,
@@ -2007,18 +2043,20 @@ pub fn tool_call(
 ) -> Result<ToolHandle> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let timestamp = parse_timestamp_micros(timestamp)?;
-    core_tool_api::tool_call(
-        core_tool_api::ToolCallParams::builder()
-            .name(name.as_str())
-            .args(args)
-            .parent_opt(handle.map(|h| &h.inner))
-            .attributes(attrs)
-            .data_opt(opt_json(data))
-            .metadata_opt(opt_json(metadata))
-            .tool_call_id_opt(tool_call_id)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_effective_scope_stack(&env, || {
+        core_tool_api::tool_call(
+            core_tool_api::ToolCallParams::builder()
+                .name(name.as_str())
+                .args(args)
+                .parent_opt(handle.map(|h| &h.inner))
+                .attributes(attrs)
+                .data_opt(opt_json(data))
+                .metadata_opt(opt_json(metadata))
+                .tool_call_id_opt(tool_call_id)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })?
     .map(ToolHandle::from)
     .map_err(to_napi_err)
 }
@@ -2033,6 +2071,7 @@ pub fn tool_call(
 /// It must be a safe integer number; omit it to use the runtime default end timestamp.
 #[napi]
 pub fn tool_call_end(
+    env: Env,
     handle: &ToolHandle,
     result: Json,
     data: Option<Json>,
@@ -2040,15 +2079,17 @@ pub fn tool_call_end(
     timestamp: Option<f64>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
-    core_tool_api::tool_call_end(
-        core_tool_api::ToolCallEndParams::builder()
-            .handle(&handle.inner)
-            .result(result)
-            .data_opt(opt_json(data))
-            .metadata_opt(opt_json(metadata))
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_effective_scope_stack(&env, || {
+        core_tool_api::tool_call_end(
+            core_tool_api::ToolCallEndParams::builder()
+                .handle(&handle.inner)
+                .result(result)
+                .data_opt(opt_json(data))
+                .metadata_opt(opt_json(metadata))
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })?
     .map_err(to_napi_err)
 }
 
@@ -2073,13 +2114,13 @@ pub fn tool_call_execute(
     metadata: Option<Json>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
-        .unwrap_or_else(task_scope_top);
+        .unwrap_or_else(|| effective_scope_top(&scope_stack));
     let callback = callable::safe_execution_callback(&env, &func)?;
     let exec_fn = callable::wrap_js_tool_exec_fn(json_callback_tsfn(&env, &callback)?);
     let default_fn: ToolExecutionNextFn = std::sync::Arc::new(move |args| exec_fn(args));
-    let scope_stack = current_scope_stack_handle();
 
     env.execute_tokio_future(
         async move {
@@ -2126,10 +2167,10 @@ pub fn tool_call_execute_async(
     metadata: Option<Json>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
-        .unwrap_or_else(task_scope_top);
-    let scope_stack = current_scope_stack_handle();
+        .unwrap_or_else(|| effective_scope_top(&scope_stack));
 
     // Create promise-aware wrapper — this must happen on the JS thread (we have Env).
     let pa_fn = std::sync::Arc::new(
@@ -2186,6 +2227,7 @@ pub fn tool_call_execute_async(
 #[allow(clippy::too_many_arguments)]
 #[napi]
 pub fn llm_call(
+    env: Env,
     name: String,
     request: Json,
     handle: Option<&ScopeHandle>,
@@ -2209,7 +2251,7 @@ pub fn llm_call(
         .model_name_opt(model_name)
         .timestamp_opt(timestamp)
         .build();
-    core_llm_api::llm_call(params)
+    with_effective_scope_stack(&env, || core_llm_api::llm_call(params))?
         .map(LlmHandle::from)
         .map_err(to_napi_err)
 }
@@ -2224,6 +2266,7 @@ pub fn llm_call(
 /// It must be a safe integer number; omit it to use the runtime default end timestamp.
 #[napi]
 pub fn llm_call_end(
+    env: Env,
     handle: &LlmHandle,
     response: Json,
     data: Option<Json>,
@@ -2231,15 +2274,17 @@ pub fn llm_call_end(
     timestamp: Option<f64>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
-    core_llm_api::llm_call_end(
-        core_llm_api::LlmCallEndParams::builder()
-            .handle(&handle.inner)
-            .response(response)
-            .data_opt(opt_json(data))
-            .metadata_opt(opt_json(metadata))
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_effective_scope_stack(&env, || {
+        core_llm_api::llm_call_end(
+            core_llm_api::LlmCallEndParams::builder()
+                .handle(&handle.inner)
+                .response(response)
+                .data_opt(opt_json(data))
+                .metadata_opt(opt_json(metadata))
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })?
     .map_err(to_napi_err)
 }
 
@@ -2270,9 +2315,10 @@ pub fn llm_call_execute(
     #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<JsFunction>,
 ) -> Result<JsObject> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
-        .unwrap_or_else(task_scope_top);
+        .unwrap_or_else(|| effective_scope_top(&scope_stack));
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let callback = callable::safe_execution_callback(&env, &func)?;
@@ -2300,8 +2346,6 @@ pub fn llm_call_execute(
             codec_references.extend(references);
             codec
         });
-    let scope_stack = current_scope_stack_handle();
-
     env.execute_tokio_future(
         async move {
             TASK_SCOPE_STACK
@@ -2352,13 +2396,12 @@ pub fn llm_call_execute_async(
     #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<JsFunction>,
 ) -> Result<JsObject> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
-        .unwrap_or_else(task_scope_top);
+        .unwrap_or_else(|| effective_scope_top(&scope_stack));
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    let scope_stack = current_scope_stack_handle();
-
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &func).map_err(|e| {
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
@@ -2459,9 +2502,10 @@ pub fn llm_stream_call_execute(
     #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<JsFunction>,
 ) -> Result<JsObject> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let scope_stack = effective_scope_stack(&env)?;
     let parent = handle
         .map(|h| h.inner.clone())
-        .unwrap_or_else(task_scope_top);
+        .unwrap_or_else(|| effective_scope_top(&scope_stack));
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
 
@@ -2532,8 +2576,6 @@ pub fn llm_stream_call_execute(
             codec
         });
     let completion_codec_references = codec_references.clone();
-    let scope_stack = current_scope_stack_handle();
-
     env.execute_tokio_future(
         async move {
             TASK_SCOPE_STACK
@@ -3723,7 +3765,7 @@ pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<b
 /// Returns the transformed arguments.
 #[napi(ts_return_type = "Promise<unknown>")]
 pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsObject> {
-    let scope_stack = current_scope_stack_handle();
+    let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
             TASK_SCOPE_STACK
@@ -3742,7 +3784,7 @@ pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsO
 /// Throws if any guardrail rejects.
 #[napi(ts_return_type = "Promise<void>")]
 pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<JsObject> {
-    let scope_stack = current_scope_stack_handle();
+    let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
             TASK_SCOPE_STACK
@@ -3766,7 +3808,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    let scope_stack = current_scope_stack_handle();
+    let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
             TASK_SCOPE_STACK
@@ -3796,7 +3838,7 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
 pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    let scope_stack = current_scope_stack_handle();
+    let scope_stack = effective_scope_stack(&env)?;
     env.execute_tokio_future(
         async move {
             TASK_SCOPE_STACK
