@@ -150,6 +150,10 @@ collect:github-artifacts:
         echo "Error: collected GitHub Node artifacts did not contain any .tgz files." >&2
         exit 1
       fi
+      if ! ls collected/cli-npm/*.tgz >/dev/null 2>&1; then
+        echo "Error: collected GitHub CLI npm artifacts did not contain any .tgz files." >&2
+        exit 1
+      fi
 
       {
         printf '{\n'
@@ -326,6 +330,8 @@ publish:artifactory:npm:
         npm publish --tag dev "$package"
       done
       npm publish --tag dev "collected/node/nemo-relay-node-npm-${CI_COMMIT_TAG}.tgz"
-      for package in collected/cli-npm/*.tgz; do
+      for platform in linux-x64 linux-arm64 darwin-arm64 win32-x64 win32-arm64; do
+        package="collected/cli-npm/nemo-relay-bin-npm-${platform}-${CI_COMMIT_TAG}.tgz"
         npm publish --tag dev "$package"
       done
+      npm publish --tag dev "collected/cli-npm/nemo-relay-bin-npm-${CI_COMMIT_TAG}.tgz"

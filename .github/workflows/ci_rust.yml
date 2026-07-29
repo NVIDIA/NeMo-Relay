@@ -310,8 +310,16 @@ jobs:
         run: |
           set -euo pipefail
           wheels=("${NEMO_RELAY_CI_WORKSPACE_TMP}"/cli-packages/*.whl)
-          python -m pip install --force-reinstall --no-deps "${wheels[0]}"
-          nemo-relay --version
+          python -m venv "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            venv_python="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/Scripts/python.exe"
+            venv_cli="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/Scripts/nemo-relay.exe"
+          else
+            venv_python="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/bin/python"
+            venv_cli="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/bin/nemo-relay"
+          fi
+          "$venv_python" -m pip install --force-reinstall --no-deps "${wheels[0]}"
+          "$venv_cli" --version
 
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

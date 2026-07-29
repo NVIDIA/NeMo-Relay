@@ -1274,7 +1274,7 @@ wheels = [
 
 [package.optional-dependencies]
 zig = [
-    { name = "ziglang" },
+    { name = "ziglang", marker = "sys_platform == 'linux'" },
 ]
 
 [[package]]

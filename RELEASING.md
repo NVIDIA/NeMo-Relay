@@ -62,8 +62,8 @@ NeMo Relay versions are anchored on the workspace SemVer in the repository root
 - `integrations/openclaw/package.json` carries the base npm version for the
   OpenClaw plugin package and must stay aligned with the same release version.
 - `packages/cli-bin/package.json` and `python/cli-bin/pyproject.toml` carry the
-  base CLI package versions. The `nemo-relay[cli]` extra must pin the same
-  PEP 440 version.
+  base CLI package versions in their registry-specific SemVer and PEP 440
+  spellings. The `nemo-relay[cli]` extra must pin the exact PyPI version.
 - The Python package version is derived at packaging time. `pyproject.toml`
   stays `dynamic = ["version"]` in the repository, and the packaging recipe
   writes a concrete version into `pyproject.toml` and `crates/python/Cargo.toml`

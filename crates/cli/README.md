@@ -80,7 +80,7 @@ Install the Python API and matching CLI with the optional extra:
 pip install "nemo-relay[cli]"
 ```
 
-Cargo:
+Build and install the CLI from crates.io with Cargo:
 
 ```bash
 cargo install nemo-relay-cli
