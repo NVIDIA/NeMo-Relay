@@ -1178,6 +1178,7 @@ pub fn wrap_js_event_sanitize_fn(
     Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
         let func = func.clone();
         Box::pin(async move {
+            let _active_callback = ActiveEventSanitizerCallback::enter();
             let event_json = match JsEvent::try_from_event(&event) {
                 Ok(event) => event.into_json(),
                 Err(error) => {

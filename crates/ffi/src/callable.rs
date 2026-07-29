@@ -324,13 +324,14 @@ pub fn wrap_tool_sanitize_fn(
     Arc::new(move |name: String, args: Json| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let c_name = CString::new(name).unwrap_or_default();
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
             unsafe { nemo_relay_string_free_internal(c_args) };
-            let result = ptr_to_json(result_ptr);
+            let result = json_result_from_ptr(result_ptr, "tool sanitize callback returned null");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
-            Ok(result)
+            result
         })
     })
 }
@@ -400,9 +401,9 @@ pub fn wrap_tool_exec_fn(
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
             unsafe { nemo_relay_string_free_internal(c_args) };
-            let result = json_result_from_ptr(result_ptr, "tool execution callback failed")?;
+            let result = json_result_from_ptr(result_ptr, "tool execution callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
-            Ok(result)
+            result
         })
     })
 }
@@ -457,8 +458,9 @@ pub fn wrap_tool_exec_intercept_fn(
             unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
             unsafe { nemo_relay_string_free_internal(c_args) };
             let outcome_json =
-                json_result_from_ptr(result_ptr, "tool execution intercept callback failed")?;
+                json_result_from_ptr(result_ptr, "tool execution intercept callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
+            let outcome_json = outcome_json?;
             serde_json::from_value::<ToolExecutionInterceptOutcome>(outcome_json).map_err(|error| {
                 FlowError::Internal(format!(
                     "invalid tool execution intercept outcome JSON: {error}"
@@ -528,9 +530,9 @@ pub fn wrap_llm_exec_intercept_fn(
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
                 unsafe { nemo_relay_string_free_internal(c_request) };
                 let result =
-                    json_result_from_ptr(result_ptr, "LLM execution intercept callback failed")?;
+                    json_result_from_ptr(result_ptr, "LLM execution intercept callback failed");
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
-                Ok(result)
+                result
             })
         },
     )
@@ -606,8 +608,9 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                 let result = json_result_from_ptr(
                     result_ptr,
                     "LLM stream execution intercept callback failed",
-                )?;
+                );
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
+                let result = result?;
                 let stream = tokio_stream::once(Ok(result));
                 Ok(LlmJsonStream::new(stream))
             })
@@ -843,9 +846,9 @@ pub fn wrap_llm_exec_fn(
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
             unsafe { nemo_relay_string_free_internal(c_request) };
-            let result = json_result_from_ptr(result_ptr, "LLM execution callback failed")?;
+            let result = json_result_from_ptr(result_ptr, "LLM execution callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
-            Ok(result)
+            result
         })
     })
 }
@@ -868,8 +871,9 @@ pub fn wrap_llm_stream_exec_fn(
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
             unsafe { nemo_relay_string_free_internal(c_request) };
-            let result = json_result_from_ptr(result_ptr, "LLM stream execution callback failed")?;
+            let result = json_result_from_ptr(result_ptr, "LLM stream execution callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
+            let result = result?;
             // The C callback returns the full response as a single JSON value for stream
             // We emit it as a single-item stream
             let stream = tokio_stream::once(Ok(result));
@@ -1052,7 +1056,9 @@ fn json_result_from_ptr(ptr: *mut c_char, fallback: &str) -> Result<Json> {
         let message = last_error_message().unwrap_or_else(|| fallback.to_string());
         return Err(FlowError::Internal(message));
     }
-    Ok(ptr_to_json(ptr))
+    let value = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
+    serde_json::from_str(&value)
+        .map_err(|error| FlowError::Internal(format!("{fallback}: invalid JSON: {error}")))
 }
 
 fn ptr_to_opt_string(ptr: *mut c_char) -> Option<String> {
