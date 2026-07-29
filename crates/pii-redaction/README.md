@@ -6,10 +6,13 @@ SPDX-License-Identifier: Apache-2.0
 # NeMo Relay PII Redaction
 
 `nemo-relay-pii-redaction` is the first-party NeMo Relay plugin crate for
-deterministic privacy redaction on tool and LLM observability payloads. It
-ships the `pii_redaction` plugin contract, a production-ready `builtin`
-backend, and the future `local_model` seam for model-backed detection and
-redaction.
+privacy redaction on tool and LLM observability payloads. It provides two
+independent component kinds:
+
+- `pii_redaction` provides deterministic policies and a `local_model`
+  integration seam.
+- `pii_rampart` optionally runs the pinned `nationaldesignstudio/rampart`
+  ONNX model inside the Relay process.
 
 The plugin is designed for the common case where teams want a supported,
 config-driven privacy policy surface instead of writing custom sanitize
@@ -38,6 +41,8 @@ NeMo Relay PII Redaction allows you to:
   tool-call identity, model attribution, routing, usage, and cost analytics.
 - Use the `local_model` config contract and provider registration surface for
   future model-backed implementations.
+- Enable the `rampart` feature to use the separate in-process `pii_rampart`
+  component for contextual PII detection.
 
 ## Plugin Versus Raw Middleware
 
@@ -59,6 +64,12 @@ Install the plugin crate alongside the core runtime:
 
 ```bash
 cargo add nemo-relay nemo-relay-pii-redaction
+```
+
+For a Rust application that uses the Rampart component, enable its feature:
+
+```bash
+cargo add nemo-relay-pii-redaction --features rampart
 ```
 
 For local source development:
@@ -195,6 +206,84 @@ The seam exists so a future local detector/redactor backend can be added
 without redesigning the public plugin surface. If `mode = "local_model"` is
 configured today, the runtime expects a registered local backend provider and
 fails fast if one is not installed.
+
+## Rampart PII Component
+
+`pii_rampart` is a separate component, not an implementation of the
+`pii_redaction.local_model` seam. It runs the pinned Rampart ONNX graph through
+`tract-onnx` in the Relay Rust process. Relay does not download the model or
+make network requests during activation.
+
+### Provision the Model
+
+Install the
+[Hugging Face Hub CLI](https://huggingface.co/docs/huggingface_hub/en/guides/cli),
+then download the files accepted by Relay into a deployment-owned directory:
+
+```bash
+hf download nationaldesignstudio/rampart \
+  config.json \
+  onnx/model_q4.onnx \
+  special_tokens_map.json \
+  tokenizer.json \
+  tokenizer_config.json \
+  vocab.txt \
+  --revision b1993e4e68b082835b80ffc65acc03325ea2e501 \
+  --local-dir /absolute/path/to/rampart
+```
+
+Set `model_path` to that absolute directory. During activation, Relay verifies
+the SHA-256 digest of every required file and rejects missing files or digest
+mismatches before installing sanitizer callbacks.
+
+### Activate the Component
+
+Add a `pii_rampart` component with explicit content selectors. This example
+sanitizes normalized LLM request and response content without sending marks,
+tool payloads, or provider metadata to the model:
+
+```toml
+[[components]]
+kind = "pii_rampart"
+enabled = true
+
+[components.config]
+version = 1
+model_path = "/absolute/path/to/rampart"
+codec = "openai_chat"
+input = true
+output = true
+mark = false
+tool_input = false
+tool_output = false
+target_paths = ["/message"]
+target_path_patterns = [
+  "/messages/*/content",
+  "/messages/*/content/*/text",
+]
+```
+
+`target_paths` contains exact JSON pointers. `target_path_patterns` also
+accepts `*` as one complete path segment. At least one selector is required.
+When a supported codec is active, selectors address the normalized Relay
+request or response shape.
+
+### Use a Language Binding
+
+The CLI, Python, Node.js, and FFI host entry points register `pii_rampart`
+automatically. Rust applications that initialize plugin configuration directly
+must enable the `rampart` feature and call
+`register_rampart_pii_component()` first.
+
+Configuration helpers are available through these binding modules:
+
+- Rust: `nemo_relay_pii_redaction::rampart`
+- Python: `nemo_relay.pii_rampart`
+- Node.js: `nemo-relay-node/pii_rampart`
+- Go: `github.com/NVIDIA/NeMo-Relay/go/nemo_relay/pii_rampart`
+
+Go and the raw C FFI remain experimental and source-first. Model loading and
+inference run in the shared Rust implementation for every binding.
 
 ## Documentation
 
