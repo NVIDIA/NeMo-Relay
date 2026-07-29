@@ -34,7 +34,7 @@ use tokio_stream::Stream;
 
 use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::llm::LlmHandle;
-use crate::api::llm::emit_optimization_marks;
+use crate::api::llm::emit_reserved_optimization_marks;
 use crate::api::optimization::finalize_optimization_summary;
 use crate::api::runtime::LlmSanitizeResponseContext;
 use crate::api::runtime::NemoRelayContextState;
@@ -295,7 +295,7 @@ impl LlmStreamWrapper {
             handle
                 .optimization_recorder
                 .close_for_finalization(interruption);
-            emit_optimization_marks(&handle, &subscribers).await;
+            emit_reserved_optimization_marks(&handle, &subscribers).await;
             let pricing = crate::codec::response::active_pricing_resolver();
             let summary = finalize_optimization_summary(
                 &handle.optimization_recorder,
@@ -326,18 +326,16 @@ impl LlmStreamWrapper {
             if let Some(event) = event_snapshot
                 && let Some(event) = sanitize_event_with_scope_stack(event, &scope_stack).await
             {
-                let _ = subscriber_dispatcher::dispatch_sanitized_event(
+                let _ = subscriber_dispatcher::dispatch_reserved_sanitized_event(
                     event,
                     Vec::new(),
                     &subscribers,
                     scope_stack.clone(),
                 );
             }
-            if let Some(done) = publication_barrier {
-                let _ = done.send(());
-            }
         };
-        let finalize = subscriber_dispatcher::with_async_publication_context(finalize);
+        let finalize =
+            subscriber_dispatcher::with_async_publication_context(publication_barrier, finalize);
         if background_thread {
             // `Drop` can run while the current-thread Tokio executor is
             // synchronously flushing subscribers. Use a dedicated runtime so

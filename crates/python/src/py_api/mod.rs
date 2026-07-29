@@ -1524,9 +1524,9 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
 
 /// Wait for subscriber callbacks queued before this call to finish.
 ///
-/// Re-entrant calls and calls observed while an asynchronous publication
-/// boundary is active return without waiting. Call again after middleware
-/// settles to wait for its event and later work.
+/// Public Python wrappers prevent re-entrant event-sanitizer callbacks from
+/// waiting on the serial dispatcher. Publication middleware must not move such
+/// a re-entrant flush to an unmarked worker thread.
 #[pyfunction]
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
     py.detach(core_subscriber_api::flush_subscribers)
