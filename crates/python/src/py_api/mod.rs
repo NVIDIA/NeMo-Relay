@@ -1524,13 +1524,10 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
 
 /// Wait for subscriber callbacks queued before this call to finish.
 ///
-/// A call from an asynchronous event-sanitizer callback returns without waiting to prevent a
-/// cycle with the serial dispatcher.
+/// Public Python wrappers prevent re-entrant event-sanitizer callbacks from waiting on the serial
+/// dispatcher.
 #[pyfunction]
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
-    if crate::py_callable::event_sanitizer_callback_active() {
-        return Ok(());
-    }
     py.detach(core_subscriber_api::flush_subscribers)
         .map_err(to_py_err)
 }
