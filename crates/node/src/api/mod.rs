@@ -461,9 +461,15 @@ pub fn end_stream(stream_id: f64) {
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum PromiseAwareKey {
+    GlobalMarkSanitize(String),
+    GlobalScopeStartSanitize(String),
+    GlobalScopeEndSanitize(String),
     GlobalToolExecution(String),
     GlobalLlmExecution(String),
     GlobalLlmStreamExecution(String),
+    ScopeMarkSanitize { scope_uuid: String, name: String },
+    ScopeStartSanitize { scope_uuid: String, name: String },
+    ScopeEndSanitize { scope_uuid: String, name: String },
     ScopeToolExecution { scope_uuid: String, name: String },
     ScopeLlmExecution { scope_uuid: String, name: String },
     ScopeLlmStreamExecution { scope_uuid: String, name: String },
@@ -472,10 +478,16 @@ enum PromiseAwareKey {
 impl PromiseAwareKey {
     fn scope_uuid(&self) -> Option<&str> {
         match self {
-            Self::ScopeToolExecution { scope_uuid, .. }
+            Self::ScopeMarkSanitize { scope_uuid, .. }
+            | Self::ScopeStartSanitize { scope_uuid, .. }
+            | Self::ScopeEndSanitize { scope_uuid, .. }
+            | Self::ScopeToolExecution { scope_uuid, .. }
             | Self::ScopeLlmExecution { scope_uuid, .. }
             | Self::ScopeLlmStreamExecution { scope_uuid, .. } => Some(scope_uuid),
-            Self::GlobalToolExecution(_)
+            Self::GlobalMarkSanitize(_)
+            | Self::GlobalScopeStartSanitize(_)
+            | Self::GlobalScopeEndSanitize(_)
+            | Self::GlobalToolExecution(_)
             | Self::GlobalLlmExecution(_)
             | Self::GlobalLlmStreamExecution(_) => None,
         }
@@ -646,18 +658,20 @@ fn add_plugin_event_sanitizer(
         let name = format!("{}{}", namespace_prefix, ctx.get::<String>(0)?);
         let priority = ctx.get::<i32>(1)?;
         let callback = ctx.get::<JsFunction>(2)?;
-        register(&name, priority, node_event_sanitize_fn(ctx.env, &callback)?)
-            .map_err(to_napi_err)?;
+        let (callback, promise_aware) = node_event_sanitize_fn(ctx.env, &callback)?;
+        register(&name, priority, callback).map_err(to_napi_err)?;
         let name_clone = name.clone();
         registrations.lock().unwrap().push(PluginRegistration::new(
             "plugin",
             name_clone.clone(),
             Box::new(move || {
-                deregister(&name_clone).map(|_| ()).map_err(|error| {
+                let result = deregister(&name_clone).map(|_| ()).map_err(|error| {
                     PluginError::RegistrationFailed(format!(
                         "{label} deregistration failed: {error}"
                     ))
-                })
+                });
+                promise_aware.close();
+                result
             }),
         ));
         ctx.env.get_undefined()
@@ -1412,11 +1426,17 @@ impl PersistentJsFunction {
     }
 }
 
-fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
+fn node_event_sanitize_fn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<(EventSanitizeFn, Arc<crate::promise_call::PromiseAwareFn>)> {
     let callback = Arc::new(crate::promise_call::PromiseAwareFn::new_event_sanitizer(
         env, func,
     )?);
-    Ok(callable::wrap_js_event_sanitize_promise_fn(callback))
+    Ok((
+        callable::wrap_js_event_sanitize_promise_fn(callback.clone()),
+        callback,
+    ))
 }
 
 type NodeLlmCodec = (
@@ -2663,7 +2683,13 @@ pub fn llm_stream_call_execute(
 // ---------------------------------------------------------------------------
 
 macro_rules! napi_event_guardrail_api {
-    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+    (
+        $register_name:ident,
+        $deregister_name:ident,
+        $core_register:path,
+        $core_deregister:path,
+        $key:ident
+    ) => {
         /// Register an event sanitize guardrail.
         ///
         /// The callback may return fields directly or in a Promise. Scope and mark
@@ -2681,13 +2707,20 @@ macro_rules! napi_event_guardrail_api {
             )]
             guardrail: JsFunction,
         ) -> Result<()> {
-            $core_register(&name, priority, node_event_sanitize_fn(&env, &guardrail)?)
-                .map_err(to_napi_err)
+            let (callback, promise_aware) = node_event_sanitize_fn(&env, &guardrail)?;
+            $core_register(&name, priority, callback).map_err(to_napi_err)?;
+            remember_promise_aware(PromiseAwareKey::$key(name), promise_aware);
+            Ok(())
         }
 
         #[napi]
         pub fn $deregister_name(name: String) -> Result<bool> {
-            $core_deregister(&name).map_err(to_napi_err)
+            let key = PromiseAwareKey::$key(name.clone());
+            let removed = $core_deregister(&name).map_err(to_napi_err)?;
+            if removed {
+                forget_promise_aware(&key);
+            }
+            Ok(removed)
         }
     };
 }
@@ -2696,19 +2729,22 @@ napi_event_guardrail_api!(
     register_mark_sanitize_guardrail,
     deregister_mark_sanitize_guardrail,
     core_registry_api::register_mark_sanitize_guardrail,
-    core_registry_api::deregister_mark_sanitize_guardrail
+    core_registry_api::deregister_mark_sanitize_guardrail,
+    GlobalMarkSanitize
 );
 napi_event_guardrail_api!(
     register_scope_sanitize_start_guardrail,
     deregister_scope_sanitize_start_guardrail,
     core_registry_api::register_scope_sanitize_start_guardrail,
-    core_registry_api::deregister_scope_sanitize_start_guardrail
+    core_registry_api::deregister_scope_sanitize_start_guardrail,
+    GlobalScopeStartSanitize
 );
 napi_event_guardrail_api!(
     register_scope_sanitize_end_guardrail,
     deregister_scope_sanitize_end_guardrail,
     core_registry_api::register_scope_sanitize_end_guardrail,
-    core_registry_api::deregister_scope_sanitize_end_guardrail
+    core_registry_api::deregister_scope_sanitize_end_guardrail,
+    GlobalScopeEndSanitize
 );
 
 macro_rules! napi_guardrail_tool_api {
@@ -3206,7 +3242,13 @@ pub fn flush_subscribers(env: Env) -> Result<JsObject> {
 // ---------------------------------------------------------------------------
 
 macro_rules! napi_scope_event_guardrail_api {
-    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+    (
+        $register_name:ident,
+        $deregister_name:ident,
+        $core_register:path,
+        $core_deregister:path,
+        $key:ident
+    ) => {
         /// Register a scope-local event sanitize guardrail.
         ///
         /// The callback may return fields directly or in a Promise. Scope and mark
@@ -3227,20 +3269,31 @@ macro_rules! napi_scope_event_guardrail_api {
         ) -> Result<()> {
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
                 .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-            $core_register(
-                &uuid,
-                &name,
-                priority,
-                node_event_sanitize_fn(&env, &guardrail)?,
-            )
-            .map_err(to_napi_err)
+            let (callback, promise_aware) = node_event_sanitize_fn(&env, &guardrail)?;
+            $core_register(&uuid, &name, priority, callback).map_err(to_napi_err)?;
+            remember_promise_aware(
+                PromiseAwareKey::$key {
+                    scope_uuid,
+                    name,
+                },
+                promise_aware,
+            );
+            Ok(())
         }
 
         #[napi]
         pub fn $deregister_name(scope_uuid: String, name: String) -> Result<bool> {
+            let key = PromiseAwareKey::$key {
+                scope_uuid: scope_uuid.clone(),
+                name: name.clone(),
+            };
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
                 .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-            $core_deregister(&uuid, &name).map_err(to_napi_err)
+            let removed = $core_deregister(&uuid, &name).map_err(to_napi_err)?;
+            if removed {
+                forget_promise_aware(&key);
+            }
+            Ok(removed)
         }
     };
 }
@@ -3249,19 +3302,22 @@ napi_scope_event_guardrail_api!(
     scope_register_mark_sanitize_guardrail,
     scope_deregister_mark_sanitize_guardrail,
     core_registry_api::scope_register_mark_sanitize_guardrail,
-    core_registry_api::scope_deregister_mark_sanitize_guardrail
+    core_registry_api::scope_deregister_mark_sanitize_guardrail,
+    ScopeMarkSanitize
 );
 napi_scope_event_guardrail_api!(
     scope_register_scope_sanitize_start_guardrail,
     scope_deregister_scope_sanitize_start_guardrail,
     core_registry_api::scope_register_scope_sanitize_start_guardrail,
-    core_registry_api::scope_deregister_scope_sanitize_start_guardrail
+    core_registry_api::scope_deregister_scope_sanitize_start_guardrail,
+    ScopeStartSanitize
 );
 napi_scope_event_guardrail_api!(
     scope_register_scope_sanitize_end_guardrail,
     scope_deregister_scope_sanitize_end_guardrail,
     core_registry_api::scope_register_scope_sanitize_end_guardrail,
-    core_registry_api::scope_deregister_scope_sanitize_end_guardrail
+    core_registry_api::scope_deregister_scope_sanitize_end_guardrail,
+    ScopeEndSanitize
 );
 
 macro_rules! napi_scope_guardrail_tool_api {

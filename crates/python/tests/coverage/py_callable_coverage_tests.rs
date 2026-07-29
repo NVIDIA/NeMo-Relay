@@ -743,11 +743,12 @@ fn event_sanitize_wrapper_covers_conversion_success_and_error_propagation() {
     use nemo_relay::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
-    Python::attach(|py| {
-        let _context_module = install_event_sanitizer_context_module(py);
-        let module = load_module(
-            py,
-            r#"
+    let (_context_module, sanitized_fn, async_sanitizer, raises_fn, invalid_fn) =
+        Python::attach(|py| {
+            let context_module = install_event_sanitizer_context_module(py);
+            let module = load_module(
+                py,
+                r#"
 import asyncio
 
 def sanitize(event, fields):
@@ -767,55 +768,54 @@ def raises(event, fields):
 def invalid(event, fields):
     return "not fields"
 "#,
-        );
-        let event = Event::Mark(MarkEvent::new(
-            BaseEvent::builder().name("checkpoint").build(),
-            None,
-            None,
-        ));
-        let fields = EventSanitizeFields {
-            data: Some(json!({"secret": true})),
-            category_profile: None,
-            metadata: Some(json!({"secret": true})),
-        };
+            );
+            (
+                context_module,
+                wrap_py_event_sanitize_fn(module.getattr("sanitize").unwrap().unbind()),
+                wrap_py_event_sanitize_fn(module.getattr("async_sanitize").unwrap().unbind()),
+                wrap_py_event_sanitize_fn(module.getattr("raises").unwrap().unbind()),
+                wrap_py_event_sanitize_fn(module.getattr("invalid").unwrap().unbind()),
+            )
+        });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("checkpoint").build(),
+        None,
+        None,
+    ));
+    let fields = EventSanitizeFields {
+        data: Some(json!({"secret": true})),
+        category_profile: None,
+        metadata: Some(json!({"secret": true})),
+    };
 
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let sanitized = runtime
-            .block_on(wrap_py_event_sanitize_fn(
-                module.getattr("sanitize").unwrap().unbind(),
-            )(Arc::new(event.clone()), fields.clone()))
-            .unwrap();
-        assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
-        assert_eq!(sanitized.metadata, None);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let sanitized = runtime
+        .block_on(sanitized_fn(Arc::new(event.clone()), fields.clone()))
+        .unwrap();
+    assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
+    assert_eq!(sanitized.metadata, None);
 
-        let async_sanitized = runtime
-            .block_on(wrap_py_event_sanitize_fn(
-                module.getattr("async_sanitize").unwrap().unbind(),
-            )(Arc::new(event.clone()), fields.clone()))
-            .unwrap();
-        assert_eq!(
-            async_sanitized.data,
-            Some(json!({"async_safe": "checkpoint"}))
-        );
+    let async_sanitized = runtime
+        .block_on(async_sanitizer(Arc::new(event.clone()), fields.clone()))
+        .unwrap();
+    assert_eq!(
+        async_sanitized.data,
+        Some(json!({"async_safe": "checkpoint"}))
+    );
 
-        let raised = runtime
-            .block_on(wrap_py_event_sanitize_fn(
-                module.getattr("raises").unwrap().unbind(),
-            )(Arc::new(event.clone()), fields.clone()))
-            .unwrap_err();
-        assert!(raised.to_string().contains("sanitize boom"));
+    let raised = runtime
+        .block_on(raises_fn(Arc::new(event.clone()), fields.clone()))
+        .unwrap_err();
+    assert!(raised.to_string().contains("sanitize boom"));
 
-        let invalid = runtime
-            .block_on(wrap_py_event_sanitize_fn(
-                module.getattr("invalid").unwrap().unbind(),
-            )(Arc::new(event), fields.clone()))
-            .unwrap_err();
-        assert!(
-            invalid
-                .to_string()
-                .contains("invalid event sanitizer result")
-        );
-    });
+    let invalid = runtime
+        .block_on(invalid_fn(Arc::new(event), fields))
+        .unwrap_err();
+    assert!(
+        invalid
+            .to_string()
+            .contains("invalid event sanitizer result")
+    );
 }
 
 #[test]

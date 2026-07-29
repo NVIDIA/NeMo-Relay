@@ -204,8 +204,8 @@ describe('event sanitizer registries', () => {
       if (event.name === 'descendant-flush-origin') {
         setTimeout(async () => {
           await secondEntered;
-          descendantFlushStarted();
           lib.flushSubscribers().then(descendantFlush.resolve, descendantFlush.reject);
+          descendantFlushStarted();
         }, 0);
       } else if (event.name === 'descendant-flush-blocked') {
         secondSanitizerEntered();
@@ -220,7 +220,7 @@ describe('event sanitizer registries', () => {
       await flushStarted;
       const state = await Promise.race([
         flushed.then(() => 'flushed'),
-        new Promise((resolve) => setImmediate(() => resolve('pending'))),
+        new Promise((resolve) => setTimeout(() => resolve('pending'), 50)),
       ]);
       assert.equal(state, 'pending');
       releaseSecondSanitizer();

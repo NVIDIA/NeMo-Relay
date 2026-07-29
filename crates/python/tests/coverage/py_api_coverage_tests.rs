@@ -329,10 +329,12 @@ async def run_llm(api, request, func, handle, attributes, codec, response_codec)
 async def run_standalone(api, request):
     tool_args = await api.tool_request_intercepts("demo-tool", {"value": 1})
     await api.tool_conditional_execution("demo-tool", tool_args)
+    conditional_allowed = True
     llm_outcome = await api.llm_request_intercepts("demo-llm", request)
     await api.llm_conditional_execution(llm_outcome.request)
     return {
         "tool_value": tool_args["value"],
+        "conditional_allowed": conditional_allowed,
         "llm_header": llm_outcome.request.headers["x-intercepted"],
     }
 
@@ -528,10 +530,6 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
             .to_string()
             .contains("requires an async caller")
         );
-        assert!(
-            deregister_tool_conditional_execution_guardrail(&async_sync_rejection_name).unwrap()
-        );
-
         let llm_request = PyLLMRequest {
             inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
@@ -579,7 +577,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 .unwrap();
             assert_eq!(
                 crate::convert::py_to_json(&standalone).unwrap(),
-                json!({"tool_value": 3, "llm_header": "1"})
+                json!({"tool_value": 3, "conditional_allowed": true, "llm_header": "1"})
             );
 
             let tool_result = event_loop
@@ -666,6 +664,9 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 json!([{"delta": 11}, {"delta": 12}])
             );
         });
+        assert!(
+            deregister_tool_conditional_execution_guardrail(&async_sync_rejection_name).unwrap()
+        );
 
         let events = helpers.getattr("events").unwrap();
         let events_json = crate::convert::py_to_json(events.as_any()).unwrap();

@@ -72,6 +72,10 @@ Python and Node.js registration names are unchanged. Mark a Python callback
 `async def`, or return a Promise from Node.js, only when it needs asynchronous
 work; existing direct-value callbacks remain supported.
 
+Queued Python event sanitizers registered outside a running event loop use
+`asyncio.run` with a fresh loop. Bare coroutine results are supported in that
+fallback; `Task` and `Future` instances bound to a different loop are not.
+
 Scope, mark, and manual tool/LLM lifecycle APIs remain synchronous. This
 includes `push_scope`, `pop_scope`, mark APIs, `tool_call`, `tool_call_end`,
 `llm_call`, and `llm_call_end`. These APIs snapshot the event and visible

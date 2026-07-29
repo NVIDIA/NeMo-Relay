@@ -45,7 +45,7 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **Stable native ABI v3**: C-compatible host and plugin tables behind the
   safe Rust authoring interface. The v3 tables preserve a v2-compatible field
   prefix, but native plugins must still be rebuilt for v3 as described in the
-  [0.7 migration guide](../../docs/reference/migration-guides.mdx#upgrade-to-nemo-relay-07).
+  [0.7 migration guide](https://docs.nvidia.com/nemo/relay/reference/migration-guides#upgrade-to-nemo-relay-07).
 - **Raw async middleware**: Completion-based raw registrations for plugins
   that need asynchronous guardrails, intercepts, or event sanitizers. Typed
   Rust callbacks remain synchronous convenience APIs.

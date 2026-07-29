@@ -183,7 +183,7 @@ class TestLLMGuardrails:
         request_flushed = False
         response_flushed = False
 
-        async def sanitize_request(request, context):
+        async def sanitize_request(request, context) -> LLMRequest:
             nonlocal request_flushed
             del context
             await asyncio.sleep(0)
@@ -191,7 +191,7 @@ class TestLLMGuardrails:
             request_flushed = True
             return request
 
-        async def sanitize_response(response, context):
+        async def sanitize_response(response, context) -> dict:
             nonlocal response_flushed
             del context
             await asyncio.sleep(0)

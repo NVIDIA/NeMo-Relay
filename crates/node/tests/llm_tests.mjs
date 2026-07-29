@@ -696,7 +696,11 @@ describe('LLM guardrails', () => {
     try {
       const handle = llmCall('node_manual_flush', makeNative());
       llmCallEnd(handle, { response: 'ok' });
-      await flushSubscribers();
+      const outcome = await Promise.race([
+        flushSubscribers().then(() => 'flushed'),
+        new Promise((resolve) => setTimeout(() => resolve('timeout'), 2000)),
+      ]);
+      assert.equal(outcome, 'flushed', 'flushSubscribers deadlocked inside an async sanitizer');
     } finally {
       deregisterLlmSanitizeRequestGuardrail('node_manual_flush_request');
       deregisterLlmSanitizeResponseGuardrail('node_manual_flush_response');
