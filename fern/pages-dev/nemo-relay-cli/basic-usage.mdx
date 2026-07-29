@@ -161,11 +161,16 @@ The base `config.toml` stores the agent settings. Select **Yes** at the plugin
 prompt to configure optional Relay components and save them separately in
 `plugins.toml`. Project setup uses the project plugin configuration, global
 setup uses the user plugin configuration, and `both` continues with the project
-plugin configuration.
+plugin configuration. When the top-level command receives
+`--config path/to/config.toml`, the plugin editor instead uses the sibling
+`path/to/plugins.toml`, matching runtime selection.
 
 Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can
-open the plugin editor again later with `nemo-relay plugins edit`, or use
+open the plugin editor again later with the resume command printed by Relay.
+For an explicit `--config path/to/config.toml` flow, the equivalent command is
+`nemo-relay --plugin-config-path path/to/plugins.toml plugins edit`. Otherwise,
+use `nemo-relay plugins edit` for user configuration or
 `nemo-relay plugins edit --project` for project configuration.
 
 ### Edit Gateway Configuration
@@ -183,6 +188,11 @@ after you select **Save**, preserves unrelated TOML sections, and lets you
 clear a setting to restore normal configuration precedence and defaults. Global
 saves are system-readable (`0644` on Unix), so they reject authorization
 headers; store credentials in a user config or environment variables instead.
+
+When the top-level CLI receives `--config path/to/config.toml`, the editor uses
+that exact file. An explicit `config edit --user`, `--project`, or `--global`
+flag overrides the inherited target. This selects only the file opened by the
+editor; it does not change runtime discovery, layering, or merge precedence.
 
 Agent command setup remains under `nemo-relay config`; plugin components remain
 under `nemo-relay plugins edit`.

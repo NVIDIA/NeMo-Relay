@@ -221,6 +221,13 @@ or:
 ~/.config/nemo-relay/plugins.toml
 ```
 
+When the top-level CLI receives `--plugin-config-path`, the editor uses that
+exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
+sibling `path/to/plugins.toml`, matching the runtime selection for that
+configuration. An explicit editor scope flag overrides this inherited target.
+These rules only select the file opened by the editor; they do not change
+runtime discovery, layering, or merge precedence.
+
 Use a scope flag to edit another location:
 
 ```bash
