@@ -26,6 +26,8 @@ use crate::server::GatewayOverrides;
 
 use super::{PreparedAgentLaunch, RunOverrides};
 
+const TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Runs a child coding-agent command behind an ephemeral local gateway.
 ///
 /// The gateway binds to an OS-assigned loopback port, prepares agent-specific hook/gateway wiring,
@@ -378,13 +380,29 @@ impl RunningGateway {
             .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
     }
 
-    // Requests shutdown and joins the server task. The send can fail only if the task already exited;
-    // the join result still captures whether serving ended cleanly.
+    // Requests shutdown and joins the server task, aborting it if an in-flight request prevents
+    // graceful shutdown from completing. The send can fail only if the task already exited.
     async fn stop(self) -> Result<(), CliError> {
-        let _ = self.shutdown_tx.send(());
-        self.task
+        self.stop_with_timeout(TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT)
             .await
-            .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
+    }
+
+    async fn stop_with_timeout(mut self, timeout: Duration) -> Result<(), CliError> {
+        let _ = self.shutdown_tx.send(());
+        match tokio::time::timeout(timeout, &mut self.task).await {
+            Ok(result) => {
+                result.map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
+            }
+            Err(_) => {
+                self.task.abort();
+                match self.task.await {
+                    Err(error) if error.is_cancelled() => Ok(()),
+                    result => result.map_err(|error| {
+                        CliError::Launch(format!("gateway task failed: {error}"))
+                    })?,
+                }
+            }
+        }
     }
 }
 
