@@ -1985,7 +1985,9 @@ async fn test_stream_response_sanitizer_can_flush_subscribers() {
         1,
         Arc::new(|response, _context| {
             Box::pin(async move {
-                flush_subscribers()?;
+                tokio::task::spawn_blocking(flush_subscribers)
+                    .await
+                    .map_err(|error| FlowError::Internal(error.to_string()))??;
                 Ok(Some(response))
             })
         }),
@@ -2004,11 +2006,13 @@ async fn test_stream_response_sanitizer_can_flush_subscribers() {
     .await
     .unwrap();
 
-    while stream.next().await.is_some() {}
-    tokio::time::timeout(std::time::Duration::from_secs(2), stream.close())
-        .await
-        .expect("stream close deadlocked in response sanitizer")
-        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while stream.next().await.is_some() {}
+        stream.close().await
+    })
+    .await
+    .expect("stream finalization deadlocked in response sanitizer")
+    .unwrap();
     flush_subscribers().unwrap();
 
     deregister_llm_sanitize_response_guardrail("stream_reentrant_flush_sanitizer").unwrap();

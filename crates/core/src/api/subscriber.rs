@@ -72,9 +72,10 @@ pub fn deregister_subscriber(name: &str) -> Result<bool> {
 
 /// Wait for all subscriber callbacks queued before this call to finish.
 ///
-/// Call this helper outside native subscriber callbacks. A re-entrant call returns without
-/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
-/// still run.
+/// A re-entrant call returns without waiting. The same applies while an
+/// asynchronous publication boundary is active, including calls spawned or
+/// offloaded by publication middleware. Call again after that middleware
+/// settles to wait for its event and work queued behind it.
 ///
 /// Native targets deliver subscriber callbacks on a background dispatcher so
 /// event-producing APIs do not wait for observer work. Call this helper from

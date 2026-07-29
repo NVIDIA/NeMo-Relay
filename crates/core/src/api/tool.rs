@@ -202,8 +202,8 @@ pub struct ToolCallEndParams<'a> {
 
 /// Start a manual tool lifecycle span.
 ///
-/// This emits a tool-start event after applying sanitize-request guardrails to
-/// the payload recorded for observability.
+/// This submits a tool-start event for queued sanitize-request guardrails and
+/// publication without waiting for that work.
 ///
 /// # Parameters
 /// - `name`: Tool name recorded on the emitted lifecycle event.
@@ -218,11 +218,13 @@ pub struct ToolCallEndParams<'a> {
 ///   the emitted start event. When `None`, the current UTC time is used.
 ///
 /// # Returns
-/// A [`Result`] containing the created [`ToolHandle`].
+/// A [`Result`] containing the created [`ToolHandle`] after its start-event
+/// snapshot has been submitted for queued publication.
 ///
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state
-/// cannot be read safely.
+/// cannot be read safely. Dispatcher submission failures are logged because
+/// observability publication is best effort.
 ///
 /// # Notes
 /// Sanitize-request guardrails affect only the emitted start-event payload, not
@@ -392,8 +394,8 @@ async fn tool_call_with_subscriber_snapshot(
 
 /// Finish a manual tool lifecycle span.
 ///
-/// This emits a tool-end event for a handle previously returned by
-/// [`tool_call`].
+/// This submits a tool-end event for queued sanitization and publication for a
+/// handle previously returned by [`tool_call`].
 ///
 /// # Parameters
 /// - `handle`: Tool handle to close.
@@ -407,11 +409,13 @@ async fn tool_call_with_subscriber_snapshot(
 ///   the handle start time if the current time is not later.
 ///
 /// # Returns
-/// A [`Result`] that is `Ok(())` when the end event has been emitted.
+/// A [`Result`] that is `Ok(())` when the end-event snapshot has been submitted
+/// for queued publication.
 ///
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state
-/// cannot be read safely.
+/// cannot be read safely. Dispatcher submission failures are logged because
+/// observability publication is best effort.
 ///
 /// # Notes
 /// Sanitize-response guardrails affect only the emitted end-event payload, not

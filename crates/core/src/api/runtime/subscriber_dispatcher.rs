@@ -23,6 +23,7 @@ mod native {
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
+    use std::time::Duration;
 
     use super::*;
     use crate::api::runtime::scope_stack::{
@@ -278,9 +279,33 @@ mod native {
                     }
                 }
                 DispatcherMessage::Barrier { done } => {
-                    let _ = done.recv();
+                    wait_for_barrier(done, &rx, &mut pending);
                 }
                 message => handle_message(message),
+            }
+        }
+    }
+
+    /// Preserve FIFO delivery behind an asynchronous publication boundary while
+    /// allowing flush requests to return. A flush cannot wait for the current
+    /// publication without risking a cycle when middleware spawned the caller.
+    fn wait_for_barrier(
+        done: Receiver<()>,
+        rx: &Receiver<DispatcherMessage>,
+        pending: &mut VecDeque<DispatcherMessage>,
+    ) {
+        loop {
+            match done.recv_timeout(Duration::from_millis(10)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            while let Ok(message) = rx.try_recv() {
+                match message {
+                    DispatcherMessage::Flush { done } => {
+                        let _ = done.send(());
+                    }
+                    message => pending.push_back(message),
+                }
             }
         }
     }
@@ -412,14 +437,13 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::sync::Mutex;
-        use std::time::Duration;
-
-        static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
         #[test]
-        fn flush_does_not_wait_for_a_later_publication_barrier() {
-            let _lock = TEST_MUTEX.lock().unwrap();
+        fn flush_does_not_wait_for_active_or_later_publication_barriers() {
+            let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            flush_subscribers().unwrap();
             let first = register_async_publication().expect("first publication barrier");
             let sender = dispatcher_sender().expect("dispatcher sender");
             let (flush_tx, flush_rx) = mpsc::channel();
@@ -428,11 +452,12 @@ mod native {
                 .unwrap();
             let later = register_async_publication().expect("later publication barrier");
 
-            first.send(()).unwrap();
             flush_rx
                 .recv_timeout(Duration::from_secs(1))
-                .expect("flush queued before the later barrier must complete");
+                .expect("flush must not wait for an active publication barrier");
+            first.send(()).unwrap();
             later.send(()).unwrap();
+            flush_subscribers().unwrap();
         }
     }
 }
@@ -488,7 +513,11 @@ pub(crate) async fn with_async_publication_context<F: Future>(future: F) -> F::O
     native::with_async_publication_context(future).await
 }
 
-/// Wait for all queued subscriber callbacks submitted before this call.
+/// Wait for queued subscriber callbacks submitted before this call.
+///
+/// If an asynchronous publication boundary is still active, this returns
+/// without waiting for that publication or work queued behind it. This avoids
+/// a cycle when publication middleware spawns or offloads the caller.
 pub fn flush_subscribers() -> Result<()> {
     native::flush_subscribers()
 }
