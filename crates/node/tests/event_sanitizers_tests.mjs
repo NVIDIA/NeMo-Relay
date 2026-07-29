@@ -2,15 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 const plugin = require('../plugin.js');
+const execFileAsync = promisify(execFile);
 
 function capture(name) {
   const events = [];
@@ -127,6 +130,48 @@ describe('event sanitizer registries', () => {
     }
     assert.equal(settled, true);
     assert.deepEqual(events.at(-1).data, { sanitized: true });
+  });
+
+  it('keeps synchronous exporter flush and shutdown reentrant inside Promise sanitizers', async () => {
+    const addonPath = require.resolve('../index.js');
+    const runExporterScenario = async (kind) => {
+      const script = String.raw`
+        const fs = require('node:fs');
+        const os = require('node:os');
+        const path = require('node:path');
+        const lib = require(${JSON.stringify(addonPath)});
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nemo-relay-reentrant-exporter-'));
+        const exporter = ${kind === 'atof'
+          ? "new lib.AtofExporter({ outputDirectory: directory })"
+          : "new lib.OpenTelemetrySubscriber({ type: 'full', endpoint: 'http://127.0.0.1:9', timeoutMillis: 10 })"};
+        const sanitizerName = ${JSON.stringify(`node-reentrant-${kind}-sanitizer`)};
+        const subscriberName = ${JSON.stringify(`node-reentrant-${kind}-subscriber`)};
+        lib.registerSubscriber(subscriberName, () => {});
+        lib.registerMarkSanitizeGuardrail(sanitizerName, 0, async (_event, fields) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          exporter.forceFlush();
+          exporter.shutdown();
+          return fields;
+        });
+        lib.event(${JSON.stringify(`node-reentrant-${kind}-event`)});
+        lib.flushSubscribers().then(() => {
+          lib.deregisterMarkSanitizeGuardrail(sanitizerName);
+          lib.deregisterSubscriber(subscriberName);
+          fs.rmSync(directory, { recursive: true, force: true });
+          process.stdout.write('ok');
+        }, (error) => {
+          process.stderr.write(String(error?.stack ?? error));
+          process.exitCode = 1;
+        });
+      `;
+      const { stdout } = await execFileAsync(process.execPath, ['--eval', script], {
+        timeout: 10_000,
+      });
+      assert.equal(stdout, 'ok');
+    };
+
+    await runExporterScenario('atof');
+    await runExporterScenario('otel');
   });
 
   it('publishes nested Promise sanitizer events before already queued events', async () => {

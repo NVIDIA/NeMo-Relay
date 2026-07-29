@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Shared support for Rust tests of the Python binding.
+
 use std::ffi::{CString, OsString};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -86,7 +88,7 @@ pub(crate) fn init_python_test_locked(lock: MutexGuard<'static, ()>) -> PythonTe
             .set_item("nemo_relay", package)
             .expect("register test package");
         let source = CString::new(include_str!(
-            "../../../python/nemo_relay/_event_sanitizer_context.py"
+            "../../../../python/nemo_relay/_event_sanitizer_context.py"
         ))
         .expect("helper source");
         let filename = CString::new("_event_sanitizer_context.py").expect("helper filename");

@@ -715,7 +715,7 @@ mod native {
     /// failure drops the event because it may be responsible for inserting the
     /// sanitized payload. A sanitizer failure retains the transformed snapshot
     /// and continues publication (fail open).
-    fn sanitize_event_snapshot(
+    pub(super) fn sanitize_event_snapshot(
         event: Event,
         transform: Option<EventTransformFn>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
@@ -737,10 +737,23 @@ mod native {
                     log::error!(
                         target: "nemo_relay.runtime",
                         event = "event_sanitizer_runtime_failed";
-                        "Event sanitizer runtime failed; dropping events: {error}"
+                        "Event sanitizer runtime failed: {error}"
                     );
                 }
-                return (None, Vec::new());
+                if transform.is_some() {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_transform_runtime_unavailable";
+                        "Dropping an event because its required asynchronous transform could not run"
+                    );
+                    return (None, Vec::new());
+                }
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_fail_open";
+                    "Publishing the original event snapshot because event sanitizers could not run"
+                );
+                return (Some(event), Vec::new());
             }
         };
         let transform_context = publication_context.clone();
@@ -819,6 +832,19 @@ mod native {
             );
             PROCESS_STATE.store(state, Ordering::Release);
         });
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_sanitizer_runtime_failure_for_test(error: Option<&str>) {
+        let state = process_state();
+        let mut runtime = state
+            .sanitizer_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *runtime = error.map(|error| Err(error.to_string()));
+        state
+            .sanitizer_runtime_failure_logged
+            .store(false, Ordering::Release);
     }
 }
 

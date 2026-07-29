@@ -44,9 +44,9 @@ use nemo_relay::api::registry::{
     scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
     scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
     scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
-    scope_register_mark_sanitize_guardrail, scope_register_tool_conditional_execution_guardrail,
-    scope_register_tool_execution_intercept, scope_register_tool_request_intercept,
-    scope_register_tool_sanitize_request_guardrail,
+    scope_register_mark_sanitize_guardrail, scope_register_scope_sanitize_end_guardrail,
+    scope_register_tool_conditional_execution_guardrail, scope_register_tool_execution_intercept,
+    scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
@@ -1377,6 +1377,92 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
 }
 
 #[tokio::test]
+async fn cancelled_tool_end_uses_the_originating_scope_sanitizer() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let originating_stack = current_scope_stack();
+    let owner = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("cancelled-tool-sanitizer-owner")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    scope_register_scope_sanitize_end_guardrail(
+        &owner.uuid,
+        "cancelled-tool-end-sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            if event.name() == "cancelled-tool-cross-scope" {
+                fields.data = Some(json!({"secret": "[redacted]"}));
+            }
+            ready(fields)
+        }),
+    )
+    .unwrap();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "cancelled_tool_cross_scope_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+    register_tool_execution_intercept(
+        "pending_tool_cross_scope",
+        1,
+        Arc::new(move |_name, _args, _next| {
+            if let Some(sender) = entered_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            Box::pin(std::future::pending())
+        }),
+    )
+    .unwrap();
+
+    let mut execution = Box::pin(tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("cancelled-tool-cross-scope")
+            .args(json!({}))
+            .data(json!({"secret": "classified"}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    ));
+    tokio::select! {
+        result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
+        result = entered_rx => result.unwrap(),
+    }
+
+    set_thread_scope_stack(create_scope_stack());
+    drop(execution);
+    flush_subscribers().unwrap();
+
+    let end = captured_events_snapshot(&events)
+        .into_iter()
+        .find(|event| {
+            event.name() == "cancelled-tool-cross-scope"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .expect("cancelled tool should emit an end event");
+    assert_eq!(end.data(), Some(&json!({"secret": "[redacted]"})));
+
+    set_thread_scope_stack(originating_stack);
+    deregister_tool_execution_intercept("pending_tool_cross_scope").unwrap();
+    deregister_subscriber("cancelled_tool_cross_scope_observer").unwrap();
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&owner.uuid)
+            .build(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
 async fn dropping_pending_conditional_closes_the_guardrail_scope() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
@@ -1429,6 +1515,92 @@ async fn dropping_pending_conditional_closes_the_guardrail_scope() {
 
     deregister_tool_conditional_execution_guardrail("pending_conditional").unwrap();
     deregister_subscriber("cancelled_guardrail_lifecycle").unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_guardrail_end_uses_the_originating_scope_sanitizer() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let originating_stack = current_scope_stack();
+    let owner = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("cancelled-guardrail-sanitizer-owner")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    scope_register_scope_sanitize_end_guardrail(
+        &owner.uuid,
+        "cancelled-guardrail-end-sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            if event.name() == "pending-conditional-cross-scope" {
+                fields.metadata = Some(json!({"sanitized_by": "originating-scope"}));
+            }
+            ready(fields)
+        }),
+    )
+    .unwrap();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "cancelled_guardrail_cross_scope_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+    register_tool_conditional_execution_guardrail(
+        "pending-conditional-cross-scope",
+        1,
+        Arc::new(move |_name, _args| {
+            if let Some(sender) = entered_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            Box::pin(std::future::pending())
+        }),
+    )
+    .unwrap();
+
+    let conditional_args = json!({});
+    let mut evaluation = Box::pin(tool_conditional_execution(
+        "cancelled-conditional-cross-scope",
+        &conditional_args,
+    ));
+    tokio::select! {
+        result = &mut evaluation => panic!("evaluation unexpectedly completed: {result:?}"),
+        result = entered_rx => result.unwrap(),
+    }
+
+    set_thread_scope_stack(create_scope_stack());
+    drop(evaluation);
+    flush_subscribers().unwrap();
+
+    let end = captured_events_snapshot(&events)
+        .into_iter()
+        .find(|event| {
+            event.name() == "pending-conditional-cross-scope"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .expect("cancelled guardrail should emit an end event");
+    assert_eq!(
+        end.metadata(),
+        Some(&json!({"sanitized_by": "originating-scope"}))
+    );
+
+    set_thread_scope_stack(originating_stack);
+    deregister_tool_conditional_execution_guardrail("pending-conditional-cross-scope").unwrap();
+    deregister_subscriber("cancelled_guardrail_cross_scope_observer").unwrap();
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&owner.uuid)
+            .build(),
+    )
+    .unwrap();
 }
 
 #[tokio::test]

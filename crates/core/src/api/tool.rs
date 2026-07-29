@@ -10,7 +10,9 @@ use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher::{
     dispatch_sanitized_event, dispatch_transformed_event,
 };
-use crate::api::runtime::{EventSubscriberFn, ToolExecutionNextFn, with_active_event_uuid};
+use crate::api::runtime::{
+    EventSubscriberFn, ScopeStackHandle, ToolExecutionNextFn, with_active_event_uuid,
+};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
@@ -29,6 +31,14 @@ pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutc
 
 fn queue_sanitized_event(event: Event, subscribers: &[EventSubscriberFn]) -> bool {
     let scope_stack = current_scope_stack();
+    queue_sanitized_event_with_scope_stack(event, subscribers, scope_stack)
+}
+
+fn queue_sanitized_event_with_scope_stack(
+    event: Event,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> bool {
     let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
 }
@@ -566,6 +576,7 @@ fn emit_tool_end_without_output(
     handle: &ToolHandle,
     metadata: Option<Json>,
     lifecycle_subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let event = {
@@ -575,7 +586,7 @@ fn emit_tool_end_without_output(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.end_tool_handle(handle, handle.data.clone(), metadata)
     };
-    queue_sanitized_event(event, lifecycle_subscribers);
+    queue_sanitized_event_with_scope_stack(event, lifecycle_subscribers, scope_stack);
     Ok(())
 }
 
@@ -583,14 +594,21 @@ struct ManagedToolCompletion {
     handle: Option<ToolHandle>,
     metadata: Option<Json>,
     subscribers: Vec<EventSubscriberFn>,
+    scope_stack: ScopeStackHandle,
 }
 
 impl ManagedToolCompletion {
-    fn new(handle: &ToolHandle, metadata: Option<Json>, subscribers: &[EventSubscriberFn]) -> Self {
+    fn new(
+        handle: &ToolHandle,
+        metadata: Option<Json>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> Self {
         Self {
             handle: Some(handle.clone()),
             metadata,
             subscribers: subscribers.to_vec(),
+            scope_stack,
         }
     }
 
@@ -609,7 +627,12 @@ impl Drop for ManagedToolCompletion {
             "ERROR",
             Some("tool execution cancelled".into()),
         );
-        let _ = emit_tool_end_without_output(&handle, metadata, &self.subscribers);
+        let _ = emit_tool_end_without_output(
+            &handle,
+            metadata,
+            &self.subscribers,
+            self.scope_stack.clone(),
+        );
     }
 }
 
@@ -742,8 +765,13 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         state.tool_build_execution_chain(&name, func, &scope_locals)
     };
 
-    let mut completion =
-        ManagedToolCompletion::new(&handle, metadata.clone(), &lifecycle_subscribers);
+    let lifecycle_scope_stack = current_scope_stack();
+    let mut completion = ManagedToolCompletion::new(
+        &handle,
+        metadata.clone(),
+        &lifecycle_subscribers,
+        lifecycle_scope_stack.clone(),
+    );
     match with_active_event_uuid(handle.uuid, execution(intercepted_args)).await {
         Ok(outcome) => {
             let ToolExecutionInterceptOutcome {
@@ -768,7 +796,12 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ = emit_tool_end_without_output(&handle, end_metadata, &lifecycle_subscribers);
+            let _ = emit_tool_end_without_output(
+                &handle,
+                end_metadata,
+                &lifecycle_subscribers,
+                lifecycle_scope_stack,
+            );
             completion.disarm();
             Err(error)
         }

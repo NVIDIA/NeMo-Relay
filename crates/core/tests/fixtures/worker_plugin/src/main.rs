@@ -72,6 +72,24 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                 Ok(fields)
             },
         );
+        let nested_publication_runtime = runtime.clone();
+        ctx.register_mark_sanitize_guardrail(
+            "fixture_nested_publication_order",
+            2,
+            move |event, fields| {
+                let runtime = nested_publication_runtime.clone();
+                let emit_nested = event.name() == "worker-nested-order-outer";
+                async move {
+                    if emit_nested {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        runtime
+                            .emit_mark("worker-nested-order-inner", None, None)
+                            .await?;
+                    }
+                    Ok(fields)
+                }
+            },
+        );
         ctx.register_scope_sanitize_start_guardrail(
             "fixture_scope_start_sanitize",
             0,

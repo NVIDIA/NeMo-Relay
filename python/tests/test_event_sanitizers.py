@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import cast
@@ -128,6 +129,68 @@ async def test_nested_async_sanitizer_event_precedes_already_queued_event(captur
         "python-nested-event",
         "python-later-event",
     ]
+
+
+def test_sync_standalone_middleware_preserves_nested_publication_order(capture_events):
+    _capture_name, events = capture_events
+    entered = threading.Event()
+    release = threading.Event()
+
+    def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        if event.name == "python-sync-outer-event":
+            entered.set()
+            assert release.wait(timeout=2)
+            nemo_relay.tools.conditional_execution("python-nested-conditional", {})
+        return fields
+
+    guardrails.register_tool_conditional_execution(
+        "python-nested-conditional",
+        0,
+        lambda _name, _args: None,
+    )
+    guardrails.register_mark_sanitize("python-sync-nested-order", 0, sanitize)
+    try:
+        scope.event("python-sync-outer-event")
+        assert entered.wait(timeout=2)
+        scope.event("python-sync-later-event")
+        release.set()
+        subscribers.flush()
+    finally:
+        release.set()
+        guardrails.deregister_mark_sanitize("python-sync-nested-order")
+        guardrails.deregister_tool_conditional_execution("python-nested-conditional")
+
+    assert [event.name for event in events] == [
+        "python-sync-outer-event",
+        "python-nested-conditional",
+        "python-nested-conditional",
+        "python-sync-later-event",
+    ]
+
+
+async def test_scope_start_sanitizer_uses_started_scope_context(capture_events):
+    _capture_name, events = capture_events
+    observed_scope_uuids: list[str] = []
+
+    async def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        if event.name == "python-start-context":
+            await asyncio.sleep(0)
+            observed_scope_uuids.append(scope.get_handle().uuid)
+            scope.event("python-start-context-nested")
+        return fields
+
+    guardrails.register_scope_sanitize_start("python-start-context", 0, sanitize)
+    handle = scope.push("python-start-context", nemo_relay.ScopeType.Agent)
+    try:
+        await subscribers.flush_async()
+    finally:
+        scope.pop(handle)
+        await subscribers.flush_async()
+        guardrails.deregister_scope_sanitize_start("python-start-context")
+
+    nested = next(event for event in events if event.name == "python-start-context-nested")
+    assert observed_scope_uuids == [handle.uuid]
+    assert nested.parent_uuid == handle.uuid
 
 
 async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events):

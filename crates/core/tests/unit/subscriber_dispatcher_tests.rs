@@ -3,8 +3,11 @@
 use super::EventSubscriberFn;
 use super::native::{
     DispatcherMessage, dispatcher_sender, enqueue_dispatch_message, flush_subscribers,
-    register_async_publication, spawn_background_publication,
+    register_async_publication, sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test,
+    spawn_background_publication,
 };
+use crate::api::registry::RegistryRecord;
+use crate::api::runtime::EventSanitizeFn;
 use crate::api::runtime::scope_stack::current_scope_stack;
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -101,7 +104,7 @@ fn flush_does_not_wait_for_later_delivery() {
         .unwrap();
 
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-    let event = serde_json::from_value(serde_json::json!({
+    let event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
         "kind": "mark",
         "atof_version": "0.1",
         "uuid": "019c1df6-4a57-7000-8000-000000000003",
@@ -273,4 +276,36 @@ fn detached_publications_share_one_background_executor_thread() {
         "detached publications must not allocate one OS thread per future"
     );
     release_tx.send(true).unwrap();
+}
+
+#[test]
+fn sanitizer_runtime_failure_preserves_untransformed_event_snapshot() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000008",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "fail-open-runtime"
+    }))
+    .expect("valid event");
+    let sanitizer: EventSanitizeFn = Arc::new(|_, _| {
+        Box::pin(async {
+            panic!("the unavailable sanitizer runtime must not invoke middleware");
+        })
+    });
+
+    set_sanitizer_runtime_failure_for_test(Some("injected runtime failure"));
+    let (published, nested) = sanitize_event_snapshot(
+        event.clone(),
+        None,
+        vec![RegistryRecord::new("unreachable", 0, sanitizer)],
+        None,
+    );
+    set_sanitizer_runtime_failure_for_test(None);
+
+    assert_eq!(published, Some(event));
+    assert!(nested.is_empty());
 }

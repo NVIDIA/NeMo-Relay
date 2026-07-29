@@ -1152,7 +1152,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
     );
     let overlapping_scope_stack_id = callback
         .host_state
-        .insert_invocation_scope_stack(invocation_stack.clone());
+        .insert_invocation_scope_stack(invocation_stack.clone(), None);
     let invocation_id = request.invocation_id.clone();
     let callback_task = callback.clone();
     let task = tokio::spawn(async move { callback_task.invoke_async(request).await });
@@ -1255,7 +1255,7 @@ fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
     ));
     let stack = crate::api::runtime::create_scope_stack();
     let baseline_depth = stack.read().expect("scope stack lock").scopes().len();
-    let scope_stack_id = state.insert_invocation_scope_stack(stack.clone());
+    let scope_stack_id = state.insert_invocation_scope_stack(stack.clone(), None);
     with_scope_stack(stack.clone(), || {
         push_scope(
             PushScopeParams::builder()

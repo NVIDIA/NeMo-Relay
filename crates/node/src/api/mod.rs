@@ -4122,9 +4122,8 @@ impl AtofExporter {
     /// establish the delivery barrier. A stream timeout is logged and does not by itself return an
     /// error.
     #[napi]
-    pub fn force_flush(&self) -> napi::Result<()> {
-        self.inner
-            .force_flush()
+    pub fn force_flush(&self, env: Env) -> napi::Result<()> {
+        with_effective_scope_stack(&env, || self.inner.force_flush())?
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
@@ -4133,9 +4132,8 @@ impl AtofExporter {
     /// does not establish the delivery barrier. A stream timeout is logged and does not by itself
     /// return an error.
     #[napi]
-    pub fn shutdown(&self) -> napi::Result<()> {
-        self.inner
-            .shutdown()
+    pub fn shutdown(&self, env: Env) -> napi::Result<()> {
+        with_effective_scope_stack(&env, || self.inner.shutdown())?
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
@@ -4210,17 +4208,15 @@ impl OpenTelemetrySubscriber {
 
     /// Force a flush of finished spans through the exporter.
     #[napi]
-    pub fn force_flush(&self) -> napi::Result<()> {
-        self.inner
-            .force_flush()
+    pub fn force_flush(&self, env: Env) -> napi::Result<()> {
+        with_effective_scope_stack(&env, || self.inner.force_flush())?
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Shut down the underlying tracer provider.
     #[napi]
-    pub fn shutdown(&self) -> napi::Result<()> {
-        self.inner
-            .shutdown()
+    pub fn shutdown(&self, env: Env) -> napi::Result<()> {
+        with_effective_scope_stack(&env, || self.inner.shutdown())?
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }

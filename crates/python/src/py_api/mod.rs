@@ -107,10 +107,11 @@ where
     if !python_event_loop_running(py)? {
         let result = py
             .detach(|| {
-                block_on_sync_middleware(
-                    py_callable::PY_AWAITABLES_ALLOWED
-                        .scope(false, TASK_SCOPE_STACK.scope(scope_stack, future)),
-                )
+                let future = py_callable::PY_AWAITABLES_ALLOWED
+                    .scope(false, TASK_SCOPE_STACK.scope(scope_stack, future));
+                let future = with_task_publication_context(publication_context, future);
+                let future = with_task_nested_publication_buffer(publication_buffer, future);
+                block_on_sync_middleware(future)
             })
             .map_err(to_py_err)?;
         return convert(py, result).map(|value| value.into_bound(py));

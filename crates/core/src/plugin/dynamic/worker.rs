@@ -63,7 +63,9 @@ use crate::api::optimization::{
 };
 use crate::api::runtime::scope_stack::active_event_uuid;
 use crate::api::runtime::subscriber_dispatcher::{
-    PublicationContext, capture_publication_context, with_task_publication_context,
+    PublicationBuffer, PublicationContext, capture_nested_publication_buffer,
+    capture_publication_context, with_nested_publication_buffer,
+    with_task_nested_publication_buffer, with_task_publication_context,
 };
 use crate::api::runtime::{
     EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
@@ -1854,9 +1856,10 @@ impl WorkerPluginCallback {
         continuation_id: Option<String>,
         payload: Option<invoke_request_payload::Payload>,
     ) -> InvokeRequest {
-        let scope_stack_id = self
-            .host_state
-            .insert_invocation_scope_stack(current_scope_stack());
+        let scope_stack_id = self.host_state.insert_invocation_scope_stack(
+            current_scope_stack(),
+            capture_nested_publication_buffer(),
+        );
         InvokeRequest {
             activation_id: self.activation_id.clone(),
             auth_token: self.host_state.auth_token.clone(),
@@ -2110,6 +2113,7 @@ enum WorkerCodecDirection {
 
 struct StoredScopeStack {
     handle: crate::api::runtime::ScopeStackHandle,
+    publication_buffer: Option<PublicationBuffer>,
     invocation_base_depth: Option<usize>,
 }
 
@@ -2249,6 +2253,7 @@ impl WorkerHostRuntimeState {
     fn insert_invocation_scope_stack(
         &self,
         stack: crate::api::runtime::ScopeStackHandle,
+        publication_buffer: Option<PublicationBuffer>,
     ) -> String {
         let id = format!("invoke-{}", Uuid::now_v7());
         let Ok(mut stacks) = self.scope_stacks.lock() else {
@@ -2280,6 +2285,7 @@ impl WorkerHostRuntimeState {
             id.clone(),
             StoredScopeStack {
                 handle: stack,
+                publication_buffer,
                 invocation_base_depth: Some(invocation_base_depth),
             },
         );
@@ -2386,6 +2392,7 @@ impl WorkerHostRuntimeState {
             .ok_or_else(|| Status::not_found("continuation not found"))
     }
 
+    #[cfg(test)]
     fn stack(&self, id: &str) -> Result<Option<crate::api::runtime::ScopeStackHandle>, Status> {
         if id.is_empty() {
             return Ok(None);
@@ -2398,6 +2405,28 @@ impl WorkerHostRuntimeState {
             .map(Some)
             .ok_or_else(|| Status::not_found("scope stack not found"))
     }
+
+    fn invocation_context(&self, id: &str) -> Result<Option<StoredInvocationContext>, Status> {
+        if id.is_empty() {
+            return Ok(None);
+        }
+        self.scope_stacks
+            .lock()
+            .map_err(|err| Status::internal(format!("scope stack lock poisoned: {err}")))?
+            .get(id)
+            .map(|stored| StoredInvocationContext {
+                scope_stack: stored.handle.clone(),
+                publication_buffer: stored.publication_buffer.clone(),
+            })
+            .map(Some)
+            .ok_or_else(|| Status::not_found("scope stack not found"))
+    }
+}
+
+#[derive(Clone)]
+struct StoredInvocationContext {
+    scope_stack: crate::api::runtime::ScopeStackHandle,
+    publication_buffer: Option<PublicationBuffer>,
 }
 
 #[derive(Clone)]
@@ -2405,6 +2434,7 @@ struct ContinuationContext {
     scope_stack: crate::api::runtime::ScopeStackHandle,
     active_event_uuid: Option<Uuid>,
     publication_context: Option<PublicationContext>,
+    publication_buffer: Option<PublicationBuffer>,
     optimization_recorder: Option<LlmOptimizationRecorder>,
 }
 
@@ -2414,6 +2444,7 @@ impl ContinuationContext {
             scope_stack: current_scope_stack(),
             active_event_uuid: active_event_uuid(),
             publication_context: capture_publication_context(),
+            publication_buffer: capture_nested_publication_buffer(),
             optimization_recorder: current_llm_optimization_recorder(),
         }
     }
@@ -2421,6 +2452,8 @@ impl ContinuationContext {
     async fn run<F: Future>(&self, future: F) -> F::Output {
         let scoped = TASK_SCOPE_STACK.scope(self.scope_stack.clone(), future);
         let published = with_task_publication_context(self.publication_context.clone(), scoped);
+        let published =
+            with_task_nested_publication_buffer(self.publication_buffer.clone(), published);
         let active = async {
             match self.active_event_uuid {
                 Some(uuid) => with_active_event_uuid(uuid, published).await,
@@ -2575,8 +2608,10 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         };
         let result = if handle.scope_stack_id.is_empty() {
             pop()
-        } else if let Some(stack) = self.state.stack(&handle.scope_stack_id)? {
-            with_scope_stack(stack, pop)
+        } else if let Some(context) = self.state.invocation_context(&handle.scope_stack_id)? {
+            with_nested_publication_buffer(context.publication_buffer, || {
+                with_scope_stack(context.scope_stack, pop)
+            })
         } else {
             pop()
         };
@@ -2599,6 +2634,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 id.clone(),
                 StoredScopeStack {
                     handle: crate::api::runtime::create_scope_stack(),
+                    publication_buffer: None,
                     invocation_base_depth: None,
                 },
             );
@@ -2809,14 +2845,16 @@ impl WorkerHostRuntimeService {
         let Some(stack_id) = scope.map(|scope| scope.scope_stack_id.as_str()) else {
             return f();
         };
-        let Some(stack) = self
+        let Some(context) = self
             .state
-            .stack(stack_id)
+            .invocation_context(stack_id)
             .map_err(|err| FlowError::Internal(err.to_string()))?
         else {
             return f();
         };
-        with_scope_stack(stack, f)
+        with_nested_publication_buffer(context.publication_buffer, || {
+            with_scope_stack(context.scope_stack, f)
+        })
     }
 }
 

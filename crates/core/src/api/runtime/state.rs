@@ -23,6 +23,7 @@ use crate::api::event::{
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
+use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
@@ -52,19 +53,30 @@ use uuid::Uuid;
 struct GuardrailScopeCompletion<'a> {
     handle: Option<ScopeHandle>,
     subscribers: &'a [EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
 }
 
 impl GuardrailScopeCompletion<'_> {
-    fn new(handle: ScopeHandle, subscribers: &[EventSubscriberFn]) -> GuardrailScopeCompletion<'_> {
+    fn new(
+        handle: ScopeHandle,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> GuardrailScopeCompletion<'_> {
         GuardrailScopeCompletion {
             handle: Some(handle),
             subscribers,
+            scope_stack,
         }
     }
 
     fn finish(mut self, output: Json) {
         let handle = self.handle.take().expect("guardrail scope handle");
-        NemoRelayContextState::emit_guardrail_scope_end(&handle, output, self.subscribers);
+        NemoRelayContextState::emit_guardrail_scope_end(
+            &handle,
+            output,
+            self.subscribers,
+            self.scope_stack.clone(),
+        );
     }
 }
 
@@ -81,6 +93,7 @@ impl Drop for GuardrailScopeCompletion<'_> {
                 "error": "guardrail evaluation cancelled",
             }),
             self.subscribers,
+            self.scope_stack.clone(),
         );
     }
 }
@@ -602,6 +615,7 @@ impl NemoRelayContextState {
         metadata: Option<Json>,
         input: Json,
         subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
     ) -> ScopeHandle {
         let handle = ScopeHandle::builder()
             .name(name)
@@ -623,7 +637,6 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        let scope_stack = super::current_scope_stack();
         let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
         subscriber_dispatcher::dispatch_sanitized_event(
             event,
@@ -638,6 +651,7 @@ impl NemoRelayContextState {
         handle: &ScopeHandle,
         output: Json,
         subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
     ) {
         let event = Event::Scope(ScopeEvent::new(
             BaseEvent::builder()
@@ -653,7 +667,6 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        let scope_stack = super::current_scope_stack();
         let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
         subscriber_dispatcher::dispatch_sanitized_event(
             event,
@@ -887,6 +900,7 @@ impl NemoRelayContextState {
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
         for entry in entries {
+            let scope_stack = super::current_scope_stack();
             let handle = Self::emit_guardrail_scope_start(
                 &entry.name,
                 parent_uuid,
@@ -896,8 +910,9 @@ impl NemoRelayContextState {
                     "target_name": name,
                 }),
                 subscribers,
+                scope_stack.clone(),
             );
-            let completion = GuardrailScopeCompletion::new(handle, subscribers);
+            let completion = GuardrailScopeCompletion::new(handle, subscribers, scope_stack);
             let callback = Arc::clone(&entry.payload);
             let callback_name = name.to_string();
             let callback_args = args.clone();
@@ -1265,6 +1280,7 @@ impl NemoRelayContextState {
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
         for entry in entries {
+            let scope_stack = super::current_scope_stack();
             let handle = Self::emit_guardrail_scope_start(
                 &entry.name,
                 parent_uuid,
@@ -1273,8 +1289,9 @@ impl NemoRelayContextState {
                     "kind": "llm_conditional_execution",
                 }),
                 subscribers,
+                scope_stack.clone(),
             );
-            let completion = GuardrailScopeCompletion::new(handle, subscribers);
+            let completion = GuardrailScopeCompletion::new(handle, subscribers, scope_stack);
             let callback = Arc::clone(&entry.payload);
             let callback_request = request.clone();
             let result = match AssertUnwindSafe(async move { callback(callback_request).await })

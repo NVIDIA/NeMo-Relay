@@ -414,6 +414,54 @@ async fn worker_event_sanitizers_preserve_prior_field_changes() {
 }
 
 #[tokio::test]
+async fn worker_sanitizer_nested_publication_precedes_already_queued_event() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::new()).await;
+    let names = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = names.clone();
+    register_subscriber(
+        "worker_nested_publication_order",
+        Arc::new(move |event| {
+            if event.name().starts_with("worker-nested-order-") {
+                captured.lock().unwrap().push(event.name().to_string());
+            }
+        }),
+    )
+    .expect("test subscriber should register");
+
+    TASK_SCOPE_STACK
+        .scope(create_scope_stack(), async {
+            event(
+                EmitMarkEventParams::builder()
+                    .name("worker-nested-order-outer")
+                    .build(),
+            )
+            .expect("outer mark should emit");
+            event(
+                EmitMarkEventParams::builder()
+                    .name("worker-nested-order-later")
+                    .build(),
+            )
+            .expect("later mark should emit");
+        })
+        .await;
+
+    flush_subscribers().expect("worker nested events should flush");
+    assert_eq!(
+        names.lock().unwrap().as_slice(),
+        [
+            "worker-nested-order-outer",
+            "worker-nested-order-inner",
+            "worker-nested-order-later",
+        ]
+    );
+
+    deregister_subscriber("worker_nested_publication_order")
+        .expect("test subscriber should deregister");
+    loaded.clear();
+}
+
+#[tokio::test]
 async fn host_cancellation_reaches_rust_worker_invocation() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let loaded = load_and_initialize_fixture(Map::new()).await;

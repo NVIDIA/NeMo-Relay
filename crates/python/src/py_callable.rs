@@ -357,7 +357,6 @@ fn capture_python_task_locals() -> Option<TaskLocals> {
 struct PythonPublicationContext {
     task_locals: Option<TaskLocals>,
     context: Py<PyAny>,
-    scope_stack: nemo_relay::api::runtime::ScopeStackHandle,
 }
 
 pub(crate) fn capture_python_publication_context() -> Option<PublicationContext> {
@@ -370,7 +369,6 @@ pub(crate) fn capture_python_publication_context() -> Option<PublicationContext>
         Some(Arc::new(PythonPublicationContext {
             task_locals: pyo3_async_runtimes::tokio::get_current_locals(py).ok(),
             context,
-            scope_stack: snapshot_scope_stack(&current_scope_stack()).ok()?,
         }) as PublicationContext)
     })
 }
@@ -427,10 +425,12 @@ fn copy_publication_invocation_with_buffer<'py>(
     publication_buffer: Option<PublicationBuffer>,
 ) -> PyResult<(Bound<'py, PyAny>, Option<TaskLocals>)> {
     let invocation_context = context.context.bind(py).call_method0("copy")?;
+    let scope_stack = snapshot_scope_stack(&current_scope_stack())
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     let scope_stack = Py::new(
         py,
         PyScopeStack {
-            inner: context.scope_stack.clone(),
+            inner: scope_stack,
             publication_buffer,
         },
     )?;
