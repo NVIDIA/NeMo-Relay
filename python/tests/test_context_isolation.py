@@ -4,8 +4,22 @@
 """Tests for per-request scope stack isolation via ContextVar."""
 
 import asyncio
+import uuid
+
+import pytest
 
 import nemo_relay
+from nemo_relay._native import capture_thread_scope_stack, restore_thread_scope_stack
+
+
+@pytest.fixture
+def restore_native_scope_stack():
+    """Restore the test thread's native scope binding after each test."""
+    binding = capture_thread_scope_stack()
+    try:
+        yield
+    finally:
+        restore_thread_scope_stack(binding)
 
 
 def test_create_scope_stack_returns_scope_stack():
@@ -13,6 +27,103 @@ def test_create_scope_stack_returns_scope_stack():
     stack = nemo_relay.create_scope_stack()
     assert isinstance(stack, nemo_relay.ScopeStack)
     assert repr(stack) == "<ScopeStack>"
+
+
+def test_propagation_context_installs_and_restores_a_scoped_stack():
+    original = nemo_relay.get_scope_stack()
+    root_uuid = str(uuid.uuid4())
+    parent_uuid = str(uuid.uuid4())
+    context = nemo_relay.PropagationContext(parent_uuid, root_uuid)
+    stack = nemo_relay.create_scope_stack_from_propagation(context)
+
+    with nemo_relay.use_scope_stack(stack):
+        assert nemo_relay.get_scope_stack() is stack
+        assert nemo_relay.scope.get_handle().uuid == parent_uuid
+
+    assert nemo_relay.get_scope_stack() is original
+
+
+def test_propagation_context_capture_and_constructor_validation():
+    root_uuid = str(uuid.uuid4())
+
+    with nemo_relay.scope.scope("sender", nemo_relay.ScopeType.Agent) as sender:
+        rootless = nemo_relay.capture_propagation_context()
+        rooted = nemo_relay.capture_propagation_context_with_root(root_uuid)
+
+    assert rootless.version == 1
+    assert rootless.root_uuid is None
+    assert rootless.parent_uuid == sender.uuid
+    assert rooted.version == 1
+    assert rooted.root_uuid == root_uuid
+    assert rooted.parent_uuid == sender.uuid
+
+    with pytest.raises(ValueError, match="invalid character"):
+        nemo_relay.PropagationContext("not-a-uuid")
+    with pytest.raises(ValueError, match="invalid character"):
+        nemo_relay.PropagationContext(str(uuid.uuid4()), "not-a-uuid")
+    with pytest.raises(ValueError, match="unsupported propagation context version 2; expected 1"):
+        nemo_relay.PropagationContext(str(uuid.uuid4()), version=2)
+    with pytest.raises(ValueError, match="invalid character"):
+        nemo_relay.capture_propagation_context_with_root("not-a-uuid")
+
+
+def test_propagation_context_json_round_trip_and_validation():
+    context = nemo_relay.PropagationContext(str(uuid.uuid4()), str(uuid.uuid4()))
+
+    encoded = context.to_json()
+    decoded = nemo_relay.PropagationContext.from_json(encoded)
+
+    assert decoded.version == context.version
+    assert decoded.root_uuid == context.root_uuid
+    assert decoded.parent_uuid == context.parent_uuid
+    with pytest.raises(ValueError, match="invalid propagation context JSON"):
+        nemo_relay.PropagationContext.from_json("not JSON")
+    with pytest.raises(ValueError, match="unsupported propagation context version 2; expected 1"):
+        nemo_relay.PropagationContext.from_json(f'{{"version":2,"parent_uuid":"{uuid.uuid4()}"}}')
+
+
+def test_rootless_and_root_parent_propagation_contexts_install_current_handle():
+    parent_uuid = str(uuid.uuid4())
+    rootless_stack = nemo_relay.create_scope_stack_from_propagation(nemo_relay.PropagationContext(parent_uuid))
+
+    with nemo_relay.use_scope_stack(rootless_stack):
+        assert nemo_relay.scope.get_handle().uuid == parent_uuid
+
+    root_stack = nemo_relay.create_scope_stack_from_propagation(nemo_relay.PropagationContext(parent_uuid, parent_uuid))
+    with nemo_relay.use_scope_stack(root_stack):
+        assert nemo_relay.scope.get_handle().uuid == parent_uuid
+
+
+def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native_scope_stack):
+    previous = nemo_relay.create_scope_stack()
+    replacement = nemo_relay.create_scope_stack()
+    nemo_relay.set_thread_scope_stack(previous)
+    previous_uuid = nemo_relay.scope.get_handle().uuid
+    assert nemo_relay.scope_stack_active()
+
+    with nemo_relay.use_scope_stack(replacement):
+        assert nemo_relay.scope.get_handle().uuid != previous_uuid
+
+    assert nemo_relay.scope.get_handle().uuid == previous_uuid
+    assert nemo_relay.scope_stack_active()
+
+
+def test_use_scope_stack_restores_nested_and_failing_contexts(restore_native_scope_stack):
+    previous = nemo_relay.create_scope_stack()
+    outer = nemo_relay.create_scope_stack()
+    inner = nemo_relay.create_scope_stack()
+    nemo_relay.set_thread_scope_stack(previous)
+    previous_uuid = nemo_relay.scope.get_handle().uuid
+
+    with nemo_relay.use_scope_stack(outer):
+        outer_uuid = nemo_relay.scope.get_handle().uuid
+        with pytest.raises(RuntimeError, match="expected failure"):
+            with nemo_relay.use_scope_stack(inner):
+                assert nemo_relay.scope.get_handle().uuid != outer_uuid
+                raise RuntimeError("expected failure")
+        assert nemo_relay.scope.get_handle().uuid == outer_uuid
+
+    assert nemo_relay.scope.get_handle().uuid == previous_uuid
 
 
 def test_get_scope_stack_returns_same_in_same_context():

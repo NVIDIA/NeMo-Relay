@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    Duration, FfiAtifExporter, FfiAtofExporter, FfiOpenInferenceSubscriber,
-    FfiOpenTelemetrySubscriber, NemoRelayStatus, c_char, c_str_to_json, c_str_to_string,
-    clear_last_error, core_subscriber_api, json_to_c_string, set_last_error, status_from_error,
-    str_to_c_string, tokio_runtime,
+    Duration, FfiAtifExporter, FfiAtofExporter, FfiOpenTelemetrySubscriber, NemoRelayStatus,
+    c_char, c_str_to_json, c_str_to_string, clear_last_error, core_subscriber_api,
+    json_to_c_string, set_last_error, status_from_error, str_to_c_string, tokio_runtime,
 };
 
 type AtofExporter = nemo_relay::observability::atof::AtofExporter;
@@ -14,9 +13,6 @@ type AtofExporterError = nemo_relay::observability::atof::AtofExporterError;
 type AtofExporterMode = nemo_relay::observability::atof::AtofExporterMode;
 type OpenTelemetryConfig = nemo_relay::observability::otel::OpenTelemetryConfig;
 type OpenTelemetrySubscriber = nemo_relay::observability::otel::OpenTelemetrySubscriber;
-type OpenInferenceConfig = nemo_relay::observability::openinference::OpenInferenceConfig;
-type OpenInferenceSubscriber = nemo_relay::observability::openinference::OpenInferenceSubscriber;
-type OtlpAttributeMapping = nemo_relay::observability::OtlpAttributeMapping;
 type ObservabilityComponentSpec = nemo_relay::observability::plugin_component::ComponentSpec;
 type ObservabilityConfig = nemo_relay::observability::plugin_component::ObservabilityConfig;
 
@@ -542,28 +538,6 @@ fn parse_string_map_json(
     Ok(out)
 }
 
-fn parse_attribute_mappings_json(
-    json_ptr: *const c_char,
-) -> Result<Vec<OtlpAttributeMapping>, NemoRelayStatus> {
-    if json_ptr.is_null() {
-        return Ok(Vec::new());
-    }
-    let json_string = c_str_to_string(json_ptr)?;
-    let value: serde_json::Value = serde_json::from_str(&json_string).map_err(|error| {
-        set_last_error(&format!("invalid attribute_mappings JSON: {error}"));
-        NemoRelayStatus::InvalidJson
-    })?;
-    let mappings: Vec<OtlpAttributeMapping> = serde_json::from_value(value).map_err(|error| {
-        set_last_error(&format!("invalid attribute_mappings: {error}"));
-        NemoRelayStatus::InvalidArg
-    })?;
-    nemo_relay::observability::validate_attribute_mappings(&mappings).map_err(|error| {
-        set_last_error(&format!("invalid attribute_mappings: {error}"));
-        NemoRelayStatus::InvalidArg
-    })?;
-    Ok(mappings)
-}
-
 fn required_out_ptr<T>(out: *mut *mut T) -> Result<(), NemoRelayStatus> {
     if out.is_null() {
         set_last_error("out pointer is null");
@@ -598,17 +572,6 @@ where
     })
 }
 
-fn apply_timeout<T, F>(config: T, timeout_millis: u64, apply: F) -> T
-where
-    F: FnOnce(T, Duration) -> T,
-{
-    if timeout_millis != 0 {
-        apply(config, Duration::from_millis(timeout_millis))
-    } else {
-        config
-    }
-}
-
 fn apply_string_map<T, F>(
     mut config: T,
     json_ptr: *const c_char,
@@ -628,37 +591,73 @@ fn parse_transport(ptr: *const c_char) -> Result<String, NemoRelayStatus> {
     parse_string_or_default(ptr, "http_binary")
 }
 
-fn otel_config_for_transport(
-    transport: &str,
-    service_name: String,
-) -> Result<OpenTelemetryConfig, NemoRelayStatus> {
-    match transport {
-        "http_binary" => Ok(OpenTelemetryConfig::http_binary(service_name)),
-        "grpc" => Ok(OpenTelemetryConfig::grpc(service_name)),
-        other => {
-            set_last_error(&format!(
-                "transport must be 'http_binary' or 'grpc', got {other:?}"
-            ));
-            Err(NemoRelayStatus::InvalidArg)
-        }
-    }
+fn parse_mark_projection(
+    ptr: *const c_char,
+) -> Result<nemo_relay::observability::MarkProjection, NemoRelayStatus> {
+    let value = parse_string_or_default(ptr, "inherit")?;
+    serde_json::from_value(serde_json::Value::String(value)).map_err(|error| {
+        set_last_error(&error.to_string());
+        NemoRelayStatus::InvalidArg
+    })
 }
 
-fn openinference_config_for_transport(
+fn parse_mark_exclude_names(ptr: *const c_char) -> Result<Vec<String>, NemoRelayStatus> {
+    if ptr.is_null() {
+        return Ok(nemo_relay::observability::default_mark_exclude_names());
+    }
+    let Some(value) = c_str_to_json(ptr) else {
+        return Err(NemoRelayStatus::InvalidJson);
+    };
+    serde_json::from_value(value).map_err(|error| {
+        set_last_error(&format!(
+            "mark_exclude_names must be an array of strings: {error}"
+        ));
+        NemoRelayStatus::InvalidArg
+    })
+}
+
+fn parse_attribute_mappings(
+    ptr: *const c_char,
+) -> Result<Vec<nemo_relay::observability::OtlpAttributeMapping>, NemoRelayStatus> {
+    if ptr.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(value) = c_str_to_json(ptr) else {
+        return Err(NemoRelayStatus::InvalidJson);
+    };
+    let mappings: Vec<nemo_relay::observability::OtlpAttributeMapping> =
+        serde_json::from_value(value).map_err(|error| {
+            set_last_error(&format!(
+                "attribute_mappings must be an array of mappings: {error}"
+            ));
+            NemoRelayStatus::InvalidArg
+        })?;
+    nemo_relay::observability::validate_attribute_mappings(&mappings).map_err(|error| {
+        set_last_error(&error.to_string());
+        NemoRelayStatus::InvalidArg
+    })?;
+    Ok(mappings)
+}
+
+fn otel_config_for_transport(
     transport: &str,
-) -> Result<OpenInferenceConfig, NemoRelayStatus> {
-    match transport {
-        "http_binary" => Ok(OpenInferenceConfig::new()
-            .with_transport(nemo_relay::observability::openinference::OtlpTransport::HttpBinary)),
-        "grpc" => Ok(OpenInferenceConfig::new()
-            .with_transport(nemo_relay::observability::openinference::OtlpTransport::Grpc)),
+    otel_type: nemo_relay::observability::OpenTelemetryType,
+    endpoint: String,
+    service_name: String,
+) -> Result<OpenTelemetryConfig, NemoRelayStatus> {
+    let transport = match transport {
+        "http_binary" => nemo_relay::observability::otel::OtlpTransport::HttpBinary,
+        "grpc" => nemo_relay::observability::otel::OtlpTransport::Grpc,
         other => {
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
             ));
-            Err(NemoRelayStatus::InvalidArg)
+            return Err(NemoRelayStatus::InvalidArg);
         }
-    }
+    };
+    Ok(OpenTelemetryConfig::new(otel_type, endpoint)
+        .with_transport(transport)
+        .with_service_name(service_name))
 }
 
 fn create_otel_subscriber(
@@ -671,26 +670,100 @@ fn create_otel_subscriber(
     })
 }
 
-fn create_openinference_subscriber(
-    config: OpenInferenceConfig,
-) -> Result<OpenInferenceSubscriber, NemoRelayStatus> {
-    let _runtime_guard = tokio_runtime().enter();
-    OpenInferenceSubscriber::new(config).map_err(|error| {
-        set_last_error(&error.to_string());
-        NemoRelayStatus::Internal
-    })
+fn parse_otel_type(
+    ptr: *const c_char,
+) -> Result<nemo_relay::observability::OpenTelemetryType, NemoRelayStatus> {
+    match parse_optional_string(ptr)? {
+        Some(value) if value == "full" => Ok(nemo_relay::observability::OpenTelemetryType::Full),
+        Some(value) if value == "gen_ai" => Ok(nemo_relay::observability::OpenTelemetryType::GenAi),
+        Some(value) if value == "openinference" => {
+            Ok(nemo_relay::observability::OpenTelemetryType::OpenInference)
+        }
+        Some(value) => {
+            set_last_error(&format!(
+                "type must be 'full', 'gen_ai', or 'openinference', got {value:?}"
+            ));
+            Err(NemoRelayStatus::InvalidArg)
+        }
+        None => {
+            set_last_error("type is required");
+            Err(NemoRelayStatus::InvalidArg)
+        }
+    }
 }
 
-/// Creates a new OpenTelemetry subscriber.
+fn parse_required_otel_endpoint(ptr: *const c_char) -> Result<String, NemoRelayStatus> {
+    match parse_optional_string(ptr)? {
+        Some(value) if !value.trim().is_empty() => Ok(value),
+        _ => {
+            set_last_error("endpoint is required and must be nonblank");
+            Err(NemoRelayStatus::InvalidArg)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_ffi_otel_config(
+    otel_type: *const c_char,
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+) -> Result<OpenTelemetryConfig, NemoRelayStatus> {
+    let mut config = otel_config_for_transport(
+        &parse_transport(transport)?,
+        parse_otel_type(otel_type)?,
+        parse_required_otel_endpoint(endpoint)?,
+        parse_string_or_default(service_name, "unknown_service")?,
+    )?;
+    config = apply_optional_string(
+        config,
+        service_namespace,
+        OpenTelemetryConfig::with_service_namespace,
+    )?;
+    config = apply_optional_string(
+        config,
+        service_version,
+        OpenTelemetryConfig::with_service_version,
+    )?;
+    config = config
+        .with_instrumentation_scope(parse_string_or_default(
+            instrumentation_scope,
+            "opentelemetry",
+        )?)
+        .with_timeout(Duration::from_millis(if timeout_millis == 0 {
+            3_000
+        } else {
+            timeout_millis
+        }));
+    config = apply_string_map(
+        config,
+        headers_json,
+        "headers",
+        OpenTelemetryConfig::with_header,
+    )?;
+    apply_string_map(
+        config,
+        resource_attributes_json,
+        "resource_attributes",
+        OpenTelemetryConfig::with_resource_attribute,
+    )
+}
+
+/// Creates one typed OpenTelemetry exporter subscriber.
 ///
-/// Nullable strings use crate defaults when omitted. `headers_json` and
-/// `resource_attributes_json` must be JSON objects of string values when
-/// provided.
+/// `otel_type` must be `full`, `gen_ai`, or `openinference`. `endpoint` is required.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
+    otel_type: *const c_char,
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
@@ -702,31 +775,45 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
     timeout_millis: u64,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_subscriber_create_with_attribute_mappings(
-            transport,
-            endpoint,
-            headers_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            std::ptr::null(),
-            out,
-        )
+    clear_last_error();
+    if let Err(status) = required_out_ptr(out) {
+        return status;
     }
+    let config = match build_ffi_otel_config(
+        otel_type,
+        transport,
+        endpoint,
+        headers_json,
+        resource_attributes_json,
+        service_name,
+        service_namespace,
+        service_version,
+        instrumentation_scope,
+        timeout_millis,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    let subscriber = match create_otel_subscriber(config) {
+        Ok(subscriber) => subscriber,
+        Err(status) => return status,
+    };
+    unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
+    NemoRelayStatus::Ok
 }
 
-/// Creates a new OpenTelemetry subscriber with typed attribute mappings.
+/// Creates one typed OpenTelemetry exporter subscriber with projection controls.
 ///
-/// `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+/// The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
+/// `attribute_mappings: [{"key":"…","alias":"…"}]` shapes. Pass null for either
+/// array to use its default. `mark_projection` is `inherit`, `event`, or `tool`.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
+#[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_attribute_mappings(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options(
+    otel_type: *const c_char,
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
@@ -736,6 +823,8 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_attribute_mappin
     service_version: *const c_char,
     instrumentation_scope: *const c_char,
     timeout_millis: u64,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
     attribute_mappings_json: *const c_char,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
@@ -743,73 +832,34 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_attribute_mappin
     if let Err(status) = required_out_ptr(out) {
         return status;
     }
-
-    let transport = match parse_transport(transport) {
-        Ok(value) => value,
-        Err(status) => return status,
-    };
-    let service_name = match parse_string_or_default(service_name, "nemo-relay") {
-        Ok(value) => value,
-        Err(status) => return status,
-    };
-
-    let mut config = match otel_config_for_transport(&transport, service_name) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = match apply_optional_string(config, endpoint, OpenTelemetryConfig::with_endpoint) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = match apply_optional_string(
-        config,
-        service_namespace,
-        OpenTelemetryConfig::with_service_namespace,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = match apply_optional_string(
-        config,
-        service_version,
-        OpenTelemetryConfig::with_service_version,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = match apply_optional_string(
-        config,
-        instrumentation_scope,
-        OpenTelemetryConfig::with_instrumentation_scope,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = apply_timeout(config, timeout_millis, OpenTelemetryConfig::with_timeout);
-    config = match apply_string_map(
-        config,
+    let config = match build_ffi_otel_config(
+        otel_type,
+        transport,
+        endpoint,
         headers_json,
-        "headers",
-        OpenTelemetryConfig::with_header,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    let attribute_mappings = match parse_attribute_mappings_json(attribute_mappings_json) {
-        Ok(mappings) => mappings,
-        Err(status) => return status,
-    };
-    config = config.with_attribute_mappings(attribute_mappings);
-    config = match apply_string_map(
-        config,
         resource_attributes_json,
-        "resource_attributes",
-        OpenTelemetryConfig::with_resource_attribute,
+        service_name,
+        service_namespace,
+        service_version,
+        instrumentation_scope,
+        timeout_millis,
     ) {
         Ok(config) => config,
         Err(status) => return status,
     };
-
+    let config = config
+        .with_mark_projection(match parse_mark_projection(mark_projection) {
+            Ok(value) => value,
+            Err(status) => return status,
+        })
+        .with_mark_exclude_names(match parse_mark_exclude_names(mark_exclude_names_json) {
+            Ok(value) => value,
+            Err(status) => return status,
+        })
+        .with_attribute_mappings(match parse_attribute_mappings(attribute_mappings_json) {
+            Ok(value) => value,
+            Err(status) => return status,
+        });
     let subscriber = match create_otel_subscriber(config) {
         Ok(subscriber) => subscriber,
         Err(status) => return status,
@@ -896,237 +946,6 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_force_flush(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_subscriber_shutdown(
     subscriber: *const FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if subscriber.is_null() {
-        set_last_error("subscriber pointer is null");
-        return NemoRelayStatus::NullPointer;
-    }
-
-    match unsafe { &*subscriber }.0.shutdown() {
-        Ok(()) => NemoRelayStatus::Ok,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            NemoRelayStatus::Internal
-        }
-    }
-}
-
-/// Creates a new OpenInference subscriber.
-///
-/// Nullable strings use crate defaults when omitted. `headers_json` and
-/// `resource_attributes_json` must be JSON objects of string values when
-/// provided.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_openinference_subscriber_create(
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    out: *mut *mut FfiOpenInferenceSubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_openinference_subscriber_create_with_attribute_mappings(
-            transport,
-            endpoint,
-            headers_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            std::ptr::null(),
-            out,
-        )
-    }
-}
-
-/// Creates a new OpenInference subscriber with typed attribute mappings.
-///
-/// `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_openinference_subscriber_create_with_attribute_mappings(
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    attribute_mappings_json: *const c_char,
-    out: *mut *mut FfiOpenInferenceSubscriber,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if let Err(status) = required_out_ptr(out) {
-        return status;
-    }
-
-    let transport = match parse_transport(transport) {
-        Ok(value) => value,
-        Err(status) => return status,
-    };
-    let mut config = match openinference_config_for_transport(&transport) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config =
-        match apply_optional_string(config, service_name, OpenInferenceConfig::with_service_name) {
-            Ok(config) => config,
-            Err(status) => return status,
-        };
-    config = match apply_optional_string(config, endpoint, OpenInferenceConfig::with_endpoint) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = match apply_optional_string(
-        config,
-        service_namespace,
-        OpenInferenceConfig::with_service_namespace,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = match apply_optional_string(
-        config,
-        service_version,
-        OpenInferenceConfig::with_service_version,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = match apply_optional_string(
-        config,
-        instrumentation_scope,
-        OpenInferenceConfig::with_instrumentation_scope,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    config = apply_timeout(config, timeout_millis, OpenInferenceConfig::with_timeout);
-    config = match apply_string_map(
-        config,
-        headers_json,
-        "headers",
-        OpenInferenceConfig::with_header,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    let attribute_mappings = match parse_attribute_mappings_json(attribute_mappings_json) {
-        Ok(mappings) => mappings,
-        Err(status) => return status,
-    };
-    config = config.with_attribute_mappings(attribute_mappings);
-    config = match apply_string_map(
-        config,
-        resource_attributes_json,
-        "resource_attributes",
-        OpenInferenceConfig::with_resource_attribute,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-
-    let subscriber = match create_openinference_subscriber(config) {
-        Ok(subscriber) => subscriber,
-        Err(status) => return status,
-    };
-    unsafe { *out = Box::into_raw(Box::new(FfiOpenInferenceSubscriber(subscriber))) };
-    NemoRelayStatus::Ok
-}
-
-/// Registers the OpenInference subscriber as an event subscriber.
-///
-/// # Safety
-/// `subscriber` and `name` must be valid, non-null pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_openinference_subscriber_register(
-    subscriber: *const FfiOpenInferenceSubscriber,
-    name: *const c_char,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if subscriber.is_null() {
-        set_last_error("subscriber pointer is null");
-        return NemoRelayStatus::NullPointer;
-    }
-    let name = match c_str_to_string(name) {
-        Ok(s) => s,
-        Err(status) => return status,
-    };
-
-    match unsafe { &*subscriber }.0.register(&name) {
-        Ok(()) => NemoRelayStatus::Ok,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            NemoRelayStatus::Internal
-        }
-    }
-}
-
-/// Deregisters the OpenInference subscriber by name.
-///
-/// # Safety
-/// `name` must be a valid C string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_openinference_subscriber_deregister(
-    name: *const c_char,
-) -> NemoRelayStatus {
-    clear_last_error();
-    let name = match c_str_to_string(name) {
-        Ok(s) => s,
-        Err(status) => return status,
-    };
-
-    match core_subscriber_api::deregister_subscriber(&name) {
-        Ok(_) => NemoRelayStatus::Ok,
-        Err(e) => status_from_error(&e),
-    }
-}
-
-/// Forces a flush of finished spans through the exporter.
-///
-/// # Safety
-/// `subscriber` must be a valid, non-null pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_openinference_subscriber_force_flush(
-    subscriber: *const FfiOpenInferenceSubscriber,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if subscriber.is_null() {
-        set_last_error("subscriber pointer is null");
-        return NemoRelayStatus::NullPointer;
-    }
-
-    match unsafe { &*subscriber }.0.force_flush() {
-        Ok(()) => NemoRelayStatus::Ok,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            NemoRelayStatus::Internal
-        }
-    }
-}
-
-/// Shuts down the underlying tracer provider.
-///
-/// # Safety
-/// `subscriber` must be a valid, non-null pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_openinference_subscriber_shutdown(
-    subscriber: *const FfiOpenInferenceSubscriber,
 ) -> NemoRelayStatus {
     clear_last_error();
     if subscriber.is_null() {

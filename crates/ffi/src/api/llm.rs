@@ -2,16 +2,140 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    Arc, FfiCodecHandle, FfiLLMHandle, FfiScopeHandle, FlowResult, LlmAttributes,
-    LlmExecutionNextFn, LlmRequest, LlmStreamExecutionNextFn, NemoRelayCodecDecodeFn,
-    NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayFinalizerCb, NemoRelayFreeFn,
-    NemoRelayLlmExecCb, NemoRelayStatus, TASK_SCOPE_STACK, c_char, c_str_to_json,
-    c_str_to_opt_json, c_str_to_string, clear_last_error, core_llm_api, current_scope_stack,
-    json_to_c_string, set_last_error, status_from_error, tokio_runtime,
-    unix_micros_to_opt_timestamp, wrap_codec_fn, wrap_collector_fn, wrap_finalizer_fn,
-    wrap_llm_exec_fn, wrap_llm_stream_exec_fn,
+    Arc, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest, FfiLlmSanitizeRequestCodec,
+    FfiLlmSanitizeResponseCodec, FfiScopeHandle, FlowResult, LlmAttributes, LlmExecutionNextFn,
+    LlmRequest, LlmStreamExecutionNextFn, NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn,
+    NemoRelayCollectorCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmExecCb,
+    NemoRelayStatus, TASK_SCOPE_STACK, c_char, c_str_to_json, c_str_to_opt_json, c_str_to_string,
+    clear_last_error, core_llm_api, current_scope_stack, json_to_c_string, set_last_error,
+    status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
+    wrap_collector_fn, wrap_finalizer_fn, wrap_llm_exec_fn, wrap_llm_stream_exec_fn,
 };
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use tokio_stream::StreamExt;
+
+/// Decode a request through a callback-scoped sanitizer codec capability.
+///
+/// The returned JSON string must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// Both pointers must be non-null and valid only during the sanitizer callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_sanitize_request_codec_decode(
+    codec: *const FfiLlmSanitizeRequestCodec,
+    request: *const FfiLLMRequest,
+) -> *mut c_char {
+    clear_last_error();
+    if codec.is_null() || request.is_null() {
+        set_last_error("null sanitizer request codec argument");
+        return std::ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut c_char, String> {
+            let annotated = unsafe { &*codec }
+                .0
+                .decode(&unsafe { &*request }.0)
+                .map_err(|error| error.to_string())?;
+            let value = serde_json::to_value(annotated).map_err(|error| error.to_string())?;
+            Ok(json_to_c_string(&value))
+        },
+    ));
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(&error);
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("sanitizer request codec decode panicked");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Encode normalized request changes through a callback-scoped codec capability.
+///
+/// The returned request is owned by the caller and must be freed with
+/// `nemo_relay_llm_request_free`. Returns null on failure.
+///
+/// # Safety
+/// All pointers must be non-null and valid only during the sanitizer callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_sanitize_request_codec_encode(
+    codec: *const FfiLlmSanitizeRequestCodec,
+    annotated_json: *const c_char,
+    original: *const FfiLLMRequest,
+) -> *mut FfiLLMRequest {
+    clear_last_error();
+    if codec.is_null() || annotated_json.is_null() || original.is_null() {
+        set_last_error("null sanitizer request codec argument");
+        return std::ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut FfiLLMRequest, String> {
+            let annotated = c_str_to_json(annotated_json)
+                .and_then(|value| serde_json::from_value(value).ok())
+                .ok_or_else(|| "invalid annotated request JSON".to_string())?;
+            let request = unsafe { &*codec }
+                .0
+                .encode(&annotated, &unsafe { &*original }.0)
+                .map_err(|error| error.to_string())?;
+            Ok(Box::into_raw(Box::new(FfiLLMRequest(request))))
+        },
+    ));
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(&error);
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("sanitizer request codec encode panicked");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Decode a response through a callback-scoped sanitizer codec capability.
+///
+/// The returned JSON string must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// All pointers must be non-null and valid only during the sanitizer callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_sanitize_response_codec_decode(
+    codec: *const FfiLlmSanitizeResponseCodec,
+    response_json: *const c_char,
+) -> *mut c_char {
+    clear_last_error();
+    if codec.is_null() || response_json.is_null() {
+        set_last_error("null sanitizer response codec argument");
+        return std::ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut c_char, String> {
+            let response =
+                c_str_to_json(response_json).ok_or_else(|| "invalid response JSON".to_string())?;
+            let annotated = unsafe { &*codec }
+                .0
+                .decode_response(&response)
+                .map_err(|error| error.to_string())?;
+            let value = serde_json::to_value(annotated).map_err(|error| error.to_string())?;
+            Ok(json_to_c_string(&value))
+        },
+    ));
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(&error);
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("sanitizer response codec decode panicked");
+            std::ptr::null_mut()
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LLM lifecycle

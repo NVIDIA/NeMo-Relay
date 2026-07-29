@@ -4,6 +4,7 @@
 //! Coverage tests for coverage in the NeMo Relay Python crate.
 
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
@@ -48,6 +49,29 @@ fn make_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::from_iter([("x-trace".into(), json!("1"))]),
         content: json!({"model": "test-model", "messages": []}),
+    }
+}
+
+/// Restores the process working directory after a plugin-layering test.
+///
+/// Plugin discovery intentionally walks from the working directory, so this
+/// guard keeps coverage tests independent of a developer's parent project
+/// configuration. The Python test guard serializes these process-global test
+/// changes.
+struct CurrentDirectoryGuard(PathBuf);
+
+impl CurrentDirectoryGuard {
+    fn move_to_temporary_directory() -> Self {
+        let original = std::env::current_dir().expect("test process has a working directory");
+        std::env::set_current_dir(std::env::temp_dir())
+            .expect("temporary directory is available for plugin config discovery");
+        Self(original)
+    }
+}
+
+impl Drop for CurrentDirectoryGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.0).expect("restore test working directory");
     }
 }
 
@@ -346,6 +370,7 @@ fn test_py_adaptive_binding_rejects_zero_sensitivity() {
 fn test_plugin_bindings_validate_configure_and_clear() {
     let _python = crate::test_support::init_python_test();
     let _plugin_test_state = crate::py_plugin::lock_plugin_test_state_for_tests();
+    let _working_directory = CurrentDirectoryGuard::move_to_temporary_directory();
     Python::attach(|py| {
         nemo_relay_adaptive::plugin_component::register_adaptive_component().unwrap();
 
@@ -405,10 +430,10 @@ def tool_passthrough(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):
@@ -610,7 +635,7 @@ def tool_fail(name, args):
 def tool_cond_bad(name, args):
     return 123
 
-def llm_sanitize_bad(request):
+def llm_sanitize_bad(request, context):
     return {"bad": True}
 
 def llm_cond_bad(request):
@@ -622,7 +647,7 @@ def llm_cond_none(request):
 def llm_req_bad(name, request):
     return {"bad": True}
 
-def llm_resp_fail(response):
+def llm_resp_fail(response, context):
     raise RuntimeError("resp boom")
 
 def collector_fail(chunk):
@@ -656,8 +681,15 @@ def event_fail(event):
 
         let request = make_request();
         let llm_sanitize =
-            wrap_py_llm_sanitize_request_fn(module.getattr("llm_sanitize_bad").unwrap().unbind());
-        assert_eq!(llm_sanitize(request.clone()).content, request.content);
+            wrap_py_llm_sanitize_request_fn(module.getattr("llm_sanitize_bad").unwrap().unbind())
+                .unwrap();
+        assert_eq!(
+            llm_sanitize(
+                request.clone(),
+                nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+            ),
+            None
+        );
 
         let llm_cond = wrap_py_llm_conditional_fn(module.getattr("llm_cond_bad").unwrap().unbind());
         assert!(
@@ -689,8 +721,15 @@ def event_fail(event):
         );
 
         let llm_resp =
-            wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_fail").unwrap().unbind());
-        assert_eq!(llm_resp(json!({"ok": true})), json!({"ok": true}));
+            wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_fail").unwrap().unbind())
+                .unwrap();
+        assert_eq!(
+            llm_resp(
+                json!({"ok": true}),
+                nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+            ),
+            None
+        );
 
         let mut collector =
             wrap_py_collector_fn(module.getattr("collector_fail").unwrap().unbind());

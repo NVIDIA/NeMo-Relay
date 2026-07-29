@@ -104,8 +104,8 @@ Normalized codec output is applicable to several runtime layers:
 - Request intercepts or request-side middleware that need stable request meaning
 - Lifecycle events that should expose consistent semantic payloads
 - Subscribers that inspect runtime activity in process
-- Exporters that write raw ATOF events or project them into ATIF,
-  OpenTelemetry, or OpenInference
+- Exporters that write raw ATOF events or project them into ATIF or typed
+  OpenTelemetry output
 
 Codecs do not replace scopes, middleware, subscribers, or plugins. They make
 those layers easier to apply consistently across heterogeneous inputs.
@@ -189,10 +189,10 @@ grade provider data.
 
 ### Exporter Projection
 
-Exporter projection is the final step. ATIF, OpenTelemetry, and OpenInference
-may project the same normalized facts into different output schemas, but generic
-extraction should stay outside exporter-specific formatting where possible.
-ATIF-specific trajectory shaping, OpenTelemetry attributes, and OpenInference
+Exporter projection is the final step. ATIF and the typed OpenTelemetry
+projections can map the same normalized facts into different output schemas,
+but generic extraction should stay outside exporter-specific formatting where
+possible. ATIF-specific trajectory shaping and each OpenTelemetry projection's
 semantic attributes remain exporter-local.
 
 ## Codec Decision Limitations

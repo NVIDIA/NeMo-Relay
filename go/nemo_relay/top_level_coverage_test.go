@@ -39,7 +39,6 @@ func TestTopLevelNemoRelayCoverage(t *testing.T) {
 	assertCheckedJSONStringFailureCoverage(t)
 	assertNilLLMRequestWrapperCoverage(t)
 	assertOpenTelemetryMarshalFailureCoverage(t)
-	assertOpenInferenceMarshalFailureCoverage(t)
 }
 
 func TestTopLevelCallbacksCoverage(t *testing.T) {
@@ -146,7 +145,8 @@ func assertOpenTelemetryMarshalFailureCoverage(t *testing.T) {
 	jsonMarshal = func(v any) ([]byte, error) {
 		return nil, errors.New("forced otel headers marshal failure")
 	}
-	_, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{})
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	_, err := NewOpenTelemetrySubscriber(config)
 	assertErrorContains(t, err, "forced otel headers marshal failure", "OpenTelemetry header marshal")
 
 	callCount := 0
@@ -157,32 +157,8 @@ func assertOpenTelemetryMarshalFailureCoverage(t *testing.T) {
 		}
 		return oldMarshal(v)
 	}
-	_, err = NewOpenTelemetrySubscriber(OpenTelemetryConfig{})
+	_, err = NewOpenTelemetrySubscriber(config)
 	assertErrorContains(t, err, "forced otel resource marshal failure", "OpenTelemetry resource marshal")
-}
-
-func assertOpenInferenceMarshalFailureCoverage(t *testing.T) {
-	t.Helper()
-
-	oldMarshal := jsonMarshal
-	t.Cleanup(func() { jsonMarshal = oldMarshal })
-
-	jsonMarshal = func(v any) ([]byte, error) {
-		return nil, errors.New("forced openinference headers marshal failure")
-	}
-	_, err := NewOpenInferenceSubscriber(OpenInferenceConfig{})
-	assertErrorContains(t, err, "forced openinference headers marshal failure", "OpenInference header marshal")
-
-	callCount := 0
-	jsonMarshal = func(v any) ([]byte, error) {
-		callCount++
-		if callCount == 2 {
-			return nil, errors.New("forced openinference resource marshal failure")
-		}
-		return oldMarshal(v)
-	}
-	_, err = NewOpenInferenceSubscriber(OpenInferenceConfig{})
-	assertErrorContains(t, err, "forced openinference resource marshal failure", "OpenInference resource marshal")
 }
 
 func assertRegisterClosurePanicCoverage(t *testing.T) {

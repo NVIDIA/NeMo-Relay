@@ -8,8 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 `nemo-relay-openclaw` is the NeMo Relay observability plugin package for
 OpenClaw. It converts supported OpenClaw hook events into NeMo Relay sessions,
 LLM spans, tool spans, and lifecycle marks that the generic NeMo Relay
-observability component can export as ATIF JSON, OpenTelemetry spans, and
-OpenInference/Phoenix spans. The same generic plugin config path can initialize
+observability component can export as ATIF JSON and typed OpenTelemetry spans,
+including the OpenInference projection for Phoenix. The same generic plugin config path can initialize
 Adaptive components for hook-backed telemetry learning.
 
 This public OpenClaw plugin package uses OpenClaw public hooks. It can run
@@ -33,8 +33,8 @@ through a public plugin hook.
 - Generic NeMo Relay plugin initialization through `config.plugins`.
 - ATIF JSON export through the built-in `observability` component.
 - Adaptive plugin initialization through `config.plugins`.
-- Optional OpenTelemetry OTLP export.
-- Optional OpenInference/Phoenix OTLP export.
+- Optional typed OpenTelemetry OTLP endpoints using `full`, `gen_ai`, or
+  `openinference` projection.
 - Bounded LLM replay correlation across supported OpenClaw hooks.
 - Tool span replay with conservative privacy defaults.
 - Admin-scoped `nemoRelay.status` gateway health method.
@@ -82,7 +82,7 @@ OpenClaw plugin configuration under `plugins.entries["nemo-relay"].config`:
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                  "version": 1,
+                  "version": 3,
                   "atif": {
                     "enabled": true,
                     "agent_name": "openclaw",
@@ -90,15 +90,20 @@ OpenClaw plugin configuration under `plugins.entries["nemo-relay"].config`:
                   },
                   "opentelemetry": {
                     "enabled": false,
-                    "transport": "http_binary",
-                    "endpoint": "http://localhost:4318/v1/traces",
-                    "service_name": "openclaw-nemo-relay"
-                  },
-                  "openinference": {
-                    "enabled": false,
-                    "transport": "http_binary",
-                    "endpoint": "http://localhost:6006/v1/traces",
-                    "service_name": "openclaw-nemo-relay"
+                    "endpoints": [
+                      {
+                        "type": "full",
+                        "transport": "http_binary",
+                        "endpoint": "http://localhost:4318/v1/traces",
+                        "service_name": "openclaw-nemo-relay"
+                      },
+                      {
+                        "type": "openinference",
+                        "transport": "http_binary",
+                        "endpoint": "http://localhost:6006/v1/traces",
+                        "service_name": "openclaw-nemo-relay"
+                      }
+                    ]
                   }
                 }
               },
@@ -156,11 +161,10 @@ do not use, or set their `enabled` fields to `false`.
   `adaptive`.
 - `config.plugins.components[].config.atif` writes ATIF trajectory JSON files.
   Set `output_directory` to the directory where OpenClaw should write files.
-- `config.plugins.components[].config.opentelemetry` sends generic OTLP spans to
-  an OpenTelemetry collector when `enabled` is `true`.
-- `config.plugins.components[].config.openinference` sends OpenInference OTLP
-  spans to Phoenix or another OpenInference-compatible collector when `enabled`
-  is `true`.
+- `config.plugins.components[].config.opentelemetry.endpoints` sends typed OTLP
+  spans when the OpenTelemetry section is enabled. Use `full` for the complete
+  NeMo Relay projection, `gen_ai` for standardized GenAI conventions, or
+  `openinference` for Phoenix and other OpenInference-compatible collectors.
 - `config.plugins.components[]` entries with `kind: "adaptive"` initialize the
   Adaptive plugin. In hook-backed OpenClaw mode, adaptive telemetry can consume
   replayed NeMo Relay events, while request-rewrite features such as adaptive
@@ -191,9 +195,9 @@ sink:
 
 - ATIF: confirm JSON files appear in the configured
   `config.plugins.components[].config.atif.output_directory`.
-- OpenTelemetry: confirm spans arrive at the configured OTLP collector.
-- OpenInference: confirm spans arrive at the configured OpenInference/Phoenix
-  endpoint.
+- Typed OpenTelemetry: confirm spans arrive at every configured OTLP endpoint;
+  for an `openinference` endpoint, confirm the projected spans appear in
+  Phoenix or another OpenInference-compatible backend.
 
 The plugin also registers the `operator.admin` scoped gateway method
 `nemoRelay.status`. If your CLI is already paired with admin-capable gateway
@@ -229,9 +233,9 @@ session emits the relevant LLM, message-write, and tool hooks.
 
 If no export output appears, verify
 `config.plugins.components[].config.atif.output_directory`,
-`config.plugins.components[].config.opentelemetry.endpoint`, or
-`config.plugins.components[].config.openinference.endpoint`, then confirm the
-configured collector or output directory is reachable.
+or each
+`config.plugins.components[].config.opentelemetry.endpoints[].endpoint`, then
+confirm the configured collector or output directory is reachable.
 
 ## Development
 

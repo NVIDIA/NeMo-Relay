@@ -69,8 +69,50 @@ unsafe extern "C" fn llm_request_intercept_invalid_annotated_cb(
 unsafe extern "C" fn llm_request_passthrough_cb(
     _user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeRequestContext,
 ) -> *mut FfiLLMRequest {
     Box::into_raw(Box::new(FfiLLMRequest(unsafe { (&*request).0.clone() })))
+}
+
+unsafe extern "C" fn llm_request_codec_round_trip_cb(
+    _user_data: *mut libc::c_void,
+    request: *const FfiLLMRequest,
+    context: NemoRelayLlmSanitizeRequestContext,
+) -> *mut FfiLLMRequest {
+    assert_eq!(context.codec_kind, NemoRelayLlmSanitizeCodecKind::BuiltIn);
+    assert_eq!(
+        unsafe { CStr::from_ptr(context.codec_id) }
+            .to_str()
+            .unwrap(),
+        "openai_chat"
+    );
+    let annotated = unsafe { nemo_relay_llm_sanitize_request_codec_decode(context.codec, request) };
+    assert!(!annotated.is_null());
+    let normalized: Json =
+        serde_json::from_str(unsafe { CStr::from_ptr(annotated) }.to_str().unwrap()).unwrap();
+    assert_eq!(normalized["model"], json!("gpt-test"));
+    let encoded =
+        unsafe { nemo_relay_llm_sanitize_request_codec_encode(context.codec, annotated, request) };
+    unsafe { nemo_relay_string_free_internal(annotated) };
+    encoded
+}
+
+unsafe extern "C" fn llm_response_codec_decode_cb(
+    _user_data: *mut libc::c_void,
+    response: *const c_char,
+    context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
+    assert_eq!(context.codec_kind, NemoRelayLlmSanitizeCodecKind::BuiltIn);
+    let annotated =
+        unsafe { nemo_relay_llm_sanitize_response_codec_decode(context.codec, response) };
+    assert!(!annotated.is_null());
+    let normalized: Json =
+        serde_json::from_str(unsafe { CStr::from_ptr(annotated) }.to_str().unwrap()).unwrap();
+    assert_eq!(normalized["model"], json!("gpt-test"));
+    unsafe { nemo_relay_string_free_internal(annotated) };
+    CString::new(unsafe { CStr::from_ptr(response) }.to_bytes())
+        .unwrap()
+        .into_raw()
 }
 
 unsafe extern "C" fn llm_conditional_error_cb(
@@ -227,7 +269,11 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
     );
 
     let sanitize = wrap_llm_sanitize_request_fn(llm_request_passthrough_cb, ptr::null_mut(), None);
-    let sanitized = sanitize(request.clone());
+    let sanitized = sanitize(
+        request.clone(),
+        nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+    )
+    .expect("non-null sanitizer result");
     assert_eq!(sanitized.content, request.content);
 
     let conditional = wrap_llm_conditional_fn(llm_conditional_error_cb, ptr::null_mut(), None);
@@ -297,4 +343,44 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
     );
     let encode_err = invalid_encode.encode(&annotated, &request).unwrap_err();
     assert!(encode_err.to_string().contains("invalid result JSON"));
+}
+
+#[test]
+fn test_sanitizer_context_resolves_directional_ffi_codecs() {
+    use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+    use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+
+    let codec = Arc::new(OpenAIChatCodec);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}],
+            "preserve": true
+        }),
+    };
+    let sanitized =
+        wrap_llm_sanitize_request_fn(llm_request_codec_round_trip_cb, ptr::null_mut(), None)(
+            request.clone(),
+            LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+        )
+        .expect("codec round trip returns a request");
+    assert_eq!(sanitized.content, request.content);
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let sanitized =
+        wrap_llm_sanitize_response_fn(llm_response_codec_decode_cb, ptr::null_mut(), None)(
+            response.clone(),
+            LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+        )
+        .expect("codec decode returns a response");
+    assert_eq!(sanitized, response);
 }

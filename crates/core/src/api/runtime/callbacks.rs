@@ -19,6 +19,7 @@ use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
 use crate::json::Json;
 
@@ -132,6 +133,165 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
         + Sync,
 >;
 
+/// Relay's built-in LLM codec identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinLlmCodec {
+    /// OpenAI Chat Completions request and response payloads.
+    OpenAiChat,
+    /// OpenAI Responses request and response payloads.
+    OpenAiResponses,
+    /// Anthropic Messages request and response payloads.
+    AnthropicMessages,
+}
+
+impl BuiltinLlmCodec {
+    /// Stable identifier used in configuration and language bindings.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::OpenAiChat => "openai_chat",
+            Self::OpenAiResponses => "openai_responses",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+}
+
+/// Per-call LLM codec identity supplied to sanitize guardrails.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LlmCodecIdentity {
+    /// No codec was active for this payload direction.
+    #[default]
+    None,
+    /// A Relay built-in codec was active.
+    BuiltIn(BuiltinLlmCodec),
+    /// A runtime-registered codec was active, identified by its stable ID.
+    Runtime(String),
+    /// A codec was active but does not expose a registered identity.
+    Opaque,
+}
+
+/// Per-call codec context for LLM request sanitize guardrails.
+///
+/// The context distinguishes no codec, Relay built-ins, runtime-registered
+/// codecs, and active codecs with no stable identity.
+#[derive(Clone, Default)]
+pub struct LlmSanitizeRequestContext {
+    /// Identity of the codec active for this payload direction.
+    codec: LlmCodecIdentity,
+    request_codec: Option<Arc<dyn LlmCodec>>,
+}
+
+impl std::fmt::Debug for LlmSanitizeRequestContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LlmSanitizeRequestContext")
+            .field("codec", &self.codec)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LlmSanitizeRequestContext {
+    /// Construct a context that carries only a codec identity.
+    ///
+    /// Identity-only contexts do not carry a codec handle, so
+    /// [`Self::resolve_codec`] returns `None` even when the identity describes
+    /// an active codec.
+    #[must_use]
+    pub fn with_identity(codec: LlmCodecIdentity) -> Self {
+        Self {
+            codec,
+            ..Self::default()
+        }
+    }
+
+    /// Construct request-sanitizer context from the active request codec.
+    #[must_use]
+    pub fn for_request_codec(codec: Option<Arc<dyn LlmCodec>>) -> Self {
+        let identity = codec
+            .as_deref()
+            .map_or(LlmCodecIdentity::None, LlmCodec::codec_identity);
+        Self {
+            codec: identity,
+            request_codec: codec,
+        }
+    }
+
+    /// Return the identity of the codec active for this payload direction.
+    #[must_use]
+    pub fn codec(&self) -> &LlmCodecIdentity {
+        &self.codec
+    }
+
+    /// Resolve the active request codec.
+    ///
+    /// Returns `None` for contexts constructed with [`Self::with_identity`].
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<Arc<dyn LlmCodec>> {
+        self.request_codec.clone()
+    }
+}
+
+/// Per-call codec context for LLM response sanitize guardrails.
+///
+/// The context distinguishes no codec, Relay built-ins, runtime-registered
+/// codecs, and active codecs with no stable identity.
+#[derive(Clone, Default)]
+pub struct LlmSanitizeResponseContext {
+    /// Identity of the codec active for this payload direction.
+    codec: LlmCodecIdentity,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
+}
+
+impl std::fmt::Debug for LlmSanitizeResponseContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LlmSanitizeResponseContext")
+            .field("codec", &self.codec)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LlmSanitizeResponseContext {
+    /// Construct a context that carries only a codec identity.
+    ///
+    /// Identity-only contexts do not carry a codec handle, so
+    /// [`Self::resolve_codec`] returns `None` even when the identity describes
+    /// an active codec.
+    #[must_use]
+    pub fn with_identity(codec: LlmCodecIdentity) -> Self {
+        Self {
+            codec,
+            ..Self::default()
+        }
+    }
+
+    /// Construct response-sanitizer context from the active response codec.
+    #[must_use]
+    pub fn for_response_codec(codec: Option<Arc<dyn LlmResponseCodec>>) -> Self {
+        let identity = codec
+            .as_deref()
+            .map_or(LlmCodecIdentity::None, LlmResponseCodec::codec_identity);
+        Self {
+            codec: identity,
+            response_codec: codec,
+        }
+    }
+
+    /// Return the identity of the codec active for this payload direction.
+    #[must_use]
+    pub fn codec(&self) -> &LlmCodecIdentity {
+        &self.codec
+    }
+
+    /// Resolve the active response codec.
+    ///
+    /// Returns `None` for contexts constructed with [`Self::with_identity`].
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<Arc<dyn LlmResponseCodec>> {
+        self.response_codec.clone()
+    }
+}
+
 /// Sanitize an LLM request before the runtime records it.
 ///
 /// LLM request sanitizers affect the serialized request payload emitted on
@@ -140,10 +300,16 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
 ///
 /// # Parameters
 /// - First argument: LLM request payload to sanitize for observability.
+/// - Second argument: Per-call request codec identity and capability.
 ///
 /// # Returns
-/// Sanitized [`LlmRequest`] for the emitted event.
-pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
+/// `Some` contains the sanitized request for the emitted event. `None` omits
+/// both the raw request payload and its annotation from that event.
+///
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
+pub type LlmSanitizeRequestFn =
+    Arc<dyn Fn(LlmRequest, LlmSanitizeRequestContext) -> Option<LlmRequest> + Send + Sync>;
 /// Sanitize an LLM response before the runtime records it.
 ///
 /// These callbacks rewrite the JSON response payload captured on LLM-end
@@ -151,10 +317,16 @@ pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sy
 ///
 /// # Parameters
 /// - First argument: JSON response payload to sanitize for observability.
+/// - Second argument: Per-call response codec identity and capability.
 ///
 /// # Returns
-/// Sanitized JSON response payload for the emitted event.
-pub type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
+/// `Some` contains the sanitized response for the emitted event. `None` omits
+/// both the raw response payload and its annotation from that event.
+///
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
+pub type LlmSanitizeResponseFn =
+    Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> Option<Json> + Send + Sync>;
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,

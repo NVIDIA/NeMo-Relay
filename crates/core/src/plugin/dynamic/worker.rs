@@ -19,10 +19,14 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
     DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HealthRequest,
-    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation,
-    LlmNextRequest, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
-    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
+    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
+    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecIdentity as ProtoLlmCodecIdentity,
+    LlmCodecKind, LlmInvocation, LlmNextRequest,
+    LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
+    LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
+    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
+    ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use semver::{Version, VersionReq};
@@ -55,8 +59,9 @@ use tower::service_fn;
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
-    current_scope_stack, with_scope_stack,
+    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmSanitizeRequestContext,
+    LlmSanitizeResponseContext, LlmStreamExecutionNextFn, ToolExecutionNextFn, current_scope_stack,
+    with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -64,6 +69,7 @@ use crate::api::scope::{
 };
 use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
@@ -1048,261 +1054,33 @@ impl WorkerPluginInstance {
                     self.plugin_kind, registration.surface
                 ))
             })?;
-            let name = registration.local_name.clone();
-            let priority = registration.priority;
-            let break_chain = registration.break_chain;
             match surface {
                 RegistrationSurface::Subscriber => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_subscriber(
-                        &name,
-                        Arc::new(move |event| {
-                            if instance.invoke_subscriber(&callback_name, event).is_err() {
-                                instance.log_callback_fallback(
-                                    &callback_name,
-                                    RegistrationSurface::Subscriber,
-                                );
-                            }
-                        }),
-                    )?;
+                    self.install_subscriber_registration(ctx, &registration.local_name)?
                 }
                 RegistrationSurface::MarkSanitizeGuardrail
                 | RegistrationSurface::ScopeSanitizeStartGuardrail
-                | RegistrationSurface::ScopeSanitizeEndGuardrail => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    let callback = Arc::new(move |event: &Event, _fields: EventSanitizeFields| {
-                        instance
-                            .invoke_event_sanitize(&callback_name, surface, event)
-                            .unwrap_or_else(|_| {
-                                instance.log_callback_fallback(&callback_name, surface);
-                                EventSanitizeFields::default()
-                            })
-                    });
-                    match surface {
-                        RegistrationSurface::MarkSanitizeGuardrail => {
-                            ctx.register_mark_sanitize_guardrail(&name, priority, callback)?
-                        }
-                        RegistrationSurface::ScopeSanitizeStartGuardrail => {
-                            ctx.register_scope_sanitize_start_guardrail(&name, priority, callback)?
-                        }
-                        RegistrationSurface::ScopeSanitizeEndGuardrail => {
-                            ctx.register_scope_sanitize_end_guardrail(&name, priority, callback)?
-                        }
-                        _ => unreachable!(),
-                    }
+                | RegistrationSurface::ScopeSanitizeEndGuardrail => self
+                    .install_event_sanitize_registration(
+                        ctx,
+                        &registration.local_name,
+                        registration.priority,
+                        surface,
+                    )?,
+                RegistrationSurface::ToolSanitizeRequestGuardrail
+                | RegistrationSurface::ToolSanitizeResponseGuardrail
+                | RegistrationSurface::ToolConditionalExecutionGuardrail
+                | RegistrationSurface::ToolRequestIntercept
+                | RegistrationSurface::ToolExecutionIntercept => {
+                    self.install_tool_registration(ctx, registration, surface)?
                 }
-                RegistrationSurface::ToolSanitizeRequestGuardrail => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_tool_sanitize_request_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |tool_name, value| {
-                            instance
-                                .invoke_tool_json(
-                                    &callback_name,
-                                    RegistrationSurface::ToolSanitizeRequestGuardrail,
-                                    tool_name,
-                                    value.clone(),
-                                    None,
-                                )
-                                .unwrap_or_else(|_| {
-                                    instance.log_callback_fallback(
-                                        &callback_name,
-                                        RegistrationSurface::ToolSanitizeRequestGuardrail,
-                                    );
-                                    value
-                                })
-                        }),
-                    )?;
-                }
-                RegistrationSurface::ToolSanitizeResponseGuardrail => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_tool_sanitize_response_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |tool_name, value| {
-                            instance
-                                .invoke_tool_json(
-                                    &callback_name,
-                                    RegistrationSurface::ToolSanitizeResponseGuardrail,
-                                    tool_name,
-                                    value.clone(),
-                                    None,
-                                )
-                                .unwrap_or_else(|_| {
-                                    instance.log_callback_fallback(
-                                        &callback_name,
-                                        RegistrationSurface::ToolSanitizeResponseGuardrail,
-                                    );
-                                    value
-                                })
-                        }),
-                    )?;
-                }
-                RegistrationSurface::ToolConditionalExecutionGuardrail => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_tool_conditional_execution_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |tool_name, value| {
-                            instance.invoke_tool_guardrail(&callback_name, tool_name, value.clone())
-                        }),
-                    )?;
-                }
-                RegistrationSurface::ToolRequestIntercept => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_tool_request_intercept(
-                        &name,
-                        priority,
-                        break_chain,
-                        Arc::new(move |tool_name, value| {
-                            instance.invoke_tool_json(
-                                &callback_name,
-                                RegistrationSurface::ToolRequestIntercept,
-                                tool_name,
-                                value,
-                                None,
-                            )
-                        }),
-                    )?;
-                }
-                RegistrationSurface::ToolExecutionIntercept => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_tool_execution_intercept(
-                        &name,
-                        priority,
-                        Arc::new(move |tool_name, value, next| {
-                            let instance = instance.clone();
-                            let name = callback_name.clone();
-                            let tool_name = tool_name.to_string();
-                            Box::pin(async move {
-                                instance
-                                    .invoke_tool_execution(&name, &tool_name, value, next)
-                                    .await
-                            })
-                        }),
-                    )?;
-                }
-                RegistrationSurface::LlmSanitizeRequestGuardrail => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_llm_sanitize_request_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |request| {
-                            instance
-                                .invoke_llm_request_json(
-                                    &callback_name,
-                                    RegistrationSurface::LlmSanitizeRequestGuardrail,
-                                    "",
-                                    request.clone(),
-                                    None,
-                                    None,
-                                )
-                                .unwrap_or_else(|_| {
-                                    instance.log_callback_fallback(
-                                        &callback_name,
-                                        RegistrationSurface::LlmSanitizeRequestGuardrail,
-                                    );
-                                    request
-                                })
-                        }),
-                    )?;
-                }
-                RegistrationSurface::LlmSanitizeResponseGuardrail => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_llm_sanitize_response_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |value| {
-                            instance
-                                .invoke_llm_response_json(
-                                    &callback_name,
-                                    RegistrationSurface::LlmSanitizeResponseGuardrail,
-                                    "",
-                                    value.clone(),
-                                )
-                                .unwrap_or_else(|_| {
-                                    instance.log_callback_fallback(
-                                        &callback_name,
-                                        RegistrationSurface::LlmSanitizeResponseGuardrail,
-                                    );
-                                    value
-                                })
-                        }),
-                    )?;
-                }
-                RegistrationSurface::LlmConditionalExecutionGuardrail => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_llm_conditional_execution_guardrail(
-                        &name,
-                        priority,
-                        Arc::new(move |request| {
-                            instance.invoke_llm_guardrail(&callback_name, request.clone())
-                        }),
-                    )?;
-                }
-                RegistrationSurface::LlmRequestIntercept => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_llm_request_intercept(
-                        &name,
-                        priority,
-                        break_chain,
-                        Arc::new(move |model_name, request, annotated| {
-                            instance.invoke_llm_request_intercept(
-                                &callback_name,
-                                model_name,
-                                request,
-                                annotated,
-                            )
-                        }),
-                    )?;
-                }
-                RegistrationSurface::LlmExecutionIntercept => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_llm_execution_intercept(
-                        &name,
-                        priority,
-                        Arc::new(move |model_name, request, next| {
-                            let instance = instance.clone();
-                            let name = callback_name.clone();
-                            let model_name = model_name.to_string();
-                            Box::pin(async move {
-                                instance
-                                    .invoke_llm_execution(&name, &model_name, request, next)
-                                    .await
-                            })
-                        }),
-                    )?;
-                }
-                RegistrationSurface::LlmStreamExecutionIntercept => {
-                    let instance = Arc::new(self.clone_for_callback());
-                    let callback_name = name.clone();
-                    ctx.register_llm_stream_execution_intercept(
-                        &name,
-                        priority,
-                        Arc::new(move |model_name, request, next| {
-                            let instance = instance.clone();
-                            let name = callback_name.clone();
-                            let model_name = model_name.to_string();
-                            Box::pin(async move {
-                                instance
-                                    .invoke_llm_stream_execution(&name, &model_name, request, next)
-                                    .await
-                            })
-                        }),
-                    )?;
+                RegistrationSurface::LlmSanitizeRequestGuardrail
+                | RegistrationSurface::LlmSanitizeResponseGuardrail
+                | RegistrationSurface::LlmConditionalExecutionGuardrail
+                | RegistrationSurface::LlmRequestIntercept
+                | RegistrationSurface::LlmExecutionIntercept
+                | RegistrationSurface::LlmStreamExecutionIntercept => {
+                    self.install_llm_registration(ctx, registration, surface)?
                 }
                 RegistrationSurface::Unspecified => {
                     return Err(PluginError::RegistrationFailed(format!(
@@ -1313,6 +1091,241 @@ impl WorkerPluginInstance {
             }
         }
         Ok(())
+    }
+
+    fn install_subscriber_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        name: &str,
+    ) -> crate::plugin::Result<()> {
+        let instance = Arc::new(self.clone_for_callback());
+        let callback_name = name.to_owned();
+        ctx.register_subscriber(
+            name,
+            Arc::new(move |event| {
+                if instance.invoke_subscriber(&callback_name, event).is_err() {
+                    instance.log_callback_fallback(&callback_name, RegistrationSurface::Subscriber);
+                }
+            }),
+        )
+    }
+
+    fn install_event_sanitize_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        name: &str,
+        priority: i32,
+        surface: RegistrationSurface,
+    ) -> crate::plugin::Result<()> {
+        let instance = Arc::new(self.clone_for_callback());
+        let callback_name = name.to_owned();
+        let callback = Arc::new(move |event: &Event, _fields: EventSanitizeFields| {
+            instance
+                .invoke_event_sanitize(&callback_name, surface, event)
+                .unwrap_or_else(|_| {
+                    instance.log_callback_fallback(&callback_name, surface);
+                    EventSanitizeFields::default()
+                })
+        });
+        match surface {
+            RegistrationSurface::MarkSanitizeGuardrail => {
+                ctx.register_mark_sanitize_guardrail(name, priority, callback)
+            }
+            RegistrationSurface::ScopeSanitizeStartGuardrail => {
+                ctx.register_scope_sanitize_start_guardrail(name, priority, callback)
+            }
+            RegistrationSurface::ScopeSanitizeEndGuardrail => {
+                ctx.register_scope_sanitize_end_guardrail(name, priority, callback)
+            }
+            _ => unreachable!("event sanitizer surface was pre-filtered"),
+        }
+    }
+
+    fn install_tool_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        registration: &Registration,
+        surface: RegistrationSurface,
+    ) -> crate::plugin::Result<()> {
+        let name = registration.local_name.as_str();
+        let priority = registration.priority;
+        let instance = Arc::new(self.clone_for_callback());
+        let callback_name = name.to_owned();
+        match surface {
+            RegistrationSurface::ToolSanitizeRequestGuardrail => ctx
+                .register_tool_sanitize_request_guardrail(
+                    name,
+                    priority,
+                    Arc::new(move |tool_name, value| {
+                        instance
+                            .invoke_tool_json(
+                                &callback_name,
+                                surface,
+                                tool_name,
+                                value.clone(),
+                                None,
+                            )
+                            .unwrap_or_else(|_| {
+                                instance.log_callback_fallback(&callback_name, surface);
+                                value
+                            })
+                    }),
+                ),
+            RegistrationSurface::ToolSanitizeResponseGuardrail => ctx
+                .register_tool_sanitize_response_guardrail(
+                    name,
+                    priority,
+                    Arc::new(move |tool_name, value| {
+                        instance
+                            .invoke_tool_json(
+                                &callback_name,
+                                surface,
+                                tool_name,
+                                value.clone(),
+                                None,
+                            )
+                            .unwrap_or_else(|_| {
+                                instance.log_callback_fallback(&callback_name, surface);
+                                value
+                            })
+                    }),
+                ),
+            RegistrationSurface::ToolConditionalExecutionGuardrail => ctx
+                .register_tool_conditional_execution_guardrail(
+                    name,
+                    priority,
+                    Arc::new(move |tool_name, value| {
+                        instance.invoke_tool_guardrail(&callback_name, tool_name, value.clone())
+                    }),
+                ),
+            RegistrationSurface::ToolRequestIntercept => ctx.register_tool_request_intercept(
+                name,
+                priority,
+                registration.break_chain,
+                Arc::new(move |tool_name, value| {
+                    instance.invoke_tool_json(&callback_name, surface, tool_name, value, None)
+                }),
+            ),
+            RegistrationSurface::ToolExecutionIntercept => ctx.register_tool_execution_intercept(
+                name,
+                priority,
+                Arc::new(move |tool_name, value, next| {
+                    let instance = instance.clone();
+                    let callback_name = callback_name.clone();
+                    let tool_name = tool_name.to_owned();
+                    Box::pin(async move {
+                        instance
+                            .invoke_tool_execution(&callback_name, &tool_name, value, next)
+                            .await
+                    })
+                }),
+            ),
+            _ => Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{}' cannot install registration surface {} as a tool callback",
+                self.plugin_kind,
+                surface.as_str_name()
+            ))),
+        }
+    }
+
+    fn install_llm_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        registration: &Registration,
+        surface: RegistrationSurface,
+    ) -> crate::plugin::Result<()> {
+        let name = registration.local_name.as_str();
+        let priority = registration.priority;
+        let instance = Arc::new(self.clone_for_callback());
+        let callback_name = name.to_owned();
+        match surface {
+            RegistrationSurface::LlmSanitizeRequestGuardrail => ctx
+                .register_llm_sanitize_request_guardrail(
+                    name,
+                    priority,
+                    Arc::new(move |request, context| {
+                        instance
+                            .invoke_llm_sanitize_request(&callback_name, request.clone(), context)
+                            .unwrap_or_else(|_| {
+                                instance.log_callback_fallback(&callback_name, surface);
+                                None
+                            })
+                    }),
+                ),
+            RegistrationSurface::LlmSanitizeResponseGuardrail => ctx
+                .register_llm_sanitize_response_guardrail(
+                    name,
+                    priority,
+                    Arc::new(move |value, context| {
+                        instance
+                            .invoke_llm_sanitize_response(&callback_name, value.clone(), context)
+                            .unwrap_or_else(|_| {
+                                instance.log_callback_fallback(&callback_name, surface);
+                                None
+                            })
+                    }),
+                ),
+            RegistrationSurface::LlmConditionalExecutionGuardrail => ctx
+                .register_llm_conditional_execution_guardrail(
+                    name,
+                    priority,
+                    Arc::new(move |request| {
+                        instance.invoke_llm_guardrail(&callback_name, request.clone())
+                    }),
+                ),
+            RegistrationSurface::LlmRequestIntercept => ctx.register_llm_request_intercept(
+                name,
+                priority,
+                registration.break_chain,
+                Arc::new(move |model_name, request, annotated| {
+                    instance.invoke_llm_request_intercept(
+                        &callback_name,
+                        model_name,
+                        request,
+                        annotated,
+                    )
+                }),
+            ),
+            RegistrationSurface::LlmExecutionIntercept => ctx.register_llm_execution_intercept(
+                name,
+                priority,
+                Arc::new(move |model_name, request, next| {
+                    let instance = instance.clone();
+                    let callback_name = callback_name.clone();
+                    let model_name = model_name.to_owned();
+                    Box::pin(async move {
+                        instance
+                            .invoke_llm_execution(&callback_name, &model_name, request, next)
+                            .await
+                    })
+                }),
+            ),
+            RegistrationSurface::LlmStreamExecutionIntercept => ctx
+                .register_llm_stream_execution_intercept(
+                    name,
+                    priority,
+                    Arc::new(move |model_name, request, next| {
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        let model_name = model_name.to_owned();
+                        Box::pin(async move {
+                            instance
+                                .invoke_llm_stream_execution(
+                                    &callback_name,
+                                    &model_name,
+                                    request,
+                                    next,
+                                )
+                                .await
+                        })
+                    }),
+                ),
+            _ => Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{}' cannot install registration surface {} as an LLM callback",
+                self.plugin_kind,
+                surface.as_str_name()
+            ))),
+        }
     }
 
     fn clone_for_callback(&self) -> WorkerPluginCallback {
@@ -1555,51 +1568,99 @@ impl WorkerPluginCallback {
         }
     }
 
-    fn invoke_llm_request_json(
+    fn invoke_llm_sanitize_request(
         &self,
         registration_name: &str,
-        surface: RegistrationSurface,
-        model_name: &str,
         request: LlmRequest,
-        annotated: Option<AnnotatedLlmRequest>,
-        continuation_id: Option<String>,
-    ) -> FlowResult<LlmRequest> {
-        let invoke = self.base_request(
+        context: LlmSanitizeRequestContext,
+    ) -> FlowResult<Option<LlmRequest>> {
+        let mut invoke = self.base_request(
             registration_name,
-            surface,
-            continuation_id,
-            Some(invoke_request_payload_llm(
-                model_name,
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+            None,
+            Some(invoke_request_payload_llm_context(
+                "",
                 Some(request),
-                annotated,
                 None,
+                None,
+                llm_invocation::SanitizeContext::RequestSanitizeContext(
+                    ProtoLlmSanitizeRequestContext {
+                        codec: Some(codec_identity_to_proto(context.codec())),
+                        codec_capability_id: None,
+                    },
+                ),
             )),
         );
-        let value = json_from_invoke_response(self.invoke_blocking(invoke)?)?;
-        serde_json::from_value(value).map_err(|err| {
-            FlowError::Internal(format!("worker returned invalid LLM request: {err}"))
-        })
+        let capability_id = context.resolve_codec().map(|codec| {
+            let capability_id = self
+                .host_state
+                .insert_request_codec(&invoke.invocation_id, codec);
+            let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
+                unreachable!("LLM sanitizer invocation must have an LLM payload");
+            };
+            let Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) =
+                llm.sanitize_context.as_mut()
+            else {
+                unreachable!("request sanitizer invocation must have a request context");
+            };
+            context.codec_capability_id = Some(capability_id.clone());
+            capability_id
+        });
+        let response = self.invoke_blocking(invoke);
+        if let Some(capability_id) = capability_id {
+            self.host_state.remove_codec(&capability_id);
+        }
+        optional_json_from_invoke_response(response?)?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|err| {
+                FlowError::Internal(format!("worker returned invalid LLM request: {err}"))
+            })
     }
 
-    fn invoke_llm_response_json(
+    fn invoke_llm_sanitize_response(
         &self,
         registration_name: &str,
-        surface: RegistrationSurface,
-        model_name: &str,
         response: Json,
-    ) -> FlowResult<Json> {
-        let invoke = self.base_request(
+        context: LlmSanitizeResponseContext,
+    ) -> FlowResult<Option<Json>> {
+        let mut invoke = self.base_request(
             registration_name,
-            surface,
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
             None,
-            Some(invoke_request_payload_llm(
-                model_name,
+            Some(invoke_request_payload_llm_context(
+                "",
                 None,
                 None,
                 Some(response),
+                llm_invocation::SanitizeContext::ResponseSanitizeContext(
+                    ProtoLlmSanitizeResponseContext {
+                        codec: Some(codec_identity_to_proto(context.codec())),
+                        codec_capability_id: None,
+                    },
+                ),
             )),
         );
-        json_from_invoke_response(self.invoke_blocking(invoke)?)
+        let capability_id = context.resolve_codec().map(|codec| {
+            let capability_id = self
+                .host_state
+                .insert_response_codec(&invoke.invocation_id, codec);
+            let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
+                unreachable!("LLM sanitizer invocation must have an LLM payload");
+            };
+            let Some(llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) =
+                llm.sanitize_context.as_mut()
+            else {
+                unreachable!("response sanitizer invocation must have a response context");
+            };
+            context.codec_capability_id = Some(capability_id.clone());
+            capability_id
+        });
+        let response = self.invoke_blocking(invoke);
+        if let Some(capability_id) = capability_id {
+            self.host_state.remove_codec(&capability_id);
+        }
+        optional_json_from_invoke_response(response?)
     }
 
     fn invoke_llm_guardrail(
@@ -1973,6 +2034,17 @@ struct WorkerHostRuntimeState {
     scope_stack_cleanup_complete: Condvar,
     scope_handles: Mutex<HashMap<String, StoredScopeHandle>>,
     continuations: Mutex<HashMap<String, Continuation>>,
+    codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
+}
+
+struct WorkerCodecCapability {
+    invocation_id: String,
+    direction: WorkerCodecDirection,
+}
+
+enum WorkerCodecDirection {
+    Request(Arc<dyn LlmCodec>),
+    Response(Arc<dyn LlmResponseCodec>),
 }
 
 struct StoredScopeStack {
@@ -2024,6 +2096,85 @@ impl WorkerHostRuntimeState {
             scope_stack_cleanup_complete: Condvar::new(),
             scope_handles: Mutex::new(HashMap::new()),
             continuations: Mutex::new(HashMap::new()),
+            codecs: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn insert_request_codec(&self, invocation_id: &str, codec: Arc<dyn LlmCodec>) -> String {
+        self.insert_codec(invocation_id, WorkerCodecDirection::Request(codec))
+    }
+
+    fn insert_response_codec(
+        &self,
+        invocation_id: &str,
+        codec: Arc<dyn LlmResponseCodec>,
+    ) -> String {
+        self.insert_codec(invocation_id, WorkerCodecDirection::Response(codec))
+    }
+
+    fn insert_codec(&self, invocation_id: &str, direction: WorkerCodecDirection) -> String {
+        let id = format!("codec-{}", Uuid::now_v7());
+        if let Ok(mut codecs) = self.codecs.lock() {
+            codecs.insert(
+                id.clone(),
+                WorkerCodecCapability {
+                    invocation_id: invocation_id.to_owned(),
+                    direction,
+                },
+            );
+        }
+        id
+    }
+
+    fn remove_codec(&self, id: &str) {
+        if let Ok(mut codecs) = self.codecs.lock() {
+            codecs.remove(id);
+        }
+    }
+
+    fn request_codec(&self, id: &str, invocation_id: &str) -> Result<Arc<dyn LlmCodec>, Status> {
+        let codecs = self
+            .codecs
+            .lock()
+            .map_err(|err| Status::internal(format!("codec lock poisoned: {err}")))?;
+        let capability = codecs
+            .get(id)
+            .ok_or_else(|| Status::not_found("codec capability is unavailable"))?;
+        if capability.invocation_id != invocation_id {
+            return Err(Status::permission_denied(
+                "codec capability does not belong to this invocation",
+            ));
+        }
+        match &capability.direction {
+            WorkerCodecDirection::Request(codec) => Ok(codec.clone()),
+            WorkerCodecDirection::Response(_) => Err(Status::invalid_argument(
+                "codec capability is response-only",
+            )),
+        }
+    }
+
+    fn response_codec(
+        &self,
+        id: &str,
+        invocation_id: &str,
+    ) -> Result<Arc<dyn LlmResponseCodec>, Status> {
+        let codecs = self
+            .codecs
+            .lock()
+            .map_err(|err| Status::internal(format!("codec lock poisoned: {err}")))?;
+        let capability = codecs
+            .get(id)
+            .ok_or_else(|| Status::not_found("codec capability is unavailable"))?;
+        if capability.invocation_id != invocation_id {
+            return Err(Status::permission_denied(
+                "codec capability does not belong to this invocation",
+            ));
+        }
+        match &capability.direction {
+            WorkerCodecDirection::Response(codec) => Ok(codec.clone()),
+            WorkerCodecDirection::Request(_) => {
+                Err(Status::invalid_argument("codec capability is request-only"))
+            }
         }
     }
 
@@ -2425,6 +2576,79 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         });
         Ok(Response::new(Box::pin(mapped)))
     }
+
+    async fn decode_llm_codec_request(
+        &self,
+        request: Request<LlmCodecDecodeRequest>,
+    ) -> Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let codec = self
+            .state
+            .request_codec(&request.codec_capability_id, &request.invocation_id)?;
+        let request = required_envelope(request.request, "codec request")
+            .and_then(|value| {
+                decode_json_envelope::<LlmRequest>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        Ok(Response::new(typed_json_result(
+            ANNOTATED_LLM_REQUEST_SCHEMA,
+            codec.decode(&request),
+        )))
+    }
+
+    async fn encode_llm_codec_request(
+        &self,
+        request: Request<LlmCodecEncodeRequest>,
+    ) -> Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let codec = self
+            .state
+            .request_codec(&request.codec_capability_id, &request.invocation_id)?;
+        let annotated = required_envelope(request.annotated_request, "annotated codec request")
+            .and_then(|value| {
+                decode_json_envelope::<AnnotatedLlmRequest>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        let original = required_envelope(request.original_request, "original codec request")
+            .and_then(|value| {
+                decode_json_envelope::<LlmRequest>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        Ok(Response::new(typed_json_result(
+            LLM_REQUEST_SCHEMA,
+            codec.encode(&annotated, &original),
+        )))
+    }
+
+    async fn decode_llm_codec_response(
+        &self,
+        request: Request<LlmCodecDecodeResponse>,
+    ) -> Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let codec = self
+            .state
+            .response_codec(&request.codec_capability_id, &request.invocation_id)?;
+        let response = required_envelope(request.response, "codec response")
+            .and_then(|value| {
+                decode_json_envelope::<Json>(&value)
+                    .map_err(|err| FlowError::Internal(err.to_string()))
+            })
+            .map_err(status_from_flow)?;
+        Ok(Response::new(json_result(
+            codec.decode_response(&response).and_then(|value| {
+                serde_json::to_value(value).map_err(|err| FlowError::Internal(err.to_string()))
+            }),
+        )))
+    }
 }
 
 impl WorkerHostRuntimeService {
@@ -2449,6 +2673,10 @@ impl WorkerHostRuntimeService {
 
 mod invoke_request_payload {
     pub(crate) use nemo_relay_worker_proto::v1::invoke_request::Payload;
+}
+
+mod llm_invocation {
+    pub(crate) use nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext;
 }
 
 mod invoke_response_result {
@@ -2487,7 +2715,42 @@ fn invoke_request_payload_llm(
         response: response
             .as_ref()
             .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
+        sanitize_context: None,
     })
+}
+
+fn invoke_request_payload_llm_context(
+    model_name: &str,
+    request: Option<LlmRequest>,
+    annotated_request: Option<AnnotatedLlmRequest>,
+    response: Option<Json>,
+    context: impl Into<llm_invocation::SanitizeContext>,
+) -> invoke_request_payload::Payload {
+    invoke_request_payload::Payload::Llm(LlmInvocation {
+        model_name: model_name.into(),
+        request: request
+            .as_ref()
+            .map(|request| json_envelope_infallible(LLM_REQUEST_SCHEMA, request)),
+        annotated_request: annotated_request
+            .as_ref()
+            .map(|request| json_envelope_infallible(ANNOTATED_LLM_REQUEST_SCHEMA, request)),
+        response: response
+            .as_ref()
+            .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
+        sanitize_context: Some(context.into()),
+    })
+}
+
+fn codec_identity_to_proto(identity: &LlmCodecIdentity) -> ProtoLlmCodecIdentity {
+    let (kind, id) = match identity {
+        LlmCodecIdentity::None => (LlmCodecKind::Unspecified as i32, None),
+        LlmCodecIdentity::BuiltIn(codec) => {
+            (LlmCodecKind::Builtin as i32, Some(codec.id().to_owned()))
+        }
+        LlmCodecIdentity::Runtime(id) => (LlmCodecKind::Runtime as i32, Some(id.clone())),
+        LlmCodecIdentity::Opaque => (LlmCodecKind::Opaque as i32, None),
+    };
+    ProtoLlmCodecIdentity { kind, id }
 }
 
 fn json_envelope_infallible<T: serde::Serialize>(schema: &str, value: &T) -> JsonEnvelope {
@@ -2508,6 +2771,27 @@ fn json_from_invoke_response(response: InvokeResponse) -> FlowResult<Json> {
         Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
         _ => Err(FlowError::Internal(
             "worker returned unexpected invoke result".into(),
+        )),
+    }
+}
+
+fn optional_json_from_invoke_response(response: InvokeResponse) -> FlowResult<Option<Json>> {
+    match response.result {
+        Some(invoke_response_result::Result::Empty(_)) => Ok(None),
+        Some(invoke_response_result::Result::Json(result)) => {
+            if let Some(error) = result.error {
+                return Err(worker_error_to_flow(error));
+            }
+            let envelope = required_envelope(result.value, "worker JSON result")?;
+            decode_json_envelope::<Json>(&envelope)
+                .map(Some)
+                .map_err(|err| {
+                    FlowError::Internal(format!("worker returned invalid JSON result: {err}"))
+                })
+        }
+        Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
+        _ => Err(FlowError::Internal(
+            "worker returned unexpected LLM sanitizer result".into(),
         )),
     }
 }
@@ -2563,6 +2847,19 @@ fn json_result(result: FlowResult<Json>) -> JsonResult {
     match result {
         Ok(value) => JsonResult {
             value: Some(json_envelope_infallible(JSON_SCHEMA, &value)),
+            error: None,
+        },
+        Err(err) => JsonResult {
+            value: None,
+            error: Some(flow_error_to_worker(err)),
+        },
+    }
+}
+
+fn typed_json_result<T: serde::Serialize>(schema: &str, result: FlowResult<T>) -> JsonResult {
+    match result {
+        Ok(value) => JsonResult {
+            value: Some(json_envelope_infallible(schema, &value)),
             error: None,
         },
         Err(err) => JsonResult {

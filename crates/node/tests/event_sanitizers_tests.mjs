@@ -4,6 +4,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createRequire } from 'node:module';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -26,6 +29,18 @@ function assertSanitizerFieldsCleared(event) {
   assert.equal(event.data, null);
   assert.equal(event.category_profile, null);
   assert.equal(event.metadata, null);
+}
+
+async function initializeWithoutDiscoveredPluginConfig(config) {
+  const previousDirectory = process.cwd();
+  const directory = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-'));
+  try {
+    process.chdir(directory);
+    return await plugin.initialize(config);
+  } finally {
+    process.chdir(previousDirectory);
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 describe('event sanitizer registries', () => {
@@ -251,7 +266,10 @@ describe('event sanitizer registries', () => {
       },
     });
     try {
-      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(kind)] });
+      await initializeWithoutDiscoveredPluginConfig({
+        version: 1,
+        components: [plugin.ComponentSpec(kind)],
+      });
       lib.event('configured', null, { raw: true });
       lib.flushSubscribers();
       await waitFor(events, 1);
@@ -289,7 +307,10 @@ describe('event sanitizer registries', () => {
     });
     lib.clearLastCallbackError();
     try {
-      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(kind)] });
+      await initializeWithoutDiscoveredPluginConfig({
+        version: 1,
+        components: [plugin.ComponentSpec(kind)],
+      });
       lib.event('plugin-throw', null, { raw: true }, { raw: true });
       lib.flushSubscribers();
       await waitFor(events, 1);

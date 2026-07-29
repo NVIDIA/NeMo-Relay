@@ -28,6 +28,13 @@ pub const DEFAULT_FILE_FLUSH_INTERVAL_MILLIS: u64 = 1000;
 /// configuration above this bound is rejected with a config error. It cannot be raised.
 pub const MAX_FILE_SINK_QUEUE_ENTRIES: usize = 8_192;
 
+/// Fixed hard maximum number of retained backup files per rotating file sink.
+///
+/// Size-based rotation renames existing backup files on each rotation, so an unbounded value can
+/// make one log write perform excessive filesystem work. This limit counts backup files and does
+/// not include the active log file.
+pub const MAX_FILE_SINK_RETAINED_FILES: usize = 9;
+
 /// Operational logging configuration for [`LoggingRuntime::configure`](super::LoggingRuntime::configure).
 ///
 /// `level` is the process-wide **minimum severity**: call sites may emit any level, but records
@@ -219,6 +226,8 @@ pub struct FileLogSinkConfig {
     /// Maximum pending asynchronous queue entries for this file sink. Must be greater than 0 and
     /// at most [`MAX_FILE_SINK_QUEUE_ENTRIES`].
     pub queue_capacity: usize,
+    /// Optional size-based rotation and retention settings.
+    pub rotation: Option<FileLogRotationConfig>,
 }
 
 impl Default for FileLogSinkConfig {
@@ -228,7 +237,53 @@ impl Default for FileLogSinkConfig {
             level: LogLevel::Info,
             format: LogFormat::Jsonl,
             queue_capacity: DEFAULT_FILE_SINK_QUEUE_ENTRIES,
+            rotation: None,
         }
+    }
+}
+
+/// Size-based rotation settings for a file log sink.
+///
+/// `retained_files` counts previous log files and excludes the active file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileLogRotationConfig {
+    max_file_size_bytes: u64,
+    retained_files: usize,
+}
+
+impl FileLogRotationConfig {
+    /// Creates validated size-based rotation settings.
+    pub fn new(max_file_size_bytes: u64, retained_files: usize) -> Result<Self> {
+        if max_file_size_bytes == 0 {
+            return Err(FlowError::InvalidArgument(
+                "logging sink max_file_size_bytes must be greater than 0".into(),
+            ));
+        }
+        if retained_files == 0 {
+            return Err(FlowError::InvalidArgument(
+                "logging sink retained_files must be greater than 0".into(),
+            ));
+        }
+        if retained_files > MAX_FILE_SINK_RETAINED_FILES {
+            return Err(FlowError::InvalidArgument(format!(
+                "logging sink retained_files {retained_files} exceeds maximum \
+                 {MAX_FILE_SINK_RETAINED_FILES} backup files per sink"
+            )));
+        }
+        Ok(Self {
+            max_file_size_bytes,
+            retained_files,
+        })
+    }
+
+    /// Maximum active file size before the next record triggers rotation.
+    pub fn max_file_size_bytes(self) -> u64 {
+        self.max_file_size_bytes
+    }
+
+    /// Number of previous log files retained in addition to the active file.
+    pub fn retained_files(self) -> usize {
+        self.retained_files
     }
 }
 
@@ -277,6 +332,8 @@ struct RawFileLogSinkConfig {
     level: Option<String>,
     format: Option<String>,
     queue_capacity: Option<usize>,
+    max_file_size_bytes: Option<u64>,
+    retained_files: Option<usize>,
 }
 
 impl RawFileLogSinkConfig {
@@ -318,11 +375,26 @@ impl RawFileLogSinkConfig {
             None => DEFAULT_FILE_SINK_QUEUE_ENTRIES,
         };
 
+        let rotation = match (self.max_file_size_bytes, self.retained_files) {
+            (None, None) => None,
+            (Some(max_file_size_bytes), Some(retained_files)) => Some(FileLogRotationConfig::new(
+                max_file_size_bytes,
+                retained_files,
+            )?),
+            _ => {
+                return Err(FlowError::InvalidArgument(
+                    "logging sink max_file_size_bytes and retained_files must be configured \
+                     together"
+                        .into(),
+                ));
+            }
+        };
         Ok(LogSinkConfig::File(FileLogSinkConfig {
             path,
             level,
             format,
             queue_capacity,
+            rotation,
         }))
     }
 }

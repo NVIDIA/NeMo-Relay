@@ -222,12 +222,18 @@ version = 1
 kind = "observability"
 enabled = true
 
+[components.config]
+version = 3
+
 [components.config.atif]
 enabled = true
 output_directory = ".nemo-relay/atif"
 
-[components.config.openinference]
+[components.config.opentelemetry]
 enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
@@ -236,8 +242,8 @@ plugin config, unsupported exporter settings, or unavailable exporter features.
 The wrapper does not start the coding agent with a configuration that it cannot
 parse, validate, or activate. After the gateway and agent are running,
 exporter delivery failures follow the observability plugin policy: application
-work continues while the failing ATOF, ATIF, OpenTelemetry, or OpenInference
-destination records, logs, or reports the failure.
+work continues while the failing ATOF, ATIF, or typed OpenTelemetry destination
+records, logs, or reports the failure.
 
 ## Hook Forwarding
 

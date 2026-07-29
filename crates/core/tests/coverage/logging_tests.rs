@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::logging::{
-    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, LoggingRuntime,
-    MAX_FILE_SINK_QUEUE_ENTRIES, build_logger, format_event_for_test, init_logging,
+    FileLogRotationConfig, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
+    LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES, build_logger,
+    format_event_for_test, init_logging,
 };
 use serde_json::Value;
 use spdlog::Level;
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard};
 
 static LOGGING_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -239,6 +240,7 @@ queue_capacity = 7
                 level: LogLevel::Warn,
                 format: LogFormat::Human,
                 queue_capacity: 7,
+                rotation: None,
             })]
         );
     }
@@ -293,6 +295,97 @@ queue_capacity = 7
             .to_string()
             .contains("invalid logging configuration")
     );
+}
+
+#[test]
+fn logging_rotation_configuration_parses_complete_pair_and_rejects_invalid_values() {
+    let config = LoggingConfig::from_toml_document(
+        r#"
+[logging]
+
+[[logging.sinks]]
+path = "relay.log.jsonl"
+max_file_size_bytes = 1024
+retained_files = 2
+"#,
+    )
+    .unwrap();
+
+    let LogSinkConfig::File(sink) = &config.sinks[0];
+    assert_eq!(
+        sink.rotation,
+        Some(FileLogRotationConfig::new(1024, 2).unwrap())
+    );
+
+    let invalid_documents = [
+        (
+            "missing retained_files",
+            r#"
+[logging]
+[[logging.sinks]]
+path = "relay.log.jsonl"
+max_file_size_bytes = 1024
+"#
+            .to_owned(),
+            "must be configured together",
+        ),
+        (
+            "missing max_file_size_bytes",
+            r#"
+[logging]
+[[logging.sinks]]
+path = "relay.log.jsonl"
+retained_files = 2
+"#
+            .to_owned(),
+            "must be configured together",
+        ),
+        (
+            "zero max_file_size_bytes",
+            r#"
+[logging]
+[[logging.sinks]]
+path = "relay.log.jsonl"
+max_file_size_bytes = 0
+retained_files = 2
+"#
+            .to_owned(),
+            "max_file_size_bytes must be greater than 0",
+        ),
+        (
+            "zero retained_files",
+            r#"
+[logging]
+[[logging.sinks]]
+path = "relay.log.jsonl"
+max_file_size_bytes = 1024
+retained_files = 0
+"#
+            .to_owned(),
+            "retained_files must be greater than 0",
+        ),
+        (
+            "retained_files over maximum",
+            format!(
+                r#"
+[logging]
+[[logging.sinks]]
+path = "relay.log.jsonl"
+max_file_size_bytes = 1024
+retained_files = {}
+"#,
+                MAX_FILE_SINK_RETAINED_FILES + 1
+            ),
+            "exceeds maximum",
+        ),
+    ];
+
+    for (name, document, expected) in invalid_documents {
+        let error = LoggingConfig::from_toml_document(&document)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{name}: {error}");
+    }
 }
 
 #[test]
@@ -450,6 +543,132 @@ fn wait_for_log_line(path: &std::path::Path, ready: impl Fn(&str) -> bool) -> St
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     std::fs::read_to_string(path).unwrap_or_default()
+}
+
+fn read_single_jsonl_record(path: &Path) -> Value {
+    let contents = std::fs::read_to_string(path).unwrap();
+    let mut lines = contents.lines();
+    let record = serde_json::from_str(lines.next().expect("one JSONL record")).unwrap();
+    assert!(
+        lines.next().is_none(),
+        "expected exactly one JSONL record in {}, got {contents:?}",
+        path.display()
+    );
+    record
+}
+
+#[test]
+fn logging_rotation_retains_newest_backups_and_complete_records() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("relay.log.jsonl");
+    let config = LoggingConfig {
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            rotation: Some(FileLogRotationConfig::new(1, 2).unwrap()),
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+
+    let runtime = init_logging(&config).unwrap();
+    log::info!(target: "nemo_relay.rotation_test", event = "rotation_one"; "rotation one");
+    log::info!(target: "nemo_relay.rotation_test", event = "rotation_two"; "rotation two");
+    log::info!(target: "nemo_relay.rotation_test", event = "rotation_three"; "rotation three");
+    runtime.shutdown();
+
+    let active = read_single_jsonl_record(&path);
+    let newest_backup = read_single_jsonl_record(&temp.path().join("relay.log.1.jsonl"));
+    let oldest_backup = read_single_jsonl_record(&temp.path().join("relay.log.2.jsonl"));
+
+    assert_eq!(active["event"], "logging_shutdown_started");
+    assert_eq!(newest_backup["event"], "rotation_three");
+    assert_eq!(oldest_backup["event"], "rotation_two");
+    assert!(!temp.path().join("relay.log.3.jsonl").exists());
+}
+
+#[test]
+fn logging_rotation_rotates_existing_file_at_boundary() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("relay.log.jsonl");
+    let existing_record = "x".repeat(64);
+    std::fs::write(&path, &existing_record).unwrap();
+    let config = LoggingConfig {
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            rotation: Some(FileLogRotationConfig::new(64, 2).unwrap()),
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+
+    let runtime = init_logging(&config).unwrap();
+    runtime.shutdown();
+
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("relay.log.2.jsonl")).unwrap(),
+        existing_record
+    );
+    assert_eq!(
+        read_single_jsonl_record(&path)["event"],
+        "logging_shutdown_started"
+    );
+}
+
+#[test]
+fn logging_rotation_preserves_historical_backups_outside_retention_window() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("relay.log.jsonl");
+    let historical_path = temp.path().join("relay.log.3.jsonl");
+    let historical_contents = "historical backup outside current retention window\n";
+    std::fs::write(&historical_path, historical_contents).unwrap();
+    let config = LoggingConfig {
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path,
+            rotation: Some(FileLogRotationConfig::new(1, 2).unwrap()),
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+
+    let runtime = init_logging(&config).unwrap();
+    runtime.shutdown();
+
+    assert_eq!(
+        std::fs::read_to_string(historical_path).unwrap(),
+        historical_contents
+    );
+}
+
+#[test]
+fn logging_rotation_rejects_generated_backup_path_collision() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("relay.log.jsonl");
+    let config = LoggingConfig {
+        sinks: vec![
+            LogSinkConfig::File(FileLogSinkConfig {
+                path: path.clone(),
+                rotation: Some(FileLogRotationConfig::new(1024, 1).unwrap()),
+                ..FileLogSinkConfig::default()
+            }),
+            LogSinkConfig::File(FileLogSinkConfig {
+                path: temp.path().join("relay.log.1.jsonl"),
+                ..FileLogSinkConfig::default()
+            }),
+        ],
+        ..default_config()
+    };
+
+    let error = build_logger(&config, "root".into())
+        .err()
+        .expect("generated backup path collision should fail")
+        .to_string();
+
+    assert!(error.contains("conflicts with another active or rotated file"));
+    assert!(error.contains("relay.log.1.jsonl"));
 }
 
 #[test]

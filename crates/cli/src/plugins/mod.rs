@@ -138,6 +138,7 @@ pub(crate) fn edit(command: PluginsEditRequest) -> Result<(), CliError> {
             &mut dynamic_plugins,
             &actions,
             selection,
+            scope,
         )? == EditLoopControl::Finish
         {
             return Ok(());
@@ -152,6 +153,7 @@ fn handle_menu_response(
     dynamic_plugins: &mut [DynamicPluginEditorState],
     actions: &[MenuAction],
     selection: MenuResponse,
+    scope: TargetScope,
 ) -> Result<EditLoopControl, CliError> {
     match selection {
         MenuResponse::Selected(selection) => handle_menu_action(
@@ -160,13 +162,14 @@ fn handle_menu_response(
             components,
             dynamic_plugins,
             actions.get(selection).copied(),
+            scope,
         ),
         MenuResponse::Shortcut(MenuShortcut::Preview, _) => {
             preview_document(document, components, dynamic_plugins)?;
             Ok(EditLoopControl::Continue)
         }
         MenuResponse::Shortcut(MenuShortcut::Save, _) => {
-            save_document(document, components, dynamic_plugins)
+            save_document(document, components, dynamic_plugins, scope)
         }
         MenuResponse::Shortcut(MenuShortcut::Help, _) => {
             print_editor_help();
@@ -186,6 +189,7 @@ fn handle_menu_action(
     components: &mut [EditableComponent],
     dynamic_plugins: &mut [DynamicPluginEditorState],
     action: Option<MenuAction>,
+    scope: TargetScope,
 ) -> Result<EditLoopControl, CliError> {
     match action {
         Some(MenuAction::EditComponent(component_index)) => {
@@ -204,7 +208,7 @@ fn handle_menu_action(
             preview_document(document, components, dynamic_plugins)?;
             Ok(EditLoopControl::Continue)
         }
-        Some(MenuAction::Save) => save_document(document, components, dynamic_plugins),
+        Some(MenuAction::Save) => save_document(document, components, dynamic_plugins, scope),
         Some(MenuAction::Cancel) | None => Err(cancelled_error()),
     }
 }
@@ -265,14 +269,26 @@ fn save_document(
     document: &mut PluginConfigDocument,
     components: &[EditableComponent],
     dynamic_plugins: &[DynamicPluginEditorState],
+    scope: TargetScope,
 ) -> Result<EditLoopControl, CliError> {
     store_editable_components(document.config_mut(), components)?;
     validate_config(document.config())?;
     for plugin in dynamic_plugins {
         plugin.validate()?;
+    }
+    if scope == TargetScope::Global
+        && dynamic_plugins
+            .iter()
+            .any(DynamicPluginEditorState::has_persisted_secrets)
+    {
+        return Err(CliError::Config(
+            "global plugin configuration cannot contain schema-declared secret values; use a user or project plugin config".into(),
+        ));
+    }
+    for plugin in dynamic_plugins {
         plugin.apply_to_document(document, false)?;
     }
-    document.write()?;
+    document.write_for_scope(scope)?;
     print_save_success(document.path());
     Ok(EditLoopControl::Finish)
 }

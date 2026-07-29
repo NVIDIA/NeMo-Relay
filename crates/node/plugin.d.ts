@@ -4,6 +4,28 @@
 /// <reference lib="esnext.disposable" />
 
 import type { EventSanitizeFields, Json } from './index';
+import type { LlmCodec, LlmResponseCodec } from './typed';
+
+/** Codec identity available while a managed LLM event is sanitized. */
+export type LlmCodecIdentity =
+  | { kind: 'none' }
+  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' }
+  | { kind: 'runtime'; id: string }
+  | { kind: 'opaque' };
+
+/** Codec context available while an LLM request is sanitized. */
+export interface LlmSanitizeRequestContext {
+  codec: LlmCodecIdentity;
+  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
+  resolveCodec(): LlmCodec | null;
+}
+
+/** Codec context available while an LLM response is sanitized. */
+export interface LlmSanitizeResponseContext {
+  codec: LlmCodecIdentity;
+  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
+  resolveCodec(): LlmResponseCodec | null;
+}
 
 /** Policy behavior for unsupported configuration. */
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
@@ -205,10 +227,18 @@ export interface PluginContext {
     priority: number,
     callback: (name: string, args: Json) => string | null,
   ): void;
-  /** Register an LLM sanitize-request guardrail for this component. */
-  registerLlmSanitizeRequestGuardrail(name: string, priority: number, callback: (request: Json) => Json): void;
-  /** Register an LLM sanitize-response guardrail for this component. */
-  registerLlmSanitizeResponseGuardrail(name: string, priority: number, callback: (response: Json) => Json): void;
+  /** Register an LLM sanitize-request guardrail. The callback receives `(request, context)`. */
+  registerLlmSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: Json, context: LlmSanitizeRequestContext) => Json | null,
+  ): void;
+  /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
+  registerLlmSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null,
+  ): void;
   /** Register an LLM conditional-execution guardrail for this component. */
   registerLlmConditionalExecutionGuardrail(
     name: string,

@@ -7,11 +7,13 @@ use std::ffi::OsString;
 use super::completions::CompletionsCommand;
 use super::serve::ServerArgs;
 use super::*;
+use crate::commands::configure::ConfigSubcommand;
 use crate::commands::model_pricing::{PricingSubcommand, PricingValidateCommand};
 use crate::commands::plugins::{
     PluginsCommand, PluginsInspectCommand, PluginsListCommand, PluginsSubcommand,
     PluginsValidateCommand,
 };
+use crate::commands::root::AgentArg;
 
 #[test]
 fn operational_command_names_cover_logging_exempt_commands() {
@@ -216,6 +218,46 @@ fn command_logging_policy_excludes_only_configuration_editors() {
 
     let agents = Cli::try_parse_from(["nemo-relay", "agents"]).unwrap();
     assert!(!agents.command.as_ref().unwrap().skips_logging());
+}
+
+#[test]
+fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
+    let legacy = Cli::try_parse_from(["nemo-relay", "config", "codex"]).unwrap();
+    let Command::Config(command) = legacy.command.unwrap() else {
+        panic!("expected config command");
+    };
+    assert!(matches!(command.agent, Some(AgentArg::Codex)));
+
+    let user = Cli::try_parse_from(["nemo-relay", "config", "edit"]).unwrap();
+    let Command::Config(command) = user.command.unwrap() else {
+        panic!("expected config command");
+    };
+    let Some(ConfigSubcommand::Edit(command)) = command.command else {
+        panic!("expected config edit command");
+    };
+    assert!(!command.user);
+    assert!(!command.project);
+    assert!(!command.global);
+
+    let project = Cli::try_parse_from(["nemo-relay", "config", "edit", "--project"]).unwrap();
+    let Command::Config(command) = project.command.unwrap() else {
+        panic!("expected config command");
+    };
+    let Some(ConfigSubcommand::Edit(command)) = command.command else {
+        panic!("expected config edit command");
+    };
+    assert!(command.project);
+
+    let error =
+        Cli::try_parse_from(["nemo-relay", "config", "edit", "--user", "--global"]).unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+    for arguments in [
+        ["nemo-relay", "config", "codex", "edit", "--reset"].as_slice(),
+        ["nemo-relay", "config", "--reset", "edit"].as_slice(),
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
 }
 
 #[test]

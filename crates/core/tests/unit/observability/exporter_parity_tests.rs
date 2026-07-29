@@ -26,11 +26,11 @@ use crate::codec::response::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::json::Json;
+use crate::observability::OpenTelemetryType;
 use crate::observability::atif::{
     AtifAgentInfo, AtifExporter, AtifStep, AtifStepExtra, AtifTrajectory,
 };
-use crate::observability::openinference::OpenInferenceSubscriber;
-use crate::observability::otel::OpenTelemetrySubscriber;
+use crate::observability::otel::{OpenTelemetrySubscriber, RelayIdGenerator};
 
 // -------------------------------------------------------------------
 // Helpers
@@ -87,6 +87,7 @@ fn make_provider() -> (
 ) {
     let exporter = InMemorySpanExporterBuilder::new().build();
     let provider = SdkTracerProvider::builder()
+        .with_id_generator(RelayIdGenerator)
         .with_simple_exporter(exporter.clone())
         .build();
     (provider, exporter)
@@ -238,9 +239,10 @@ fn export_through_all_exporters(events: &[Event]) -> ParityExports {
     let otel_record = otel.subscriber();
 
     let (openinference_provider, openinference_exporter) = make_provider();
-    let openinference = OpenInferenceSubscriber::from_tracer_provider(
+    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
         openinference_provider,
         "parity-openinference",
+        OpenTelemetryType::OpenInference,
     );
     let openinference_record = openinference.subscriber();
 

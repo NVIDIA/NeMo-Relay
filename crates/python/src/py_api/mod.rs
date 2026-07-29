@@ -17,9 +17,14 @@ use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
-    TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
-    current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
-    set_thread_scope_stack as bind_thread_scope_stack,
+    TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
+    capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    capture_thread_scope_stack as capture_thread_scope_stack_handle,
+    create_scope_stack as create_scope_stack_handle,
+    create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
+    current_scope_stack as current_scope_stack_handle,
+    restore_thread_scope_stack as restore_thread_scope_stack_handle,
+    scope_stack_active as scope_stack_is_active, set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
 use nemo_relay::api::scope as core_scope_api;
@@ -38,8 +43,9 @@ use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json
 use crate::py_callable;
 use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest,
-    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyScopeAttributes, PyScopeHandle,
-    PyScopeStack, PyScopeType, PyToolAttributes, PyToolHandle,
+    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
+    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
+    PyToolAttributes, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -69,6 +75,26 @@ fn py_llm_response_codec(
         // Fall back to wrapping the Python object as a custom response codec
         Some(Arc::new(py_callable::PyLlmResponseCodecWrapper {
             py_codec: c.clone().unbind(),
+        }))
+    })
+}
+
+fn py_llm_codec(codec: Option<&Bound<'_, PyAny>>) -> Option<Arc<dyn LlmCodec>> {
+    codec.and_then(|codec| -> Option<Arc<dyn LlmCodec>> {
+        if codec.is_none() {
+            return None;
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        Some(Arc::new(py_callable::PyLlmCodecWrapper {
+            py_codec: codec.clone().unbind(),
         }))
     })
 }
@@ -142,6 +168,38 @@ pub fn create_scope_stack() -> PyScopeStack {
     PyScopeStack(create_scope_stack_handle())
 }
 
+/// Capture a transport-neutral context from the current Relay scope stack.
+#[pyfunction]
+pub fn capture_propagation_context() -> PyResult<PyPropagationContext> {
+    capture_propagation_context_handle()
+        .map(|inner| PyPropagationContext { inner })
+        .map_err(to_py_err)
+}
+
+/// Capture a context with an application-supplied stable session root UUID.
+#[pyfunction]
+pub fn capture_propagation_context_with_root(
+    root_uuid: Option<&str>,
+) -> PyResult<PyPropagationContext> {
+    let root_uuid = root_uuid
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
+    capture_propagation_context_with_root_handle(root_uuid)
+        .map(|inner| PyPropagationContext { inner })
+        .map_err(to_py_err)
+}
+
+/// Create an isolated scope stack seeded from a received propagation context.
+#[pyfunction]
+pub fn create_scope_stack_from_propagation(
+    context: &PyPropagationContext,
+) -> PyResult<PyScopeStack> {
+    create_scope_stack_from_propagation_handle(&context.inner)
+        .map(PyScopeStack)
+        .map_err(to_py_err)
+}
+
 /// Bind a ``ScopeStack`` to the current thread's thread-local storage.
 ///
 /// This ensures that subsequent NeMo Relay API calls on this thread use the given
@@ -153,6 +211,19 @@ pub fn create_scope_stack() -> PyScopeStack {
 #[pyfunction]
 pub fn set_thread_scope_stack(stack: &PyScopeStack) {
     bind_thread_scope_stack(stack.0.clone());
+}
+
+/// Capture the scope stack currently installed in native thread-local storage.
+#[pyfunction]
+pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
+    PyThreadScopeStackBinding(capture_thread_scope_stack_handle())
+}
+
+/// Restore a complete native thread binding captured by
+/// [`capture_thread_scope_stack`].
+#[pyfunction]
+pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
+    restore_thread_scope_stack_handle(binding.0.clone());
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
@@ -750,11 +821,7 @@ fn llm_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
     let default_fn: LlmExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
-    let codec_arc: Option<Arc<dyn LlmCodec>> = codec.map(|c| {
-        Arc::new(py_callable::PyLlmCodecWrapper {
-            py_codec: c.clone().unbind(),
-        }) as Arc<dyn LlmCodec>
-    });
+    let codec_arc = py_llm_codec(codec);
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
@@ -855,11 +922,7 @@ fn llm_stream_call_execute<'py>(
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
-    let codec_arc: Option<Arc<dyn LlmCodec>> = codec.map(|c| {
-        Arc::new(py_callable::PyLlmCodecWrapper {
-            py_codec: c.clone().unbind(),
-        }) as Arc<dyn LlmCodec>
-    });
+    let codec_arc = py_llm_codec(codec);
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
@@ -1081,7 +1144,8 @@ fn deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM sanitize-request guardrail.
 ///
-/// Callback: ``(request: LlmRequest) -> LlmRequest`` — returns a sanitized request.
+/// Callback: ``(request: LlmRequest, context: LlmSanitizeRequestContext) ->
+/// Optional[LlmRequest]``. Return ``None`` to omit the observability payload and annotation.
 #[pyfunction]
 fn register_llm_sanitize_request_guardrail(
     name: &str,
@@ -1091,7 +1155,7 @@ fn register_llm_sanitize_request_guardrail(
     core_registry_api::register_llm_sanitize_request_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1104,7 +1168,8 @@ fn deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
 
 /// Register an LLM sanitize-response guardrail.
 ///
-/// Callback: ``(response: dict) -> dict`` — returns a sanitized response.
+/// Callback: ``(response: Json, context: LlmSanitizeResponseContext) -> Optional[Json]``.
+/// Return ``None`` to omit the observability payload and annotation.
 #[pyfunction]
 fn register_llm_sanitize_response_guardrail(
     name: &str,
@@ -1114,7 +1179,7 @@ fn register_llm_sanitize_response_guardrail(
     core_registry_api::register_llm_sanitize_response_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1542,7 +1607,7 @@ fn scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1568,7 +1633,7 @@ fn scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1726,7 +1791,12 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_propagation_context_with_root, m)?)?;
+    m.add_function(wrap_pyfunction!(create_scope_stack_from_propagation, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(restore_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(sync_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(py_scope_stack_active, m)?)?;
 

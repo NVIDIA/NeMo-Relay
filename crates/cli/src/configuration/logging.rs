@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use nemo_relay::error::FlowError;
 use nemo_relay::logging::{
-    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogSinkConfig,
-    LogFormat, LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES,
+    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogRotationConfig,
+    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
+    MAX_FILE_SINK_QUEUE_ENTRIES,
 };
 use serde::Deserialize;
 
@@ -36,6 +37,8 @@ struct RawFileLogSinkConfig {
     /// Optional advanced: pending async queue entries per file sink (default
     /// [`DEFAULT_FILE_SINK_QUEUE_ENTRIES`]).
     queue_capacity: Option<usize>,
+    max_file_size_bytes: Option<u64>,
+    retained_files: Option<usize>,
 }
 
 pub(super) fn apply_file_logging_config(
@@ -100,11 +103,25 @@ fn parse_file_log_sink(
         Some(capacity) => capacity,
         None => DEFAULT_FILE_SINK_QUEUE_ENTRIES,
     };
+    let rotation = match (config.max_file_size_bytes, config.retained_files) {
+        (None, None) => None,
+        (Some(max_file_size_bytes), Some(retained_files)) => Some(
+            FileLogRotationConfig::new(max_file_size_bytes, retained_files)
+                .map_err(logging_parse_error)?,
+        ),
+        _ => {
+            return Err(CliError::Config(
+                "logging sink max_file_size_bytes and retained_files must be configured together"
+                    .into(),
+            ));
+        }
+    };
     Ok(LogSinkConfig::File(FileLogSinkConfig {
         path,
         level,
         format,
         queue_capacity,
+        rotation,
     }))
 }
 

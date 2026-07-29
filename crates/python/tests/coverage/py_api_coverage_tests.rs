@@ -52,6 +52,25 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         sync_thread_scope_stack(&stack);
         assert!(py_scope_stack_active());
 
+        let thread_binding = capture_thread_scope_stack();
+        assert_eq!(thread_binding.__repr__(), "<_ThreadScopeStackBinding>");
+        let replacement = create_scope_stack();
+        set_thread_scope_stack(&replacement);
+        restore_thread_scope_stack(&thread_binding);
+        assert!(py_scope_stack_active());
+
+        let rootless_context = capture_propagation_context().unwrap();
+        assert_eq!(rootless_context.inner.version, 1);
+        assert!(rootless_context.inner.root_uuid.is_none());
+        let propagation_root = Uuid::now_v7();
+        let rooted_context =
+            capture_propagation_context_with_root(Some(&propagation_root.to_string())).unwrap();
+        assert_eq!(rooted_context.inner.root_uuid, Some(propagation_root));
+        let propagated_stack = create_scope_stack_from_propagation(&rooted_context).unwrap();
+        set_thread_scope_stack(&propagated_stack);
+        restore_thread_scope_stack(&thread_binding);
+        assert!(capture_propagation_context_with_root(Some("not-a-uuid")).is_err());
+
         let handle = get_handle().unwrap();
         assert_eq!(handle.inner.name, "root");
 
@@ -179,10 +198,10 @@ async def tool_exec_intercept(name, args, next):
     result["tool_intercepted"] = True
     return ToolExecutionInterceptOutcome(result)
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     updated = dict(response)
     updated["llm_sanitized_response"] = True
     return updated

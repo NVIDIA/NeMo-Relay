@@ -15,14 +15,11 @@ workspace = true
 
 [features]
 default = [
-    "otel",
-    "openinference",
     "guardrails-remote",
     "object-store",
 ]
 atof-streaming = [
     "dep:futures-util",
-    "dep:reqwest",
     "dep:tokio-tungstenite",
     "tokio/io-util",
     "tokio/net",
@@ -30,35 +27,16 @@ atof-streaming = [
     "tokio/time",
 ]
 schema = ["dep:schemars", "nemo-relay-types/schema"]
-guardrails-remote = [
-    "dep:reqwest",
-]
+guardrails-remote = []
 object-store = [
     "dep:object_store",
-    "dep:reqwest",
     "tokio/net",
     "tokio/time",
-]
-otel = [
-    "dep:opentelemetry",
-    "dep:opentelemetry-otlp",
-    "dep:opentelemetry_sdk",
-    "dep:reqwest",
-    "dep:tonic",
-]
-openinference = [
-    "dep:openinference-semantic-conventions",
-    "dep:opentelemetry",
-    "dep:opentelemetry-otlp",
-    "dep:opentelemetry_sdk",
-    "dep:reqwest",
-    "dep:tonic",
 ]
 worker-grpc = [
     "dep:nemo-relay-worker-proto",
     "dep:hyper-util",
     "dep:tower",
-    "dep:tonic",
     "tokio-stream/net",
     "tonic/codegen",
     "tonic/router",
@@ -82,20 +60,20 @@ chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
 strum = { version = "0.27", features = ["derive"] }
-tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 typed-builder = "0.23.2"
 futures-util = { version = "0.3", optional = true }
-opentelemetry = { workspace = true, features = ["trace"], optional = true }
-opentelemetry_sdk = { workspace = true, features = ["trace"], optional = true }
-openinference-semantic-conventions = { version = "0.1.1", optional = true }
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry-semantic-conventions.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
 libloading = "0.8"
 semver = "1"
 sha2 = "0.11"
-opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "grpc-tonic"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls-native-roots", "stream"], optional = true }
-tonic = { version = "0.14.1", default-features = false, optional = true }
-object_store = { version = "0.13", default-features = false, features = ["aws"], optional = true }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "grpc-tonic", "tls-ring", "tls-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls-native-roots", "stream"] }
+tonic = { version = "0.14.1", default-features = false }
+object_store = { version = "0.14.1", default-features = false, features = ["aws"], optional = true }
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
@@ -108,7 +86,7 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-mu
 futures = "0.3"
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 serde_json = "1"
-object_store = { version = "0.13", default-features = false, features = ["aws"] }
+object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
 tempfile = "3"
 
 [[test]]

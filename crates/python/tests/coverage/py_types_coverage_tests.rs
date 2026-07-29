@@ -74,8 +74,8 @@ fn test_register_exposes_all_type_bindings() {
         assert!(module.getattr("ScopeEvent").is_ok());
         assert!(module.getattr("MarkEvent").is_ok());
         assert!(module.getattr("AtifExporter").is_ok());
-        assert!(module.getattr("OpenInferenceConfig").is_ok());
-        assert!(module.getattr("OpenInferenceSubscriber").is_ok());
+        assert!(module.getattr("OpenInferenceConfig").is_err());
+        assert!(module.getattr("OpenInferenceSubscriber").is_err());
         assert!(module.getattr("OpenTelemetryConfig").is_ok());
         assert!(module.getattr("OpenTelemetrySubscriber").is_ok());
         assert!(module.getattr("OpenAIChatCodec").is_ok());
@@ -382,8 +382,8 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
 fn test_open_telemetry_config_and_subscriber_cover_lifecycle() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let mut config = PyOpenTelemetryConfig::new();
-        config.endpoint = Some("http://localhost:4318/v1/traces".into());
+        let mut config =
+            PyOpenTelemetryConfig::new("full".into(), "http://localhost:4318/v1/traces".into());
         config.service_name = "py-agent".into();
         config.service_namespace = Some("agents".into());
         config.service_version = Some("1.0.0".into());
@@ -418,13 +418,24 @@ fn test_open_telemetry_config_and_subscriber_cover_lifecycle() {
 fn test_open_telemetry_config_rejects_invalid_inputs() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let mut config = PyOpenTelemetryConfig::new();
+        let mut config =
+            PyOpenTelemetryConfig::new("full".into(), "http://localhost:4318/v1/traces".into());
         let bad_headers = PyList::empty(py);
         assert!(config.set_headers(&bad_headers.into_any()).is_err());
 
         let bad_attrs = json_to_py(py, &json!({"env": 1})).unwrap();
         assert!(config.set_resource_attributes(bad_attrs.bind(py)).is_err());
 
+        config.otel_type = "invalid".into();
+        let err = config.to_rust_config().unwrap_err();
+        assert!(err.to_string().contains("type must be"));
+
+        config.otel_type = "full".into();
+        config.endpoint = " ".into();
+        let err = config.to_rust_config().unwrap_err();
+        assert!(err.to_string().contains("endpoint is required"));
+
+        config.endpoint = "http://localhost:4318/v1/traces".into();
         config.transport = "invalid".into();
         let err = config.to_rust_config().unwrap_err();
         assert!(err.to_string().contains("transport must be"));
@@ -432,11 +443,13 @@ fn test_open_telemetry_config_rejects_invalid_inputs() {
 }
 
 #[test]
-fn test_open_inference_config_and_subscriber_cover_lifecycle() {
+fn test_openinference_typed_otel_config_and_subscriber_cover_lifecycle() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let mut config = PyOpenInferenceConfig::new();
-        config.endpoint = Some("http://localhost:4318/v1/traces".into());
+        let mut config = PyOpenTelemetryConfig::new(
+            "openinference".into(),
+            "http://localhost:4318/v1/traces".into(),
+        );
         config.service_name = "py-agent".into();
         config.service_namespace = Some("agents".into());
         config.service_version = Some("1.0.0".into());
@@ -445,7 +458,7 @@ fn test_open_inference_config_and_subscriber_cover_lifecycle() {
         config.set_header("authorization".into(), "Bearer token".into());
         config.set_resource_attribute("deployment.environment".into(), "test".into());
 
-        assert!(config.__repr__().contains("OpenInferenceConfig"));
+        assert!(config.__repr__().contains("OpenTelemetryConfig"));
         assert_eq!(
             py_to_json(config.headers(py).unwrap().bind(py)).unwrap(),
             json!({"authorization": "Bearer token"})
@@ -456,22 +469,25 @@ fn test_open_inference_config_and_subscriber_cover_lifecycle() {
         );
 
         let config = pyo3::Py::new(py, config).unwrap();
-        let subscriber = PyOpenInferenceSubscriber::new(config.bind(py).borrow()).unwrap();
+        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()).unwrap();
         let subscriber_name = format!("py_openinference_{}", Uuid::now_v7().simple());
         subscriber.register(subscriber_name.clone()).unwrap();
         assert!(subscriber.deregister(subscriber_name.clone()).unwrap());
         assert!(!subscriber.deregister(subscriber_name).unwrap());
         subscriber.force_flush(py).unwrap();
         subscriber.shutdown(py).unwrap();
-        assert_eq!(subscriber.__repr__(), "<OpenInferenceSubscriber>");
+        assert_eq!(subscriber.__repr__(), "<OpenTelemetrySubscriber>");
     });
 }
 
 #[test]
-fn test_open_inference_config_rejects_invalid_inputs() {
+fn test_openinference_typed_otel_config_rejects_invalid_inputs() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let mut config = PyOpenInferenceConfig::new();
+        let mut config = PyOpenTelemetryConfig::new(
+            "openinference".into(),
+            "http://localhost:4318/v1/traces".into(),
+        );
         let bad_headers = PyList::empty(py);
         assert!(config.set_headers(&bad_headers.into_any()).is_err());
 
@@ -1723,9 +1739,8 @@ def run(types):
     _ = repr(exporter)
     _ = exporter.deregister("missing-exporter")
 
-    otel = types.OpenTelemetryConfig()
+    otel = types.OpenTelemetryConfig("full", "http://127.0.0.1:4317")
     otel.transport = "grpc"
-    otel.endpoint = "http://127.0.0.1:4317"
     otel_grpc_error = None
     try:
         otel_subscriber = types.OpenTelemetrySubscriber(otel)
@@ -1734,12 +1749,11 @@ def run(types):
     except RuntimeError as err:
         otel_grpc_error = str(err)
 
-    oi = types.OpenInferenceConfig()
+    oi = types.OpenTelemetryConfig("openinference", "http://127.0.0.1:4317")
     oi.transport = "grpc"
-    oi.endpoint = "http://127.0.0.1:4317"
     oi_grpc_error = None
     try:
-        oi_subscriber = types.OpenInferenceSubscriber(oi)
+        oi_subscriber = types.OpenTelemetrySubscriber(oi)
         _ = repr(oi_subscriber)
         oi_subscriber.shutdown()
     except RuntimeError as err:
@@ -1877,7 +1891,7 @@ def run(types):
         let result_json = py_to_json(&result).unwrap();
 
         assert!(result_json["request_error"].as_str().is_some());
-        assert!(result_json["otel_grpc_error"].as_str().is_some());
+        assert!(result_json["otel_grpc_error"].is_null());
         assert!(result_json["oi_grpc_error"].is_null());
         assert_eq!(result_json["params_is_none"], json!(true));
         assert_eq!(result_json["tools_is_none"], json!(true));
@@ -1993,14 +2007,14 @@ def run(types, api):
     _ = la & types.LLMAttributes(types.LLMAttributes.STREAMING)
     _ = repr(la)
 
-    otel = types.OpenTelemetryConfig()
+    otel = types.OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
     otel.headers = {"authorization": "Bearer token"}
     otel.resource_attributes = {"env": "test"}
     _ = otel.headers
     _ = otel.resource_attributes
     _ = repr(otel)
 
-    oi = types.OpenInferenceConfig()
+    oi = types.OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
     oi.headers = {"authorization": "Bearer token"}
     oi.resource_attributes = {"env": "test"}
     _ = oi.headers
