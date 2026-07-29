@@ -83,6 +83,7 @@ pub(crate) type EventTransformFn = Box<
 >;
 
 mod native {
+    use futures_util::FutureExt;
     use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Mutex;
@@ -580,22 +581,46 @@ mod native {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         let _dispatch_guard = DispatchGuard::enter();
-        let Some(event) =
-            sanitize_event_snapshot(*event, transform, sanitizers, publication_context)
-        else {
-            restore_thread_scope_stack(previous_scope_stack);
-            return;
-        };
-        for subscriber in subscribers {
-            if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "subscriber_callback_panicked";
-                    "Event subscriber callback panicked"
-                );
+        let (event, nested_publications) =
+            sanitize_event_snapshot(*event, transform, sanitizers, publication_context);
+        if let Some(event) = event {
+            for subscriber in subscribers {
+                if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "subscriber_callback_panicked";
+                        "Event subscriber callback panicked"
+                    );
+                }
             }
         }
         restore_thread_scope_stack(previous_scope_stack);
+        // Publications emitted while transforming or sanitizing this event
+        // are causally nested within it. Drain them before the dispatcher
+        // consumes messages that callers may already have queued afterward.
+        for publication in nested_publications {
+            handle_message(publication);
+        }
+    }
+
+    fn run_with_nested_publication_buffer<F: Future>(
+        runtime: &tokio::runtime::Runtime,
+        publication_context: Option<PublicationContext>,
+        future: F,
+    ) -> (std::thread::Result<F::Output>, Vec<DispatcherMessage>) {
+        runtime.block_on(ASYNC_PUBLICATION_MESSAGES.scope(
+            RefCell::new(Some(Vec::new())),
+            async move {
+                let output =
+                    AssertUnwindSafe(TASK_PUBLICATION_CONTEXT.scope(publication_context, future))
+                        .catch_unwind()
+                        .await;
+                let publications = ASYNC_PUBLICATION_MESSAGES
+                    .with(|messages| messages.borrow_mut().take())
+                    .unwrap_or_default();
+                (output, publications)
+            },
+        ))
     }
 
     /// Apply a transform and sanitizers on the dispatcher thread. A transform
@@ -607,7 +632,7 @@ mod native {
         transform: Option<EventTransformFn>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         publication_context: Option<PublicationContext>,
-    ) -> Option<Event> {
+    ) -> (Option<Event>, Vec<DispatcherMessage>) {
         let state = process_state();
         let mut runtime = state
             .sanitizer_runtime
@@ -627,20 +652,18 @@ mod native {
                         "Event sanitizer runtime failed; dropping events: {error}"
                     );
                 }
-                return None;
+                return (None, Vec::new());
             }
         };
         let transform_context = publication_context.clone();
-        let transformed = match catch_unwind(AssertUnwindSafe(|| {
-            runtime.block_on(
-                TASK_PUBLICATION_CONTEXT.scope(transform_context, async move {
-                    match transform {
-                        Some(transform) => transform(event).await,
-                        None => event,
-                    }
-                }),
-            )
-        })) {
+        let (transformed, mut nested_publications) =
+            run_with_nested_publication_buffer(runtime, transform_context, async move {
+                match transform {
+                    Some(transform) => transform(event).await,
+                    None => event,
+                }
+            });
+        let transformed = match transformed {
             Ok(event) => event,
             Err(_) => {
                 log::error!(
@@ -648,19 +671,20 @@ mod native {
                     event = "event_transform_panicked";
                     "Event transform panicked; dropping the event"
                 );
-                return None;
+                return (None, nested_publications);
             }
         };
         if sanitizers.is_empty() {
-            return Some(transformed);
+            return (Some(transformed), nested_publications);
         }
         let fallback = transformed.clone();
-        match catch_unwind(AssertUnwindSafe(|| {
-            runtime.block_on(TASK_PUBLICATION_CONTEXT.scope(
-                publication_context,
-                NemoRelayContextState::event_sanitize_snapshot_chain(transformed, &sanitizers),
-            ))
-        })) {
+        let (sanitized, sanitizer_publications) = run_with_nested_publication_buffer(
+            runtime,
+            publication_context,
+            NemoRelayContextState::event_sanitize_snapshot_chain(transformed, &sanitizers),
+        );
+        nested_publications.extend(sanitizer_publications);
+        let event = match sanitized {
             Ok(event) => Some(event),
             Err(_) => {
                 log::error!(
@@ -670,7 +694,8 @@ mod native {
                 );
                 Some(fallback)
             }
-        }
+        };
+        (event, nested_publications)
     }
 
     pub(super) fn prepare_for_fork() {

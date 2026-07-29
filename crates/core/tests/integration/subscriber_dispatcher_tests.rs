@@ -10,7 +10,8 @@ use std::time::Duration;
 use nemo_relay::api::event::Event;
 use nemo_relay::api::registry::{
     deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
+    deregister_tool_sanitize_request_guardrail, register_mark_sanitize_guardrail,
+    register_scope_sanitize_end_guardrail, register_tool_sanitize_request_guardrail,
 };
 use nemo_relay::api::runtime::{
     NemoRelayContextState, create_scope_stack, current_scope_stack, global_context,
@@ -20,6 +21,7 @@ use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::tool::{ToolCallEndParams, ToolCallParams, tool_call, tool_call_end};
 use nemo_relay::error::FlowError;
 use serde_json::json;
 
@@ -105,6 +107,136 @@ fn dispatcher_preserves_event_order() {
     deregister_subscriber("ordered-subscriber").unwrap();
 
     assert_eq!(observed.lock().unwrap().as_slice(), ["one", "two"]);
+}
+
+#[test]
+fn nested_event_sanitizer_publication_precedes_already_queued_events() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_events = Arc::clone(&observed);
+    register_subscriber(
+        "nested-event-order-subscriber",
+        Arc::new(move |event| {
+            observed_events
+                .lock()
+                .unwrap()
+                .push(event.name().to_string());
+        }),
+    )
+    .unwrap();
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    register_mark_sanitize_guardrail(
+        "nested-event-order-sanitizer",
+        0,
+        Arc::new(move |event, fields| {
+            let release_rx = Arc::clone(&release_rx);
+            let started_tx = started_tx.clone();
+            Box::pin(async move {
+                if event.name() == "outer-event" {
+                    started_tx.send(()).unwrap();
+                    release_rx.lock().unwrap().recv().unwrap();
+                    emit_mark("nested-event");
+                }
+                Ok(fields)
+            })
+        }),
+    )
+    .unwrap();
+
+    emit_mark("outer-event");
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("outer sanitizer should start");
+    emit_mark("later-event");
+    release_tx.send(()).unwrap();
+    flush_subscribers().unwrap();
+
+    assert_eq!(
+        observed.lock().unwrap().as_slice(),
+        ["outer-event", "nested-event", "later-event"]
+    );
+    deregister_mark_sanitize_guardrail("nested-event-order-sanitizer").unwrap();
+    deregister_subscriber("nested-event-order-subscriber").unwrap();
+}
+
+#[test]
+fn nested_request_sanitizer_publication_precedes_manual_end_event() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    flush_subscribers().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_events = Arc::clone(&observed);
+    register_subscriber(
+        "nested-transform-order-subscriber",
+        Arc::new(move |event| {
+            observed_events
+                .lock()
+                .unwrap()
+                .push(event.name().to_string());
+        }),
+    )
+    .unwrap();
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    register_tool_sanitize_request_guardrail(
+        "nested-transform-order-sanitizer",
+        0,
+        Arc::new(move |name, args| {
+            let release_rx = Arc::clone(&release_rx);
+            let started_tx = started_tx.clone();
+            Box::pin(async move {
+                if name == "manual-ordered-tool" {
+                    started_tx.send(()).unwrap();
+                    release_rx.lock().unwrap().recv().unwrap();
+                    emit_mark("nested-transform-event");
+                }
+                Ok(args)
+            })
+        }),
+    )
+    .unwrap();
+
+    let handle = tool_call(
+        ToolCallParams::builder()
+            .name("manual-ordered-tool")
+            .args(json!({"input": true}))
+            .build(),
+    )
+    .unwrap();
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("request sanitizer should start");
+    tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(&handle)
+            .result(json!({"output": true}))
+            .build(),
+    )
+    .unwrap();
+    release_tx.send(()).unwrap();
+    flush_subscribers().unwrap();
+
+    assert_eq!(
+        observed.lock().unwrap().as_slice(),
+        [
+            "manual-ordered-tool",
+            "nested-transform-event",
+            "manual-ordered-tool"
+        ]
+    );
+    deregister_tool_sanitize_request_guardrail("nested-transform-order-sanitizer").unwrap();
+    deregister_subscriber("nested-transform-order-subscriber").unwrap();
 }
 
 #[test]
