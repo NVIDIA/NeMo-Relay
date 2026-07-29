@@ -43,7 +43,6 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -148,21 +147,6 @@ async fn resolve_json_or_future(
                     .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
             })
         }
-    }
-}
-
-fn split_py_object_or_future(
-    py: Python<'_>,
-    result: Py<PyAny>,
-) -> FlowResult<Result<Py<PyAny>, PyValueFuture>> {
-    let bound = result.bind(py);
-    if bound.getattr("__await__").is_ok() {
-        reject_awaitable_from_sync_caller(bound)?;
-        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        Ok(Err(Box::pin(future)))
-    } else {
-        Ok(Ok(result))
     }
 }
 
@@ -284,6 +268,24 @@ fn copy_publication_invocation<'py>(
     Ok((invocation_context, task_locals))
 }
 
+fn copy_middleware_invocation<'py>(
+    py: Python<'py>,
+    fallback_task_locals: Option<TaskLocals>,
+) -> PyResult<(Option<Bound<'py, PyAny>>, Option<TaskLocals>)> {
+    if let Some(context) = publication_context::<PythonPublicationContext>() {
+        let (context, task_locals) =
+            copy_publication_invocation(py, &context, fallback_task_locals)?;
+        return Ok((Some(context), task_locals));
+    }
+    let Some(locals) = fallback_task_locals else {
+        return Ok((None, None));
+    };
+    let invocation_context = locals.context(py).call_method0("copy")?;
+    let task_locals =
+        TaskLocals::new(locals.event_loop(py)).with_context(invocation_context.clone());
+    Ok((Some(invocation_context), Some(task_locals)))
+}
+
 async fn resolve_py_object_or_future(
     outcome: FlowResult<Result<Py<PyAny>, PyValueFuture>>,
 ) -> FlowResult<Py<PyAny>> {
@@ -296,7 +298,15 @@ async fn resolve_py_object_or_future(
 fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyAny>>> {
     Python::attach(|py| {
         let iter = async_iter.bind(py);
-        match iter.call_method0("__anext__") {
+        let next = iter.getattr("__anext__");
+        let result =
+            next.and_then(
+                |next| match pyo3_async_runtimes::tokio::get_current_locals(py) {
+                    Ok(locals) => locals.context(py).call_method1("run", (next,)),
+                    Err(_) => next.call0(),
+                },
+            );
+        match result {
             Ok(coro) => Ok(Some(coro.unbind())),
             Err(error) => {
                 if error.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
@@ -315,8 +325,10 @@ fn schedule_async_iter_task(coro: Py<PyAny>) -> FlowResult<Py<PyAny>> {
             .and_then(|locals| {
                 let kwargs = PyDict::new(py);
                 kwargs.set_item("loop", locals.event_loop(py))?;
-                py.import("asyncio")?
-                    .call_method("ensure_future", (coro,), Some(&kwargs))
+                let ensure_future = py.import("asyncio")?.getattr("ensure_future")?;
+                locals
+                    .context(py)
+                    .call_method("run", (ensure_future, coro), Some(&kwargs))
             })
             .map(|task| task.unbind())
             .map_err(|e| FlowError::Internal(e.to_string()))
@@ -390,7 +402,15 @@ async fn await_async_iter_value(coro: Py<PyAny>) -> FlowResult<Option<Json>> {
 async fn close_async_iter(async_iter: &Arc<Py<PyAny>>) -> FlowResult<()> {
     let close = Python::attach(|py| {
         let iter = async_iter.bind(py);
-        match iter.call_method0("aclose") {
+        let close = iter.getattr("aclose");
+        let result =
+            close.and_then(
+                |close| match pyo3_async_runtimes::tokio::get_current_locals(py) {
+                    Ok(locals) => locals.context(py).call_method1("run", (close,)),
+                    Err(_) => close.call0(),
+                },
+            );
+        match result {
             Ok(close) => Ok(Some(close.unbind())),
             Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => {
                 Ok(None)
@@ -547,12 +567,18 @@ impl LlmStreamInner for PythonAsyncIteratorStream {
     }
 }
 
-fn stream_from_async_iter(async_iter: Py<PyAny>) -> FlowResult<LlmJsonStream> {
+fn stream_from_async_iter(
+    async_iter: Py<PyAny>,
+    task_locals: Option<TaskLocals>,
+) -> FlowResult<LlmJsonStream> {
     let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
-    let task_locals = Python::attach(|py| {
-        pyo3_async_runtimes::tokio::get_current_locals(py)
-            .map_err(|e: pyo3::PyErr| FlowError::Internal(e.to_string()))
-    })?;
+    let task_locals = match task_locals {
+        Some(locals) => locals,
+        None => Python::attach(|py| {
+            pyo3_async_runtimes::tokio::get_current_locals(py)
+                .map_err(|e: pyo3::PyErr| FlowError::Internal(e.to_string()))
+        })?,
+    };
 
     let async_iter = Arc::new(async_iter);
     let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
@@ -589,7 +615,8 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
                                 .map_err(|error| FlowError::Internal(error.to_string()))?;
                         (Some(context), publication_task_locals)
                     }
-                    None => (None, task_locals),
+                    None => copy_middleware_invocation(py, task_locals)
+                        .map_err(|error| FlowError::Internal(error.to_string()))?,
                 };
                 let py_args = json_to_py(py, &args)
                     .map_err(|e| FlowError::Internal(format!("tool json_to_py failed: {e}")))?;
@@ -635,12 +662,21 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
+                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
                 let py_args =
                     json_to_py(py, &args).map_err(|e| FlowError::Internal(e.to_string()))?;
-                let result = py_fn
-                    .call1(py, (name, py_args))
-                    .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_py_object_or_future_with_locals(py, result, task_locals.as_ref(), None)
+                let result = match invocation_context.as_ref() {
+                    Some(context) => context.call_method1("run", (py_fn.bind(py), name, py_args)),
+                    None => py_fn.bind(py).call1((name, py_args)),
+                }
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
             }))
             .await?;
             Python::attach(|py| {
@@ -668,12 +704,16 @@ pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
             resolve_json_or_future(Python::attach(|py| {
+                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
                 let py_args =
                     json_to_py(py, &args).map_err(|e| FlowError::Internal(e.to_string()))?;
-                let result = py_fn
-                    .call1(py, (name, py_args))
-                    .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_json_or_future_with_locals(py, result, task_locals.as_ref())
+                let result = match invocation_context.as_ref() {
+                    Some(context) => context.call_method1("run", (py_fn.bind(py), name, py_args)),
+                    None => py_fn.bind(py).call1((name, py_args)),
+                }
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
+                split_json_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
             }))
             .await
         })
@@ -825,71 +865,47 @@ pub fn wrap_py_tool_exec_intercept_fn(
     py_fn: Py<PyAny>,
 ) -> nemo_relay::api::runtime::ToolExecutionFn {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(move |name: &str, args: Json, next: ToolExecutionNextFn| {
         let py_fn = py_fn.clone();
         let name = name.to_string();
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
-            let outcome: FlowResult<
-                Result<
-                    ToolExecutionInterceptOutcome,
-                    Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>,
-                >,
-            > = Python::attach(|py| {
+            let result = resolve_py_object_or_future(Python::attach(|py| {
+                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
                 let py_args =
                     json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                 let py_next = PyToolNextFn { inner: next };
-                let result = py_fn
-                    .call1(
-                        py,
-                        (
-                            &name,
-                            py_args,
-                            py_next
-                                .into_pyobject(py)
-                                .map_err(|e| FlowError::Internal(e.to_string()))?
-                                .into_any(),
-                        ),
-                    )
-                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-
-                let bound = result.bind(py);
-                if bound.getattr("__await__").is_ok() {
-                    let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| FlowError::Internal(e.to_string()))?;
-                    Ok(Err(Box::pin(future)
-                        as Pin<
-                            Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
-                        >))
-                } else {
-                    let outcome = result
-                        .extract::<PyToolExecutionInterceptOutcome>(py)
-                        .map_err(|e| {
-                            FlowError::Internal(format!(
-                                "tool execution intercept must return ToolExecutionInterceptOutcome: {e}"
-                            ))
-                        })?;
-                    Ok(Ok(outcome.inner))
+                let py_next = py_next
+                    .into_pyobject(py)
+                    .map_err(|e| FlowError::Internal(e.to_string()))?
+                    .into_any();
+                let result = match invocation_context.as_ref() {
+                    Some(context) => {
+                        context.call_method1("run", (py_fn.bind(py), &name, py_args, py_next))
+                    }
+                    None => py_fn.bind(py).call1((&name, py_args, py_next)),
                 }
-            });
-
-            match outcome? {
-                Ok(json) => Ok(json),
-                Err(future) => {
-                    let py_result = future
-                        .await
-                        .map_err(|e| FlowError::Internal(e.to_string()))?;
-                    Python::attach(|py| {
-                        py_result
-                            .extract::<PyToolExecutionInterceptOutcome>(py)
-                            .map(|value| value.inner)
-                            .map_err(|e| {
-                                FlowError::Internal(format!(
-                                    "tool execution intercept must return ToolExecutionInterceptOutcome: {e}"
-                                ))
-                            })
+                .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
+            }))
+            .await?;
+            Python::attach(|py| {
+                result
+                    .extract::<PyToolExecutionInterceptOutcome>(py)
+                    .map(|value| value.inner)
+                    .map_err(|e| {
+                        FlowError::Internal(format!(
+                            "tool execution intercept must return ToolExecutionInterceptOutcome: {e}"
+                        ))
                     })
-                }
-            }
+            })
         })
     })
 }
@@ -907,60 +923,46 @@ pub fn wrap_py_llm_exec_intercept_fn(
         + Sync,
 > {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(
         move |name: &str, request: LlmRequest, next: LlmExecutionNextFn| {
             let py_fn = py_fn.clone();
             let name = name.to_string();
+            let task_locals = task_locals_with_running_loop(task_locals.as_ref());
             Box::pin(async move {
-                let outcome: FlowResult<
-                    Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
-                > = Python::attach(|py| {
+                let result = resolve_py_object_or_future(Python::attach(|py| {
+                    let (invocation_context, task_locals) =
+                        copy_middleware_invocation(py, task_locals)
+                            .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let py_req = PyLLMRequest { inner: request };
                     let py_next = PyLlmNextFn { inner: next };
-                    let result = py_fn
-                        .call1(
-                            py,
-                            (
-                                &name,
-                                py_req
-                                    .into_pyobject(py)
-                                    .map_err(|e| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                                py_next
-                                    .into_pyobject(py)
-                                    .map_err(|e| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                            ),
-                        )
-                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-
-                    let bound = result.bind(py);
-                    if bound.getattr("__await__").is_ok() {
-                        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                            .map_err(|e| FlowError::Internal(e.to_string()))?;
-                        Ok(Err(Box::pin(future)
-                            as Pin<
-                                Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
-                            >))
-                    } else {
-                        let json = py_to_json(bound)
-                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                        Ok(Ok(json))
+                    let py_req = py_req
+                        .into_pyobject(py)
+                        .map_err(|e| FlowError::Internal(e.to_string()))?
+                        .into_any();
+                    let py_next = py_next
+                        .into_pyobject(py)
+                        .map_err(|e| FlowError::Internal(e.to_string()))?
+                        .into_any();
+                    let result = match invocation_context.as_ref() {
+                        Some(context) => {
+                            context.call_method1("run", (py_fn.bind(py), &name, py_req, py_next))
+                        }
+                        None => py_fn.bind(py).call1((&name, py_req, py_next)),
                     }
-                });
-
-                match outcome? {
-                    Ok(json) => Ok(json),
-                    Err(future) => {
-                        let py_result = future
-                            .await
-                            .map_err(|e| FlowError::Internal(e.to_string()))?;
-                        Python::attach(|py| {
-                            py_to_json(py_result.bind(py))
-                                .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
-                        })
-                    }
-                }
+                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                    split_py_object_or_future_with_locals(
+                        py,
+                        result.unbind(),
+                        task_locals.as_ref(),
+                        invocation_context.as_ref(),
+                    )
+                }))
+                .await?;
+                Python::attach(|py| {
+                    py_to_json(result.bind(py))
+                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
+                })
             })
         },
     )
@@ -984,33 +986,44 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
         + Sync,
 > {
     let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
     Arc::new(
         move |_name: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
             let py_fn = py_fn.clone();
+            let task_locals = task_locals_with_running_loop(task_locals.as_ref());
             Box::pin(async move {
-                let async_iter = resolve_py_object_or_future(Python::attach(|py| {
+                let (outcome, invocation_task_locals) = Python::attach(|py| {
+                    let (invocation_context, task_locals) =
+                        copy_middleware_invocation(py, task_locals)
+                            .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let py_req = PyLLMRequest { inner: request };
                     let py_next = PyLlmStreamNextFn { inner: next };
-                    let result = py_fn
-                        .call1(
-                            py,
-                            (
-                                py_req
-                                    .into_pyobject(py)
-                                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                                py_next
-                                    .into_pyobject(py)
-                                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                            ),
-                        )
-                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                    split_py_object_or_future(py, result)
-                }))
-                .await?;
+                    let py_req = py_req
+                        .into_pyobject(py)
+                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
+                        .into_any();
+                    let py_next = py_next
+                        .into_pyobject(py)
+                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
+                        .into_any();
+                    let result = match invocation_context.as_ref() {
+                        Some(context) => {
+                            context.call_method1("run", (py_fn.bind(py), py_req, py_next))
+                        }
+                        None => py_fn.bind(py).call1((py_req, py_next)),
+                    }
+                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                    let outcome = split_py_object_or_future_with_locals(
+                        py,
+                        result.unbind(),
+                        task_locals.as_ref(),
+                        invocation_context.as_ref(),
+                    )?;
+                    Ok::<_, FlowError>((outcome, task_locals))
+                })?;
+                let async_iter = resolve_py_object_or_future(Ok(outcome)).await?;
 
-                stream_from_async_iter(async_iter)
+                stream_from_async_iter(async_iter, invocation_task_locals)
             })
         },
     )
@@ -1036,7 +1049,8 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
                                     .map_err(|error| FlowError::Internal(error.to_string()))?;
                             (Some(context), publication_task_locals)
                         }
-                        None => (None, task_locals),
+                        None => copy_middleware_invocation(py, task_locals)
+                            .map_err(|error| FlowError::Internal(error.to_string()))?,
                     };
                     let args = (
                         PyLLMRequest { inner: request },
@@ -1096,10 +1110,20 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
-                let result = py_fn
-                    .call1(py, (PyLLMRequest { inner: request },))
-                    .map_err(|e| FlowError::Internal(e.to_string()))?;
-                split_py_object_or_future_with_locals(py, result, task_locals.as_ref(), None)
+                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let request = PyLLMRequest { inner: request };
+                let result = match invocation_context.as_ref() {
+                    Some(context) => context.call_method1("run", (py_fn.bind(py), request)),
+                    None => py_fn.bind(py).call1((request,)),
+                }
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
             }))
             .await?;
             Python::attach(|py| {
@@ -1133,6 +1157,9 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
             let task_locals = task_locals_with_running_loop(task_locals.as_ref());
             Box::pin(async move {
                 let result = resolve_py_object_or_future(Python::attach(|py| {
+                    let (invocation_context, task_locals) =
+                        copy_middleware_invocation(py, task_locals)
+                            .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let py_req = PyLLMRequest { inner: request };
                     let py_ann: Py<PyAny> = match annotated {
                         Some(ann) => {
@@ -1149,11 +1176,22 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                         }
                         None => py.None(),
                     };
-                    let result = py_fn.call1(py, (name, py_req, py_ann)).map_err(|e| {
+                    let result = match invocation_context.as_ref() {
+                        Some(context) => {
+                            context.call_method1("run", (py_fn.bind(py), name, py_req, py_ann))
+                        }
+                        None => py_fn.bind(py).call1((name, py_req, py_ann)),
+                    }
+                    .map_err(|e| {
                         FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
                     })?;
 
-                    split_py_object_or_future_with_locals(py, result, task_locals.as_ref(), None)
+                    split_py_object_or_future_with_locals(
+                        py,
+                        result.unbind(),
+                        task_locals.as_ref(),
+                        invocation_context.as_ref(),
+                    )
                 }))
                 .await?;
                 Python::attach(|py| {
@@ -1216,7 +1254,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                     .call1(py, (py_req,))
                     .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
             })?;
-            stream_from_async_iter(async_iter)
+            stream_from_async_iter(async_iter, None)
         })
     })
 }
@@ -1285,7 +1323,8 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
                                 .map_err(|error| FlowError::Internal(error.to_string()))?;
                         (Some(context), publication_task_locals)
                     }
-                    None => (None, task_locals),
+                    None => copy_middleware_invocation(py, task_locals)
+                        .map_err(|error| FlowError::Internal(error.to_string()))?,
                 };
                 let py_context = PyLlmSanitizeResponseContext { inner: context };
                 let py_response = json_to_py(py, &response)
@@ -1386,7 +1425,8 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                                     .map_err(|error| FlowError::Internal(error.to_string()))?;
                             (Some(context), publication_task_locals)
                         }
-                        None => (None, task_locals),
+                        None => copy_middleware_invocation(py, task_locals)
+                            .map_err(|error| FlowError::Internal(error.to_string()))?,
                     };
                     let py_event = match event.as_ref() {
                         Event::Scope(inner) => Py::new(

@@ -162,10 +162,6 @@ class EventSanitizeFields(TypedDict):
     metadata: Json | None
 
 ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
-EventSanitizeGuardrail: TypeAlias = Callable[
-    [Event, EventSanitizeFields],
-    EventSanitizeFields | Awaitable[EventSanitizeFields],
-]
 """Guardrail callback that sanitizes emitted tool request or response payloads.
 
 Arguments:
@@ -175,8 +171,22 @@ Return:
     JSON payload recorded on the emitted lifecycle event.
 
 Exceptional flow:
-    Exceptions raised by the callback propagate through the lifecycle operation
-    that invoked the guardrail.
+    Exceptions fail open and preserve the last valid observability payload.
+"""
+EventSanitizeGuardrail: TypeAlias = Callable[
+    [Event, EventSanitizeFields],
+    EventSanitizeFields | Awaitable[EventSanitizeFields],
+]
+"""Guardrail callback that sanitizes emitted mark or scope event fields.
+
+Arguments:
+    The immutable event snapshot and its mutable observability fields.
+
+Return:
+    Observability fields recorded on the asynchronously published event.
+
+Exceptional flow:
+    Exceptions fail open and preserve the last valid event snapshot.
 """
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 """Guardrail callback that can block tool execution.

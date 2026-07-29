@@ -604,6 +604,151 @@ class TestLLMIntercepts:
 
 
 class TestLLMInterceptsAsync:
+    async def test_sync_middleware_preserves_async_caller_context(self):
+        request_id = contextvars.ContextVar("llm_middleware_request_id", default="registration")
+        observed: list[tuple[str, str]] = []
+
+        def conditional(_request):
+            observed.append(("conditional", request_id.get()))
+            return None
+
+        def request_intercept(_name, request, annotated):
+            observed.append(("request", request_id.get()))
+            return LLMRequestInterceptOutcome(request, annotated)
+
+        def execution_intercept(_name, _request, _next):
+            observed.append(("execution", request_id.get()))
+            return {"ok": True}
+
+        guardrails.register_llm_conditional_execution("py_llm_context_conditional", 1, conditional)
+        intercepts.register_llm_request("py_llm_context_request", 1, False, request_intercept)
+        intercepts.register_llm_execution("py_llm_context_execution", 1, execution_intercept)
+        token = request_id.set("emitter")
+        try:
+            assert await llm.execute("context_llm", make_request(), lambda _request: {}) == {"ok": True}
+            await llm.conditional_execution(make_request())
+            standalone = await llm.request_intercepts("context_llm_standalone", make_request())
+            assert standalone.request.content == make_request().content
+        finally:
+            request_id.reset(token)
+            intercepts.deregister_llm_execution("py_llm_context_execution")
+            intercepts.deregister_llm_request("py_llm_context_request")
+            guardrails.deregister_llm_conditional_execution("py_llm_context_conditional")
+
+        assert observed == [
+            ("conditional", "emitter"),
+            ("request", "emitter"),
+            ("execution", "emitter"),
+            ("conditional", "emitter"),
+            ("request", "emitter"),
+        ]
+
+    async def test_sync_stream_intercept_preserves_async_caller_context(self):
+        request_id = contextvars.ContextVar("llm_stream_middleware_request_id", default="registration")
+        observed: list[tuple[str, str]] = []
+
+        def middleware(request, next):
+            observed.append(("callback", request_id.get()))
+
+            async def generate():
+                observed.append(("generator-before", request_id.get()))
+                await asyncio.sleep(0)
+                observed.append(("generator-after", request_id.get()))
+                upstream = await next(request)
+                async for chunk in upstream:
+                    yield chunk
+
+            return generate()
+
+        def provider(_request):
+            async def generate():
+                yield {"token": "ok"}
+
+            return generate()
+
+        intercepts.register_llm_stream_execution("py_llm_stream_context", 1, middleware)
+        token = request_id.set("emitter")
+        try:
+            stream = await llm.stream_execute(
+                "context_stream_llm",
+                make_request(),
+                provider,
+                lambda _chunk: None,
+                lambda: {},
+            )
+            assert [chunk async for chunk in stream] == [{"token": "ok"}]
+        finally:
+            request_id.reset(token)
+            intercepts.deregister_llm_stream_execution("py_llm_stream_context")
+
+        assert observed == [
+            ("callback", "emitter"),
+            ("generator-before", "emitter"),
+            ("generator-after", "emitter"),
+        ]
+
+    async def test_custom_stream_iterator_methods_preserve_async_caller_context(self):
+        request_id = contextvars.ContextVar("llm_custom_iterator_request_id", default="registration")
+        observed: list[tuple[str, str]] = []
+
+        class CustomIterator:
+            def __aiter__(self):
+                return self
+
+            def __anext__(self):
+                observed.append(("anext-sync", request_id.get()))
+
+                async def step():
+                    observed.append(("anext-before", request_id.get()))
+                    await asyncio.sleep(0)
+                    observed.append(("anext-after", request_id.get()))
+                    return {"token": "ok"}
+
+                return step()
+
+            def aclose(self):
+                observed.append(("aclose-sync", request_id.get()))
+
+                async def close():
+                    observed.append(("aclose-before", request_id.get()))
+                    await asyncio.sleep(0)
+                    observed.append(("aclose-after", request_id.get()))
+
+                return close()
+
+        def middleware(_request, _next):
+            observed.append(("callback", request_id.get()))
+            return CustomIterator()
+
+        intercepts.register_llm_stream_execution("py_llm_custom_iterator_context", 1, middleware)
+        token = request_id.set("emitter")
+        try:
+            stream = await llm.stream_execute(
+                "custom_iterator_context_llm",
+                make_request(),
+                lambda _request: None,
+                lambda _chunk: None,
+                lambda: {},
+            )
+            assert await anext(stream) == {"token": "ok"}
+            await stream.aclose()
+        finally:
+            request_id.reset(token)
+            intercepts.deregister_llm_stream_execution("py_llm_custom_iterator_context")
+
+        assert observed[:4] == [
+            ("callback", "emitter"),
+            ("anext-sync", "emitter"),
+            ("anext-before", "emitter"),
+            ("anext-after", "emitter"),
+        ]
+        assert [label for label, _value in observed[-3:]] == [
+            "aclose-sync",
+            "aclose-before",
+            "aclose-after",
+        ]
+        assert all(value == "emitter" for _label, value in observed)
+
     async def test_async_request_intercept_runs_on_originating_loop(self):
         originating_loop = asyncio.get_running_loop()
 

@@ -4,6 +4,7 @@
 """Tests for NeMo Relay tool lifecycle, guardrails, and intercepts."""
 
 import asyncio
+import contextvars
 from collections import UserDict, UserList
 from dataclasses import dataclass
 from typing import cast
@@ -440,6 +441,44 @@ class TestToolIntercepts:
 
 
 class TestToolInterceptsAsync:
+    async def test_sync_middleware_preserves_async_caller_context(self):
+        request_id = contextvars.ContextVar("tool_middleware_request_id", default="registration")
+        observed: list[tuple[str, str]] = []
+
+        def conditional(_name, _args):
+            observed.append(("conditional", request_id.get()))
+            return None
+
+        def request_intercept(_name, args):
+            observed.append(("request", request_id.get()))
+            return args
+
+        def execution_intercept(_name, args, _next):
+            observed.append(("execution", request_id.get()))
+            return ToolExecutionInterceptOutcome(args)
+
+        guardrails.register_tool_conditional_execution("py_tool_context_conditional", 1, conditional)
+        intercepts.register_tool_request("py_tool_context_request", 1, False, request_intercept)
+        intercepts.register_tool_execution("py_tool_context_execution", 1, execution_intercept)
+        token = request_id.set("emitter")
+        try:
+            assert await tools.execute("context_tool", {"ok": True}, lambda args: args) == {"ok": True}
+            await tools.conditional_execution("context_tool_standalone", {})
+            assert await tools.request_intercepts("context_tool_standalone", {"ok": True}) == {"ok": True}
+        finally:
+            request_id.reset(token)
+            intercepts.deregister_tool_execution("py_tool_context_execution")
+            intercepts.deregister_tool_request("py_tool_context_request")
+            guardrails.deregister_tool_conditional_execution("py_tool_context_conditional")
+
+        assert observed == [
+            ("conditional", "emitter"),
+            ("request", "emitter"),
+            ("execution", "emitter"),
+            ("conditional", "emitter"),
+            ("request", "emitter"),
+        ]
+
     async def test_async_request_intercept_runs_on_originating_loop(self):
         originating_loop = asyncio.get_running_loop()
 

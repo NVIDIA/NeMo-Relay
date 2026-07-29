@@ -539,7 +539,7 @@ async def coro_non_json():
             .unwrap();
         });
 
-        let no_loop_err = match stream_from_async_iter(no_loop_iter) {
+        let no_loop_err = match stream_from_async_iter(no_loop_iter, None) {
             Ok(_) => panic!("expected missing event loop error"),
             Err(err) => err,
         };
