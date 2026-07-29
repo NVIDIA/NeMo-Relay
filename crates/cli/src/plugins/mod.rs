@@ -8,7 +8,7 @@
 //! tests, so Codecov does not depend on exercising interactive prompt loops.
 
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use console::{Key, Term, style, truncate_str};
 use dialoguer::theme::ColorfulTheme;
@@ -104,8 +104,7 @@ fn print_save_success(path: &Path) {
 
 pub(crate) fn edit(command: PluginsEditRequest) -> Result<(), CliError> {
     ensure_tty()?;
-    let scope = target_scope(&command.scope)?;
-    let path = target_path(scope)?;
+    let (scope, path) = resolve_edit_target(command)?;
     let mut document = PluginConfigDocument::read(&path)?;
     ensure_observability_component(document.config_mut())?;
     ensure_adaptive_component(document.config_mut())?;
@@ -144,6 +143,17 @@ pub(crate) fn edit(command: PluginsEditRequest) -> Result<(), CliError> {
             return Ok(());
         }
     }
+}
+
+pub(crate) fn resolve_edit_target(
+    command: PluginsEditRequest,
+) -> Result<(TargetScope, PathBuf), CliError> {
+    let scope = target_scope(&command.scope)?;
+    let path = match command.explicit_path {
+        Some(path) => path,
+        None => target_path(scope)?,
+    };
+    Ok((scope, path))
 }
 
 fn handle_menu_response(

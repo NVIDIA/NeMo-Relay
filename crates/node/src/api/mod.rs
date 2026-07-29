@@ -3237,17 +3237,24 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
     core_subscriber_api::deregister_subscriber(&name).map_err(to_napi_err)
 }
 
-/// Wait for native subscriber callbacks queued before this call to finish.
+/// Return a Promise that resolves when native subscriber callbacks queued
+/// before this call finish.
 ///
 /// Call this function outside native subscriber callbacks. A re-entrant call returns without
 /// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
 /// still run.
 ///
-/// JavaScript subscribers are queued through Node's `ThreadsafeFunction`; callers that
-/// need JS callback side effects should await an event-loop tick after this returns.
+/// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
+/// Promise does not block the Node event loop while event sanitizers settle.
+///
+/// The Promise rejects if the blocking task fails or the core subscriber flush returns an error.
+/// Callers should handle errors when awaiting it.
 #[napi]
-pub fn flush_subscribers() -> Result<()> {
-    core_subscriber_api::flush_subscribers().map_err(to_napi_err)
+pub async fn flush_subscribers() -> Result<()> {
+    tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
+        .await
+        .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
+        .map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------

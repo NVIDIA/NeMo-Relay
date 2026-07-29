@@ -37,10 +37,12 @@ impl From<&ConfigEditCommand> for TargetScope {
     }
 }
 
-pub(super) fn edit(command: ConfigEditCommand) -> Result<(), CliError> {
+pub(super) fn edit(
+    command: ConfigEditCommand,
+    explicit_path: Option<PathBuf>,
+) -> Result<(), CliError> {
     ensure_tty()?;
-    let scope = TargetScope::from(&command);
-    let path = target_path(scope)?;
+    let (scope, path) = resolve_edit_target(&command, explicit_path)?;
     let mut document = ConfigDocument::read(path)?;
     let theme = ColorfulTheme::default();
 
@@ -72,6 +74,22 @@ pub(super) fn edit(command: ConfigEditCommand) -> Result<(), CliError> {
             _ => unreachable!("select returns an in-range index"),
         }
     }
+}
+
+fn resolve_edit_target(
+    command: &ConfigEditCommand,
+    explicit_path: Option<PathBuf>,
+) -> Result<(TargetScope, PathBuf), CliError> {
+    let scope = TargetScope::from(command);
+    let path = if command.user || command.project || command.global {
+        target_path(scope)?
+    } else {
+        match explicit_path {
+            Some(path) => path,
+            None => target_path(scope)?,
+        }
+    };
+    Ok((scope, path))
 }
 
 fn ensure_tty() -> Result<(), CliError> {

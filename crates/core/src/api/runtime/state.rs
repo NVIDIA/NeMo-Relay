@@ -10,6 +10,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -638,8 +639,19 @@ impl NemoRelayContextState {
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
         for entry in entries {
-            let fields = (entry.payload)(&event, event.sanitize_fields());
-            event.apply_sanitize_fields(fields);
+            if catch_unwind(AssertUnwindSafe(|| {
+                let fields = (entry.payload)(&event, event.sanitize_fields());
+                event.apply_sanitize_fields(fields);
+            }))
+            .is_err()
+            {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_panicked",
+                    guardrail = entry.name.as_str();
+                    "Event sanitizer panicked; publishing the latest valid event snapshot"
+                );
+            }
         }
         event
     }

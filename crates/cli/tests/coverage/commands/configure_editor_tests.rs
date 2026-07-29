@@ -181,6 +181,54 @@ fn target_selection_and_file_loading_behave_as_expected() {
 }
 
 #[test]
+fn config_editor_inherits_explicit_target_unless_scope_is_selected() {
+    let inherited = PathBuf::from("/managed/config.toml");
+    let (scope, path) =
+        resolve_edit_target(&ConfigEditCommand::default(), Some(inherited.clone())).unwrap();
+    assert_eq!(scope, TargetScope::User);
+    assert_eq!(path, inherited);
+
+    let user = ConfigEditCommand {
+        user: true,
+        ..ConfigEditCommand::default()
+    };
+    let (scope, path) =
+        resolve_edit_target(&user, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
+    assert_eq!(scope, TargetScope::User);
+    assert_eq!(
+        path,
+        crate::configuration::user_config_dir()
+            .unwrap()
+            .join("config.toml")
+    );
+
+    let project_root = tempfile::tempdir().unwrap();
+    let _cwd = crate::test_support::CwdTestScope::enter(project_root.path());
+    let project = ConfigEditCommand {
+        project: true,
+        ..ConfigEditCommand::default()
+    };
+    let (scope, path) =
+        resolve_edit_target(&project, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
+    assert_eq!(scope, TargetScope::Project);
+    assert_eq!(
+        path,
+        std::env::current_dir()
+            .unwrap()
+            .join(".nemo-relay/config.toml")
+    );
+
+    let global = ConfigEditCommand {
+        global: true,
+        ..ConfigEditCommand::default()
+    };
+    let (scope, path) =
+        resolve_edit_target(&global, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
+    assert_eq!(scope, TargetScope::Global);
+    assert_eq!(path, PathBuf::from("/etc/nemo-relay/config.toml"));
+}
+
+#[test]
 fn documents_are_written_atomically_with_scope_appropriate_permissions() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("nested/config.toml");

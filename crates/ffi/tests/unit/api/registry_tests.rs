@@ -22,6 +22,7 @@ fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
@@ -243,6 +244,8 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             nemo_relay_deregister_mark_sanitize_guardrail(invalid_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
+        // The queued event retains its sanitizer snapshot after deregistration.
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         assert_eq!(*lock_unpoisoned(plugin_frees()), 4);
 
         let mut owner = ptr::null_mut();
@@ -343,6 +346,8 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::Ok
         );
+        // Scope removal does not alter the sanitizer snapshots already queued.
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         assert_eq!(*lock_unpoisoned(plugin_frees()), 7);
 
         let invalid_uuid = cstring("not-a-uuid");

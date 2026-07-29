@@ -30,6 +30,23 @@ use crate::plugins::policy::{
     evaluate_dynamic_plugin_host_policy,
 };
 
+#[test]
+fn explicit_plugin_config_path_resolves_runtime_target() {
+    let config = PathBuf::from("/managed/config.toml");
+    let sibling = PathBuf::from("/managed/plugins.toml");
+    let override_path = PathBuf::from("/override/plugins.toml");
+
+    assert_eq!(
+        explicit_plugin_config_path(Some(&config), None),
+        Some(sibling)
+    );
+    assert_eq!(
+        explicit_plugin_config_path(Some(&config), Some(&override_path)),
+        Some(override_path)
+    );
+    assert_eq!(explicit_plugin_config_path(None, None), None);
+}
+
 struct PluginConfigDiscoveryScope {
     _cwd_guard: crate::test_support::CwdTestScope,
     _guard: MutexGuard<'static, ()>,

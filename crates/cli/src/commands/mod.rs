@@ -160,7 +160,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
         Command::Hermes(command) => run::easy_path(CodingAgent::Hermes, command, server).await,
         Command::Mcp => mcp::execute(server).await,
-        Command::Config(command) => configure::execute(command).await,
+        Command::Config(command) => configure::execute(command, server).await,
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
         Command::Doctor(command) => diagnostics::execute(command, server).await,
@@ -213,7 +213,7 @@ async fn run_default(
     } else if runtime_configuration::any_config_file_exists() {
         runtime_diagnostics::run_doctor(None, false, &runtime_args).await
     } else {
-        configure::run(None).await?;
+        configure::run(None, None).await?;
         Ok(ExitCode::SUCCESS)
     }
 }

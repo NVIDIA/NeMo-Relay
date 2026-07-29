@@ -3,6 +3,7 @@
 
 use clap::Parser;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use super::completions::CompletionsCommand;
 use super::serve::ServerArgs;
@@ -10,10 +11,60 @@ use super::*;
 use crate::commands::configure::ConfigSubcommand;
 use crate::commands::model_pricing::{PricingSubcommand, PricingValidateCommand};
 use crate::commands::plugins::{
-    PluginsCommand, PluginsInspectCommand, PluginsListCommand, PluginsSubcommand,
-    PluginsValidateCommand,
+    PluginsCommand, PluginsEditCommand, PluginsInspectCommand, PluginsListCommand,
+    PluginsScopeArgs, PluginsSubcommand, PluginsValidateCommand,
 };
 use crate::commands::root::AgentArg;
+
+#[test]
+fn plugins_edit_inherits_explicit_plugin_target_unless_scope_is_selected() {
+    let config = PathBuf::from("/managed/config.toml");
+    let server = crate::server::GatewayOverrides {
+        config: Some(config),
+        ..crate::server::GatewayOverrides::default()
+    };
+
+    let default = PluginsEditCommand::default();
+    let request = plugins::edit_request(default, &server);
+    assert_eq!(
+        request.explicit_path,
+        Some(PathBuf::from("/managed/plugins.toml"))
+    );
+
+    let server = crate::server::GatewayOverrides {
+        config: Some(PathBuf::from("/managed/config.toml")),
+        plugin_config_path: Some(PathBuf::from("/override/plugins.toml")),
+        ..crate::server::GatewayOverrides::default()
+    };
+    let request = plugins::edit_request(PluginsEditCommand::default(), &server);
+    assert_eq!(
+        request.explicit_path,
+        Some(PathBuf::from("/override/plugins.toml"))
+    );
+
+    let project = PluginsEditCommand {
+        scope: PluginsScopeArgs {
+            project: true,
+            ..PluginsScopeArgs::default()
+        },
+    };
+    let request = plugins::edit_request(project, &server);
+    assert_eq!(request.explicit_path, None);
+}
+
+#[test]
+fn easy_path_setup_inherits_explicit_plugin_target() {
+    let plugin_config_path = PathBuf::from("/managed/plugins.toml");
+    let inherited = crate::server::GatewayOverrides {
+        plugin_config_path: Some(plugin_config_path.clone()),
+        ..crate::server::GatewayOverrides::default()
+    };
+
+    assert_eq!(
+        run::easy_path_plugin_config_path(&inherited),
+        Some(plugin_config_path)
+    );
+}
 
 #[test]
 fn operational_command_names_cover_logging_exempt_commands() {
@@ -238,6 +289,19 @@ fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
     assert!(!command.user);
     assert!(!command.project);
     assert!(!command.global);
+
+    let explicit = Cli::try_parse_from([
+        "nemo-relay",
+        "--config",
+        "/managed/config.toml",
+        "config",
+        "edit",
+    ])
+    .unwrap();
+    assert_eq!(
+        explicit.server.config,
+        Some(PathBuf::from("/managed/config.toml"))
+    );
 
     let project = Cli::try_parse_from(["nemo-relay", "config", "edit", "--project"]).unwrap();
     let Command::Config(command) = project.command.unwrap() else {

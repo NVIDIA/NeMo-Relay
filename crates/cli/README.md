@@ -173,12 +173,21 @@ Use `--project` for the nearest project `config.toml`, or `--global` for
 Unix) and reject authorization headers; use the corresponding environment
 variables or a user config for credentials.
 
+When the top-level CLI receives `--config path/to/config.toml`, the config
+editor uses that exact file. An explicit `config edit --user`, `--project`, or
+`--global` flag overrides the inherited target.
+
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:
 
 ```bash
 nemo-relay plugins edit
 ```
+
+When the top-level CLI receives `--plugin-config-path`, the editor uses that
+exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
+sibling `path/to/plugins.toml`, matching runtime selection. An explicit
+`--user`, `--project`, or `--global` editor flag overrides the inherited target.
 
 The top-level editor menu contains one entry per supported built-in, followed by
 the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
