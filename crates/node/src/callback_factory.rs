@@ -77,11 +77,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         reject(message);
       });
     };
-    if (publication) {
-      eventSanitizerContext.run(token, invoke);
-    } else {
-      invoke();
-    }
+    eventSanitizerContext.run(token, invoke);
   }
 
   return {
@@ -111,20 +107,6 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           return;
         }
         callPromise(fn, arg0, spread, next, resolve, reject, publication);
-      };
-    },
-
-    eventSanitizerPromise(fn) {
-      return function __nemo_relay_event_sanitizer_promise_wrapper(error, arg0, spread, next, resolve, reject) {
-        if (error != null) {
-          let message = 'unknown error';
-          try {
-            message = String(error?.message ?? error);
-          } catch {}
-          reject(message);
-          return;
-        }
-        callPromise(fn, arg0, spread, next, resolve, reject, true);
       };
     },
 
@@ -176,13 +158,6 @@ pub(crate) fn wrap_execution_callback(env: &Env, func: &JsFunction) -> napi::Res
 
 pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
     wrap_callback(env, func, "promise")
-}
-
-pub(crate) fn wrap_event_sanitizer_callback(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<JsFunction> {
-    wrap_callback(env, func, "eventSanitizerPromise")
 }
 
 pub(crate) fn event_sanitizer_callback_active(env: &Env) -> napi::Result<bool> {

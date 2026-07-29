@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import cast
@@ -96,6 +97,32 @@ async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
         guardrails.deregister_mark_sanitize("python-async-mark")
 
     assert events[-1].data == {"async": True}
+
+
+async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events):
+    request_id = contextvars.ContextVar("request_id", default="registration")
+    observed: dict[str, str] = {}
+
+    async def sanitize(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        await asyncio.sleep(0)
+        observed[event.name] = request_id.get()
+        return fields
+
+    async def emit(name: str) -> None:
+        token = request_id.set(name)
+        try:
+            scope.event(name)
+        finally:
+            request_id.reset(token)
+
+    guardrails.register_mark_sanitize("python-emitter-context", 0, sanitize)
+    try:
+        await asyncio.gather(emit("request-a"), emit("request-b"))
+        await subscribers.flush_async()
+    finally:
+        guardrails.deregister_mark_sanitize("python-emitter-context")
+
+    assert observed == {"request-a": "request-a", "request-b": "request-b"}
 
 
 async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_events):

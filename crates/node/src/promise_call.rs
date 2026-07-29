@@ -209,13 +209,6 @@ impl PromiseAwareFn {
         Self::from_wrapper(env, &wrapper)
     }
 
-    /// Create a callback wrapper that marks only its JavaScript async context
-    /// as an active event sanitizer.
-    pub fn new_event_sanitizer(env: &Env, func: &JsFunction) -> napi::Result<Self> {
-        let wrapper = callback_factory::wrap_event_sanitizer_callback(env, func)?;
-        Self::from_wrapper(env, &wrapper)
-    }
-
     fn from_wrapper(env: &Env, wrapper: &JsFunction) -> napi::Result<Self> {
         let mut tsfn =
             env.create_threadsafe_function(wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {

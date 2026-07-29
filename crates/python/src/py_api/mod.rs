@@ -15,6 +15,9 @@ use std::sync::Arc;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::runtime::subscriber_dispatcher::{
+    with_publication_context, with_task_publication_context,
+};
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
@@ -65,6 +68,10 @@ fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
     }
 }
 
+fn with_python_publication_context<T>(f: impl FnOnce() -> T) -> T {
+    with_publication_context(py_callable::capture_python_publication_context(), f)
+}
+
 fn block_on_sync_middleware<F, T>(future: F) -> FlowResult<T>
 where
     F: Future<Output = FlowResult<T>> + Send,
@@ -94,6 +101,7 @@ where
     C: Fn(Python<'_>, T) -> PyResult<Py<PyAny>> + Send + 'static,
 {
     let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
     if !python_event_loop_running(py)? {
         let result = py
             .detach(|| {
@@ -106,10 +114,12 @@ where
         return convert(py, result).map(|value| value.into_bound(py));
     }
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = TASK_SCOPE_STACK
-            .scope(scope_stack, future)
-            .await
-            .map_err(to_py_err)?;
+        let result = with_task_publication_context(
+            publication_context,
+            TASK_SCOPE_STACK.scope(scope_stack, future),
+        )
+        .await
+        .map_err(to_py_err)?;
         Python::attach(|py| convert(py, result))
     })
 }
@@ -366,6 +376,7 @@ fn get_handle() -> PyResult<PyScopeHandle> {
 	    timestamp: "datetime.datetime | None"=None
 ) -> "ScopeHandle", text_signature = "(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: object | None = None, metadata: object | None = None, input: object | None = None, timestamp: datetime.datetime | None = None) -> ScopeHandle")]
 fn push_scope(
+    _py: Python<'_>,
     name: &str,
     scope_type: PyScopeType,
     handle: Option<PyScopeHandle>,
@@ -382,18 +393,20 @@ fn push_scope(
     let meta = opt_py_to_json(metadata)?;
     let input = opt_py_to_json(input)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_scope_api::push_scope(
-        core_scope_api::PushScopeParams::builder()
-            .name(name)
-            .scope_type(scope_type.into())
-            .parent_opt(handle.as_ref().map(|h| &h.inner))
-            .attributes(attrs)
-            .data_opt(d)
-            .metadata_opt(meta)
-            .input_opt(input)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_scope_api::push_scope(
+            core_scope_api::PushScopeParams::builder()
+                .name(name)
+                .scope_type(scope_type.into())
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .attributes(attrs)
+                .data_opt(d)
+                .metadata_opt(meta)
+                .input_opt(input)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map(PyScopeHandle::from)
     .map_err(to_py_err)
 }
@@ -416,6 +429,7 @@ fn push_scope(
 #[pyfunction]
 #[pyo3(signature = (handle: "ScopeHandle", output: "object | None"=None, metadata: "object | None"=None, timestamp: "datetime.datetime | None"=None) -> "None", text_signature = "(handle: ScopeHandle, output: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn pop_scope(
+    _py: Python<'_>,
     handle: &PyScopeHandle,
     output: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
@@ -424,14 +438,16 @@ fn pop_scope(
     let output = opt_py_to_json(output)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_scope_api::pop_scope(
-        core_scope_api::PopScopeParams::builder()
-            .handle_uuid(&handle.inner.uuid)
-            .output_opt(output)
-            .metadata_opt(metadata)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_scope_api::pop_scope(
+            core_scope_api::PopScopeParams::builder()
+                .handle_uuid(&handle.inner.uuid)
+                .output_opt(output)
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -449,6 +465,7 @@ fn pop_scope(
 ///     TypeError: If ``timestamp`` is not a ``datetime.datetime``.
 ///     ValueError: If ``timestamp`` is a naive datetime.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     name: "str",
     *,
@@ -458,6 +475,7 @@ fn pop_scope(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn event(
+    _py: Python<'_>,
     name: &str,
     handle: Option<PyScopeHandle>,
     data: Option<&Bound<'_, PyAny>>,
@@ -467,15 +485,17 @@ fn event(
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_scope_api::event(
-        core_scope_api::EmitMarkEventParams::builder()
-            .name(name)
-            .parent_opt(handle.as_ref().map(|h| &h.inner))
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_scope_api::event(
+            core_scope_api::EmitMarkEventParams::builder()
+                .name(name)
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -523,6 +543,7 @@ fn event(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "ToolHandle", text_signature = "(name: str, args: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None, timestamp: datetime.datetime | None = None) -> ToolHandle")]
 fn tool_call(
+    _py: Python<'_>,
     name: &str,
     args: &Bound<'_, PyAny>,
     handle: Option<PyScopeHandle>,
@@ -539,18 +560,20 @@ fn tool_call(
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_tool_api::tool_call(
-        core_tool_api::ToolCallParams::builder()
-            .name(name)
-            .args(args_json)
-            .parent_opt(handle.as_ref().map(|h| &h.inner))
-            .attributes(attrs)
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .tool_call_id_opt(tool_call_id)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_tool_api::tool_call(
+            core_tool_api::ToolCallParams::builder()
+                .name(name)
+                .args(args_json)
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .attributes(attrs)
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .tool_call_id_opt(tool_call_id)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map(PyToolHandle::from)
     .map_err(to_py_err)
 }
@@ -582,6 +605,7 @@ fn tool_call(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "None", text_signature = "(handle: ToolHandle, result: object, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn tool_call_end(
+    _py: Python<'_>,
     handle: &PyToolHandle,
     result: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -592,15 +616,17 @@ fn tool_call_end(
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_tool_api::tool_call_end(
-        core_tool_api::ToolCallEndParams::builder()
-            .handle(&handle.inner)
-            .result(result_json)
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_tool_api::tool_call_end(
+            core_tool_api::ToolCallEndParams::builder()
+                .handle(&handle.inner)
+                .result(result_json)
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -660,9 +686,11 @@ fn tool_call_execute<'py>(
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
 
     let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
+        with_task_publication_context(
+            publication_context,
+            TASK_SCOPE_STACK.scope(scope_stack, async move {
                 let result = core_tool_api::tool_call_execute(
                     core_tool_api::ToolCallExecuteParams::builder()
                         .name(name)
@@ -677,8 +705,9 @@ fn tool_call_execute<'py>(
                 .await
                 .map_err(to_py_err)?;
                 Python::attach(|py| json_to_py(py, &result))
-            })
-            .await
+            }),
+        )
+        .await
     })
 }
 
@@ -725,6 +754,7 @@ fn tool_call_execute<'py>(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "LlmHandle", text_signature = "(name: str, request: LlmRequest, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, timestamp: datetime.datetime | None = None) -> LlmHandle")]
 fn llm_call(
+    _py: Python<'_>,
     name: &str,
     request: PyLLMRequest,
     handle: Option<PyScopeHandle>,
@@ -750,7 +780,7 @@ fn llm_call(
         .model_name_opt(model_name)
         .timestamp_opt(timestamp)
         .build();
-    core_llm_api::llm_call(params)
+    with_python_publication_context(|| core_llm_api::llm_call(params))
         .map(PyLLMHandle::from)
         .map_err(to_py_err)
 }
@@ -777,6 +807,7 @@ fn llm_call(
 ///     TypeError: If ``timestamp`` is not a ``datetime.datetime``.
 ///     ValueError: If ``timestamp`` is a naive datetime.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     handle: "LlmHandle",
     response: "object",
@@ -788,6 +819,7 @@ fn llm_call(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "None", text_signature = "(handle: LlmHandle, response: object, *, data: object | None = None, metadata: object | None = None, annotated_response: AnnotatedLLMResponse | object | None = None, response_codec: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn llm_call_end(
+    _py: Python<'_>,
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -802,17 +834,19 @@ fn llm_call_end(
     let response_codec = py_llm_response_codec(response_codec);
     let annotated_response = py_annotated_llm_response(annotated_response)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_llm_api::llm_call_end(
-        core_llm_api::LlmCallEndParams::builder()
-            .handle(&handle.inner)
-            .response(response_json)
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .annotated_response_opt(annotated_response)
-            .response_codec_opt(response_codec)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_llm_api::llm_call_end(
+            core_llm_api::LlmCallEndParams::builder()
+                .handle(&handle.inner)
+                .response(response_json)
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .annotated_response_opt(annotated_response)
+                .response_codec_opt(response_codec)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -884,9 +918,11 @@ fn llm_call_execute<'py>(
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
+        with_task_publication_context(
+            publication_context,
+            TASK_SCOPE_STACK.scope(scope_stack, async move {
                 let params = core_llm_api::LlmCallExecuteParams::builder()
                     .name(name)
                     .request(request.inner)
@@ -903,8 +939,9 @@ fn llm_call_execute<'py>(
                     .await
                     .map_err(to_py_err)?;
                 Python::attach(|py| json_to_py(py, &result))
-            })
-            .await
+            }),
+        )
+        .await
     })
 }
 
@@ -985,9 +1022,12 @@ fn llm_stream_call_execute<'py>(
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
+    let stream_publication_context = publication_context.clone();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
+        with_task_publication_context(
+            publication_context,
+            TASK_SCOPE_STACK.scope(scope_stack, async move {
                 let params = core_llm_api::LlmStreamCallExecuteParams::builder()
                     .name(name)
                     .request(request.inner)
@@ -1010,11 +1050,9 @@ fn llm_stream_call_execute<'py>(
                 let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
                 let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
                 let (closed, closed_rx) = tokio::sync::watch::channel(None);
-                tokio::spawn(forward_stream_to_channel(
-                    rust_stream,
-                    tx,
-                    cancel_rx,
-                    closed,
+                tokio::spawn(with_task_publication_context(
+                    stream_publication_context,
+                    forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
                 ));
 
                 Ok(PyLlmStream {
@@ -1022,8 +1060,9 @@ fn llm_stream_call_execute<'py>(
                     cancel,
                     closed: closed_rx,
                 })
-            })
-            .await
+            }),
+        )
+        .await
     })
 }
 
@@ -1488,6 +1527,24 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
     py.detach(core_subscriber_api::flush_subscribers)
         .map_err(to_py_err)
+}
+
+/// Lock dispatcher resources before a process forks.
+#[pyfunction]
+fn subscriber_dispatcher_before_fork() {
+    nemo_relay::api::runtime::subscriber_dispatcher::prepare_for_fork();
+}
+
+/// Unlock dispatcher resources in the parent after a process forks.
+#[pyfunction]
+fn subscriber_dispatcher_after_fork_parent() {
+    nemo_relay::api::runtime::subscriber_dispatcher::resume_after_fork_parent();
+}
+
+/// Reset inherited dispatcher resources in the child after a process forks.
+#[pyfunction]
+fn subscriber_dispatcher_after_fork_child() {
+    nemo_relay::api::runtime::subscriber_dispatcher::reset_after_fork_child();
 }
 
 // ---------------------------------------------------------------------------
@@ -1997,6 +2054,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(register_subscriber, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_subscriber, m)?)?;
     m.add_function(wrap_pyfunction!(flush_subscribers, m)?)?;
+    m.add_function(wrap_pyfunction!(subscriber_dispatcher_before_fork, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        subscriber_dispatcher_after_fork_parent,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(subscriber_dispatcher_after_fork_child, m)?)?;
 
     // Scope-local tool guardrails
     m.add_function(wrap_pyfunction!(

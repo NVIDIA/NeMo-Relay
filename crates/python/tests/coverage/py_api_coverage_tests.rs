@@ -77,6 +77,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         let data = py_dict(py, json!({"payload": true}));
         let metadata = py_dict(py, json!({"meta": true}));
         let child = push_scope(
+            py,
             "child",
             PyScopeType::Tool,
             Some(handle.clone()),
@@ -92,6 +93,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         assert_eq!(child.inner.name, "child");
 
         event(
+            py,
             "mark",
             Some(child.clone()),
             Some(&py_dict(py, json!({"step": 1}))),
@@ -101,6 +103,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         .unwrap();
 
         let tool = tool_call(
+            py,
             "tool",
             &py_dict(py, json!({"arg": 1})),
             Some(child.clone()),
@@ -114,6 +117,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         )
         .unwrap();
         tool_call_end(
+            py,
             &tool,
             &py_dict(py, json!({"result": 2})),
             Some(&py_dict(py, json!({"done": true}))),
@@ -129,6 +133,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             },
         };
         let llm = llm_call(
+            py,
             "llm",
             llm_request,
             Some(child.clone()),
@@ -143,6 +148,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         )
         .unwrap();
         llm_call_end(
+            py,
             &llm,
             &py_dict(py, json!({"response": "ok"})),
             Some(&py_dict(py, json!({"tokens": 10}))),
@@ -153,7 +159,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         )
         .unwrap();
 
-        pop_scope(&child, None, None, None).unwrap();
+        pop_scope(py, &child, None, None, None).unwrap();
         assert_eq!(get_handle().unwrap().inner.name, "root");
     });
 }
@@ -387,6 +393,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         set_thread_scope_stack(&stack);
         let root = get_handle().unwrap();
         let child = push_scope(
+            py,
             "child-exec",
             PyScopeType::Agent,
             Some(root.clone()),
@@ -889,7 +896,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         assert!(deregister_subscriber(&global_subscriber).unwrap());
         assert!(!deregister_subscriber(&global_subscriber).unwrap());
 
-        pop_scope(&child, None, None, None).unwrap();
+        pop_scope(py, &child, None, None, None).unwrap();
     });
 }
 

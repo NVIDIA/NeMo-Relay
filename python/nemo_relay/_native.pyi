@@ -1985,6 +1985,18 @@ def flush_subscribers() -> None:
     """
     ...
 
+def subscriber_dispatcher_before_fork() -> None:
+    """Lock subscriber dispatcher resources before a process forks."""
+    ...
+
+def subscriber_dispatcher_after_fork_parent() -> None:
+    """Unlock subscriber dispatcher resources in the parent after a fork."""
+    ...
+
+def subscriber_dispatcher_after_fork_child() -> None:
+    """Reset and unlock inherited subscriber dispatcher resources in a child."""
+    ...
+
 def scope_register_tool_sanitize_request_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: _ToolSanitizeGuardrail
 ) -> None:

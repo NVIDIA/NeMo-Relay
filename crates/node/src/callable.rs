@@ -479,10 +479,9 @@ pub fn wrap_js_llm_request_intercept_promise_fn(
 
 /// Wrap a Promise-aware JS event sanitizer.
 ///
-/// Event sanitizers run on Relay's serial publication dispatcher, not on the
-/// JavaScript registration thread. Waiting here therefore preserves synchronous
-/// scope/mark APIs while allowing the JavaScript callback to settle a Promise
-/// on the Node event loop.
+/// Scope and mark publication invokes these callbacks from Relay's serial
+/// dispatcher, while managed tool/LLM lifecycle paths can invoke them inline.
+/// The invocation context decides whether `flushSubscribers()` is reentrant.
 pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSanitizeFn {
     Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
         let func = func.clone();
@@ -512,24 +511,29 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
                     })?,
                 metadata: fields.metadata,
             };
-            let value = func
-                .call_spread(vec![
-                    event_json,
-                    serde_json::to_value(js_fields).map_err(|error| {
-                        let error = FlowError::Internal(format!(
-                            "failed to serialize JS event sanitizer fields: {error}"
-                        ));
-                        record_callback_error(error.to_string());
-                        error
-                    })?,
-                ])
-                .await
-                .inspect_err(|error| {
-                    // Scope and mark publication happens on the dispatcher
-                    // thread. Preserve the event (the core fails open) while
-                    // making the binding-visible failure available to Node.
+            let args = vec![
+                event_json,
+                serde_json::to_value(js_fields).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS event sanitizer fields: {error}"
+                    ));
                     record_callback_error(error.to_string());
-                })?;
+                    error
+                })?,
+            ];
+            let publication =
+                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+            let value = if publication {
+                func.call_spread_for_publication(args).await
+            } else {
+                func.call_spread(args).await
+            }
+            .inspect_err(|error| {
+                // Scope and mark publication happens on the dispatcher
+                // thread. Preserve the event (the core fails open) while
+                // making the binding-visible failure available to Node.
+                record_callback_error(error.to_string());
+            })?;
             let fields = event_sanitize_fields_from_json(value).map_err(|error| {
                 let error =
                     FlowError::Internal(format!("invalid JS event sanitizer result: {error}"));

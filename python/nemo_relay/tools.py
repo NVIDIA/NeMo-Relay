@@ -196,7 +196,9 @@ def request_intercepts(name, args):
         args: JSON-compatible tool arguments to pass through the intercepts.
 
     Returns:
-        Json: The arguments produced by the final request intercept.
+        Json | Awaitable[Json]: The arguments produced by the final request
+        intercept. Outside a running event loop this is returned directly.
+        Inside an event loop, await the returned value.
 
     Notes:
         This runs only the request-intercept chain. It does not execute
@@ -214,12 +216,16 @@ def conditional_execution(name, args):
         args: JSON-compatible tool arguments to validate.
 
     Returns:
-        str | None: A rejection message if execution should be blocked,
-        otherwise ``None``.
+        None | Awaitable[None]: ``None`` when execution is allowed, returned
+        directly outside an event loop or through an awaitable inside one.
 
     Notes:
         This helper evaluates only the conditional-execution guardrail chain
         and does not invoke request intercepts or tool execution.
+
+    Raises:
+        RuntimeError: If a guardrail rejects the call or an asynchronous
+        guardrail is registered when called outside an event loop.
     """
     ensure_scope_stack()
     return _native_tool_conditional_execution(name, args)

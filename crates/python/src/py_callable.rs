@@ -25,6 +25,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use nemo_relay::api::runtime::subscriber_dispatcher::{PublicationContext, publication_context};
 use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
@@ -204,23 +205,35 @@ fn capture_python_task_locals() -> Option<TaskLocals> {
     Python::attach(|py| pyo3_async_runtimes::tokio::get_current_locals(py).ok())
 }
 
-fn task_locals_with_running_loop(registered: Option<&TaskLocals>) -> Option<TaskLocals> {
+struct PythonPublicationContext(TaskLocals);
+
+pub(crate) fn capture_python_publication_context() -> Option<PublicationContext> {
     capture_python_task_locals()
-        .or_else(|| registered.cloned())
-        .filter(|locals| {
-            Python::attach(|py| {
-                let event_loop = locals.event_loop(py);
-                let running = event_loop
-                    .call_method0("is_running")
-                    .and_then(|value| value.extract::<bool>())
-                    .unwrap_or(false);
-                let closed = event_loop
-                    .call_method0("is_closed")
-                    .and_then(|value| value.extract::<bool>())
-                    .unwrap_or(true);
-                running && !closed
-            })
-        })
+        .map(PythonPublicationContext)
+        .map(|context| Arc::new(context) as PublicationContext)
+}
+
+fn running_task_locals(locals: TaskLocals) -> Option<TaskLocals> {
+    let live = Python::attach(|py| {
+        let event_loop = locals.event_loop(py);
+        let running = event_loop
+            .call_method0("is_running")
+            .and_then(|value| value.extract::<bool>())
+            .unwrap_or(false);
+        let closed = event_loop
+            .call_method0("is_closed")
+            .and_then(|value| value.extract::<bool>())
+            .unwrap_or(true);
+        running && !closed
+    });
+    live.then_some(locals)
+}
+
+fn task_locals_with_running_loop(registered: Option<&TaskLocals>) -> Option<TaskLocals> {
+    publication_context::<PythonPublicationContext>()
+        .and_then(|context| running_task_locals(context.0.clone()))
+        .or_else(|| capture_python_task_locals().and_then(running_task_locals))
+        .or_else(|| registered.cloned().and_then(running_task_locals))
 }
 
 async fn resolve_py_object_or_future(

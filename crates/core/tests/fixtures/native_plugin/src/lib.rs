@@ -1005,15 +1005,22 @@ unsafe extern "C" fn raw_async_tool_execution_callback(
     let value = unsafe { raw_host_string_value(&host.v1, invocation_json) }
         .and_then(|json| serde_json::from_str::<Json>(&json).ok())
         .and_then(|mut invocation| {
-            if let Some(value) = invocation.get_mut("value").and_then(Json::as_object_mut) {
-                value.insert("native_async_execution".into(), json!(true));
-                Some(Json::Object(value.clone()))
-            } else {
-                invocation.get("request").cloned()
-            }
+            let cancellation_probe = invocation["name"].as_str() == Some("async-cancel-next");
+            let value =
+                if let Some(value) = invocation.get_mut("value").and_then(Json::as_object_mut) {
+                    value.insert("native_async_execution".into(), json!(true));
+                    Some(Json::Object(value.clone()))
+                } else {
+                    invocation.get("request").cloned()
+                };
+            value.map(|value| (value, cancellation_probe))
         })
-        .and_then(|value| serde_json::to_string(&value).ok());
-    let Some(value) = value else {
+        .and_then(|(value, cancellation_probe)| {
+            serde_json::to_string(&value)
+                .ok()
+                .map(|value| (value, cancellation_probe))
+        });
+    let Some((value, cancellation_probe)) = value else {
         unsafe {
             reject_async_completion(host, completion, "invalid async tool execution invocation")
         };
@@ -1037,6 +1044,9 @@ unsafe extern "C" fn raw_async_tool_execution_callback(
         (host.v1.string_free)(value);
     }
     if status == NemoRelayStatus::Ok {
+        if cancellation_probe {
+            ASYNC_PENDING_ENTERED.store(true, Ordering::Release);
+        }
         unsafe {
             (host.async_next_release)(next);
             (host.async_completion_release)(completion);

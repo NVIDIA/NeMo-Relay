@@ -790,7 +790,11 @@ pub enum NemoRelayNativeAsyncMiddlewareKind {
     LlmRequestIntercept = 8,
     /// LLM execution intercept with a continuation.
     LlmExecutionIntercept = 9,
-    /// Streaming LLM execution intercept with a continuation.
+    /// Reserved legacy discriminant for streaming LLM execution intercepts.
+    ///
+    /// Hosts reject this kind from the generic completion-based registration
+    /// hook. Use `plugin_context_register_async_stream_middleware` so chunks
+    /// remain incremental.
     LlmStreamExecutionIntercept = 10,
     /// Mark event sanitizer.
     MarkSanitize = 11,
@@ -933,6 +937,8 @@ pub struct NemoRelayNativeHostApiV3 {
     pub async_completion_release:
         unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion),
     /// Invokes an execution continuation and settles a supplied completion.
+    ///
+    /// Cancellation of that completion aborts an in-flight continuation.
     pub async_next_invoke: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,
@@ -943,10 +949,12 @@ pub struct NemoRelayNativeHostApiV3 {
     /// Execution callbacks must call this exactly once after their final use
     /// for both `Complete` and `Pending` return states.
     pub async_next_release: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext),
-    /// Registers any completion-based asynchronous middleware surface.
+    /// Registers a completion-based asynchronous middleware surface.
     ///
     /// `kind` must be a valid [`NemoRelayNativeAsyncMiddlewareKind`]
-    /// discriminant. The host rejects unknown `u32` values.
+    /// discriminant. The host rejects unknown `u32` values and
+    /// [`NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept`],
+    /// which must use `plugin_context_register_async_stream_middleware`.
     pub plugin_context_register_async_middleware: unsafe extern "C" fn(
         ctx: *mut NemoRelayNativePluginContext,
         kind: u32,
@@ -957,7 +965,11 @@ pub struct NemoRelayNativeHostApiV3 {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus,
-    /// Pushes one JSON chunk to an incremental native stream.
+    /// Pushes one JSON chunk to an incremental native stream without blocking.
+    ///
+    /// A full bounded host queue returns [`NemoRelayStatus::Internal`] and
+    /// records a backpressure message in the host's last-error slot. The
+    /// producer may retry the logical chunk after the consumer advances.
     pub async_stream_push_json: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         chunk_json: *const NemoRelayNativeString,
@@ -965,7 +977,10 @@ pub struct NemoRelayNativeHostApiV3 {
     /// Finishes an incremental native stream successfully.
     pub async_stream_finish:
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus,
-    /// Rejects an incremental native stream.
+    /// Rejects an incremental native stream without blocking.
+    ///
+    /// A full bounded queue returns [`NemoRelayStatus::Internal`]; the caller
+    /// may retry the rejection after the consumer advances.
     pub async_stream_reject: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         message: *const NemoRelayNativeString,
@@ -2485,6 +2500,8 @@ impl<'a> PluginContext<'a> {
     /// `cb`, `user_data`, and `free_fn` must remain valid until the host
     /// deregisters the callback or invokes `free_fn`. A callback returning
     /// `Pending` must settle and release its completion/next references.
+    /// [`NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept`] is
+    /// rejected; use [`Self::register_async_stream_middleware_raw`] instead.
     #[allow(clippy::too_many_arguments)] // Mirrors the native C ABI registration callback.
     pub unsafe fn register_async_middleware_raw(
         &mut self,
@@ -2521,7 +2538,9 @@ impl<'a> PluginContext<'a> {
     /// # Safety
     /// The callback and user data must remain valid until deregistration or
     /// `free_fn`; callback-owned `next` and `stream` handles must each be
-    /// released exactly once.
+    /// released exactly once. Stream pushes and rejection are nonblocking:
+    /// `Internal` with a host last-error containing `backpressured` means the
+    /// bounded queue is full and the operation may be retried.
     pub unsafe fn register_async_stream_middleware_raw(
         &mut self,
         name: &str,

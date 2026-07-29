@@ -1368,6 +1368,101 @@ describe('LLM intercepts', () => {
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec_repl');
   });
 
+  it('snapshotted stream execution intercept survives deregistration', async () => {
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+
+    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_target', 100, async (request, next) => [
+      ...(await next(request)),
+      { snapshotted: true },
+    ]);
+    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_blocker', -100, async (request, next) => {
+      blockerEntered();
+      await release;
+      return next(request);
+    });
+
+    try {
+      const streamPromise = llmStreamCallExecute(
+        'stream_snapshot_llm',
+        makeNative(),
+        (wrapper) => {
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { downstream: true });
+          lib.endStream(wrapper.__nemo_relay_stream_id);
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      await entered;
+      assert.equal(deregisterLlmStreamExecutionIntercept('node_llm_stream_snapshot_target'), true);
+      releaseBlocker();
+      const stream = await streamPromise;
+      const chunks = [];
+      for (;;) {
+        const chunk = await stream.next();
+        if (chunk === null) {
+          break;
+        }
+        chunks.push(chunk);
+      }
+      assert.deepEqual(chunks, [{ downstream: true }, { snapshotted: true }]);
+    } finally {
+      releaseBlocker();
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_snapshot_blocker');
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_snapshot_target');
+    }
+  });
+
+  it('completed deregistered stream intercepts do not keep Node alive', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      const lib = require(${modulePath});
+      const request = {
+        headers: {},
+        content: { messages: [], model: 'test-model' },
+      };
+      lib.registerLlmStreamExecutionIntercept('process-exit-stream', 10, async (value, next) => next(value));
+      const stream = await lib.llmStreamCallExecute(
+        'process-exit-llm',
+        request,
+        (wrapper) => {
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { done: true });
+          lib.endStream(wrapper.__nemo_relay_stream_id);
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      while (await stream.next() !== null) {}
+      await stream.close();
+      if (!lib.deregisterLlmStreamExecutionIntercept('process-exit-stream')) {
+        throw new Error('stream intercept was not deregistered');
+      }
+    `;
+
+    execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 5_000,
+    });
+  });
+
   it('stream execution intercept can return a single scalar chunk', async () => {
     registerLlmStreamExecutionIntercept('node_llm_stream_scalar', 10, async () => ({
       scalar: true,
@@ -1507,6 +1602,46 @@ describe('LLM intercepts', () => {
     assert.equal(declarations.split("context: import('./plugin').LlmSanitizeRequestContext").length - 1, 2);
     assert.equal(declarations.split("context: import('./plugin').LlmSanitizeResponseContext").length - 1, 2);
     assert.doesNotMatch(declarations, /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/);
+  });
+
+  it('generated middleware declarations expose Promise-aware callback types', () => {
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const registrations = [
+      'registerToolSanitizeRequestGuardrail',
+      'registerToolSanitizeResponseGuardrail',
+      'registerToolConditionalExecutionGuardrail',
+      'registerToolRequestIntercept',
+      'registerToolExecutionIntercept',
+      'registerLlmSanitizeRequestGuardrail',
+      'registerLlmSanitizeResponseGuardrail',
+      'registerLlmConditionalExecutionGuardrail',
+      'registerLlmRequestIntercept',
+      'registerLlmExecutionIntercept',
+      'registerLlmStreamExecutionIntercept',
+      'scopeRegisterToolSanitizeRequestGuardrail',
+      'scopeRegisterToolSanitizeResponseGuardrail',
+      'scopeRegisterToolConditionalExecutionGuardrail',
+      'scopeRegisterToolRequestIntercept',
+      'scopeRegisterToolExecutionIntercept',
+      'scopeRegisterLlmSanitizeRequestGuardrail',
+      'scopeRegisterLlmSanitizeResponseGuardrail',
+      'scopeRegisterLlmConditionalExecutionGuardrail',
+      'scopeRegisterLlmRequestIntercept',
+      'scopeRegisterLlmExecutionIntercept',
+      'scopeRegisterLlmStreamExecutionIntercept',
+    ];
+
+    for (const registration of registrations) {
+      const declaration = declarations.match(new RegExp(`export declare function ${registration}\\([^\\n]+`))?.[0];
+      assert.ok(declaration, `missing declaration for ${registration}`);
+      assert.doesNotMatch(declaration, /\.\.\.args: any\[\]/, `${registration} must not expose an any callback`);
+      assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);
+    }
+    assert.equal(
+      declarations.split('next: (request: Json) => Promise<Json[]>').length - 1,
+      2,
+      'global and scope-local stream intercept declarations must expose the buffered next contract',
+    );
   });
 
   it('plugin declarations expose Promise middleware and the implemented stream contract', () => {

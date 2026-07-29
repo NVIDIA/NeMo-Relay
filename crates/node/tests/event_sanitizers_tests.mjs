@@ -216,6 +216,47 @@ describe('event sanitizer registries', () => {
     }
   });
 
+  it('treats inline managed sanitizers as real flush barriers', async () => {
+    lib.registerSubscriber('node-event-inline-flush-sub', () => {});
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+    let inlineFlushReturned = false;
+
+    lib.registerMarkSanitizeGuardrail('node-event-inline-flush-blocker', 0, async (_event, fields) => {
+      blockerEntered();
+      await release;
+      return fields;
+    });
+    lib.registerScopeSanitizeStartGuardrail('node-event-inline-flush', 0, async (_event, fields) => {
+      await lib.flushSubscribers();
+      inlineFlushReturned = true;
+      return fields;
+    });
+
+    try {
+      lib.event('inline-flush-blocker', null, { raw: true });
+      await entered;
+      const execution = lib.toolCallExecute('inline-flush-tool', {}, (args) => args);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(inlineFlushReturned, false);
+      releaseBlocker();
+      await execution;
+      assert.equal(inlineFlushReturned, true);
+      await lib.flushSubscribers();
+    } finally {
+      releaseBlocker();
+      lib.deregisterMarkSanitizeGuardrail('node-event-inline-flush-blocker');
+      lib.deregisterScopeSanitizeStartGuardrail('node-event-inline-flush');
+      lib.deregisterSubscriber('node-event-inline-flush-sub');
+    }
+  });
+
   it('clears sanitizer re-entrancy in async descendants after settlement', async () => {
     const events = capture('node-event-sanitize-descendant-flush-sub');
     let secondSanitizerEntered;

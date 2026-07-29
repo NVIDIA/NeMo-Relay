@@ -148,12 +148,24 @@ Event sanitizers registered through this extension still run on Relay's serial
 publication dispatcher. Scope and mark emission remain synchronous and their
 sanitized events are delivered later in emission order.
 
-The v3 completion and continuation ABI settles one JSON value. Consequently,
-an async native LLM stream execution intercept currently receives and returns
-the complete JSON array of chunks: Relay buffers the provider stream before
-replaying it to the caller. It is not an incremental streaming transport and
-does not provide per-chunk backpressure. Use a synchronous native stream
-intercept or a worker plugin when first-token latency is required.
+The generic v3 completion registration settles one JSON value and rejects the
+`LlmStreamExecutionIntercept` kind. Register asynchronous stream intercepts
+with `plugin_context_register_async_stream_middleware` instead. Its dedicated
+`async_next_invoke_stream` continuation forwards downstream chunks
+incrementally, so Relay does not buffer the provider stream into an array.
+
+The incremental output queue is bounded. `async_stream_push_json` and
+`async_stream_reject` never block a native callback thread. If either returns
+`Internal` and the host last-error contains `backpressured`, retain the logical
+chunk or rejection and retry after the consumer advances. `InvalidArg` means
+the stream is already closed or cancelled and must not be retried. Check
+`async_stream_is_cancelled` during longer producer work.
+
+Cancelling the one-shot completion supplied to a non-stream execution
+intercept also aborts any pending `async_next_invoke` continuation. Plugins
+must still release their callback-owned completion and `next` references
+exactly once; cancellation only stops the host-side continuation and prevents
+it from retaining the plugin indefinitely.
 
 Legacy v1/v2 middleware callbacks are synchronous and run on the runtime's
 execution path. They must not block on I/O; use the v3 completion-based API for

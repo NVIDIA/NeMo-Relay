@@ -3,6 +3,10 @@
 
 """Tests for NeMo Relay subscriber and event handling."""
 
+import os
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 from datetime import datetime, timezone
@@ -97,6 +101,80 @@ class TestSubscribers:
 
     def test_deregister_nonexistent(self):
         assert not subscribers.deregister("nonexistent_sub")
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+    def test_async_flush_remains_usable_after_fork(self):
+        script = textwrap.dedent(
+            """
+            import asyncio
+            import os
+
+            from nemo_relay import subscribers
+
+            asyncio.run(subscribers.flush_async())
+            child = os.fork()
+            if child == 0:
+                async def flush():
+                    await asyncio.wait_for(subscribers.flush_async(), timeout=1)
+
+                try:
+                    asyncio.run(flush())
+                except BaseException:
+                    os._exit(42)
+                os._exit(0)
+
+            _, status = os.waitpid(child, 0)
+            raise SystemExit(os.waitstatus_to_exitcode(status))
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+    def test_cancelled_async_flush_does_not_block_process_exit(self):
+        script = textwrap.dedent(
+            """
+            import asyncio
+            import threading
+
+            from nemo_relay import guardrails, scope, subscribers
+
+            entered = threading.Event()
+
+            async def stuck(_event, fields):
+                entered.set()
+                await asyncio.Event().wait()
+                return fields
+
+            subscribers.register("cancel-flush-sink", lambda _event: None)
+            guardrails.register_mark_sanitize("cancel-flush-sanitizer", 0, stuck)
+            scope.event("cancel-flush")
+
+            async def run():
+                flush = asyncio.create_task(subscribers.flush_async())
+                assert await asyncio.to_thread(entered.wait, 2)
+                flush.cancel()
+                try:
+                    await flush
+                except asyncio.CancelledError:
+                    pass
+
+            asyncio.run(run())
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert completed.returncode == 0, completed.stderr
 
 
 class TestSubscriberEventDetails:

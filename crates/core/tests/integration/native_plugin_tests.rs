@@ -792,6 +792,46 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         .expect("pending v3 async request intercept should settle after clear");
     assert_eq!(pending["native_async"], true);
 
+    let mut config = PluginConfig::default();
+    config.components.push(PluginComponentSpec {
+        kind: "fixture_async".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    initialize_plugins_exact(config)
+        .await
+        .expect("v3 async native fixture should reactivate");
+    cleanup.mark_plugin_configuration_active();
+    let pending_next = tokio::spawn(async {
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("async-cancel-next")
+                .args(json!({"input": true}))
+                .func(Arc::new(|_args| {
+                    Box::pin(async { std::future::pending().await })
+                }))
+                .build(),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !unsafe { pending_entered() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("native async next should start before cancellation");
+    clear_plugin_configuration().expect("plugin configuration should clear with next pending");
+    cleanup.plugin_configuration_active = false;
+    pending_next.abort();
+    assert!(
+        pending_next
+            .await
+            .expect_err("pending next should be cancelled")
+            .is_cancelled(),
+        "aborting the managed call should cancel its native next continuation"
+    );
+
     drop(cleanup);
     drop(activation);
 }

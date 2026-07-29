@@ -9,8 +9,68 @@ use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
 use crate::error::Result;
+use std::any::Any;
+use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+
+/// Binding-owned context captured when an event is emitted.
+///
+/// The dispatcher treats this value as opaque. Bindings can use it to carry
+/// task-local state from synchronous emission into queued middleware.
+pub type PublicationContext = Arc<dyn Any + Send + Sync>;
+
+thread_local! {
+    static THREAD_PUBLICATION_CONTEXT: RefCell<Option<PublicationContext>> = const { RefCell::new(None) };
+}
+tokio::task_local! {
+    static TASK_PUBLICATION_CONTEXT: Option<PublicationContext>;
+}
+
+struct ThreadPublicationContextGuard(Option<PublicationContext>);
+
+impl Drop for ThreadPublicationContextGuard {
+    fn drop(&mut self) {
+        THREAD_PUBLICATION_CONTEXT.with(|current| {
+            current.replace(self.0.take());
+        });
+    }
+}
+
+fn current_publication_context() -> Option<PublicationContext> {
+    TASK_PUBLICATION_CONTEXT
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
+        .or_else(|| THREAD_PUBLICATION_CONTEXT.with(|current| current.borrow().clone()))
+}
+
+/// Run synchronous event emission with an opaque binding context snapshot.
+#[doc(hidden)]
+pub fn with_publication_context<T>(
+    context: Option<PublicationContext>,
+    f: impl FnOnce() -> T,
+) -> T {
+    let previous = THREAD_PUBLICATION_CONTEXT.with(|current| current.replace(context));
+    let _guard = ThreadPublicationContextGuard(previous);
+    f()
+}
+
+/// Run asynchronous event emission with an opaque binding context snapshot.
+#[doc(hidden)]
+pub async fn with_task_publication_context<F: Future>(
+    context: Option<PublicationContext>,
+    future: F,
+) -> F::Output {
+    TASK_PUBLICATION_CONTEXT.scope(context, future).await
+}
+
+/// Return a typed binding context while queued middleware is running.
+#[doc(hidden)]
+pub fn publication_context<T: Any + Send + Sync>() -> Option<Arc<T>> {
+    current_publication_context()?.downcast().ok()
+}
 
 pub(crate) type EventTransformFn = Box<
     dyn FnOnce(Event) -> Pin<Box<dyn Future<Output = Event> + Send + 'static>> + Send + 'static,
@@ -18,11 +78,10 @@ pub(crate) type EventTransformFn = Box<
 
 mod native {
     use std::cell::{Cell, RefCell};
-    use std::collections::VecDeque;
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{LazyLock, Mutex, MutexGuard};
 
     use super::*;
     use crate::api::runtime::scope_stack::{
@@ -38,6 +97,7 @@ mod native {
             sanitizers: Vec<Guardrail<EventSanitizeFn>>,
             subscribers: Vec<EventSubscriberFn>,
             scope_stack: ScopeStackHandle,
+            publication_context: Option<PublicationContext>,
         },
         Flush {
             done: Sender<()>,
@@ -47,20 +107,28 @@ mod native {
         },
     }
 
-    static DISPATCHER: OnceLock<std::result::Result<Sender<DispatcherMessage>, String>> =
-        OnceLock::new();
-    static SANITIZER_RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
-        OnceLock::new();
+    type DispatcherState = Option<std::result::Result<Sender<DispatcherMessage>, String>>;
+    type SanitizerRuntimeState = Option<std::result::Result<tokio::runtime::Runtime, String>>;
+
+    static DISPATCHER: LazyLock<Mutex<DispatcherState>> = LazyLock::new(|| Mutex::new(None));
+    static SANITIZER_RUNTIME: LazyLock<Mutex<SanitizerRuntimeState>> =
+        LazyLock::new(|| Mutex::new(None));
     static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
     static SANITIZER_RUNTIME_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
+        static FORK_GUARDS: RefCell<Option<ForkGuards>> = const { RefCell::new(None) };
     }
     tokio::task_local! {
         static ASYNC_PUBLICATION_MESSAGES: RefCell<Option<Vec<DispatcherMessage>>>;
     }
 
     struct DispatchGuard;
+
+    struct ForkGuards {
+        sanitizer_runtime: MutexGuard<'static, SanitizerRuntimeState>,
+        dispatcher: MutexGuard<'static, DispatcherState>,
+    }
 
     pub(crate) struct AsyncPublication {
         sender: Sender<Vec<DispatcherMessage>>,
@@ -79,23 +147,25 @@ mod native {
         }
     }
 
-    fn sanitizer_runtime() -> std::result::Result<&'static tokio::runtime::Runtime, String> {
-        SANITIZER_RUNTIME
-            .get_or_init(|| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|error| error.to_string())
-            })
-            .as_ref()
-            .map_err(Clone::clone)
-    }
-
     #[cfg(test)]
     pub(super) fn block_on_sanitizer_future<F: Future>(
         future: F,
     ) -> std::result::Result<F::Output, String> {
-        sanitizer_runtime().map(|runtime| runtime.block_on(future))
+        let mut runtime = SANITIZER_RUNTIME
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let runtime = runtime.get_or_insert_with(build_sanitizer_runtime);
+        runtime
+            .as_ref()
+            .map(|runtime| runtime.block_on(future))
+            .map_err(Clone::clone)
+    }
+
+    fn build_sanitizer_runtime() -> std::result::Result<tokio::runtime::Runtime, String> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())
     }
 
     pub(super) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
@@ -108,6 +178,7 @@ mod native {
             sanitizers: Vec::new(),
             subscribers: subscribers.to_vec(),
             scope_stack: current_scope_stack(),
+            publication_context: current_publication_context(),
         };
         send_dispatch_message(message)
     }
@@ -127,6 +198,7 @@ mod native {
             sanitizers,
             subscribers: subscribers.to_vec(),
             scope_stack,
+            publication_context: current_publication_context(),
         };
         send_dispatch_message(message)
     }
@@ -146,6 +218,7 @@ mod native {
             sanitizers,
             subscribers: subscribers.to_vec(),
             scope_stack,
+            publication_context: current_publication_context(),
         };
         let buffer_active = ASYNC_PUBLICATION_MESSAGES
             .try_with(|messages| messages.borrow().is_some())
@@ -177,6 +250,7 @@ mod native {
             sanitizers,
             subscribers: subscribers.to_vec(),
             scope_stack,
+            publication_context: current_publication_context(),
         };
         send_dispatch_message(message)
     }
@@ -201,12 +275,16 @@ mod native {
         if in_dispatcher_callback() {
             return Ok(());
         }
-        let Some(sender_result) = DISPATCHER.get() else {
-            return Ok(());
+        let sender = {
+            let dispatcher = DISPATCHER.lock().unwrap_or_else(|error| error.into_inner());
+            let Some(sender_result) = dispatcher.as_ref() else {
+                return Ok(());
+            };
+            sender_result
+                .as_ref()
+                .map_err(|error| FlowError::Internal(error.clone()))?
+                .clone()
         };
-        let sender = sender_result
-            .as_ref()
-            .map_err(|error| FlowError::Internal(error.clone()))?;
         let (done_tx, done_rx) = mpsc::channel();
         sender
             .send(DispatcherMessage::Flush { done: done_tx })
@@ -249,7 +327,8 @@ mod native {
     }
 
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
-        DISPATCHER.get_or_init(start_dispatcher).clone()
+        let mut dispatcher = DISPATCHER.lock().unwrap_or_else(|error| error.into_inner());
+        dispatcher.get_or_insert_with(start_dispatcher).clone()
     }
 
     fn send_dispatch_message(message: DispatcherMessage) -> bool {
@@ -294,22 +373,10 @@ mod native {
     }
 
     fn run_dispatcher(rx: Receiver<DispatcherMessage>) {
-        let mut pending = VecDeque::new();
-        loop {
-            let message = match pending.pop_front() {
-                Some(message) => message,
-                None => match rx.recv() {
-                    Ok(message) => message,
-                    Err(_) => break,
-                },
-            };
+        while let Ok(message) = rx.recv() {
             match message {
                 DispatcherMessage::Flush { done } => {
-                    let pending_flushes = drain_pending_messages(&rx, &mut pending);
                     let _ = done.send(());
-                    for pending in pending_flushes {
-                        let _ = pending.send(());
-                    }
                 }
                 DispatcherMessage::Barrier { publications } => {
                     if let Ok(publications) = publications.recv() {
@@ -323,24 +390,6 @@ mod native {
         }
     }
 
-    fn drain_pending_messages(
-        rx: &Receiver<DispatcherMessage>,
-        pending: &mut VecDeque<DispatcherMessage>,
-    ) -> Vec<Sender<()>> {
-        let mut pending_flushes = Vec::new();
-        while let Ok(message) = rx.try_recv() {
-            match message {
-                DispatcherMessage::Flush { done } => pending_flushes.push(done),
-                message @ DispatcherMessage::Barrier { .. } => {
-                    pending.push_back(message);
-                    break;
-                }
-                message => handle_message(message),
-            }
-        }
-        pending_flushes
-    }
-
     fn handle_message(message: DispatcherMessage) {
         match message {
             DispatcherMessage::Deliver {
@@ -349,7 +398,15 @@ mod native {
                 sanitizers,
                 subscribers,
                 scope_stack,
-            } => deliver_event(event, transform, sanitizers, subscribers, scope_stack),
+                publication_context,
+            } => deliver_event(
+                event,
+                transform,
+                sanitizers,
+                subscribers,
+                scope_stack,
+                publication_context,
+            ),
             DispatcherMessage::Flush { done } => {
                 let _ = done.send(());
             }
@@ -369,11 +426,14 @@ mod native {
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         subscribers: Vec<EventSubscriberFn>,
         scope_stack: ScopeStackHandle,
+        publication_context: Option<PublicationContext>,
     ) {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         let _dispatch_guard = DispatchGuard::enter();
-        let Some(event) = sanitize_event_snapshot(*event, transform, sanitizers) else {
+        let Some(event) =
+            sanitize_event_snapshot(*event, transform, sanitizers, publication_context)
+        else {
             restore_thread_scope_stack(previous_scope_stack);
             return;
         };
@@ -397,8 +457,13 @@ mod native {
         event: Event,
         transform: Option<EventTransformFn>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        publication_context: Option<PublicationContext>,
     ) -> Option<Event> {
-        let runtime = match sanitizer_runtime() {
+        let mut runtime = SANITIZER_RUNTIME
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let runtime = runtime.get_or_insert_with(build_sanitizer_runtime);
+        let runtime = match runtime.as_ref() {
             Ok(runtime) => runtime,
             Err(error) => {
                 if !SANITIZER_RUNTIME_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
@@ -411,13 +476,16 @@ mod native {
                 return None;
             }
         };
+        let transform_context = publication_context.clone();
         let transformed = match catch_unwind(AssertUnwindSafe(|| {
-            runtime.block_on(async move {
-                match transform {
-                    Some(transform) => transform(event).await,
-                    None => event,
-                }
-            })
+            runtime.block_on(
+                TASK_PUBLICATION_CONTEXT.scope(transform_context, async move {
+                    match transform {
+                        Some(transform) => transform(event).await,
+                        None => event,
+                    }
+                }),
+            )
         })) {
             Ok(event) => event,
             Err(_) => {
@@ -434,9 +502,9 @@ mod native {
         }
         let fallback = transformed.clone();
         match catch_unwind(AssertUnwindSafe(|| {
-            runtime.block_on(NemoRelayContextState::event_sanitize_snapshot_chain(
-                transformed,
-                &sanitizers,
+            runtime.block_on(TASK_PUBLICATION_CONTEXT.scope(
+                publication_context,
+                NemoRelayContextState::event_sanitize_snapshot_chain(transformed, &sanitizers),
             ))
         })) {
             Ok(event) => Some(event),
@@ -449,6 +517,44 @@ mod native {
                 Some(fallback)
             }
         }
+    }
+
+    pub(super) fn prepare_for_fork() {
+        // Lock in the same order used by publication: sanitizer execution can
+        // enqueue another event and therefore acquire the dispatcher lock.
+        let sanitizer_runtime = SANITIZER_RUNTIME
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let dispatcher = DISPATCHER.lock().unwrap_or_else(|error| error.into_inner());
+        FORK_GUARDS.with(|guards| {
+            let previous = guards.replace(Some(ForkGuards {
+                sanitizer_runtime,
+                dispatcher,
+            }));
+            assert!(previous.is_none(), "subscriber fork preparation is nested");
+        });
+    }
+
+    pub(super) fn resume_after_fork_parent() {
+        FORK_GUARDS.with(|guards| {
+            guards
+                .borrow_mut()
+                .take()
+                .expect("subscriber fork parent hook ran without preparation");
+        });
+    }
+
+    pub(super) fn reset_after_fork_child() {
+        FORK_GUARDS.with(|guards| {
+            let mut guards = guards
+                .borrow_mut()
+                .take()
+                .expect("subscriber fork child hook ran without preparation");
+            *guards.dispatcher = None;
+            *guards.sanitizer_runtime = None;
+        });
+        DISPATCHER_FAILURE_LOGGED.store(false, Ordering::Release);
+        SANITIZER_RUNTIME_FAILURE_LOGGED.store(false, Ordering::Release);
     }
 
     #[cfg(test)]
@@ -488,6 +594,7 @@ mod native {
                     sanitizers: Vec::new(),
                     subscribers: vec![subscriber.clone()],
                     scope_stack: current_scope_stack(),
+                    publication_context: None,
                 })
                 .unwrap();
             let (flush_tx, flush_rx) = mpsc::channel();
@@ -518,6 +625,7 @@ mod native {
                     sanitizers: Vec::new(),
                     subscribers: vec![subscriber],
                     scope_stack: current_scope_stack(),
+                    publication_context: None,
                 }])
                 .unwrap();
             flush_rx
@@ -530,6 +638,54 @@ mod native {
             );
             later.sender.send(Vec::new()).unwrap();
             flush_subscribers().unwrap();
+        }
+
+        #[test]
+        fn flush_does_not_wait_for_later_delivery() {
+            let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            flush_subscribers().unwrap();
+            let barrier = register_async_publication().expect("publication barrier");
+            let sender = dispatcher_sender().expect("dispatcher sender");
+            let (flush_tx, flush_rx) = mpsc::channel();
+            sender
+                .send(DispatcherMessage::Flush { done: flush_tx })
+                .unwrap();
+
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+            let event = serde_json::from_value(serde_json::json!({
+                "kind": "mark",
+                "atof_version": "0.1",
+                "uuid": "019c1df6-4a57-7000-8000-000000000003",
+                "timestamp": "2026-07-28T00:00:00Z",
+                "name": "queued-after-flush"
+            }))
+            .expect("valid event");
+            sender
+                .send(DispatcherMessage::Deliver {
+                    event: Box::new(event),
+                    transform: Some(Box::new(move |event| {
+                        Box::pin(async move {
+                            let _ = release_rx.await;
+                            event
+                        })
+                    })),
+                    sanitizers: Vec::new(),
+                    subscribers: Vec::new(),
+                    scope_stack: current_scope_stack(),
+                    publication_context: None,
+                })
+                .unwrap();
+            barrier.sender.send(Vec::new()).unwrap();
+
+            let flush_result = flush_rx.recv_timeout(std::time::Duration::from_millis(100));
+            let _ = release_tx.send(());
+            flush_subscribers().unwrap();
+            assert!(
+                flush_result.is_ok(),
+                "a delivery queued after a flush must not delay that flush"
+            );
         }
     }
 }
@@ -603,6 +759,24 @@ pub(crate) async fn with_async_publication_context<F: Future>(
 /// Wait for all queued subscriber callbacks submitted before this call.
 pub fn flush_subscribers() -> Result<()> {
     native::flush_subscribers()
+}
+
+/// Acquire process-local dispatcher resources before a Unix `fork`.
+#[doc(hidden)]
+pub fn prepare_for_fork() {
+    native::prepare_for_fork();
+}
+
+/// Release process-local dispatcher resources in the parent after a Unix `fork`.
+#[doc(hidden)]
+pub fn resume_after_fork_parent() {
+    native::resume_after_fork_parent();
+}
+
+/// Reset and release inherited dispatcher resources in the child after a Unix `fork`.
+#[doc(hidden)]
+pub fn reset_after_fork_child() {
+    native::reset_after_fork_child();
 }
 
 /// Return whether the current callback was invoked by queued event publication.

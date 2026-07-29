@@ -386,8 +386,10 @@ def request_intercepts(name, request):
             intercept chain.
 
     Returns:
-        LLMRequestInterceptOutcome: The complete request, annotation, and
-        pending-mark outcome produced by the intercept chain.
+        LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]:
+        The complete request, annotation, and pending-mark outcome produced by
+        the intercept chain. Outside a running event loop this is returned
+        directly. Inside an event loop, await the returned value.
 
     Notes:
         This runs only the request-intercept chain. It does not execute
@@ -405,12 +407,16 @@ def conditional_execution(request):
             conditional-execution guardrails.
 
     Returns:
-        str | None: A rejection message if execution should be blocked,
-        otherwise ``None``.
+        None | Awaitable[None]: ``None`` when execution is allowed, returned
+        directly outside an event loop or through an awaitable inside one.
 
     Notes:
         This helper evaluates only conditional-execution guardrails and does
         not invoke request intercepts, codecs, or provider execution.
+
+    Raises:
+        RuntimeError: If a guardrail rejects the call or an asynchronous
+        guardrail is registered when called outside an event loop.
     """
     ensure_scope_stack()
     return _native_llm_conditional_execution(request)

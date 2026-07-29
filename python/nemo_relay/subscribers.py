@@ -23,8 +23,9 @@ Example::
 """
 
 import asyncio
+import os
+import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from nemo_relay._event_sanitizer_context import callback_active as _event_sanitizer_callback_active
@@ -37,11 +38,25 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     register_subscriber as _native_register,
 )
+from nemo_relay._native import (
+    subscriber_dispatcher_after_fork_child as _native_after_fork_child,
+)
+from nemo_relay._native import (
+    subscriber_dispatcher_after_fork_parent as _native_after_fork_parent,
+)
+from nemo_relay._native import (
+    subscriber_dispatcher_before_fork as _native_before_fork,
+)
 
 if TYPE_CHECKING:
     from nemo_relay import Event
 
-_FLUSH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nemo-relay-flush")
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(
+        before=_native_before_fork,
+        after_in_parent=_native_after_fork_parent,
+        after_in_child=_native_after_fork_child,
+    )
 
 
 def register(name: str, callback: "Callable[[Event], None]") -> None:
@@ -124,14 +139,41 @@ def flush() -> None:
 async def flush_async() -> None:
     """Wait asynchronously for subscriber callbacks already queued by Relay.
 
-    Use this barrier from an ``asyncio`` task. The blocking native wait runs on
-    Relay's dedicated flush thread so an event sanitizer scheduled on the
-    caller's event loop or default executor can continue to make progress.
+    Use this barrier from an ``asyncio`` task. A daemon bridge thread waits for
+    the native dispatcher without blocking the Python event loop or process
+    shutdown when this coroutine is cancelled.
     """
     if _event_sanitizer_callback_active():
         return None
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(_FLUSH_EXECUTOR, _native_flush)
+    completed: asyncio.Future[None] = loop.create_future()
+
+    def finish(error: BaseException | None) -> None:
+        if completed.done():
+            return
+        if error is None:
+            completed.set_result(None)
+        else:
+            completed.set_exception(error)
+
+    def wait_for_dispatcher() -> None:
+        try:
+            _native_flush()
+        except BaseException as error:
+            result = error
+        else:
+            result = None
+        try:
+            loop.call_soon_threadsafe(finish, result)
+        except RuntimeError:
+            pass
+
+    threading.Thread(
+        target=wait_for_dispatcher,
+        name="nemo-relay-flush",
+        daemon=True,
+    ).start()
+    await completed
 
 
 __all__ = ["deregister", "flush", "flush_async", "register"]

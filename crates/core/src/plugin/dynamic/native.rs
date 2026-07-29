@@ -1381,41 +1381,12 @@ fn make_user_data(
     })
 }
 
-/// One-shot state retained by a v3 native async callback.
-enum NativeAsyncResult {
-    Json(Json),
-    LlmStream(LlmJsonStream),
-}
-
-impl std::fmt::Debug for NativeAsyncResult {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Json(value) => formatter.debug_tuple("Json").field(value).finish(),
-            Self::LlmStream(_) => formatter.write_str("LlmStream(..)"),
-        }
-    }
-}
-
-impl PartialEq<Json> for NativeAsyncResult {
-    fn eq(&self, other: &Json) -> bool {
-        matches!(self, Self::Json(value) if value == other)
-    }
-}
-
-impl NativeAsyncResult {
-    fn into_json(self) -> FlowResult<Json> {
-        match self {
-            Self::Json(value) => Ok(value),
-            Self::LlmStream(_) => Err(FlowError::Internal(
-                "native async callback returned a stream for a non-stream invocation".into(),
-            )),
-        }
-    }
-}
+const NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY: usize = 64;
 
 struct NativeAsyncCompletion {
-    sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<NativeAsyncResult>>>>,
+    sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>,
     cancelled: AtomicBool,
+    next_abort: Mutex<Option<tokio::task::AbortHandle>>,
     // A pending native callback can continue running after its completion
     // wakes the awaiting task. Keep the callback's dynamic-library instance
     // alive until native code explicitly releases this handle.
@@ -1424,12 +1395,21 @@ struct NativeAsyncCompletion {
 
 struct NativeAsyncWait {
     completion: Arc<NativeAsyncCompletion>,
-    receiver: tokio::sync::oneshot::Receiver<FlowResult<NativeAsyncResult>>,
+    receiver: tokio::sync::oneshot::Receiver<FlowResult<Json>>,
 }
 
 impl Drop for NativeAsyncWait {
     fn drop(&mut self) {
         self.completion.cancelled.store(true, Ordering::Release);
+        if let Some(abort) = self
+            .completion
+            .next_abort
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            abort.abort();
+        }
     }
 }
 
@@ -1449,14 +1429,14 @@ struct NativeAsyncNext {
 }
 
 struct NativeAsyncStream {
-    sender: Mutex<Option<tokio::sync::mpsc::UnboundedSender<FlowResult<Json>>>>,
+    sender: Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
     cancelled: AtomicBool,
     downstream_abort: Mutex<Option<tokio::task::AbortHandle>>,
     _callback_user_data: Option<Arc<NativeCallbackUserData>>,
 }
 
 struct NativeAsyncStreamReceiver {
-    receiver: tokio::sync::mpsc::UnboundedReceiver<FlowResult<Json>>,
+    receiver: tokio::sync::mpsc::Receiver<FlowResult<Json>>,
     stream: Arc<NativeAsyncStream>,
 }
 
@@ -1520,7 +1500,7 @@ async fn invoke_native_async_callback(
     user_data: Arc<NativeCallbackUserData>,
     invocation: Json,
     next: Option<NativeAsyncNextInner>,
-) -> FlowResult<NativeAsyncResult> {
+) -> FlowResult<Json> {
     let runtime = if next.is_some() {
         Some(tokio::runtime::Handle::try_current().map_err(|error| {
             FlowError::Internal(format!(
@@ -1537,6 +1517,7 @@ async fn invoke_native_async_callback(
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
         _callback_user_data: Some(user_data.clone()),
     });
     let completion_ref = Arc::into_raw(completion.clone()) as usize;
@@ -1626,6 +1607,14 @@ unsafe extern "C" fn native_async_completion_resolve_json(
         Ok(value) => value,
         Err(status) => return status,
     };
+    if let Some(abort) = completion
+        .next_abort
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    {
+        abort.abort();
+    }
     let Some(sender) = completion
         .sender
         .lock()
@@ -1634,7 +1623,7 @@ unsafe extern "C" fn native_async_completion_resolve_json(
     else {
         return NemoRelayStatus::InvalidArg;
     };
-    let _ = sender.send(Ok(NativeAsyncResult::Json(value)));
+    let _ = sender.send(Ok(value));
     NemoRelayStatus::Ok
 }
 
@@ -1660,6 +1649,14 @@ unsafe extern "C" fn native_async_completion_reject(
             }
         }
     };
+    if let Some(abort) = completion
+        .next_abort
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    {
+        abort.abort();
+    }
     let Some(sender) = completion
         .sender
         .lock()
@@ -1697,6 +1694,7 @@ unsafe extern "C" fn native_async_stream_push_json(
     stream: *const NemoRelayNativeAsyncStream,
     chunk_json: *const NemoRelayNativeString,
 ) -> NemoRelayStatus {
+    clear_native_last_error();
     let Some(stream) = (unsafe { (stream as *const NativeAsyncStream).as_ref() }) else {
         return NemoRelayStatus::NullPointer;
     };
@@ -1712,9 +1710,18 @@ unsafe extern "C" fn native_async_stream_push_json(
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
-    match sender {
-        Some(sender) if sender.send(Ok(chunk)).is_ok() => NemoRelayStatus::Ok,
-        _ => NemoRelayStatus::InvalidArg,
+    let Some(sender) = sender else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    match sender.try_send(Ok(chunk)) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            set_native_last_error(
+                "native async stream is backpressured; retry the chunk after the consumer advances",
+            );
+            NemoRelayStatus::Internal
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => NemoRelayStatus::InvalidArg,
     }
 }
 
@@ -1741,22 +1748,31 @@ unsafe extern "C" fn native_async_stream_reject(
     stream: *const NemoRelayNativeAsyncStream,
     message: *const NemoRelayNativeString,
 ) -> NemoRelayStatus {
+    clear_native_last_error();
     let Some(stream) = (unsafe { (stream as *const NativeAsyncStream).as_ref() }) else {
         return NemoRelayStatus::NullPointer;
     };
     let message =
         read_native_string(message).unwrap_or_else(|_| "native async stream rejected".to_string());
-    let sender = stream
+    let mut sender_guard = stream
         .sender
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .take();
-    match sender {
-        Some(sender) => {
-            let _ = sender.send(Err(FlowError::Internal(message)));
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(sender) = sender_guard.as_ref() else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    match sender.try_send(Err(FlowError::Internal(message))) {
+        Ok(()) => {
+            sender_guard.take();
             NemoRelayStatus::Ok
         }
-        None => NemoRelayStatus::InvalidArg,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            set_native_last_error(
+                "native async stream is backpressured; retry rejection after the consumer advances",
+            );
+            NemoRelayStatus::Internal
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => NemoRelayStatus::InvalidArg,
     }
 }
 
@@ -1789,16 +1805,22 @@ unsafe extern "C" fn native_async_next_invoke(
         Ok(value) => value,
         Err(status) => return status,
     };
+    if matches!(&next.inner, NativeAsyncNextInner::LlmStream(_)) {
+        set_native_last_error(
+            "stream continuations require async_next_invoke_stream; completion-based next cannot buffer a stream",
+        );
+        return NemoRelayStatus::InvalidArg;
+    }
     unsafe { Arc::increment_strong_count(completion as *const NativeAsyncCompletion) };
     let completion = unsafe { Arc::from_raw(completion as *const NativeAsyncCompletion) };
-    let future: Pin<Box<dyn Future<Output = FlowResult<NativeAsyncResult>> + Send>> = match &next
-        .inner
-    {
+    if completion.cancelled.load(Ordering::Acquire) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> = match &next.inner {
         NativeAsyncNextInner::Tool(next) => {
             let next = next.clone();
             Box::pin(async move {
                 serde_json::to_value(ToolExecutionInterceptOutcome::new(next(invocation).await?))
-                    .map(NativeAsyncResult::Json)
                     .map_err(|error| {
                         FlowError::Internal(format!(
                             "failed to serialize native async tool outcome: {error}"
@@ -1820,30 +1842,30 @@ unsafe extern "C" fn native_async_next_invoke(
                 }
             };
             let next = next.clone();
-            Box::pin(async move { next(request).await.map(NativeAsyncResult::Json) })
+            Box::pin(async move { next(request).await })
         }
-        NativeAsyncNextInner::LlmStream(next) => {
-            let request = match serde_json::from_value(invocation) {
-                Ok(request) => request,
-                Err(error) => {
-                    let _ = completion
-                        .sender
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .take()
-                        .map(|sender| sender.send(Err(FlowError::Internal(error.to_string()))));
-                    return NemoRelayStatus::InvalidArg;
-                }
-            };
-            let next = next.clone();
-            Box::pin(async move { next(request).await.map(NativeAsyncResult::LlmStream) })
-        }
+        NativeAsyncNextInner::LlmStream(_) => unreachable!("stream continuations were rejected"),
     };
     let scope_stack = next.scope_stack.clone();
-    next.runtime
+    let mut abort_guard = completion
+        .next_abort
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if abort_guard.is_some() {
+        set_native_last_error("native async next was already invoked for this completion");
+        return NemoRelayStatus::InvalidArg;
+    }
+    let completion_for_task = Arc::clone(&completion);
+    let task = next
+        .runtime
         .spawn(TASK_SCOPE_STACK.scope(scope_stack, async move {
             let result = future.await;
-            if let Some(sender) = completion
+            completion_for_task
+                .next_abort
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+            if let Some(sender) = completion_for_task
                 .sender
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
@@ -1852,6 +1874,7 @@ unsafe extern "C" fn native_async_next_invoke(
                 let _ = sender.send(result);
             }
         }));
+    *abort_guard = Some(task.abort_handle());
     NemoRelayStatus::Ok
 }
 
@@ -1980,8 +2003,7 @@ fn wrap_native_async_tool_json(
                 serde_json::json!({"name": name, "value": value}),
                 None,
             )
-            .await?
-            .into_json()?;
+            .await?;
             Ok(value)
         })
     })
@@ -2004,7 +2026,6 @@ fn wrap_native_async_tool_conditional(
                 None,
             )
             .await?
-            .into_json()?
             {
                 Json::Null => Ok(None),
                 Json::String(reason) => Ok(Some(reason)),
@@ -2033,7 +2054,6 @@ fn wrap_native_async_llm_conditional(
                 None,
             )
             .await?
-            .into_json()?
             {
                 Json::Null => Ok(None),
                 Json::String(reason) => Ok(Some(reason)),
@@ -2062,8 +2082,7 @@ fn wrap_native_async_llm_sanitize_request(
                 serde_json::json!({"request": request, "context": codec}),
                 None,
             )
-            .await?
-            .into_json()?;
+            .await?;
             if value.is_null() {
                 Ok(None)
             } else {
@@ -2092,8 +2111,7 @@ fn wrap_native_async_llm_sanitize_response(
                 serde_json::json!({"response": response, "context": codec}),
                 None,
             )
-            .await?
-            .into_json()?;
+            .await?;
             Ok((!value.is_null()).then_some(value))
         })
     })
@@ -2137,8 +2155,7 @@ fn wrap_native_async_llm_request_intercept(
                     }),
                     None,
                 )
-                .await?
-                .into_json()?,
+                .await?,
             )
             .map_err(|error| {
                 FlowError::Internal(format!(
@@ -2166,8 +2183,7 @@ fn wrap_native_async_event_sanitize(
                     serde_json::json!({"event": event, "fields": fields}),
                     None,
                 )
-                .await?
-                .into_json()?,
+                .await?,
             )
             .map_err(|error| {
                 FlowError::Internal(format!("invalid native async event fields: {error}"))
@@ -2194,8 +2210,7 @@ fn wrap_native_async_tool_execution(
                     invocation,
                     Some(NativeAsyncNextInner::Tool(next)),
                 )
-                .await?
-                .into_json()?,
+                .await?,
             )
             .map_err(|error| {
                 FlowError::Internal(format!("invalid native async tool outcome: {error}"))
@@ -2221,39 +2236,7 @@ fn wrap_native_async_llm_execution(
                 serde_json::json!({"name": name, "request": request}),
                 Some(NativeAsyncNextInner::Llm(next)),
             )
-            .await?
-            .into_json()
-        })
-    })
-}
-
-fn wrap_native_async_llm_stream_execution(
-    instance: Arc<NativePluginInstance>,
-    cb: NemoRelayNativeAsyncMiddlewareCb,
-    user_data: *mut c_void,
-    free_fn: NemoRelayNativeFreeFn,
-) -> LlmStreamExecutionFn {
-    let user_data = make_user_data(instance, user_data, free_fn);
-    Arc::new(move |name, request, next| {
-        let user_data = user_data.clone();
-        let name = name.to_owned();
-        Box::pin(async move {
-            let value = invoke_native_async_callback(
-                cb,
-                user_data,
-                serde_json::json!({"name": name, "request": request}),
-                Some(NativeAsyncNextInner::LlmStream(next)),
-            )
-            .await?;
-            match value {
-                NativeAsyncResult::LlmStream(stream) => Ok(stream),
-                NativeAsyncResult::Json(Json::Array(chunks)) => Ok(LlmJsonStream::new(
-                    tokio_stream::iter(chunks.into_iter().map(Ok)),
-                )),
-                NativeAsyncResult::Json(_) => Err(FlowError::Internal(
-                    "native async LLM stream intercept must resolve to an array".into(),
-                )),
-            }
+            .await
         })
     })
 }
@@ -2287,7 +2270,8 @@ fn wrap_native_incremental_llm_stream_execution(
                 scope_stack: current_scope_stack(),
                 _callback_user_data: Some(user_data.clone()),
             }));
-            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+            let (sender, receiver) =
+                tokio::sync::mpsc::channel(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY);
             let stream = Arc::new(NativeAsyncStream {
                 sender: Mutex::new(Some(sender)),
                 cancelled: AtomicBool::new(false),
@@ -2400,6 +2384,12 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
             return NemoRelayStatus::InvalidArg;
         }
     };
+    if kind == NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept {
+        set_native_last_error(
+            "completion-based LLM stream middleware is unsupported; use plugin_context_register_async_stream_middleware",
+        );
+        return NemoRelayStatus::InvalidArg;
+    }
     if kind == NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept
         && let Err(error) = validate_annotated_request_consumer_compatibility(
             &instance.relay_compat,
@@ -2473,12 +2463,9 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
                 priority,
                 wrap_native_async_llm_execution(instance, cb, user_data, free_fn),
             ),
-        NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept => context
-            .register_llm_stream_execution_intercept(
-                &name,
-                priority,
-                wrap_native_async_llm_stream_execution(instance, cb, user_data, free_fn),
-            ),
+        NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept => {
+            unreachable!("completion-based stream middleware was rejected before registration")
+        }
         NemoRelayNativeAsyncMiddlewareKind::MarkSanitize => context
             .register_mark_sanitize_guardrail(
                 &name,

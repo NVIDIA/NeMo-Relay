@@ -1342,9 +1342,7 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
     // PromiseAwareFn releases its TSFN on the last drop, so deregistration
     // preserves already-snapshotted publication while still cleaning up
     // deterministically once that work finishes.
-    let callback = Arc::new(crate::promise_call::PromiseAwareFn::new_event_sanitizer(
-        env, func,
-    )?);
+    let callback = Arc::new(crate::promise_call::PromiseAwareFn::new(env, func)?);
     Ok(callable::wrap_js_event_sanitize_promise_fn(callback))
 }
 
@@ -2481,6 +2479,8 @@ pub fn llm_stream_call_execute(
     // event loop and pushes each chunk into Rust via `pushStreamChunk`.
     // We create an unbounded channel here and pass the stream ID to JS
     // so it knows where to send chunks.
+    let mut func = func;
+    func.unref(&env)?;
     let func = std::sync::Arc::new(func);
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
@@ -2645,6 +2645,9 @@ macro_rules! napi_guardrail_tool_api {
             env: Env,
             name: String,
             priority: i32,
+            #[napi(
+                ts_arg_type = "(toolName: string, value: Json) => Json | Promise<Json>"
+            )]
             guardrail: JsFunction,
         ) -> Result<()> {
             let callback = Arc::new(PromiseAwareFn::new(&env, &guardrail)?);
@@ -2749,6 +2752,9 @@ macro_rules! napi_intercept_tool_api {
             name: String,
             priority: i32,
             break_chain: bool,
+            #[napi(
+                ts_arg_type = "(toolName: string, args: Json) => Json | Promise<Json>"
+            )]
             callable: JsFunction,
         ) -> Result<()> {
             let callback = std::sync::Arc::new(
@@ -2985,6 +2991,9 @@ pub fn register_llm_execution_intercept(
     env: Env,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
+    )]
     callable: JsFunction,
 ) -> Result<()> {
     let pa_fn = std::sync::Arc::new(
@@ -3020,6 +3029,9 @@ pub fn register_llm_stream_execution_intercept(
     env: Env,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>"
+    )]
     callable: JsFunction,
 ) -> Result<()> {
     let pa_fn = std::sync::Arc::new(
@@ -3175,6 +3187,9 @@ macro_rules! napi_scope_guardrail_tool_api {
             scope_uuid: String,
             name: String,
             priority: i32,
+            #[napi(
+                ts_arg_type = "(toolName: string, value: Json) => Json | Promise<Json>"
+            )]
             guardrail: JsFunction,
         ) -> Result<()> {
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -3246,6 +3261,9 @@ pub fn scope_register_tool_conditional_execution_guardrail(
     scope_uuid: String,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(toolName: string, args: Json) => string | null | Promise<string | null>"
+    )]
     guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -3293,6 +3311,9 @@ macro_rules! napi_scope_intercept_tool_api {
             name: String,
             priority: i32,
             break_chain: bool,
+            #[napi(
+                ts_arg_type = "(toolName: string, args: Json) => Json | Promise<Json>"
+            )]
             callable: JsFunction,
         ) -> Result<()> {
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -3486,6 +3507,7 @@ pub fn scope_register_llm_conditional_execution_guardrail(
     scope_uuid: String,
     name: String,
     priority: i32,
+    #[napi(ts_arg_type = "(request: Json) => string | null | Promise<string | null>")]
     guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -3577,6 +3599,9 @@ pub fn scope_register_llm_execution_intercept(
     scope_uuid: String,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
+    )]
     callable: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -3618,6 +3643,9 @@ pub fn scope_register_llm_stream_execution_intercept(
     scope_uuid: String,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>"
+    )]
     callable: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
