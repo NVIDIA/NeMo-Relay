@@ -10,10 +10,10 @@ Recommended for publication based on the completed evaluation evidence in this r
 
 - Skill: `nemo-relay-plugin-observability`
 - Evaluation date: 2026-07-30
-- Evaluator version: `0.9.0`
+- Evaluator version: `0.9.2`
 - Agents: Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`), Codex (`openai/openai/gpt-5.5`)
 - Tasks: 20 evaluation tasks (16 positive, 4 negative)
-- Dataset digest: `sha256:26c7648d389e0ffdfd888e7eb2aada74713bdcbbff9ed8ee90bd52679948470f` (skill-evaluator-dataset-snapshot/1)
+- Dataset digest: `sha256:f399331a28e80f4e118ccf4bfb6f71b126c0d88cd1103bf84c6126b50eb54d8a` (skill-evaluator-dataset-snapshot/1)
 - Attempts per task: 1
 - Environment: `k8s-sandbox`
 - Tier 3 evidence: required for publication
@@ -34,12 +34,12 @@ The three-tier evaluation checks whether the skill:
 
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 52% → 94% (+42 points) | 65% → 93% (+28 points) |
-| Security | 100% → 100% (±0 points) | 95% → 100% (+5 points) |
-| Correctness | 36% → 100% (+64 points) | 83% → 97% (+14 points) |
-| Discoverability | 50% → 100% (+50 points) | 58% → 94% (+36 points) |
-| Effectiveness | 36% → 84% (+48 points) | 63% → 82% (+19 points) |
-| Efficiency | 41% → 87% (+46 points) | 26% → 91% (+65 points) |
+| Overall | 53% → 95% (+42 points) | 66% → 92% (+26 points) |
+| Security | 100% → 100% (±0 points) | 100% → 95% (-5 points) |
+| Correctness | 36% → 100% (+64 points) | 78% → 90% (+12 points) |
+| Discoverability | 52% → 100% (+48 points) | 61% → 94% (+33 points) |
+| Effectiveness | 38% → 89% (+50 points) | 61% → 87% (+27 points) |
+| Efficiency | 39% → 88% (+50 points) | 28% → 92% (+63 points) |
 
 **How to read this table:** baseline is the same task attempted without the target skill. Uplift is `skill score - baseline score`, shown in percentage points.
 

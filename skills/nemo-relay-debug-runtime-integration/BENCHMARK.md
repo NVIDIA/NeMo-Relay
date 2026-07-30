@@ -10,7 +10,7 @@ Recommended for publication based on the completed evaluation evidence in this r
 
 - Skill: `nemo-relay-debug-runtime-integration`
 - Evaluation date: 2026-07-30
-- Evaluator version: `0.9.0`
+- Evaluator version: `0.9.2`
 - Agents: Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`), Codex (`openai/openai/gpt-5.5`)
 - Tasks: 4 evaluation tasks (3 positive, 1 negative)
 - Dataset digest: `sha256:6c296a04671b2c4dbcf71cd6635b53ccd7fdef8405ea55c6ba6de51d66a3f0e2` (skill-evaluator-dataset-snapshot/1)
@@ -34,12 +34,12 @@ The three-tier evaluation checks whether the skill:
 
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 73% → 96% (+22 points) | 76% → 91% (+15 points) |
-| Security | 100% → 100% (±0 points) | 100% → 88% (-12 points) |
+| Overall | 73% → 98% (+26 points) | 71% → 94% (+22 points) |
+| Security | 100% → 100% (±0 points) | 75% → 100% (+25 points) |
 | Correctness | 85% → 100% (+15 points) | 100% → 100% (±0 points) |
-| Discoverability | 62% → 99% (+37 points) | 59% → 91% (+31 points) |
-| Effectiveness | 74% → 89% (+14 points) | 89% → 94% (+4 points) |
-| Efficiency | 44% → 89% (+46 points) | 31% → 83% (+52 points) |
+| Discoverability | 62% → 100% (+38 points) | 61% → 95% (+34 points) |
+| Effectiveness | 76% → 95% (+19 points) | 88% → 90% (+2 points) |
+| Efficiency | 40% → 96% (+56 points) | 32% → 83% (+51 points) |
 
 **How to read this table:** baseline is the same task attempted without the target skill. Uplift is `skill score - baseline score`, shown in percentage points.
 
