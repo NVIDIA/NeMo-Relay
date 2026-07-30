@@ -461,12 +461,16 @@ impl CompiledBuiltinBackend {
 }
 
 pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSanitizeFn {
-    Arc::new(
-        move |_name: &str, payload: Json| match backend.trajectory.as_ref() {
-            Some(trajectory) => trajectory.sanitize_tool_payload(payload),
-            None => backend.sanitize_json_preorder_dfs(payload),
-        },
-    )
+    let backend = Arc::new(backend);
+    Arc::new(move |_name: String, payload: Json| {
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            Ok(match backend.trajectory.as_ref() {
+                Some(trajectory) => trajectory.sanitize_tool_payload(payload),
+                None => backend.sanitize_json_preorder_dfs(payload),
+            })
+        })
+    })
 }
 
 pub(super) fn event_sanitize_callback(backend: CompiledBuiltinBackend) -> EventSanitizeFn {
@@ -485,133 +489,145 @@ fn event_sanitize_callback_with_scope_categories(
     backend: CompiledBuiltinBackend,
     scope_categories: Option<(bool, bool)>,
 ) -> EventSanitizeFn {
+    let backend = Arc::new(backend);
     Arc::new(move |event, mut fields| {
-        if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
-            matches!(event, Event::Scope(_))
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
+                matches!(event.as_ref(), Event::Scope(_))
+                    && event
+                        .category()
+                        .is_some_and(|category| match category.as_str() {
+                            "llm" => !sanitize_llm,
+                            "tool" => !sanitize_tool,
+                            _ => false,
+                        })
+            }) {
+                return Ok(fields);
+            }
+
+            if let Some(trajectory) = backend.trajectory.as_ref() {
+                return Ok(trajectory.sanitize_event_fields(&event, fields));
+            }
+            let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
                 && event
                     .category()
-                    .is_some_and(|category| match category.as_str() {
-                        "llm" => !sanitize_llm,
-                        "tool" => !sanitize_tool,
-                        _ => false,
-                    })
-        }) {
-            return fields;
-        }
+                    .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
 
-        if let Some(trajectory) = backend.trajectory.as_ref() {
-            return trajectory.sanitize_event_fields(event, fields);
-        }
-        let specialized_scope = matches!(event, Event::Scope(_))
-            && event
-                .category()
-                .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
+            if !specialized_scope {
+                fields.data = fields
+                    .data
+                    .map(|data| backend.sanitize_json_preorder_dfs(data));
+                fields.category_profile = fields.category_profile.and_then(|profile| {
+                    sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
+                });
+            }
 
-        if !specialized_scope {
-            fields.data = fields
-                .data
-                .map(|data| backend.sanitize_json_preorder_dfs(data));
-            fields.category_profile = fields.category_profile.and_then(|profile| {
-                sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
-            });
-        }
-
-        fields.metadata = fields
-            .metadata
-            .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
-        fields
+            fields.metadata = fields
+                .metadata
+                .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
+            Ok(fields)
+        })
     })
 }
 
 pub(super) fn llm_sanitize_request_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeRequestFn {
+    let backend = Arc::new(backend);
     Arc::new(move |mut request: LlmRequest, context| {
-        if let Some(trajectory) = backend.trajectory.as_ref() {
-            request.headers = trajectory
-                .sanitize_tool_payload(Json::Object(request.headers))
-                .as_object()
-                .cloned()
-                .unwrap_or_default();
-            request.content = trajectory.sanitize_provider_payload(request.content);
-            return Some(request);
-        }
-        request.headers = backend.sanitize_request_headers(request.headers);
-        if backend.target_paths.is_empty() {
-            request.content = backend.sanitize_json_preorder_dfs(request.content);
-            return Some(request);
-        }
-        let resolved = context.resolve_codec();
-        let fallback = if resolved.is_none() {
-            backend
-                .selected_surface(context.codec())
-                .map(build_request_codec)
-        } else {
-            None
-        };
-        let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
-            log_llm_payload_omitted("request", context.codec(), "no usable request codec");
-            return None;
-        };
-        let sanitized = backend.sanitize_request_with_codec(codec, &request);
-        if sanitized.is_none() {
-            log_llm_payload_omitted(
-                "request",
-                context.codec(),
-                "codec decode, sanitize, or encode failure",
-            );
-        }
-        sanitized
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            if let Some(trajectory) = backend.trajectory.as_ref() {
+                request.headers = trajectory
+                    .sanitize_tool_payload(Json::Object(request.headers))
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                request.content = trajectory.sanitize_provider_payload(request.content);
+                return Ok(Some(request));
+            }
+            request.headers = backend.sanitize_request_headers(request.headers);
+            if backend.target_paths.is_empty() {
+                request.content = backend.sanitize_json_preorder_dfs(request.content);
+                return Ok(Some(request));
+            }
+            let resolved = context.resolve_codec();
+            let fallback = if resolved.is_none() {
+                backend
+                    .selected_surface(context.codec())
+                    .map(build_request_codec)
+            } else {
+                None
+            };
+            let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+                log_llm_payload_omitted("request", context.codec(), "no usable request codec");
+                return Ok(None);
+            };
+            let sanitized = backend.sanitize_request_with_codec(codec, &request);
+            if sanitized.is_none() {
+                log_llm_payload_omitted(
+                    "request",
+                    context.codec(),
+                    "codec decode, sanitize, or encode failure",
+                );
+            }
+            Ok(sanitized)
+        })
     })
 }
 
 pub(super) fn llm_sanitize_response_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeResponseFn {
+    let backend = Arc::new(backend);
     Arc::new(move |payload: Json, context| {
-        if let Some(trajectory) = backend.trajectory.as_ref() {
-            return Some(trajectory.sanitize_provider_payload(payload));
-        }
-        if backend.target_paths.is_empty() {
-            return Some(backend.sanitize_json_preorder_dfs(payload));
-        }
-        if matches!(context.codec(), LlmCodecIdentity::None)
-            && !backend.uses_compatible_legacy_response_codec(&payload)
-        {
-            log_llm_payload_omitted(
-                "response",
-                context.codec(),
-                "no active response codec or compatible legacy codec",
-            );
-            return None;
-        }
-        let Some(surface) = backend.selected_surface(context.codec()) else {
-            log_llm_payload_omitted(
-                "response",
-                context.codec(),
-                "no recognized response codec surface",
-            );
-            return None;
-        };
-        let resolved = context.resolve_codec();
-        let fallback = if resolved.is_none() {
-            Some(build_response_codec(surface))
-        } else {
-            None
-        };
-        let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
-            log_llm_payload_omitted("response", context.codec(), "no usable response codec");
-            return None;
-        };
-        let sanitized = backend.sanitize_response_with_codec(codec, surface, payload);
-        if sanitized.is_none() {
-            log_llm_payload_omitted(
-                "response",
-                context.codec(),
-                "codec decode, sanitize, or encode failure",
-            );
-        }
-        sanitized
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            if let Some(trajectory) = backend.trajectory.as_ref() {
+                return Ok(Some(trajectory.sanitize_provider_payload(payload)));
+            }
+            if backend.target_paths.is_empty() {
+                return Ok(Some(backend.sanitize_json_preorder_dfs(payload)));
+            }
+            if matches!(context.codec(), LlmCodecIdentity::None)
+                && !backend.uses_compatible_legacy_response_codec(&payload)
+            {
+                log_llm_payload_omitted(
+                    "response",
+                    context.codec(),
+                    "no active response codec or compatible legacy codec",
+                );
+                return Ok(None);
+            }
+            let Some(surface) = backend.selected_surface(context.codec()) else {
+                log_llm_payload_omitted(
+                    "response",
+                    context.codec(),
+                    "no recognized response codec surface",
+                );
+                return Ok(None);
+            };
+            let resolved = context.resolve_codec();
+            let fallback = if resolved.is_none() {
+                Some(build_response_codec(surface))
+            } else {
+                None
+            };
+            let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+                log_llm_payload_omitted("response", context.codec(), "no usable response codec");
+                return Ok(None);
+            };
+            let sanitized = backend.sanitize_response_with_codec(codec, surface, payload);
+            if sanitized.is_none() {
+                log_llm_payload_omitted(
+                    "response",
+                    context.codec(),
+                    "codec decode, sanitize, or encode failure",
+                );
+            }
+            Ok(sanitized)
+        })
     })
 }
 

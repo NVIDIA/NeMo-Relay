@@ -239,6 +239,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             .expect("outer scope should push");
             let outer_uuid = outer.uuid;
             let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
+                .await
                 .expect("native request intercept should run");
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
@@ -446,6 +447,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         .expect("thread outer scope should push");
         let thread_outer_uuid = thread_outer.uuid;
         let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "thread" }))
+            .await
             .expect("native request intercept should run with thread stack");
         assert_eq!(rewritten["native_plugin"], true);
         pop_scope(
@@ -657,6 +659,184 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
 }
 
 #[tokio::test]
+async fn native_v3_async_registration_supports_all_middleware_kinds() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_with_plugin_id_and_symbol(
+        &fixture,
+        "fixture_async",
+        "nemo_relay_fixture_async_entry",
+    );
+
+    let activation = load_native_plugins([NativePluginLoadSpec {
+        plugin_id: "fixture_async".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+    }])
+    .expect("v3 async native fixture should load");
+    let fixture_library = unsafe { libloading::Library::new(&fixture.library_path) }
+        .expect("loaded v3 async native fixture should open for synchronization");
+    let pending_entered = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(b"nemo_relay_fixture_async_pending_entered\0")
+            .expect("v3 async native fixture should export its pending-entry signal")
+    };
+    // This pointer remains valid only while `activation` keeps the fixture
+    // library loaded; never call it after clearing the plugin configuration.
+    assert!(!unsafe { pending_entered() });
+    drop(fixture_library);
+    let mut cleanup = NativePluginTestCleanup::new();
+    let mut config = PluginConfig::default();
+    config.components.push(PluginComponentSpec {
+        kind: "fixture_async".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    initialize_plugins_exact(config)
+        .await
+        .expect("v3 async native fixture should register");
+    cleanup.mark_plugin_configuration_active();
+
+    let rewritten = tool_request_intercepts("async-tool", json!({"input": true}))
+        .await
+        .expect("v3 async request intercept should settle");
+    assert_eq!(rewritten["input"], true);
+    assert_eq!(rewritten["native_async"], true);
+
+    let duplicate = tool_request_intercepts("async-double", json!({"input": true}))
+        .await
+        .expect("duplicate v3 async settlement keeps the first result");
+    assert_eq!(duplicate["native_async"], true);
+
+    let executed = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("async-execution")
+            .args(json!({"input": true}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .expect("v3 async execution intercept should continue with next");
+    assert_eq!(executed["native_async_execution"], true);
+
+    let llm_response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("async-llm")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "native async"}),
+            })
+            .func(Arc::new(|_request| {
+                Box::pin(async move { Ok(json!({"content": "native async response"})) })
+            }))
+            .build(),
+    )
+    .await
+    .expect("v3 async LLM middleware should settle");
+    assert_eq!(llm_response["content"], "native async response");
+    flush_subscribers().expect("async native LLM events should flush");
+
+    let stream_chunks = Arc::new(Mutex::new(Vec::<Json>::new()));
+    let collected_chunks = stream_chunks.clone();
+    let finalized_chunks = stream_chunks.clone();
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("async-llm-stream")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "native async stream"}),
+            })
+            .func(Arc::new(|_request| {
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                        "content": "native async stream response"
+                    }))])))
+                })
+            }))
+            .collector(Box::new(move |chunk| {
+                collected_chunks.lock().unwrap().push(chunk);
+                Ok(())
+            }))
+            .finalizer(Box::new(move || {
+                Json::Array(finalized_chunks.lock().unwrap().clone())
+            }))
+            .build(),
+    )
+    .await
+    .expect("v3 async LLM stream middleware should settle");
+    assert_eq!(
+        stream
+            .next()
+            .await
+            .expect("stream should contain a chunk")
+            .expect("stream chunk should succeed")["content"],
+        "native async stream response"
+    );
+    assert!(stream.next().await.is_none());
+    flush_subscribers().expect("async native LLM stream events should flush");
+
+    let pending = tokio::spawn(async {
+        tool_request_intercepts("async-pending", json!({"input": true})).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !unsafe { pending_entered() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("native async callback should enter before plugin clear");
+    clear_plugin_configuration().expect("v3 async native fixture should clear while pending");
+    cleanup.plugin_configuration_active = false;
+    let pending = pending
+        .await
+        .expect("pending v3 async task should not panic")
+        .expect("pending v3 async request intercept should settle after clear");
+    assert_eq!(pending["native_async"], true);
+
+    let mut config = PluginConfig::default();
+    config.components.push(PluginComponentSpec {
+        kind: "fixture_async".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    initialize_plugins_exact(config)
+        .await
+        .expect("v3 async native fixture should reactivate");
+    cleanup.mark_plugin_configuration_active();
+    let pending_next = tokio::spawn(async {
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("async-cancel-next")
+                .args(json!({"input": true}))
+                .func(Arc::new(|_args| {
+                    Box::pin(async { std::future::pending().await })
+                }))
+                .build(),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !unsafe { pending_entered() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("native async next should start before cancellation");
+    clear_plugin_configuration().expect("plugin configuration should clear with next pending");
+    cleanup.plugin_configuration_active = false;
+    pending_next.abort();
+    assert!(
+        pending_next
+            .await
+            .expect_err("pending next should be cancelled")
+            .is_cancelled(),
+        "aborting the managed call should cancel its native next continuation"
+    );
+
+    drop(cleanup);
+    drop(activation);
+}
+
+#[tokio::test]
 async fn native_validation_diagnostics_prevent_initialization() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
@@ -752,7 +932,7 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
 }
 
 #[tokio::test]
-async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
+async fn native_event_sanitizer_callback_errors_preserve_observability_fields() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref =
@@ -793,8 +973,8 @@ async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
 
     let captured_events = events.lock().unwrap().clone();
     let event = find_event(&captured_events, "native-event-sanitize-error", None);
-    assert_eq!(event.data(), None);
-    assert_eq!(event.metadata(), None);
+    assert_eq!(event.data(), Some(&json!({ "secret": true })));
+    assert_eq!(event.metadata(), Some(&json!({ "secret": true })));
 
     deregister_subscriber("native_event_sanitizer_error_capture")
         .expect("test subscriber should deregister");
@@ -1218,6 +1398,7 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
             .any(|kind| kind == "fixture_native")
     );
     let rewritten = tool_request_intercepts("host-owned-tool", json!({ "input": true }))
+        .await
         .expect("host-owned intercept should run");
     assert_eq!(rewritten["native_plugin"], true);
 
@@ -1238,6 +1419,7 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
             .any(|kind| kind == "fixture_native")
     );
     let unchanged = tool_request_intercepts("host-owned-tool", json!({ "input": true }))
+        .await
         .expect("cleared intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
 }
@@ -1393,6 +1575,7 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
         .clear()
         .expect("host should clear while a callback snapshot remains in flight");
     let unchanged = tool_request_intercepts("after-clear", json!({ "input": true }))
+        .await
         .expect("new calls should observe the cleared registries");
     assert_eq!(unchanged, json!({ "input": true }));
 

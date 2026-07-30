@@ -12,8 +12,6 @@ Covers:
 
 from typing import cast
 
-import pytest
-
 import nemo_relay
 from nemo_relay import (
     AnnotatedLLMRequest,
@@ -434,8 +432,8 @@ class TestResponseCodecObjectParam:
             subscribers.deregister("test-manual-call-end-sanitized-response-codec")
             guardrails.deregister_llm_sanitize_response("test-call-end-codec-sanitizer")
 
-    def test_manual_call_end_response_codec_failure_raises_after_end_event(self):
-        """manual llm.call_end() surfaces response codec failures instead of dropping them."""
+    def test_manual_call_end_response_codec_failure_defers_without_raising(self):
+        """manual llm.call_end() records deferred response codec failures without blocking."""
         captured_events = []
 
         def capture(event):
@@ -448,8 +446,7 @@ class TestResponseCodecObjectParam:
                 "manual-codec-error-llm",
                 LLMRequest({}, {"model": "gpt-4", "messages": []}),
             )
-            with pytest.raises(RuntimeError, match="OpenAI Chat response decode"):
-                llm.call_end(handle, "malformed response", response_codec=OpenAIChatCodec())
+            llm.call_end(handle, "malformed response", response_codec=OpenAIChatCodec())
             subscribers.flush()
 
             end_events = [
@@ -501,7 +498,7 @@ class TestResponseCodecObjectParam:
                 mock_llm,
                 response_codec=codec,
             )
-            subscribers.flush()
+            await subscribers.flush_async()
 
             # Find LLMEnd event
             end_events = [
@@ -534,7 +531,7 @@ class TestResponseCodecObjectParam:
                 return {"result": "ok"}
 
             await llm.execute("test-llm", request, mock_llm)
-            subscribers.flush()
+            await subscribers.flush_async()
 
             end_events = [
                 e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"

@@ -166,28 +166,35 @@ class EventSanitizeFields(TypedDict):
 
 #: Guardrail callback that sanitizes emitted tool request or response payloads.
 #: Arguments are the tool name and JSON payload. The return value is the JSON
-#: payload recorded on the emitted event. Exceptions propagate through the
-#: lifecycle call that invoked the guardrail.
-ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json]
-EventSanitizeGuardrail: TypeAlias = Callable[["Event", EventSanitizeFields], EventSanitizeFields]
+#: payload recorded on the emitted event. Exceptions fail open and preserve the
+#: last valid observability payload.
+ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
+EventSanitizeGuardrail: TypeAlias = Callable[
+    ["Event", EventSanitizeFields], EventSanitizeFields | Awaitable[EventSanitizeFields]
+]
 #: Guardrail callback that can block tool execution by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
-ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
+ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 #: Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 #: Callbacks receive ``(request, context)``. Returning ``None`` omits the LLM observability
 #: payload and annotation without changing the caller-visible request.
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeRequestContext"], Optional[LLMRequest]]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[
+    [LLMRequest, "LlmSanitizeRequestContext"],
+    Optional[LLMRequest] | Awaitable[Optional[LLMRequest]],
+]
 #: Guardrail callback that sanitizes an emitted JSON LLM response payload.
 #: Callbacks receive ``(response, context)`` and can return ``None`` to omit
 #: observability payload and annotation without changing the caller response.
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[Json, "LlmSanitizeResponseContext"], Optional[Json]]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[
+    [Json, "LlmSanitizeResponseContext"], Optional[Json] | Awaitable[Optional[Json]]
+]
 #: Guardrail callback that can block an LLM call by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
-LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
+LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str] | Awaitable[Optional[str]]]
 #: Request intercept callback that rewrites tool arguments before execution.
 #: Arguments are the tool name and current JSON payload. The return value
 #: becomes the payload seen by later request intercepts and tool execution.
-ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json]
+ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json | Awaitable[Json]]
 #: Execution intercept callback that wraps tool execution with middleware
 #: behavior. The callback receives the tool name, current arguments, and the
 #: next callable. It may await and return ``next(args)`` or short-circuit.
@@ -199,7 +206,7 @@ ToolExecutionIntercept: TypeAlias = Callable[
 #: and pending-mark outcome passed to later intercepts and managed execution.
 LlmRequestIntercept: TypeAlias = Callable[
     [str, LLMRequest, AnnotatedLLMRequest | None],
-    LLMRequestInterceptOutcome,
+    LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome],
 ]
 #: Execution intercept callback that wraps non-streaming LLM execution. The
 #: callback receives the logical LLM name, request, and next callable. It may
@@ -426,6 +433,9 @@ def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeSta
 @contextmanager
 def use_scope_stack(stack: ScopeStack):
     """Temporarily install ``stack`` in the current Python context."""
+    current_stack = _scope_stack_var.get(None)
+    if current_stack is not None:
+        _sync_thread_scope_stack(current_stack)
     previous_native_stack = _capture_thread_scope_stack()
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)

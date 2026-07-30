@@ -1771,16 +1771,22 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_tool_sanitize_response_guardrail("tool-sanitize", 1, |_, value| async move {
             Ok(set_json_field(value, "phase", "tool_sanitize_response"))
         });
-        ctx.register_tool_conditional_execution_guardrail("tool-conditional", 1, |_, value| {
-            Ok(value
-                .get("block")
-                .and_then(serde_json::Value::as_bool)
-                .and_then(|blocked| blocked.then(|| "blocked-tool".into())))
-        });
-        ctx.register_tool_request_intercept("tool-request", 1, false, |_, value| {
+        ctx.register_tool_conditional_execution_guardrail(
+            "tool-conditional",
+            1,
+            |_, value| async move {
+                tokio::task::yield_now().await;
+                Ok(value
+                    .get("block")
+                    .and_then(serde_json::Value::as_bool)
+                    .and_then(|blocked| blocked.then(|| "blocked-tool".into())))
+            },
+        );
+        ctx.register_tool_request_intercept("tool-request", 1, false, |_, value| async move {
+            tokio::task::yield_now().await;
             Ok(set_json_field(value, "phase", "tool_request"))
         });
-        ctx.register_tool_request_intercept("tool-error", 1, false, |_, _| {
+        ctx.register_tool_request_intercept("tool-error", 1, false, |_, _| async {
             Err(WorkerSdkError::Callback("boom".into()))
         });
 
@@ -1885,19 +1891,30 @@ impl WorkerPlugin for SurfacePlugin {
             1,
             |_response, _context| async { Ok(None) },
         );
-        ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, |request| {
-            Ok(request
-                .content
-                .get("block")
-                .and_then(serde_json::Value::as_bool)
-                .and_then(|blocked| blocked.then(|| "blocked-llm".into())))
-        });
-        ctx.register_llm_request_intercept("llm-request", 1, false, |_, request, annotated| {
-            Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(
-                set_llm_phase(request, "llm_request"),
-                annotated,
-            ))
-        });
+        ctx.register_llm_conditional_execution_guardrail(
+            "llm-conditional",
+            1,
+            |request| async move {
+                tokio::task::yield_now().await;
+                Ok(request
+                    .content
+                    .get("block")
+                    .and_then(serde_json::Value::as_bool)
+                    .and_then(|blocked| blocked.then(|| "blocked-llm".into())))
+            },
+        );
+        ctx.register_llm_request_intercept(
+            "llm-request",
+            1,
+            false,
+            |_, request, annotated| async move {
+                tokio::task::yield_now().await;
+                Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(
+                    set_llm_phase(request, "llm_request"),
+                    annotated,
+                ))
+            },
+        );
 
         ctx.register_llm_execution_intercept(
             "llm-exec",

@@ -72,6 +72,24 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                 Ok(fields)
             },
         );
+        let nested_publication_runtime = runtime.clone();
+        ctx.register_mark_sanitize_guardrail(
+            "fixture_nested_publication_order",
+            2,
+            move |event, fields| {
+                let runtime = nested_publication_runtime.clone();
+                let emit_nested = event.name() == "worker-nested-order-outer";
+                async move {
+                    if emit_nested {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        runtime
+                            .emit_mark("worker-nested-order-inner", None, None)
+                            .await?;
+                    }
+                    Ok(fields)
+                }
+            },
+        );
         ctx.register_scope_sanitize_start_guardrail(
             "fixture_scope_start_sanitize",
             0,
@@ -151,7 +169,7 @@ fn register_fixture_tool_hooks(
     ctx.register_tool_conditional_execution_guardrail(
         "fixture_tool_conditional",
         0,
-        move |_name, _args| {
+        move |_name, _args| async move {
             if block_tool {
                 Ok(Some("fixture tool blocked".into()))
             } else {
@@ -160,19 +178,19 @@ fn register_fixture_tool_hooks(
         },
     );
     ctx.register_tool_request_intercept("fixture_rewrite_args", 0, false, move |_name, args| {
-        if exit_in_tool_request {
-            std::process::exit(44);
-        }
-        if tool_request_error {
-            return Err(WorkerSdkError::Callback(
-                "fixture tool request error requested".into(),
-            ));
-        }
         let runtime = runtime.clone();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(emit_runtime_events(runtime))
-        })?;
-        Ok(mark_json(args, "worker_plugin"))
+        async move {
+            if exit_in_tool_request {
+                std::process::exit(44);
+            }
+            if tool_request_error {
+                return Err(WorkerSdkError::Callback(
+                    "fixture tool request error requested".into(),
+                ));
+            }
+            emit_runtime_events(runtime).await?;
+            Ok(mark_json(args, "worker_plugin"))
+        }
     });
     ctx.register_tool_execution_intercept(
         "fixture_tool_execution",
@@ -219,14 +237,16 @@ fn register_fixture_llm_hooks(
             )))
         },
     );
-    ctx.register_llm_conditional_execution_guardrail("fixture_llm_conditional", 0, |_request| {
-        Ok(None)
-    });
+    ctx.register_llm_conditional_execution_guardrail(
+        "fixture_llm_conditional",
+        0,
+        |_request| async { Ok(None) },
+    );
     ctx.register_llm_request_intercept(
         "fixture_llm_request_intercept",
         0,
         false,
-        move |_name, request, annotated| {
+        move |_name, request, annotated| async move {
             if llm_request_error {
                 return Err(WorkerSdkError::Callback(
                     "fixture LLM request error requested".into(),

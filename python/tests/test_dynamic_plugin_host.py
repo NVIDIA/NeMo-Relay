@@ -22,7 +22,7 @@ from typing import cast
 
 import pytest
 
-from nemo_relay import Json, plugin, scope, tools
+from nemo_relay import Json, LLMRequest, llm, plugin, scope, tools
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,10 +534,55 @@ async def test_worker_activation_finalizer_never_waits_on_python_thread(
 
 async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_plugin: _BuiltPlugin):
     activation = await plugin.initialize_with_dynamic_plugins({}, [worker_dynamic_plugin.spec()])
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+
+    async def tool_provider(args: Json) -> Json:
+        assert asyncio.get_running_loop() is loop
+        assert threading.get_ident() == loop_thread
+        await asyncio.sleep(0)
+        return {"args": args}
+
+    async def llm_provider(request: LLMRequest) -> Json:
+        assert asyncio.get_running_loop() is loop
+        assert threading.get_ident() == loop_thread
+        await asyncio.sleep(0)
+        return {"request": request.content}
+
+    async def stream_provider(request: LLMRequest):
+        assert asyncio.get_running_loop() is loop
+        assert threading.get_ident() == loop_thread
+        await asyncio.sleep(0)
+        yield {"request": request.content}
+
     try:
-        result = await tools.execute("python-worker-fixture", {"input": True}, lambda args: {"args": args})
+        result = await tools.execute("python-worker-fixture", {"input": True}, tool_provider)
         assert result["worker_plugin_tool_execution"] is True
         assert result["args"]["worker_plugin_tool_execution_request"] is True
+
+        llm_result = await llm.execute(
+            "python-worker-llm",
+            LLMRequest({}, {"model": "worker"}),
+            llm_provider,
+        )
+        assert llm_result["worker_plugin_llm_execution"] is True
+        assert llm_result["request"]["worker_plugin_llm_execution_request"] is True
+
+        stream = await llm.stream_execute(
+            "python-worker-stream",
+            LLMRequest({}, {"model": "worker"}),
+            stream_provider,
+            lambda _chunk: None,
+            lambda: {},
+        )
+        chunks = [chunk async for chunk in stream]
+        assert chunks
+        chunk = chunks[0]
+        assert isinstance(chunk, dict)
+        assert chunk["worker_plugin_llm_stream_execution"] is True
+        request = chunk["request"]
+        assert isinstance(request, dict)
+        assert request["worker_plugin_llm_stream_execution_request"] is True
     finally:
         await activation.close()
 

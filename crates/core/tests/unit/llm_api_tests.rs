@@ -14,8 +14,8 @@ use tokio_stream::StreamExt;
 use super::{
     CreateLlmHandleParams, LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmHandle,
     LlmRequest, LlmStreamCallExecuteParams, create_llm_handle, emit_llm_start,
-    emit_optimization_marks_with, llm_call, llm_call_end, llm_call_execute,
-    llm_stream_call_execute, project_llm_request_to_current_user_turn,
+    emit_optimization_marks_with, enqueue_optimization_marks, llm_call, llm_call_end,
+    llm_call_execute, llm_stream_call_execute, project_llm_request_to_current_user_turn,
     sanitize_context_for_request_codec, sanitize_context_for_response_codec,
 };
 use crate::api::event::{Event, ScopeCategory};
@@ -295,7 +295,7 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
         1,
         Arc::new(move |request, _context| {
             sanitizer_capture.lock().unwrap().push(request.clone());
-            Some(request)
+            Box::pin(async move { Ok(Some(request)) })
         }),
     )
     .unwrap();
@@ -431,13 +431,13 @@ fn sanitization_invalidates_manual_annotations_without_a_codec() {
     register_llm_sanitize_request_guardrail(
         "manual-annotation-invalidation-request",
         1,
-        Arc::new(|_request, _context| Some(redacted_request())),
+        Arc::new(|_request, _context| Box::pin(async { Ok(Some(redacted_request())) })),
     )
     .unwrap();
     register_llm_sanitize_response_guardrail(
         "manual-annotation-invalidation-response",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
 
@@ -500,13 +500,13 @@ fn no_op_sanitizers_keep_manual_annotations() {
     register_llm_sanitize_request_guardrail(
         "manual-annotation-noop-request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     register_llm_sanitize_response_guardrail(
         "manual-annotation-noop-response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
 
@@ -558,13 +558,13 @@ fn sanitization_regenerates_annotations_with_active_codecs() {
     register_llm_sanitize_request_guardrail(
         "active-codec-annotation-regeneration-request",
         1,
-        Arc::new(|_request, _context| Some(redacted_request())),
+        Arc::new(|_request, _context| Box::pin(async { Ok(Some(redacted_request())) })),
     )
     .unwrap();
     register_llm_sanitize_response_guardrail(
         "active-codec-annotation-regeneration-response",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
 
@@ -647,7 +647,7 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
         1,
         Arc::new(move |response, _context| {
             sanitizer_inputs.lock().unwrap().push(response);
-            Some(Json::Null)
+            Box::pin(async { Ok(Some(Json::Null)) })
         }),
     )
     .unwrap();
@@ -676,7 +676,7 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     register_llm_sanitize_response_guardrail(
         "buffered-null-fallback-redacted",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
     let handle = create_llm_handle(
@@ -713,10 +713,25 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     )
     .unwrap();
 
+    let handle = create_llm_handle(
+        CreateLlmHandleParams::builder()
+            .name("buffered-explicit-null-fallback")
+            .build(),
+    )
+    .unwrap();
+    llm_call_end(
+        LlmCallEndParams::builder()
+            .handle(&handle)
+            .response(Json::Null)
+            .data(Json::Null)
+            .build(),
+    )
+    .unwrap();
+
     flush_subscribers().unwrap();
     let captured = events.lock().unwrap();
     assert_eq!(*seen.lock().unwrap(), vec![fallback]);
-    assert_eq!(captured.len(), 3);
+    assert_eq!(captured.len(), 4);
     assert_eq!(captured[0].output(), Some(&Json::Null));
     assert!(captured[0].annotated_response().is_none());
     assert_eq!(captured[1].output(), Some(&redacted_response()));
@@ -726,6 +741,8 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     );
     assert!(captured[2].output().is_none());
     assert!(captured[2].annotated_response().is_none());
+    assert_eq!(captured[3].output(), Some(&Json::Null));
+    assert!(captured[3].annotated_response().is_none());
     assert!(
         captured
             .iter()
@@ -760,7 +777,7 @@ fn streaming_null_fallback_is_sanitized_before_emission() {
         1,
         Arc::new(move |response, _context| {
             sanitizer_inputs.lock().unwrap().push(response);
-            Some(Json::Null)
+            Box::pin(async { Ok(Some(Json::Null)) })
         }),
     )
     .unwrap();
@@ -791,7 +808,7 @@ fn streaming_null_fallback_is_sanitized_before_emission() {
     register_llm_sanitize_response_guardrail(
         "streaming-null-fallback-redacted",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
     runtime.block_on(async {
@@ -1460,6 +1477,41 @@ fn unavailable_mark_sanitizer_does_not_acknowledge_the_delivery_cursor() {
 }
 
 #[test]
+fn manual_optimization_mark_snapshot_failure_publishes_fail_open() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    let scope_stack = create_scope_stack();
+    set_thread_scope_stack(scope_stack.clone());
+    let handle = LlmHandle::builder().name("poisoned-mark-snapshot").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new(
+                "test",
+                "snapshot_fail_open"
+            ))
+    );
+    std::thread::spawn(move || {
+        let _guard = scope_stack.write().unwrap();
+        panic!("poison the captured scope stack");
+    })
+    .join()
+    .unwrap_err();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let subscribers = vec![Arc::new(move |event: &Event| {
+        captured.lock().unwrap().push(event.clone());
+    }) as crate::api::runtime::EventSubscriberFn];
+    enqueue_optimization_marks(&handle, &subscribers);
+    flush_subscribers().unwrap();
+
+    assert_eq!(events.lock().unwrap().len(), 1);
+    assert!(handle.optimization_recorder.unemitted().is_empty());
+    set_thread_scope_stack(create_scope_stack());
+}
+
+#[test]
 fn close_boundary_freezes_identical_mark_and_summary_contributions() {
     let _guard = lock_global_runtime();
     reset_global();
@@ -1525,11 +1577,12 @@ fn failed_managed_calls_sanitize_fallback_end_data() {
         "failed-managed-call-sanitization",
         1,
         Arc::new(move |response, context| {
-            sanitizer_inputs
-                .lock()
-                .unwrap()
-                .push((response, context.codec().clone()));
-            Some(redacted_response())
+            let codec = context.codec().clone();
+            let sanitizer_inputs = Arc::clone(&sanitizer_inputs);
+            Box::pin(async move {
+                sanitizer_inputs.lock().unwrap().push((response, codec));
+                Ok(Some(redacted_response()))
+            })
         }),
     )
     .unwrap();

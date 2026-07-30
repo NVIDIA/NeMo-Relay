@@ -2339,7 +2339,9 @@ async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
         "cli-pre-tool-blocker",
         1,
         Arc::new(|name, _args| {
-            Ok((name == BLOCKED_TEST_TOOL).then(|| "blocked by policy".to_string()))
+            Box::pin(async move {
+                Ok((name == BLOCKED_TEST_TOOL).then(|| "blocked by policy".to_string()))
+            })
         }),
     )
     .unwrap();
@@ -2565,21 +2567,24 @@ async fn gateway_request_codec_exposes_annotations_and_applies_buffered_edits() 
         1,
         false,
         Arc::new(move |_name, mut request, annotated| {
-            if request.headers.get("x-codec-test").and_then(Value::as_str) != Some("buffered") {
-                return Ok(LlmRequestInterceptOutcome::new(request, annotated));
-            }
-            let mut annotated = annotated.expect("gateway generation route must have a codec");
-            *captured.lock().unwrap() = Some(serde_json::to_value(&annotated).unwrap());
-            let nemo_relay::codec::request::Message::User { content, .. } =
-                &mut annotated.messages[0]
-            else {
-                panic!("expected portable Responses string input");
-            };
-            *content = nemo_relay::codec::request::MessageContent::Text("edited".into());
-            request
-                .headers
-                .insert("x-test-intercept".into(), json!("visible"));
-            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            let captured = captured.clone();
+            Box::pin(async move {
+                if request.headers.get("x-codec-test").and_then(Value::as_str) != Some("buffered") {
+                    return Ok(LlmRequestInterceptOutcome::new(request, annotated));
+                }
+                let mut annotated = annotated.expect("gateway generation route must have a codec");
+                *captured.lock().unwrap() = Some(serde_json::to_value(&annotated).unwrap());
+                let nemo_relay::codec::request::Message::User { content, .. } =
+                    &mut annotated.messages[0]
+                else {
+                    panic!("expected portable Responses string input");
+                };
+                *content = nemo_relay::codec::request::MessageContent::Text("edited".into());
+                request
+                    .headers
+                    .insert("x-test-intercept".into(), json!("visible"));
+                Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            })
         }),
     )
     .unwrap();
@@ -2622,10 +2627,12 @@ async fn gateway_request_codec_rejects_raw_body_mutation_before_upstream() {
         1,
         false,
         Arc::new(|_name, mut request, annotated| {
-            if request.headers.get("x-codec-test").and_then(Value::as_str) == Some("raw") {
-                request.content["input"] = json!("forbidden raw edit");
-            }
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move {
+                if request.headers.get("x-codec-test").and_then(Value::as_str) == Some("raw") {
+                    request.content["input"] = json!("forbidden raw edit");
+                }
+                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            })
         }),
     )
     .unwrap();
@@ -2688,17 +2695,20 @@ async fn gateway_request_codec_rejects_stream_mode_changes_before_upstream() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            if request
-                .headers
-                .get("x-codec-stream-toggle")
-                .and_then(Value::as_str)
-                == Some("true")
-            {
-                let mut annotated = annotated.expect("generation route must expose an annotation");
-                annotated.stream = Some(!annotated.stream.unwrap_or(false));
-                return Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)));
-            }
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move {
+                if request
+                    .headers
+                    .get("x-codec-stream-toggle")
+                    .and_then(Value::as_str)
+                    == Some("true")
+                {
+                    let mut annotated =
+                        annotated.expect("generation route must expose an annotation");
+                    annotated.stream = Some(!annotated.stream.unwrap_or(false));
+                    return Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)));
+                }
+                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            })
         }),
     )
     .unwrap();
@@ -2746,29 +2756,33 @@ async fn gateway_request_codecs_apply_buffered_and_streaming_edits_on_all_genera
         1,
         false,
         Arc::new(move |_name, mut request, annotated| {
-            let Some(marker) = request
-                .headers
-                .get("x-codec-matrix")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-            else {
-                return Ok(LlmRequestInterceptOutcome::new(request, annotated));
-            };
-            let mut annotated = annotated.expect("generation route must expose an annotation");
-            captured_annotations.lock().unwrap().push(json!({
-                "marker": marker,
-                "annotation": annotated,
-            }));
-            let nemo_relay::codec::request::Message::User { content, .. } =
-                &mut annotated.messages[0]
-            else {
-                panic!("expected the first request item to be a portable user message");
-            };
-            *content = nemo_relay::codec::request::MessageContent::Text(format!("edited-{marker}"));
-            request
-                .headers
-                .insert("x-codec-edited".into(), json!(marker));
-            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            let captured_annotations = captured_annotations.clone();
+            Box::pin(async move {
+                let Some(marker) = request
+                    .headers
+                    .get("x-codec-matrix")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                else {
+                    return Ok(LlmRequestInterceptOutcome::new(request, annotated));
+                };
+                let mut annotated = annotated.expect("generation route must expose an annotation");
+                captured_annotations.lock().unwrap().push(json!({
+                    "marker": marker,
+                    "annotation": annotated,
+                }));
+                let nemo_relay::codec::request::Message::User { content, .. } =
+                    &mut annotated.messages[0]
+                else {
+                    panic!("expected the first request item to be a portable user message");
+                };
+                *content =
+                    nemo_relay::codec::request::MessageContent::Text(format!("edited-{marker}"));
+                request
+                    .headers
+                    .insert("x-codec-edited".into(), json!(marker));
+                Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            })
         }),
     )
     .unwrap();

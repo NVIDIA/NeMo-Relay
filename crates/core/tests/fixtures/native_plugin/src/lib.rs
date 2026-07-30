@@ -3,17 +3,28 @@
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
-    Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NemoRelayNativeHostApiV1,
-    NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayStatus,
-    NemoRelayNativeToolNextFn, NativePlugin, PendingMarkSpec, PluginContext, PluginRuntime,
-    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
+    Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NativePlugin,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
+    NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
+    PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
+    ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 
 struct FixtureNativePlugin;
+
+static ASYNC_PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_async_pending_entered() -> bool {
+    ASYNC_PENDING_ENTERED.swap(false, Ordering::AcqRel)
+}
 
 impl NativePlugin for FixtureNativePlugin {
     fn plugin_kind(&self) -> &str {
@@ -55,11 +66,9 @@ impl NativePlugin for FixtureNativePlugin {
             0,
             |_, fields| mark_event_fields(fields, "native_plugin_scope_start"),
         )?;
-        ctx.register_scope_sanitize_end_guardrail(
-            "fixture_scope_end_sanitize",
-            0,
-            |_, fields| mark_event_fields(fields, "native_plugin_scope_end"),
-        )?;
+        ctx.register_scope_sanitize_end_guardrail("fixture_scope_end_sanitize", 0, |_, fields| {
+            mark_event_fields(fields, "native_plugin_scope_end")
+        })?;
 
         ctx.register_tool_sanitize_request_guardrail(
             "fixture_tool_sanitize_request",
@@ -130,7 +139,12 @@ impl NativePlugin for FixtureNativePlugin {
         ctx.register_llm_sanitize_request_guardrail(
             "fixture_llm_sanitize_request",
             0,
-            |request, _context| Some(mark_llm_request(request, "native_plugin_llm_sanitize_request")),
+            |request, _context| {
+                Some(mark_llm_request(
+                    request,
+                    "native_plugin_llm_sanitize_request",
+                ))
+            },
         )?;
         ctx.register_llm_sanitize_response_guardrail(
             "fixture_llm_sanitize_response",
@@ -165,13 +179,17 @@ impl NativePlugin for FixtureNativePlugin {
                 ))
             },
         )?;
-        ctx.register_llm_execution_intercept("fixture_llm_execution", 0, |_name, request, next| {
-            let response = next.call(mark_llm_request(
-                request,
-                "native_plugin_llm_execution_request",
-            ))?;
-            Ok(mark_json(response, "native_plugin_llm_execution"))
-        })?;
+        ctx.register_llm_execution_intercept(
+            "fixture_llm_execution",
+            0,
+            |_name, request, next| {
+                let response = next.call(mark_llm_request(
+                    request,
+                    "native_plugin_llm_execution_request",
+                ))?;
+                Ok(mark_json(response, "native_plugin_llm_execution"))
+            },
+        )?;
         ctx.register_llm_stream_execution_intercept(
             "fixture_llm_stream_execution",
             0,
@@ -279,6 +297,14 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 }
 
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || FixtureNativePlugin);
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe { nemo_relay_plugin::export_plugin(host, out, FixtureAsyncPlugin { host: None }) }
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_observability_collision(
@@ -570,6 +596,491 @@ unsafe extern "C" fn raw_register_event_sanitize_errors(
     status
 }
 
+struct FixtureAsyncPlugin {
+    host: Option<Box<NemoRelayNativeHostApiV3>>,
+}
+
+impl NativePlugin for FixtureAsyncPlugin {
+    fn plugin_kind(&self) -> &str {
+        "fixture_async"
+    }
+
+    fn register(
+        &mut self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::Result<()> {
+        let host = ctx.host_api();
+        if host.abi_version < 3
+            || host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        {
+            return Err("fixture async plugin requires ABI v3".into());
+        }
+        self.host = Some(Box::new(unsafe {
+            *(host as *const _ as *const NemoRelayNativeHostApiV3)
+        }));
+        let user_data = self
+            .host
+            .as_deref()
+            .map(|host| (host as *const NemoRelayNativeHostApiV3).cast_mut().cast())
+            .expect("fixture async host was initialized");
+
+        let registrations: [(
+            NemoRelayNativeAsyncMiddlewareKind,
+            &str,
+            NemoRelayNativeAsyncMiddlewareCb,
+        ); 13] = [
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest,
+                "fixture_async_tool_sanitize_request",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeResponse,
+                "fixture_async_tool_sanitize_response",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolConditionalExecution,
+                "fixture_async_tool_conditional",
+                raw_async_allow_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept,
+                "fixture_async_request",
+                raw_async_tool_request_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept,
+                "fixture_async_execution",
+                raw_async_tool_execution_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest,
+                "fixture_async_llm_sanitize_request",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeResponse,
+                "fixture_async_llm_sanitize_response",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmConditionalExecution,
+                "fixture_async_llm_conditional",
+                raw_async_allow_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept,
+                "fixture_async_llm_request",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
+                "fixture_async_llm_execution",
+                raw_async_tool_execution_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
+                "fixture_async_mark",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart,
+                "fixture_async_scope_start",
+                raw_async_passthrough_callback,
+            ),
+            (
+                NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd,
+                "fixture_async_scope_end",
+                raw_async_passthrough_callback,
+            ),
+        ];
+        for (kind, registration_name, callback) in registrations {
+            let status = unsafe {
+                ctx.register_async_middleware_raw(
+                    kind,
+                    registration_name,
+                    0,
+                    false,
+                    callback,
+                    user_data,
+                    None,
+                )
+            };
+            if status != NemoRelayStatus::Ok {
+                return Err(format!("async registration failed: {status:?}"));
+            }
+        }
+        let status = unsafe {
+            ctx.register_async_stream_middleware_raw(
+                "fixture_async_llm_stream",
+                0,
+                raw_async_stream_callback,
+                user_data,
+                None,
+            )
+        };
+        if status != NemoRelayStatus::Ok {
+            return Err(format!("async stream registration failed: {status:?}"));
+        }
+        Ok(())
+    }
+}
+
+struct AsyncStreamForward {
+    host: NemoRelayNativeHostApiV3,
+    stream: *const NemoRelayNativeAsyncStream,
+}
+
+unsafe extern "C" fn raw_async_stream_forward(
+    user_data: *mut c_void,
+    chunk: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+    done: bool,
+) -> bool {
+    let state = unsafe { &*(user_data as *const AsyncStreamForward) };
+    if !chunk.is_null() {
+        if unsafe { (state.host.async_stream_push_json)(state.stream, chunk) }
+            == NemoRelayStatus::Ok
+        {
+            return true;
+        }
+        unsafe {
+            (state.host.async_stream_release)(state.stream);
+            drop(Box::from_raw(user_data as *mut AsyncStreamForward));
+        }
+        return false;
+    }
+    if !error.is_null() {
+        unsafe { (state.host.async_stream_reject)(state.stream, error) };
+    } else if done {
+        unsafe { (state.host.async_stream_finish)(state.stream) };
+    } else {
+        return true;
+    }
+    unsafe {
+        (state.host.async_stream_release)(state.stream);
+        drop(Box::from_raw(user_data as *mut AsyncStreamForward));
+    }
+    false
+}
+
+unsafe extern "C" fn raw_async_stream_callback(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    stream: *const NemoRelayNativeAsyncStream,
+) -> u32 {
+    let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let request = unsafe { raw_host_string_value(&host.v1, invocation_json) }
+        .and_then(|json| serde_json::from_str::<Json>(&json).ok())
+        .and_then(|invocation| invocation.get("request").cloned())
+        .and_then(|request| serde_json::to_string(&request).ok())
+        .map(|request| unsafe { raw_host_string(&host.v1, &request) });
+    let Some(request) = request.filter(|request| !request.is_null()) else {
+        unsafe {
+            (host.async_next_release)(next);
+            (host.async_stream_release)(stream);
+        }
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let state = Box::into_raw(Box::new(AsyncStreamForward {
+        host: *host,
+        stream,
+    }));
+    let status = unsafe {
+        (host.async_next_invoke_stream)(
+            next,
+            request,
+            stream,
+            raw_async_stream_forward,
+            state.cast(),
+        )
+    };
+    unsafe {
+        (host.v1.string_free)(request);
+        (host.async_next_release)(next);
+    }
+    if status == NemoRelayStatus::Ok {
+        NemoRelayNativeAsyncCallbackState::Pending as u32
+    } else {
+        unsafe {
+            drop(Box::from_raw(state));
+            (host.async_stream_release)(stream);
+        }
+        NemoRelayNativeAsyncCallbackState::Complete as u32
+    }
+}
+
+unsafe extern "C" fn raw_async_allow_callback(
+    user_data: *mut c_void,
+    _invocation_json: *const NemoRelayNativeString,
+    _next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
+    completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let result = unsafe { raw_host_string(&host.v1, "null") };
+    if result.is_null() {
+        unsafe {
+            reject_async_completion(host, completion, "failed to allocate async allow result")
+        };
+    } else {
+        unsafe {
+            (host.async_completion_resolve_json)(completion, result);
+            (host.v1.string_free)(result);
+        }
+    }
+    NemoRelayNativeAsyncCallbackState::Complete as u32
+}
+
+unsafe extern "C" fn raw_async_passthrough_callback(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    _next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
+    completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let result = unsafe { raw_host_string_value(&host.v1, invocation_json) }
+        .and_then(|value| serde_json::from_str::<Json>(&value).ok())
+        .and_then(|invocation| {
+            invocation
+                .get("annotated")
+                .map(|annotated| {
+                    json!({
+                        "request": invocation["request"],
+                        "annotated_request": annotated,
+                        "pending_marks": [],
+                        "optimization_contributions": [],
+                    })
+                })
+                .or_else(|| {
+                    ["value", "request", "response", "fields"]
+                        .into_iter()
+                        .find_map(|key| invocation.get(key).cloned())
+                })
+        })
+        .and_then(|value| serde_json::to_string(&value).ok());
+    let Some(result) = result else {
+        unsafe {
+            reject_async_completion(host, completion, "invalid async passthrough invocation")
+        };
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let result = unsafe { raw_host_string(&host.v1, &result) };
+    if result.is_null() {
+        unsafe {
+            reject_async_completion(
+                host,
+                completion,
+                "failed to allocate async passthrough result",
+            )
+        };
+    } else {
+        unsafe {
+            (host.async_completion_resolve_json)(completion, result);
+            (host.v1.string_free)(result);
+        }
+    }
+    NemoRelayNativeAsyncCallbackState::Complete as u32
+}
+
+unsafe extern "C" fn raw_async_tool_request_callback(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    _next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
+    completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let invocation = unsafe { raw_host_string_value(&host.v1, invocation_json) }
+        .and_then(|json| serde_json::from_str::<Json>(&json).ok())
+        .and_then(|mut invocation| {
+            let pending = invocation["name"].as_str() == Some("async-pending");
+            let duplicate = invocation["name"].as_str() == Some("async-double");
+            invocation
+                .get_mut("value")
+                .and_then(Json::as_object_mut)
+                .map(|value| {
+                    value.insert("native_async".into(), json!(true));
+                    (Json::Object(value.clone()), pending, duplicate)
+                })
+        })
+        .and_then(|(value, pending, duplicate)| {
+            serde_json::to_string(&value)
+                .ok()
+                .map(|value| (value, pending, duplicate))
+        });
+    let Some((result, pending, duplicate)) = invocation else {
+        unsafe {
+            reject_async_completion(host, completion, "invalid async tool request invocation")
+        };
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    if pending {
+        ASYNC_PENDING_ENTERED.store(true, Ordering::Release);
+        let host = *host;
+        let completion = completion as usize;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let result = unsafe { raw_host_string(&host.v1, &result) };
+            if !result.is_null() {
+                unsafe {
+                    (host.async_completion_resolve_json)(
+                        completion as *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+                        result,
+                    );
+                    (host.v1.string_free)(result);
+                    (host.async_completion_release)(
+                        completion as *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+                    );
+                }
+            } else {
+                unsafe {
+                    reject_async_completion(
+                        &host,
+                        completion as *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+                        "failed to allocate async tool request result",
+                    );
+                    (host.async_completion_release)(
+                        completion as *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+                    );
+                }
+            }
+        });
+        return NemoRelayNativeAsyncCallbackState::Pending as u32;
+    }
+    let result = unsafe { raw_host_string(&host.v1, &result) };
+    if !result.is_null() {
+        unsafe {
+            (host.async_completion_resolve_json)(completion, result);
+            if duplicate {
+                let _ = (host.async_completion_resolve_json)(completion, result);
+            }
+            (host.v1.string_free)(result);
+        }
+    } else {
+        unsafe {
+            reject_async_completion(
+                host,
+                completion,
+                "failed to allocate async tool request result",
+            )
+        };
+    }
+    NemoRelayNativeAsyncCallbackState::Complete as u32
+}
+
+unsafe extern "C" fn raw_async_tool_execution_callback(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const nemo_relay_plugin::NemoRelayNativeAsyncNext,
+    completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let Some(host) = (unsafe { (user_data as *const NemoRelayNativeHostApiV3).as_ref() }) else {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    if next.is_null() || completion.is_null() {
+        unsafe {
+            reject_async_completion(
+                host,
+                completion,
+                "async tool execution requires next and completion",
+            )
+        };
+        if !next.is_null() {
+            unsafe { (host.async_next_release)(next) };
+        }
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    }
+    let value = unsafe { raw_host_string_value(&host.v1, invocation_json) }
+        .and_then(|json| serde_json::from_str::<Json>(&json).ok())
+        .and_then(|mut invocation| {
+            let cancellation_probe = invocation["name"].as_str() == Some("async-cancel-next");
+            let value =
+                if let Some(value) = invocation.get_mut("value").and_then(Json::as_object_mut) {
+                    value.insert("native_async_execution".into(), json!(true));
+                    Some(Json::Object(value.clone()))
+                } else {
+                    invocation.get("request").cloned()
+                };
+            value.map(|value| (value, cancellation_probe))
+        })
+        .and_then(|(value, cancellation_probe)| {
+            serde_json::to_string(&value)
+                .ok()
+                .map(|value| (value, cancellation_probe))
+        });
+    let Some((value, cancellation_probe)) = value else {
+        unsafe {
+            reject_async_completion(host, completion, "invalid async tool execution invocation")
+        };
+        unsafe { (host.async_next_release)(next) };
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let value = unsafe { raw_host_string(&host.v1, &value) };
+    if value.is_null() {
+        unsafe {
+            reject_async_completion(
+                host,
+                completion,
+                "failed to allocate async tool execution invocation",
+            )
+        };
+        unsafe { (host.async_next_release)(next) };
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    }
+    let status = unsafe { (host.async_next_invoke)(next, value, completion) };
+    unsafe {
+        (host.v1.string_free)(value);
+    }
+    if status == NemoRelayStatus::Ok {
+        if cancellation_probe {
+            ASYNC_PENDING_ENTERED.store(true, Ordering::Release);
+        }
+        unsafe {
+            (host.async_next_release)(next);
+            (host.async_completion_release)(completion);
+        }
+        NemoRelayNativeAsyncCallbackState::Pending as u32
+    } else {
+        unsafe {
+            reject_async_completion(
+                host,
+                completion,
+                "failed to invoke async tool execution next",
+            )
+        };
+        unsafe { (host.async_next_release)(next) };
+        NemoRelayNativeAsyncCallbackState::Complete as u32
+    }
+}
+
+unsafe fn reject_async_completion(
+    host: &NemoRelayNativeHostApiV3,
+    completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+    message: &str,
+) {
+    if completion.is_null() {
+        return;
+    }
+    let message = unsafe { raw_host_string(&host.v1, message) };
+    if message.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = (host.async_completion_reject)(completion, message);
+        (host.v1.string_free)(message);
+    }
+}
+
 unsafe extern "C" fn raw_tool_outcome_callback(
     user_data: *mut c_void,
     name: *const NemoRelayNativeString,
@@ -598,10 +1109,8 @@ unsafe extern "C" fn raw_tool_outcome_callback(
         }
         "fixture-status-error-outcome" => {
             unsafe {
-                *out_outcome_json = raw_host_string(
-                    host,
-                    r#"{"result":{"stale":true},"pending_marks":[]}"#,
-                );
+                *out_outcome_json =
+                    raw_host_string(host, r#"{"result":{"stale":true},"pending_marks":[]}"#);
                 set_raw_last_error_from_user_data(user_data, "fixture tool execution failed");
             }
             NemoRelayStatus::Internal

@@ -489,9 +489,11 @@ async def plugin(config: PluginConfig | JsonObject, *, clear_on_exit: bool = Tru
     try:
         yield report_
     finally:
-        subscribers.flush()
-        if clear_on_exit:
-            clear()
+        try:
+            await subscribers.flush_async()
+        finally:
+            if clear_on_exit:
+                clear()
 
 
 def report() -> ConfigReport | None:

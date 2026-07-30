@@ -528,7 +528,10 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
     assert_eq!(llm_and.value(), PyLLMAttributes::STREAMING);
 
     Python::attach(|py| {
-        let stack = PyScopeStack(nemo_relay::api::runtime::create_scope_stack());
+        let stack = PyScopeStack {
+            inner: nemo_relay::api::runtime::create_scope_stack(),
+            publication_buffer: None,
+        };
         assert_eq!(stack.__repr__(), "<ScopeStack>");
 
         let parent_uuid = Uuid::now_v7();

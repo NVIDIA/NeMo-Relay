@@ -779,6 +779,54 @@ describe('Priority merge of global and scope-local middleware', () => {
     lib.deregisterToolExecutionIntercept('sl_merge_global_exec');
   });
 
+  it('snapshotted scope-local execution intercept survives deregistration', async () => {
+    const scope = pushScope('sl_snapshot_exec_scope', ScopeType.Agent, null, null);
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+
+    scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_target', 100, async (args, next) => ({
+      result: {
+        ...(await next(args)),
+        snapshotted: true,
+      },
+    }));
+    scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_blocker', -100, async (args, next) => {
+      blockerEntered();
+      await release;
+      return { result: await next(args) };
+    });
+
+    try {
+      const execution = toolCallExecute(
+        'sl_snapshot_exec_tool',
+        {},
+        () => ({ downstream: true }),
+        null,
+        null,
+        null,
+        null,
+      );
+      await entered;
+      assert.equal(scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_target'), true);
+      releaseBlocker();
+      assert.deepEqual(await execution, {
+        downstream: true,
+        snapshotted: true,
+      });
+    } finally {
+      releaseBlocker();
+      scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_blocker');
+      scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_target');
+      popScope(scope);
+    }
+  });
+
   it('global and scope-local llm request intercepts both run with priority ordering', async () => {
     const order = [];
 

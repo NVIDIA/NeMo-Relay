@@ -96,6 +96,15 @@ impl PropagationContext {
 }
 
 impl ScopeStack {
+    fn snapshot(&self) -> Self {
+        Self {
+            stack: self.stack.clone(),
+            scope_registries: self.scope_registries.clone(),
+            fresh_agents: self.fresh_agents.clone(),
+            propagated_parent_uuid: self.propagated_parent_uuid,
+        }
+    }
+
     /// Create a new scope stack containing only the implicit root scope.
     ///
     /// # Returns
@@ -406,6 +415,16 @@ pub fn create_scope_stack() -> ScopeStackHandle {
     Arc::new(RwLock::new(ScopeStack::new()))
 }
 
+/// Clone a scope stack into an isolated emission-time snapshot.
+#[doc(hidden)]
+pub(crate) fn snapshot_scope_stack(handle: &ScopeStackHandle) -> Result<ScopeStackHandle> {
+    let stack = handle
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .snapshot();
+    Ok(Arc::new(RwLock::new(stack)))
+}
+
 /// Create an isolated scope stack rooted below a supplied propagation context.
 ///
 /// The imported handles are synthetic bookkeeping only; Relay never emits their
@@ -448,6 +467,10 @@ tokio::task_local! {
 /// Run a future with `uuid` as the causally active managed event.
 pub async fn with_active_event_uuid<T>(uuid: Uuid, future: impl Future<Output = T>) -> T {
     ACTIVE_EVENT_UUID.scope(uuid, future).await
+}
+
+pub(crate) fn active_event_uuid() -> Option<Uuid> {
+    ACTIVE_EVENT_UUID.try_with(|uuid| *uuid).ok()
 }
 
 thread_local! {

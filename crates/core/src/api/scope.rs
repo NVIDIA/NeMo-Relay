@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, MarkEvent};
-use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
+use crate::api::runtime::scope_stack::snapshot_scope_stack;
+use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
     current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
 use crate::api::shared::{
-    ensure_runtime_owner, resolve_parent_uuid, sanitize_event, snapshot_event_subscribers,
+    ensure_runtime_owner, resolve_parent_uuid, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::error::{FlowError, Result};
 use crate::json::Json;
@@ -49,6 +51,16 @@ pub struct ScopeHandle {
     /// UUID of the parent scope, if any.
     #[builder(default)]
     pub parent_uuid: Option<Uuid>,
+}
+
+fn scope_stack_lock_error(error: impl std::fmt::Display, operation: &'static str) -> FlowError {
+    log::error!(
+        target: "nemo_relay.runtime",
+        event = "scope_stack_unavailable",
+        operation = operation;
+        "Scope operation failed because the scope stack lock is poisoned: {error}"
+    );
+    FlowError::Internal(error.to_string())
 }
 
 /// Builder parameters for [`push_scope`].
@@ -216,14 +228,16 @@ pub fn get_handle() -> Result<ScopeHandle> {
 /// cannot be read safely.
 ///
 /// # Notes
-/// Scope-local subscribers attached to ancestor scopes observe the emitted
-/// start event before the function returns.
+/// The start event is queued with subscriber and sanitizer snapshots captured
+/// while the new scope is active.
 pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
-    let (handle, event, subscribers) = {
+    let (handle, event, subscribers, emission_scope_stack) = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| scope_stack_lock_error(error, "push"))?;
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
@@ -241,13 +255,16 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
             .build();
         let handle = state.create_scope_handle(handle_params);
         let event = state.build_scope_start_event(&handle, params.input);
-        (handle, event, subscribers)
+        (handle, event, subscribers, scope_stack.clone())
     };
-    let event = sanitize_event(event);
     task_scope_push(handle.clone());
-    if let Some(event) = event {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
+    let _ = subscriber_dispatcher::dispatch_sanitized_event(
+        event,
+        sanitizers,
+        &subscribers,
+        emission_scope_stack,
+    );
     Ok(handle)
 }
 
@@ -273,11 +290,18 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
 ///
 /// # Notes
 /// The implicit root scope cannot be removed.
+///
+/// Scope-end emission snapshots the visible scope-local sanitizers before
+/// removing the scope. Publication is then queued after removal using that
+/// snapshot, so cleanup does not change the middleware applied to the emitted
+/// event.
 pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
-    let (scope, event, subscribers) = {
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+    let (scope, event, subscribers, emission_scope_stack) = {
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| scope_stack_lock_error(error, "pop"))?;
         let top = scope_guard.top();
         if top.uuid != *params.handle_uuid {
             if scope_guard.find(params.handle_uuid).is_some() {
@@ -302,14 +326,21 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
                 .metadata_opt(params.metadata)
                 .build(),
         );
-        (scope, event, subscribers)
+        (scope, event, subscribers, scope_stack.clone())
     };
-    let event = sanitize_event(event);
+    // Capture the scope-local chain before removing its owner. The event is
+    // published later, but scope cleanup must not change the middleware that
+    // was visible when the end event was emitted.
+    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
+    let publication_scope_stack = snapshot_scope_stack(&emission_scope_stack)?;
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    if let Some(event) = event {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    let _ = subscriber_dispatcher::dispatch_sanitized_event(
+        event,
+        sanitizers,
+        &subscribers,
+        publication_scope_stack,
+    );
     Ok(())
 }
 
@@ -328,28 +359,33 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 ///   `None`, the current UTC time is used.
 ///
 /// # Returns
-/// A [`Result`] that is `Ok(())` after the event has been emitted.
+/// A [`Result`] that is `Ok(())` after the event has been queued for
+/// sanitization and publication.
 ///
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state
 /// cannot be read safely.
 ///
 /// # Notes
-/// Scope-local subscribers attached to ancestor scopes observe the emitted
-/// mark event just like scope, tool, and LLM lifecycle events.
+/// The mark event is queued with subscriber and sanitizer snapshots captured
+/// from the active scope stack.
 pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
     let scope_stack = current_scope_stack();
-    let (event, subscribers) = {
+    let (event, subscribers, emission_scope_stack) = {
         let subscribers = if params.name == COMPACTION_EVENT_NAME {
-            let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+            let mut scope_guard = scope_stack
+                .write()
+                .map_err(|error| scope_stack_lock_error(error, "mark"))?;
             let subscribers =
                 snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
             scope_guard.mark_agent_fresh(parent_uuid);
             subscribers
         } else {
-            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            let scope_guard = scope_stack
+                .read()
+                .map_err(|error| scope_stack_lock_error(error, "mark"))?;
             snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
         };
         let context = global_context();
@@ -368,10 +404,14 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
             params.category,
             params.category_profile,
         ));
-        (event, subscribers)
+        (event, subscribers, scope_stack.clone())
     };
-    if let Some(event) = sanitize_event(event) {
-        NemoRelayContextState::emit_event(&event, &subscribers);
-    }
+    let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
+    let _ = subscriber_dispatcher::dispatch_sanitized_event(
+        event,
+        sanitizers,
+        &subscribers,
+        emission_scope_stack,
+    );
     Ok(())
 }

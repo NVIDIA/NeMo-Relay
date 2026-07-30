@@ -147,7 +147,7 @@ async function main() {
       console.log(result);
     });
   } finally {
-    flushSubscribers();
+    await flushSubscribers();
     await new Promise((resolve) => setImmediate(resolve));
     deregisterSubscriber("llm-check");
   }
@@ -234,9 +234,8 @@ Check both behavior and instrumentation:
   `annotated_response.usage.cost` only when a response codec decoded model and
   usage fields and a source matched the model.
 
-Native subscriber delivery is asynchronous. Flush subscribers before validating
-printed output. In Node.js, also wait one event-loop tick after
-`flushSubscribers()` so JavaScript callbacks can run.
+Native subscriber delivery is asynchronous. Await `flushSubscribers()` and
+then one event-loop turn before validating printed output.
 
 - LLM start input contains the request after request intercepts and
   sanitize-request guardrails. Each owning agent scope starts fresh, and a

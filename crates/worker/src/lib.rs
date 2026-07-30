@@ -132,8 +132,8 @@ type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 type EventSanitizeFn =
     Arc<dyn Fn(&Event, EventSanitizeFields) -> BoxFutureResult<EventSanitizeFields> + Send + Sync>;
 type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> BoxFutureResult<Json> + Send + Sync>;
-type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
-type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
+type ToolConditionalFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Option<String>> + Send + Sync>;
+type ToolRequestFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Json> + Send + Sync>;
 type ToolExecutionFn = Arc<
     dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
 >;
@@ -261,9 +261,13 @@ impl WorkerResponseCodec {
             .await
     }
 }
-type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
+type LlmConditionalFn = Arc<dyn Fn(LlmRequest) -> BoxFutureResult<Option<String>> + Send + Sync>;
 type LlmRequestFn = Arc<
-    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
+    dyn Fn(
+            String,
+            LlmRequest,
+            Option<AnnotatedLlmRequest>,
+        ) -> BoxFutureResult<LlmRequestInterceptOutcome>
         + Send
         + Sync,
 >;
@@ -456,13 +460,14 @@ impl PluginContext {
     }
 
     /// Registers a tool conditional-execution guardrail.
-    pub fn register_tool_conditional_execution_guardrail<F>(
+    pub fn register_tool_conditional_execution_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&str, &Json) -> Result<Option<String>> + Send + Sync + 'static,
+        F: Fn(String, Json) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -470,20 +475,22 @@ impl PluginContext {
             priority,
             false,
         );
-        self.handlers
-            .tool_conditionals
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.tool_conditionals.insert(
+            name.into(),
+            Arc::new(move |tool_name, value| Box::pin(callback(tool_name, value))),
+        );
     }
 
     /// Registers a tool request intercept.
-    pub fn register_tool_request_intercept<F>(
+    pub fn register_tool_request_intercept<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         break_chain: bool,
         callback: F,
     ) where
-        F: Fn(&str, Json) -> Result<Json> + Send + Sync + 'static,
+        F: Fn(String, Json) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Json>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -491,9 +498,10 @@ impl PluginContext {
             priority,
             break_chain,
         );
-        self.handlers
-            .tool_requests
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.tool_requests.insert(
+            name.into(),
+            Arc::new(move |tool_name, value| Box::pin(callback(tool_name, value))),
+        );
     }
 
     /// Registers a tool execution intercept.
@@ -567,13 +575,14 @@ impl PluginContext {
     }
 
     /// Registers an LLM conditional-execution guardrail.
-    pub fn register_llm_conditional_execution_guardrail<F>(
+    pub fn register_llm_conditional_execution_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync + 'static,
+        F: Fn(LlmRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -581,23 +590,22 @@ impl PluginContext {
             priority,
             false,
         );
-        self.handlers
-            .llm_conditionals
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.llm_conditionals.insert(
+            name.into(),
+            Arc::new(move |request| Box::pin(callback(request))),
+        );
     }
 
     /// Registers an LLM request intercept.
-    pub fn register_llm_request_intercept<F>(
+    pub fn register_llm_request_intercept<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         break_chain: bool,
         callback: F,
     ) where
-        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(String, LlmRequest, Option<AnnotatedLlmRequest>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<LlmRequestInterceptOutcome>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -605,9 +613,12 @@ impl PluginContext {
             priority,
             break_chain,
         );
-        self.handlers
-            .llm_requests
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.llm_requests.insert(
+            name.into(),
+            Arc::new(move |model_name, request, annotated| {
+                Box::pin(callback(model_name, request, annotated))
+            }),
+        );
     }
 
     /// Registers an LLM execution intercept.
@@ -1711,10 +1722,10 @@ impl WorkerService {
                     .await
             }
             RegistrationSurface::ToolConditionalExecutionGuardrail => {
-                self.invoke_tool_conditional_response(request, scope)
+                self.invoke_tool_conditional_response(request, scope).await
             }
             RegistrationSurface::ToolRequestIntercept => {
-                self.invoke_tool_request_response(request, scope)
+                self.invoke_tool_request_response(request, scope).await
             }
             RegistrationSurface::ToolExecutionIntercept => {
                 self.invoke_tool_execution_response(request, scope).await
@@ -1747,28 +1758,26 @@ impl WorkerService {
         ))
     }
 
-    fn invoke_tool_conditional_response(
+    async fn invoke_tool_conditional_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
         let handler = self.tool_conditional(&request.registration_name)?;
-        Ok(guardrail_response(with_thread_scope(scope, || {
-            handler(&payload.tool_name, &payload.value)
-        })?))
+        let future = with_thread_scope(scope, || handler(payload.tool_name, payload.value));
+        Ok(guardrail_response(future.await?))
     }
 
-    fn invoke_tool_request_response(
+    async fn invoke_tool_request_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
         let handler = self.tool_request(&request.registration_name)?;
-        Ok(json_response(with_thread_scope(scope, || {
-            handler(&payload.tool_name, payload.value)
-        })?))
+        let future = with_thread_scope(scope, || handler(payload.tool_name, payload.value));
+        Ok(json_response(future.await?))
     }
 
     async fn invoke_tool_execution_response(
@@ -1802,10 +1811,10 @@ impl WorkerService {
                     .await
             }
             RegistrationSurface::LlmConditionalExecutionGuardrail => {
-                self.invoke_llm_conditional_response(request, scope)
+                self.invoke_llm_conditional_response(request, scope).await
             }
             RegistrationSurface::LlmRequestIntercept => {
-                self.invoke_llm_request_response(request, scope)
+                self.invoke_llm_request_response(request, scope).await
             }
             RegistrationSurface::LlmExecutionIntercept => {
                 self.invoke_llm_execution_response(request, scope).await
@@ -1848,7 +1857,7 @@ impl WorkerService {
         }
     }
 
-    fn invoke_llm_conditional_response(
+    async fn invoke_llm_conditional_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
@@ -1856,12 +1865,11 @@ impl WorkerService {
         let payload = llm_payload(request.payload)?;
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let handler = self.llm_conditional(&request.registration_name)?;
-        Ok(guardrail_response(with_thread_scope(scope, || {
-            handler(&request_value)
-        })?))
+        let future = with_thread_scope(scope, || handler(request_value));
+        Ok(guardrail_response(future.await?))
     }
 
-    fn invoke_llm_request_response(
+    async fn invoke_llm_request_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
@@ -1880,8 +1888,9 @@ impl WorkerService {
             .transpose()?;
         let handler = self.llm_request(&request.registration_name)?;
         let outcome = with_thread_scope(scope, || {
-            handler(&payload.model_name, request_value, annotated)
-        })?;
+            handler(payload.model_name, request_value, annotated)
+        })
+        .await?;
         llm_request_response(outcome)
     }
 

@@ -76,6 +76,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
             .any(|kind| kind == "fixture_worker")
     );
     let rewritten = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .await
         .expect("worker host intercept should run");
     assert_eq!(rewritten["worker_plugin"], true);
 
@@ -86,6 +87,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
             .any(|kind| kind == "fixture_worker")
     );
     let unchanged = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .await
         .expect("cleared worker intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
 }
@@ -109,6 +111,7 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     .expect("worker plugin host should activate");
 
     tool_request_intercepts("terminate-worker", json!({ "input": true }))
+        .await
         .expect_err("fixture worker should terminate during callback");
     let error = activation
         .clear()
@@ -159,6 +162,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
             .expect("outer scope should push");
             let outer_uuid = outer.uuid;
             let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
+                .await
                 .expect("worker request intercept should run");
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
@@ -410,6 +414,54 @@ async fn worker_event_sanitizers_preserve_prior_field_changes() {
 }
 
 #[tokio::test]
+async fn worker_sanitizer_nested_publication_precedes_already_queued_event() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::new()).await;
+    let names = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = names.clone();
+    register_subscriber(
+        "worker_nested_publication_order",
+        Arc::new(move |event| {
+            if event.name().starts_with("worker-nested-order-") {
+                captured.lock().unwrap().push(event.name().to_string());
+            }
+        }),
+    )
+    .expect("test subscriber should register");
+
+    TASK_SCOPE_STACK
+        .scope(create_scope_stack(), async {
+            event(
+                EmitMarkEventParams::builder()
+                    .name("worker-nested-order-outer")
+                    .build(),
+            )
+            .expect("outer mark should emit");
+            event(
+                EmitMarkEventParams::builder()
+                    .name("worker-nested-order-later")
+                    .build(),
+            )
+            .expect("later mark should emit");
+        })
+        .await;
+
+    flush_subscribers().expect("worker nested events should flush");
+    assert_eq!(
+        names.lock().unwrap().as_slice(),
+        [
+            "worker-nested-order-outer",
+            "worker-nested-order-inner",
+            "worker-nested-order-later",
+        ]
+    );
+
+    deregister_subscriber("worker_nested_publication_order")
+        .expect("test subscriber should deregister");
+    loaded.clear();
+}
+
+#[tokio::test]
 async fn host_cancellation_reaches_rust_worker_invocation() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let loaded = load_and_initialize_fixture(Map::new()).await;
@@ -473,6 +525,7 @@ async fn worker_request_intercept_callback_error_surfaces_to_host() {
             .await;
 
     let error = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
+        .await
         .expect_err("worker callback error should surface");
     assert!(
         error
@@ -1120,6 +1173,7 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     cleanup.subscriber_name = Some(subscriber_name);
 
     let rewritten = tool_request_intercepts("lookup", json!({ "query": "relay" }))
+        .await
         .expect("Python callback should emit a mark and return its mutation");
     assert_eq!(
         rewritten["_nemo_relay_plugin"]["tag"],

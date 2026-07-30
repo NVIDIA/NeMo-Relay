@@ -118,7 +118,7 @@ class TestGraphCallbacks:
         with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
             result = await async_graph.ainvoke({"value": 1}, config={"callbacks": [callback_handler]})
 
-        nemo_relay.subscribers.flush()
+        await nemo_relay.subscribers.flush_async()
 
         assert result == {"value": 2}
         assert _events_to_strings(subscribed_events) == self._expected_events

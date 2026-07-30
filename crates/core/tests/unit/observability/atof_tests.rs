@@ -1618,7 +1618,7 @@ fn http_endpoint_worker_reports_request_transport_failure() {
     let (close_tx, close_rx) = std::sync::mpsc::channel();
     tx.send(EndpointMessage::Close(close_tx)).unwrap();
     close_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap();
     worker.join().unwrap();
 }

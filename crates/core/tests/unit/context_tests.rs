@@ -46,7 +46,7 @@ fn scope_stack_tracks_scope_local_registries_and_subscribers() {
             priority: 10,
             payload: RequestIntercept {
                 break_chain: false,
-                callable: Arc::new(|_, value| Ok(value)),
+                callable: Arc::new(|_, value| Box::pin(async move { Ok(value) })),
             },
         })
         .unwrap();
@@ -221,15 +221,17 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
     assert_eq!(merged_exec, vec![("local", 1), ("global", 15)]);
 }
 
-#[test]
-fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
+#[tokio::test]
+async fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
     let mut state = NemoRelayContextState::new();
     state
         .tool_conditional_execution_guardrails
         .register(Guardrail {
             name: "snapshot_guardrail".to_string(),
             priority: 1,
-            payload: Arc::new(|name, _args| Ok(Some(format!("{name} blocked")))),
+            payload: Arc::new(|name, _args| {
+                Box::pin(async move { Ok(Some(format!("{name} blocked"))) })
+            }),
         })
         .unwrap();
 
@@ -257,6 +259,7 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     assert_eq!(rejection.as_deref(), Some("snapshot_target blocked"));
@@ -268,8 +271,8 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
     );
 }
 
-#[test]
-fn context_state_supports_extensions_events_and_builders() {
+#[tokio::test]
+async fn context_state_supports_extensions_events_and_builders() {
     let mut state = NemoRelayContextState::new();
     assert!(state.extensions.is_empty());
 
@@ -325,6 +328,7 @@ fn context_state_supports_extensions_events_and_builders() {
         crate::api::runtime::LlmSanitizeRequestContext::default(),
         &entries,
     )
+    .await
     .expect("an empty sanitizer chain must retain the request");
     assert!(sanitized.headers.is_empty());
 

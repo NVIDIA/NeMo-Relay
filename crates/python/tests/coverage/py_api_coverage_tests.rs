@@ -77,6 +77,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         let data = py_dict(py, json!({"payload": true}));
         let metadata = py_dict(py, json!({"meta": true}));
         let child = push_scope(
+            py,
             "child",
             PyScopeType::Tool,
             Some(handle.clone()),
@@ -92,6 +93,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         assert_eq!(child.inner.name, "child");
 
         event(
+            py,
             "mark",
             Some(child.clone()),
             Some(&py_dict(py, json!({"step": 1}))),
@@ -101,6 +103,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         .unwrap();
 
         let tool = tool_call(
+            py,
             "tool",
             &py_dict(py, json!({"arg": 1})),
             Some(child.clone()),
@@ -114,6 +117,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         )
         .unwrap();
         tool_call_end(
+            py,
             &tool,
             &py_dict(py, json!({"result": 2})),
             Some(&py_dict(py, json!({"done": true}))),
@@ -129,6 +133,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             },
         };
         let llm = llm_call(
+            py,
             "llm",
             llm_request,
             Some(child.clone()),
@@ -143,6 +148,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         )
         .unwrap();
         llm_call_end(
+            py,
             &llm,
             &py_dict(py, json!({"response": "ok"})),
             Some(&py_dict(py, json!({"tokens": 10}))),
@@ -153,7 +159,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         )
         .unwrap();
 
-        pop_scope(&child, None, None, None).unwrap();
+        pop_scope(py, &child, None, None, None).unwrap();
         assert_eq!(get_handle().unwrap().inner.name, "root");
     });
 }
@@ -184,6 +190,9 @@ def tool_sanitize_response(name, result):
 
 def tool_conditional(name, args):
     return None if args["value"] >= 0 else "blocked"
+
+async def async_tool_conditional(name, args):
+    return None
 
 def tool_request_intercept(name, args):
     updated = dict(args)
@@ -323,6 +332,18 @@ async def run_llm(api, request, func, handle, attributes, codec, response_codec)
         response_codec=response_codec,
     )
 
+async def run_standalone(api, request):
+    tool_args = await api.tool_request_intercepts("demo-tool", {"value": 1})
+    await api.tool_conditional_execution("demo-tool", tool_args)
+    conditional_allowed = True
+    llm_outcome = await api.llm_request_intercepts("demo-llm", request)
+    await api.llm_conditional_execution(llm_outcome.request)
+    return {
+        "tool_value": tool_args["value"],
+        "conditional_allowed": conditional_allowed,
+        "llm_header": llm_outcome.request.headers["x-intercepted"],
+    }
+
 async def run_stream(api, request, func, collector, finalizer, handle, attributes, codec, response_codec):
     stream = await api.llm_stream_call_execute(
         "demo-stream",
@@ -372,6 +393,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         set_thread_scope_stack(&stack);
         let root = get_handle().unwrap();
         let child = push_scope(
+            py,
             "child-exec",
             PyScopeType::Agent,
             Some(root.clone()),
@@ -472,27 +494,59 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         )
         .unwrap();
 
-        let tool_intercepted =
-            tool_request_intercepts(py, "demo-tool", &py_dict(py, json!({"value": 1}))).unwrap();
+        let tool_intercepted = tool_request_intercepts(
+            py,
+            "demo-tool".to_string(),
+            &py_dict(py, json!({"value": 1})),
+        )
+        .unwrap();
         assert_eq!(
-            crate::convert::py_to_json(tool_intercepted.bind(py)).unwrap(),
+            crate::convert::py_to_json(&tool_intercepted).unwrap(),
             json!({"value": 3})
         );
-        tool_conditional_execution("demo-tool", &py_dict(py, json!({"value": 1}))).unwrap();
+        tool_conditional_execution(
+            py,
+            "demo-tool".to_string(),
+            &py_dict(py, json!({"value": 1})),
+        )
+        .unwrap();
         assert!(
-            tool_conditional_execution("demo-tool", &py_dict(py, json!({"value": -1})))
-                .unwrap_err()
-                .to_string()
-                .contains("blocked")
+            tool_conditional_execution(
+                py,
+                "demo-tool".to_string(),
+                &py_dict(py, json!({"value": -1}))
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("blocked")
         );
-
+        let async_sync_rejection_name = format!("async-sync-{}", Uuid::now_v7());
+        register_tool_conditional_execution_guardrail(
+            &async_sync_rejection_name,
+            20,
+            helpers.getattr("async_tool_conditional").unwrap().unbind(),
+        )
+        .unwrap();
+        assert!(
+            tool_conditional_execution(
+                py,
+                "demo-tool".to_string(),
+                &py_dict(py, json!({"value": 1})),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("requires an async caller")
+        );
         let llm_request = PyLLMRequest {
             inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
             },
         };
-        let intercepted_request = llm_request_intercepts("demo-llm", llm_request.clone()).unwrap();
+        let intercepted_request =
+            llm_request_intercepts(py, "demo-llm".to_string(), llm_request.clone()).unwrap();
+        let intercepted_request: PyRef<'_, crate::py_types::PyLLMRequestInterceptOutcome> =
+            intercepted_request.extract().unwrap();
         assert_eq!(
             intercepted_request
                 .inner
@@ -501,20 +555,38 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 .get("x-intercepted"),
             Some(&json!("1"))
         );
-        llm_conditional_execution(llm_request.clone()).unwrap();
+        llm_conditional_execution(py, llm_request.clone()).unwrap();
         assert!(
-            llm_conditional_execution(PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
-                    headers: serde_json::Map::new(),
-                    content: json!({"messages": [], "model": "blocked"}),
-                },
-            })
+            llm_conditional_execution(
+                py,
+                PyLLMRequest {
+                    inner: nemo_relay::api::llm::LlmRequest {
+                        headers: serde_json::Map::new(),
+                        content: json!({"messages": [], "model": "blocked"}),
+                    },
+                }
+            )
             .unwrap_err()
             .to_string()
             .contains("blocked")
         );
 
         with_event_loop(py, |event_loop| {
+            let standalone = event_loop
+                .call_method1(
+                    "run_until_complete",
+                    (runner
+                        .getattr("run_standalone")
+                        .unwrap()
+                        .call1((api_module.clone(), llm_request.clone()))
+                        .unwrap(),),
+                )
+                .unwrap();
+            assert_eq!(
+                crate::convert::py_to_json(&standalone).unwrap(),
+                json!({"tool_value": 3, "conditional_allowed": true, "llm_header": "1"})
+            );
+
             let tool_result = event_loop
                 .call_method1(
                     "run_until_complete",
@@ -599,6 +671,9 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 json!([{"delta": 11}, {"delta": 12}])
             );
         });
+        assert!(
+            deregister_tool_conditional_execution_guardrail(&async_sync_rejection_name).unwrap()
+        );
 
         let events = helpers.getattr("events").unwrap();
         let events_json = crate::convert::py_to_json(events.as_any()).unwrap();
@@ -821,7 +896,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         assert!(deregister_subscriber(&global_subscriber).unwrap());
         assert!(!deregister_subscriber(&global_subscriber).unwrap());
 
-        pop_scope(&child, None, None, None).unwrap();
+        pop_scope(py, &child, None, None, None).unwrap();
     });
 }
 
@@ -847,6 +922,18 @@ fn to_py_err_and_forward_stream_to_channel_cover_private_helpers() {
         assert_eq!(rx.recv().await.unwrap().unwrap(), json!({"chunk": 2}));
         assert!(rx.recv().await.is_none());
     });
+}
+
+#[test]
+fn synchronous_middleware_bridge_avoids_tokio_runtime_reentry() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime.block_on(async {
+        block_on_sync_middleware(async { Ok::<_, nemo_relay::error::FlowError>(7) })
+    });
+    assert_eq!(result.unwrap(), 7);
 }
 
 #[test]

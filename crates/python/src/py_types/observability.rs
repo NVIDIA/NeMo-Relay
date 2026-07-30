@@ -376,19 +376,17 @@ impl PyAtofExporter {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
-    /// file sink or ask the stream sink to drain for up to its timeout. A re-entrant call does not
-    /// establish the delivery barrier. A stream timeout is logged and does not by itself return an
-    /// error.
+    /// Outside subscriber and middleware callbacks, wait for queued subscriber delivery, then
+    /// flush the file sink or ask the stream sink to drain for up to its timeout. A stream timeout
+    /// is logged and does not by itself return an error.
     pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.force_flush())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
-    /// file sink or ask the stream sink to drain and close up to its timeout. A re-entrant call
-    /// does not establish the delivery barrier. A stream timeout is logged and does not by itself
-    /// return an error.
+    /// Outside subscriber and middleware callbacks, wait for queued subscriber delivery, then
+    /// flush the file sink or ask the stream sink to drain and close up to its timeout. A stream
+    /// timeout is logged and does not by itself return an error.
     pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.shutdown())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))

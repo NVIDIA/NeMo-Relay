@@ -115,8 +115,10 @@ impl Plugin for TestPlugin {
                 1,
                 false,
                 Arc::new(|_name, mut request, annotated| {
-                    request.headers.insert("x-plugin".into(), json!(true));
-                    Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                    Box::pin(async move {
+                        request.headers.insert("x-plugin".into(), json!(true));
+                        Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                    })
                 }),
             )
         })
@@ -754,27 +756,29 @@ fn test_plugin_registration_context_registers_and_rolls_back() {
         .block_on(TestPlugin.register(&Map::new(), &mut ctx))
         .unwrap();
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
@@ -798,25 +802,27 @@ fn test_initialize_plugins_registers_and_clears_components() {
     assert!(!report.has_errors());
     assert!(active_plugin_report().is_some());
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     clear_plugin_configuration().unwrap();
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
@@ -1070,8 +1076,13 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     let mut ctx = PluginRegistrationContext::with_namespace("demo::");
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
         .unwrap();
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
@@ -1083,7 +1094,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
@@ -1586,69 +1597,78 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("plugin::");
-    ctx.register_mark_sanitize_guardrail("mark_sanitize", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark_sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     ctx.register_scope_sanitize_start_guardrail(
         "scope_sanitize_start",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_scope_sanitize_end_guardrail(
         "scope_sanitize_end",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_request_guardrail(
         "tool_sanitize_request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_response_guardrail(
         "tool_sanitize_response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     ctx.register_tool_conditional_execution_guardrail(
         "tool_conditional",
         1,
-        Arc::new(|name, _args| Ok((name == "blocked-tool").then(|| "blocked tool".to_string()))),
+        Arc::new(|name, _args| {
+            Box::pin(
+                async move { Ok((name == "blocked-tool").then(|| "blocked tool".to_string())) },
+            )
+        }),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
         "llm_sanitize_request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm_sanitize_response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
     ctx.register_llm_conditional_execution_guardrail(
         "llm_conditional",
         1,
         Arc::new(|request| {
-            Ok((request.headers.get("blocked") == Some(&json!(true)))
-                .then(|| "blocked llm".to_string()))
+            let blocked = request.headers.get("blocked") == Some(&json!(true));
+            Box::pin(async move { Ok(blocked.then(|| "blocked llm".to_string())) })
         }),
     )
     .unwrap();
 
-    match tool_conditional_execution("blocked-tool", &json!({})) {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    match runtime.block_on(tool_conditional_execution("blocked-tool", &json!({}))) {
         Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked tool"),
         other => panic!("expected tool guardrail rejection, got {other:?}"),
     }
 
-    match llm_conditional_execution(&LlmRequest {
+    match runtime.block_on(llm_conditional_execution(&LlmRequest {
         headers: Map::from_iter([(String::from("blocked"), json!(true))]),
         content: json!({"messages": []}),
-    }) {
+    })) {
         Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked llm"),
         other => panic!("expected llm guardrail rejection, got {other:?}"),
     }
@@ -1656,13 +1676,18 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 
-    assert!(tool_conditional_execution("blocked-tool", &json!({})).is_ok());
     assert!(
-        llm_conditional_execution(&LlmRequest {
-            headers: Map::from_iter([(String::from("blocked"), json!(true))]),
-            content: json!({"messages": []}),
-        })
-        .is_ok()
+        runtime
+            .block_on(tool_conditional_execution("blocked-tool", &json!({})))
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .block_on(llm_conditional_execution(&LlmRequest {
+                headers: Map::from_iter([(String::from("blocked"), json!(true))]),
+                content: json!({"messages": []}),
+            }))
+            .is_ok()
     );
 
     reset_global();
@@ -1674,22 +1699,46 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("duplicate::");
-    ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields)),
+        ctx.register_mark_sanitize_guardrail(
+            "mark",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "mark sanitizer:",
     );
-    ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope-start",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields)),
+        ctx.register_scope_sanitize_start_guardrail(
+            "scope-start",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "scope-start sanitizer:",
     );
-    ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope-end",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields)),
+        ctx.register_scope_sanitize_end_guardrail(
+            "scope-end",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "scope-end sanitizer:",
     );
     ctx.register_llm_request_intercept(
@@ -1697,7 +1746,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
@@ -1707,7 +1756,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
             1,
             false,
             Arc::new(|_name, request, annotated| {
-                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
             }),
         ),
         "llm request intercept:",
@@ -1716,14 +1765,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_sanitize_request_guardrail(
             "tool-sanitize-request",
             1,
-            Arc::new(|_, args| args),
+            Arc::new(|_, args| Box::pin(async move { Ok(args) })),
         ),
         "tool sanitize request guardrail:",
     );
@@ -1731,14 +1780,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_sanitize_response_guardrail(
             "tool-sanitize-response",
             1,
-            Arc::new(|_, response| response),
+            Arc::new(|_, response| Box::pin(async move { Ok(response) })),
         ),
         "tool sanitize response guardrail:",
     );
@@ -1746,14 +1795,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Arc::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_conditional_execution_guardrail(
             "tool-conditional",
             1,
-            Arc::new(|_, _| Ok(None)),
+            Arc::new(|_, _| Box::pin(async { Ok(None) })),
         ),
         "tool conditional execution guardrail:",
     );
@@ -1761,14 +1810,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_request_guardrail(
             "llm-sanitize-request",
             1,
-            Arc::new(|request, _context| Some(request)),
+            Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
         ),
         "llm sanitize request guardrail:",
     );
@@ -1776,25 +1825,29 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_response_guardrail(
             "llm-sanitize-response",
             1,
-            Arc::new(|response, _context| Some(response)),
+            Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
         ),
         "llm sanitize response guardrail:",
     );
 
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
-        .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
     expect_registration_failed(
         ctx.register_llm_conditional_execution_guardrail(
             "llm-conditional",
             1,
-            Arc::new(|_| Ok(None)),
+            Arc::new(|_| Box::pin(async { Ok(None) })),
         ),
         "llm conditional execution guardrail:",
     );
@@ -1841,14 +1894,19 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         "llm stream execution intercept:",
     );
 
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     expect_registration_failed(
         ctx.register_tool_request_intercept(
             "tool-request",
             1,
             false,
-            Arc::new(|_name, args| Ok(args)),
+            Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
         ),
         "tool request intercept:",
     );
@@ -1879,18 +1937,22 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("teardown::");
-    ctx.register_mark_sanitize_guardrail("mark-sanitize", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark-sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     ctx.register_scope_sanitize_start_guardrail(
         "scope-sanitize-start",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_scope_sanitize_end_guardrail(
         "scope-sanitize-end",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
@@ -1900,42 +1962,46 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
     ctx.register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Arc::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
-        .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
@@ -1954,8 +2020,13 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         }),
     )
     .unwrap();
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
