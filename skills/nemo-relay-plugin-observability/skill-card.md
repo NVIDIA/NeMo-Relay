@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers choosing or configuring observability exports for NeMo Relay agent runtime applications, including selecting telemetry formats and registering subscribers or exporters. <br>
+Developers and engineers configuring observability for NeMo Relay agent runtime applications, selecting and setting up telemetry exporters for ATOF, ATIF, OpenTelemetry, or OpenInference output. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -44,37 +44,43 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 ## Evaluation Tasks: <br>
-Evaluated against 20 evaluation tasks (16 positive activation, 4 negative activation) in a k8s-sandbox environment with 1 attempt per task. <br>
+Evaluated against 20 tasks (16 positive, 4 negative) in isolated k8s-sandbox pods with 1 attempt per task. <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
-- Security: Checks whether skill-assisted execution avoids unsafe behavior such as secret leakage, destructive commands, or unauthorized access. <br>
-- Correctness: Checks whether the agent follows the expected workflow and produces the correct final output. <br>
-- Discoverability: Checks whether the agent loads the skill when relevant and avoids using it when irrelevant. <br>
-- Effectiveness: Checks whether the agent performs measurably better with the skill than without it. <br>
-- Efficiency: Checks whether the agent uses fewer tokens and avoids redundant work. <br>
+- Security: Whether the skill is safe to use, checking for unsafe operations, secret leakage, and unauthorized access. <br>
+- Correctness: Whether the answer is correct against the reference answer. <br>
+- Discoverability: Whether the right skill was found and executed when needed. <br>
+- Effectiveness: Whether the skill helped complete the user's goal and expected workflow. <br>
+- Efficiency: Whether the skill avoided wasted tool or skill usage. <br>
 
 Underlying evaluation signals used in this run: <br>
 - `security`: Checks for unsafe operations, secret leakage, and unauthorized access. <br>
-- `skill_execution`: Verifies that the agent loaded the expected skill and workflow. <br>
-- `skill_efficiency`: Checks routing quality, decoy avoidance, and redundant tool usage. <br>
-- `accuracy`: Grades final-answer correctness against the reference answer. <br>
-- `goal_accuracy`: Checks whether the overall user task completed successfully. <br>
-- `behavior_check`: Verifies expected behavior steps, including safety expectations. <br>
+- `skill_execution`: Whether the expected skill was found and executed. <br>
+- `skill_efficiency`: Routing quality, workspace-aware skill reads, and productive tool use. <br>
+- `accuracy`: Final-answer correctness against the reference answer. <br>
+- `goal_accuracy`: Whether the user's goal was achieved. <br>
+- `behavior_check`: Whether the expected workflow behavior was followed. <br>
 
 
 
 ## Evaluation Results: <br>
-| Dimension | Num | Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`) | Codex (`openai/openai/gpt-5.5`) |
-|---|---:|---:|---:|
-| Security | 20 | 100% (+2%) | 100% (+2%) |
-| Correctness | 20 | 100% (+51%) | 94% (+4%) |
-| Discoverability | 20 | 100% (+51%) | 93% (+34%) |
-| Effectiveness | 20 | 89% (+48%) | 86% (+23%) |
-| Efficiency | 20 | 96% (+55%) | 93% (+65%) |
+| Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
+|---|---:|---:|
+| Overall | 52% → 94% (+42 points) | 65% → 93% (+28 points) |
+| Security | 100% → 100% (±0 points) | 95% → 100% (+5 points) |
+| Correctness | 36% → 100% (+64 points) | 83% → 97% (+14 points) |
+| Discoverability | 50% → 100% (+50 points) | 58% → 94% (+36 points) |
+| Effectiveness | 36% → 84% (+48 points) | 63% → 82% (+19 points) |
+| Efficiency | 41% → 87% (+46 points) | 26% → 91% (+65 points) |
+
+## Testing Completed: <br>
+**[x] Agent Red-Teaming** <br>
+**[ ] Network Security** <br>
+**[ ] Product Security** <br>
 
 ## Skill Version(s): <br>
-0.6.0-alpha.20260719 (source: git tag) <br>
+3c71d72 (source: git SHA, committed 2026-07-29) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>
