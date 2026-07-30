@@ -342,27 +342,27 @@ jobs:
               trap "rm -rf $smoke_dir" EXIT
               cd "$smoke_dir"
               npm init --yes >/dev/null
-              metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "*.tgz" -print -quit)"
+              metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "nemo-relay-node-npm-[0-9]*.tgz" -print -quit)"
               native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "*.tgz" -print -quit)"
               test -n "$metapackage"
               test -n "$native"
               npm install --ignore-scripts "$native" "$metapackage"
-              node - <<"NODE"
-              const assert = require("node:assert/strict");
-              const manifest = require(`${process.env.NEMO_RELAY_NODE_PACKAGE_NAME}/package.json`);
-              assert.deepEqual(manifest.libc, ["musl"]);
-              for (const entrypoint of [
-                "nemo-relay-node",
-                "nemo-relay-node/typed",
-                "nemo-relay-node/plugin",
-                "nemo-relay-node/adaptive",
-                "nemo-relay-node/observability",
-                "nemo-relay-node/pii_redaction",
-                "nemo-relay-node/model_pricing",
-              ]) {
-                require(entrypoint);
-              }
-              NODE
+              node -e "
+                const assert = require(\"node:assert/strict\");
+                const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
+                assert.deepEqual(manifest.libc, [\"musl\"]);
+                for (const entrypoint of [
+                  \"nemo-relay-node\",
+                  \"nemo-relay-node/typed\",
+                  \"nemo-relay-node/plugin\",
+                  \"nemo-relay-node/adaptive\",
+                  \"nemo-relay-node/observability\",
+                  \"nemo-relay-node/pii_redaction\",
+                  \"nemo-relay-node/model_pricing\",
+                ]) {
+                  require(entrypoint);
+                }
+              "
             '
 
   PackageOpenClaw:

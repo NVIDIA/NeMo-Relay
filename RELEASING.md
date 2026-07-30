@@ -148,6 +148,7 @@ Before you create a release tag, confirm the following:
      `nemo-relay-cli-bin`
    - npm trusted publishers are configured for `nemo-relay-node`,
      `nemo-relay-node-linux-x64-gnu`, `nemo-relay-node-linux-arm64-gnu`,
+     `nemo-relay-node-linux-x64-musl`, `nemo-relay-node-linux-arm64-musl`,
      `nemo-relay-node-darwin-arm64`, `nemo-relay-node-win32-x64-msvc`, and
      `nemo-relay-node-win32-arm64-msvc`
    - npm trusted publishers are configured for `nemo-relay-cli-bin` and
@@ -321,7 +322,7 @@ NVIDIA Artifactory publication for the same tag:
 npm trusted publishing has its own registry-side constraints:
 
 - Each npm package can only have one trusted publisher configured at a time.
-- Configure trusted publishers for `nemo-relay-node`, all five Node platform
+- Configure trusted publishers for `nemo-relay-node`, all seven Node platform
   packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and all five CLI
   platform packages before pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
