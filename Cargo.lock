@@ -3330,7 +3330,7 @@ dependencies = [
 [[package]]
 name = "switchyard-libsy"
 version = "0.1.0"
-source = "git+https://github.com/bbednarski9/Switchyard.git?rev=773a451125231e69209cadb697666a1f03d8f909#773a451125231e69209cadb697666a1f03d8f909"
+source = "git+https://github.com/bbednarski9/Switchyard.git?rev=aa0a31126cc7ca922a6acdf4f1ef656744698c6c#aa0a31126cc7ca922a6acdf4f1ef656744698c6c"
 dependencies = [
  "async-trait",
  "futures",
@@ -3349,7 +3349,7 @@ dependencies = [
 [[package]]
 name = "switchyard-protocol"
 version = "0.1.0"
-source = "git+https://github.com/bbednarski9/Switchyard.git?rev=773a451125231e69209cadb697666a1f03d8f909#773a451125231e69209cadb697666a1f03d8f909"
+source = "git+https://github.com/bbednarski9/Switchyard.git?rev=aa0a31126cc7ca922a6acdf4f1ef656744698c6c#aa0a31126cc7ca922a6acdf4f1ef656744698c6c"
 dependencies = [
  "async-trait",
  "futures",
@@ -3361,7 +3361,7 @@ dependencies = [
 [[package]]
 name = "switchyard-translation"
 version = "0.1.0"
-source = "git+https://github.com/bbednarski9/Switchyard.git?rev=773a451125231e69209cadb697666a1f03d8f909#773a451125231e69209cadb697666a1f03d8f909"
+source = "git+https://github.com/bbednarski9/Switchyard.git?rev=aa0a31126cc7ca922a6acdf4f1ef656744698c6c#aa0a31126cc7ca922a6acdf4f1ef656744698c6c"
 dependencies = [
  "async-stream",
  "futures",

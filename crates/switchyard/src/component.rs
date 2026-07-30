@@ -1016,6 +1016,7 @@ fn build_algorithm(config: &SwitchyardConfig) -> Result<Arc<dyn Algorithm>, Stri
                     capability_elevated_floor: *capability_elevated_floor,
                     session_affinity: *session_affinity,
                     message_hash_fallback: *message_hash_fallback,
+                    recent_turn_window: None,
                 },
             )
             .map(|algorithm| Arc::new(algorithm) as Arc<dyn Algorithm>)

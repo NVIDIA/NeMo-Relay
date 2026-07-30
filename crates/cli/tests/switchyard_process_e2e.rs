@@ -399,6 +399,8 @@ base_url = "{provider_url}"
         .filter(|(_, body)| body["model"] == "provider/classifier")
     {
         assert!(body["response_format"].is_object());
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][1]["role"], "user");
     }
     drop(providers);
 

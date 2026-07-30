@@ -114,16 +114,18 @@ dedicated model-unavailable category.
 - **Relay test unblocked:** A contract test proving that model-unavailable
   reaches an algorithm as a distinct typed failure.
 
-## LIBSY-GAP-005: Classifier Prompt Instruction Role
+## LIBSY-GAP-005: Classifier Prompt Instruction Role (Resolved)
 
 **Description:** The LLM classifier's governing prompt must reach the provider
 as a system-level instruction, not as ordinary user content.
 
+- **Status:** Resolved by
+  [NVIDIA-NeMo/Switchyard#195](https://github.com/NVIDIA-NeMo/Switchyard/pull/195).
 - **Priority:** P0 for classifier routing correctness.
 - **Affected Relay behavior:** Relay dispatches the classifier `CallLlm`
   exactly as libsy constructs it. It must not rewrite neutral message roles
   around the Switchyard translation contract.
-- **Pinned behavior:** `CapabilityJudge` inserts its prompt as
+- **Original pinned behavior:** `CapabilityJudge` inserted its prompt as
   `Message { role: System }`, while the OpenAI Chat encoder maps system roles
   found in the normal message list to `user`. The classifier therefore receives
   its policy prompt at the wrong privilege level.
@@ -135,17 +137,17 @@ as a system-level instruction, not as ordinary user content.
   then map it to the provider's native system-instruction field.
 - **Proposed API area:** `switchyard-libsy::algorithms::LlmTaskClassifier`
   request construction; no Relay API or codec change.
-- **Upstream work:** `feat/libsy-classifier-system-instruction`.
-- **Switchyard issue/PR:** Pending focused upstream review. The Relay
-  development pin will include the resolving commit alongside the stream
-  preservation commit until compatible Switchyard 0.2 crates are published.
+- **Switchyard issue/PR:**
+  [NVIDIA-NeMo/Switchyard#195](https://github.com/NVIDIA-NeMo/Switchyard/pull/195),
+  now included in the development pin because Switchyard PR #192 was rebased
+  after the fix merged. Compatible versioned dependencies will replace the
+  source pin after Switchyard publishes them.
 - **Acceptance:** The libsy classifier contract test observes one system
   instruction and one user task message; Relay's focused contract probe
   observes the provider-native system field for both supported classifier
   protocols.
 - **Relay test unblocked:**
-  `classifier_prompt_is_encoded_as_a_system_instruction` (ignored while Relay
-  is pinned to the affected Switchyard revision).
+  `classifier_prompt_is_encoded_as_a_system_instruction` is active and passing.
 
 ## Deferred Capabilities
 

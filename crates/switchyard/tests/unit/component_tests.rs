@@ -431,7 +431,6 @@ async fn buffered_classifier_supports_an_openai_responses_judge_target() {
 }
 
 #[tokio::test]
-#[ignore = "blocked by LIBSY-GAP-005 in the pinned Switchyard revision"]
 async fn classifier_prompt_is_encoded_as_a_system_instruction() {
     let (_, chat_requests) = run_buffered_classifier(WireProtocol::OpenaiChat).await;
     assert_eq!(chat_requests[0].content["messages"][0]["role"], "system");

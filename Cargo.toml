@@ -35,9 +35,9 @@ nemo-relay-worker = { version = "0.6.0", path = "crates/worker" }
 nemo-relay-adaptive = { version = "0.6.0", path = "crates/adaptive" }
 nemo-relay-pii-redaction = { version = "0.6.0", path = "crates/pii-redaction" }
 nemo-relay-switchyard = { version = "0.6.0", path = "crates/switchyard" }
-switchyard-libsy = { git = "https://github.com/bbednarski9/Switchyard.git", rev = "773a451125231e69209cadb697666a1f03d8f909" }
-switchyard-protocol = { git = "https://github.com/bbednarski9/Switchyard.git", rev = "773a451125231e69209cadb697666a1f03d8f909" }
-switchyard-translation = { git = "https://github.com/bbednarski9/Switchyard.git", rev = "773a451125231e69209cadb697666a1f03d8f909" }
+switchyard-libsy = { git = "https://github.com/bbednarski9/Switchyard.git", rev = "aa0a31126cc7ca922a6acdf4f1ef656744698c6c" }
+switchyard-protocol = { git = "https://github.com/bbednarski9/Switchyard.git", rev = "aa0a31126cc7ca922a6acdf4f1ef656744698c6c" }
+switchyard-translation = { git = "https://github.com/bbednarski9/Switchyard.git", rev = "aa0a31126cc7ca922a6acdf4f1ef656744698c6c" }
 nemo-relay-ffi = { version = "0.6.0", path = "crates/ffi" }
 nemo-relay-cli = { version = "0.6.0", path = "crates/cli" }
 opentelemetry = { version = "0.31", default-features = false }
