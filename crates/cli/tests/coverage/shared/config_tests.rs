@@ -304,6 +304,19 @@ fn provider_auth_headers_default_to_unset() {
     assert!(config.anthropic_auth_header.is_none());
 }
 
+fn effective_plugin_toml_sources_without_system(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Result<Vec<PathBuf>, CliError> {
+    // System-path discovery has dedicated coverage; source-list tests must not read host policy.
+    let system = global_plugin_config_path();
+    effective_plugin_toml_sources_from_paths(
+        plugin_config_paths(explicit, plugin_config_path)
+            .into_iter()
+            .filter(|path| path != &system),
+    )
+}
+
 #[test]
 fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
     let temp = tempfile::tempdir().unwrap();
@@ -314,7 +327,7 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
     let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
 
     assert_eq!(
-        effective_plugin_toml_sources(None, None).unwrap(),
+        effective_plugin_toml_sources_without_system(None, None).unwrap(),
         Vec::<PathBuf>::new()
     );
 
@@ -325,7 +338,7 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
     std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
     std::fs::write(&user_plugins, "version = 1\ncomponents = []\n").unwrap();
 
-    let sources = effective_plugin_toml_sources(None, None).unwrap();
+    let sources = effective_plugin_toml_sources_without_system(None, None).unwrap();
     assert!(sources.is_sorted());
     assert!(sources.windows(2).all(|paths| paths[0] != paths[1]));
 
@@ -371,7 +384,7 @@ fn effective_plugin_toml_sources_replace_user_with_explicit_and_include_project(
     let mut expected = vec![explicit_plugins, discovered_project_plugins];
     expected.sort();
     assert_eq!(
-        effective_plugin_toml_sources(Some(&explicit_config), None).unwrap(),
+        effective_plugin_toml_sources_without_system(Some(&explicit_config), None).unwrap(),
         expected
     );
 }

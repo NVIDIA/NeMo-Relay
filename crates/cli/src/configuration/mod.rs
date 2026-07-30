@@ -1279,13 +1279,6 @@ struct FileDynamicPluginConfig {
     config: Option<Map<String, Value>>,
 }
 
-fn load_plugin_toml_config(
-    explicit: Option<&PathBuf>,
-    plugin_config_path: Option<&PathBuf>,
-) -> Result<Option<PluginTomlConfig>, CliError> {
-    load_plugin_toml_config_scoped(explicit, plugin_config_path, user_config_scope())
-}
-
 fn load_plugin_toml_config_scoped(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1315,7 +1308,14 @@ pub(crate) fn effective_plugin_toml_sources(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Result<Vec<PathBuf>, CliError> {
-    let Some(config) = load_plugin_toml_config(explicit, plugin_config_path)? else {
+    effective_plugin_toml_sources_from_paths(plugin_config_paths(explicit, plugin_config_path))
+}
+
+fn effective_plugin_toml_sources_from_paths<I>(paths: I) -> Result<Vec<PathBuf>, CliError>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let Some(config) = load_plugin_toml_config_from_paths(paths)? else {
         return Ok(Vec::new());
     };
     let mut sources = config.contributing_sources;
