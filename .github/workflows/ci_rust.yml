@@ -199,18 +199,23 @@ jobs:
           - platform: linux-amd64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            musllinux_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
+            musllinux_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
           - platform: macos-arm64
             runner: macos-15
             target: aarch64-apple-darwin
+            musllinux_image: ''
           - platform: windows-amd64
             runner: windows-2022
             target: x86_64-pc-windows-msvc
+            musllinux_image: ''
           - platform: windows-arm64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
+            musllinux_image: ''
 
     steps:
       - name: Checkout
@@ -253,6 +258,17 @@ jobs:
         run: |
           set -e
           cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+
+      - name: Verify CLI binary on musllinux
+        if: ${{ matrix.musllinux_image != '' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            "${{ matrix.musllinux_image }}" \
+            "${{ env.NEMO_RELAY_CI_WORKSPACE }}/target/${{ matrix.target }}/release/nemo-relay" --version
 
       - name: Stage CLI binary artifact
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}

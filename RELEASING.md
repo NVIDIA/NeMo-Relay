@@ -254,12 +254,15 @@ The release pipeline then:
    validation.
 3. Builds publishable package artifacts with the exact tag version:
    - `package-rust` packs the published Rust crates for local validation.
-   - `package-node` packs one native npm Node.js package per supported platform
-     and creates the JavaScript and TypeScript metapackage once.
+   - `package-node` packs one native npm Node.js package per supported platform,
+     including GNU and musl Linux packages for x86_64 and ARM64, and creates the
+     JavaScript and TypeScript metapackage once.
    - `package-openclaw` packs the npm OpenClaw plugin package.
-   - `package-python` builds platform `nemo-relay` wheels.
+   - `package-python` builds platform `nemo-relay` wheels, including
+     `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
-   - The Rust CLI matrix packages each prebuilt binary as a
+   - The Rust CLI matrix validates its Linux binaries on musllinux and packages
+     each prebuilt binary as a
      `nemo-relay-cli-bin` wheel and npm platform package, and creates the npm
      launcher package once.
    - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
