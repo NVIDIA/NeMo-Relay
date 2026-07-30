@@ -175,8 +175,9 @@ Unix) and reject authorization headers; use the corresponding environment
 variables or a user config for credentials.
 
 When the top-level CLI receives `--config path/to/config.toml`, the config
-editor uses that exact file. An explicit `config edit --user`, `--project`, or
-`--global` flag overrides the inherited target.
+editor uses that exact file as its user target, so the default editor and
+`config edit --user` both open it. Use `--project` or `--global` to edit the
+other active layers.
 
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:

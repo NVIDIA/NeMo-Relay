@@ -181,7 +181,7 @@ fn target_selection_and_file_loading_behave_as_expected() {
 }
 
 #[test]
-fn config_editor_inherits_explicit_target_unless_scope_is_selected() {
+fn config_editor_treats_explicit_config_as_the_user_target() {
     let inherited = PathBuf::from("/managed/config.toml");
     let (scope, path) =
         resolve_edit_target(&ConfigEditCommand::default(), Some(inherited.clone())).unwrap();
@@ -192,8 +192,11 @@ fn config_editor_inherits_explicit_target_unless_scope_is_selected() {
         user: true,
         ..ConfigEditCommand::default()
     };
-    let (scope, path) =
-        resolve_edit_target(&user, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
+    let (scope, path) = resolve_edit_target(&user, Some(inherited.clone())).unwrap();
+    assert_eq!(scope, TargetScope::User);
+    assert_eq!(path, inherited);
+
+    let (scope, path) = resolve_edit_target(&user, None).unwrap();
     assert_eq!(scope, TargetScope::User);
     assert_eq!(
         path,

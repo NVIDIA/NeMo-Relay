@@ -44,7 +44,7 @@ pub(crate) enum ConfigSubcommand {
         .multiple(false)
 ))]
 pub(crate) struct ConfigEditCommand {
-    /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/config.toml`.
+    /// Edit explicit `--config`, otherwise `$XDG_CONFIG_HOME/nemo-relay/config.toml`.
     #[arg(long)]
     pub(crate) user: bool,
     /// Edit the nearest project config at `.nemo-relay/config.toml`.

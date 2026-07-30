@@ -198,9 +198,10 @@ saves are system-readable (`0644` on Unix), so they reject authorization
 headers; store credentials in a user config or environment variables instead.
 
 When the top-level CLI receives `--config path/to/config.toml`, the editor uses
-that exact file. An explicit `config edit --user`, `--project`, or `--global`
-flag overrides the inherited target. This selects only the file opened by the
-editor; it does not change runtime discovery, layering, or merge precedence.
+that exact file as its user target, so the default editor and
+`config edit --user` both open it. Use `--project` or `--global` to edit the
+other active layers. This selects only the file opened by the editor; it does
+not change runtime discovery, layering, or merge precedence.
 
 Agent command setup remains under `nemo-relay config`; plugin components remain
 under `nemo-relay plugins edit`.
