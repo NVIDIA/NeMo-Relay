@@ -1710,6 +1710,76 @@ async fn spawned_rust_next_preserves_the_full_managed_context() {
 }
 
 #[tokio::test]
+async fn default_lazy_stream_preserves_the_full_managed_context() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_events = Arc::clone(&events);
+    register_subscriber(
+        "default_lazy_stream_context",
+        Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let owner = setup_isolated_scope("default-lazy-stream-owner");
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("default-lazy-stream-context")
+            .request(LlmRequest {
+                headers: Default::default(),
+                content: json!({}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(futures::stream::once(async {
+                        Ok(json!({
+                            "parent_uuid": capture_propagation_context()?.parent_uuid.to_string(),
+                            "scope_uuid": task_scope_top().uuid.to_string(),
+                        }))
+                    })))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({})))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let provider_context = stream.next().await.unwrap().unwrap();
+    assert!(stream.next().await.is_none());
+    flush_subscribers().unwrap();
+    let start_uuid = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            event.name() == "default-lazy-stream-context"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap()
+        .uuid()
+        .to_string();
+    assert_eq!(
+        provider_context,
+        json!({
+            "parent_uuid": start_uuid,
+            "scope_uuid": owner.uuid.to_string(),
+        })
+    );
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&owner.uuid)
+            .build(),
+    )
+    .unwrap();
+    deregister_subscriber("default_lazy_stream_context").unwrap();
+}
+
+#[tokio::test]
 async fn stream_next_preserves_each_invocation_scope_while_polling() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

@@ -1571,6 +1571,34 @@ describe('LLM intercepts', () => {
     }
   });
 
+  it('default lazy stream preserves the managed parent context', async () => {
+    const events = [];
+    registerSubscriber('node_default_lazy_stream_context', (event) => events.push(event));
+    try {
+      const stream = await llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), (wrapper) => {
+        setImmediate(() => {
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
+            parentUuid: lib.capturePropagationContext().parentUuid,
+          });
+          lib.endStream(wrapper.__nemo_relay_stream_id);
+        });
+      });
+      const providerContext = await stream.next();
+      assert.equal(await stream.next(), null);
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'node_default_lazy_stream_context' &&
+          event.scope_category === 'start' &&
+          event.category === 'llm',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      assert.deepEqual(providerContext, { parentUuid: start.uuid });
+    } finally {
+      deregisterSubscriber('node_default_lazy_stream_context');
+    }
+  });
+
   it('stream execution next honors concurrent per-call scope-stack replacements', async () => {
     const firstStack = lib.createScopeStack();
     const secondStack = lib.createScopeStack();

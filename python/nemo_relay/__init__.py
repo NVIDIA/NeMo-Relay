@@ -241,6 +241,10 @@ from nemo_relay import (  # noqa: E402
 )
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
+_propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_parent",
+    default=None,
+)
 
 
 def get_scope_stack() -> ScopeStack:
@@ -414,12 +418,16 @@ def create_scope_stack() -> ScopeStack:
 def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport."""
     get_scope_stack()
+    if parent_uuid := _propagation_parent_var.get():
+        return PropagationContext(parent_uuid)
     return _capture_propagation_context()
 
 
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
     """Capture the current parent with an optional stable application session root."""
     get_scope_stack()
+    if parent_uuid := _propagation_parent_var.get():
+        return PropagationContext(parent_uuid, root_uuid)
     return _capture_propagation_context_with_root(root_uuid)
 
 

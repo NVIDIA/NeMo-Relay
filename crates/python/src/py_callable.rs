@@ -33,7 +33,7 @@ use nemo_relay::api::runtime::{
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, LlmStreamInner,
     MiddlewareContinuationContext, ScopeStackHandle, ToolConditionalFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn, current_scope_stack,
+    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -455,18 +455,32 @@ fn copy_middleware_invocation<'py>(
     py: Python<'py>,
     fallback_task_locals: Option<TaskLocals>,
 ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<TaskLocals>)> {
-    if let Some(context) = publication_context::<PythonPublicationContext>() {
-        let (context, task_locals) =
-            copy_publication_invocation(py, &context, fallback_task_locals)?;
-        return Ok((Some(context), task_locals));
+    let (invocation_context, task_locals) =
+        if let Some(context) = publication_context::<PythonPublicationContext>() {
+            let (context, task_locals) =
+                copy_publication_invocation(py, &context, fallback_task_locals)?;
+            (Some(context), task_locals)
+        } else if let Some(locals) = fallback_task_locals {
+            let invocation_context = locals.context(py).call_method0("copy")?;
+            let task_locals =
+                TaskLocals::new(locals.event_loop(py)).with_context(invocation_context.clone());
+            (Some(invocation_context), Some(task_locals))
+        } else {
+            (None, None)
+        };
+    if let Some(context) = invocation_context.as_ref() {
+        let parent_var = py
+            .import("nemo_relay")
+            .and_then(|module| module.getattr("_propagation_parent_var"));
+        if let Ok(parent_var) = parent_var {
+            let propagation_parent_uuid = capture_propagation_context()
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+                .parent_uuid
+                .to_string();
+            context.call_method1("run", (parent_var.getattr("set")?, propagation_parent_uuid))?;
+        }
     }
-    let Some(locals) = fallback_task_locals else {
-        return Ok((None, None));
-    };
-    let invocation_context = locals.context(py).call_method0("copy")?;
-    let task_locals =
-        TaskLocals::new(locals.event_loop(py)).with_context(invocation_context.clone());
-    Ok((Some(invocation_context), Some(task_locals)))
+    Ok((invocation_context, task_locals))
 }
 
 fn loop_affine_callback(

@@ -20,6 +20,7 @@ from nemo_relay import (
     PendingMarkSpec,
     ScopeEvent,
     ScopeType,
+    capture_propagation_context,
     guardrails,
     intercepts,
     llm,
@@ -845,6 +846,70 @@ class TestLLMInterceptsAsync:
             "aclose-after",
         ]
         assert all(value == "emitter" for _label, value in observed)
+
+    async def test_default_lazy_stream_preserves_managed_parent_context(self):
+        events = []
+        subscribers.register("py_default_lazy_stream_context", events.append)
+        owner = scope.push("py-default-lazy-stream-owner", ScopeType.Agent)
+
+        def provider(_request):
+            async def generate():
+                yield {"parent_uuid": capture_propagation_context().parent_uuid}
+
+            return generate()
+
+        try:
+            stream = await llm.stream_execute(
+                "py_default_lazy_stream_context",
+                make_request(),
+                provider,
+                lambda _chunk: None,
+                lambda: {},
+            )
+            chunks = [chunk async for chunk in stream]
+            await subscribers.flush_async()
+        finally:
+            scope.pop(owner)
+            subscribers.deregister("py_default_lazy_stream_context")
+
+        start = _llm_event(events, "py_default_lazy_stream_context", "start")
+        assert chunks == [{"parent_uuid": start.uuid}]
+
+    async def test_terminal_stream_error_close_waits_for_real_producer_cleanup(self):
+        cleanup_started = asyncio.Event()
+        release_cleanup = asyncio.Event()
+        cleanup_finished = asyncio.Event()
+
+        class FailingIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise RuntimeError("provider stream failed")
+
+            async def aclose(self):
+                cleanup_started.set()
+                await release_cleanup.wait()
+                cleanup_finished.set()
+
+        stream = await llm.stream_execute(
+            "py_terminal_error_cleanup",
+            make_request(),
+            lambda _request: FailingIterator(),
+            lambda _chunk: None,
+            lambda: {},
+        )
+        with pytest.raises(RuntimeError, match="provider stream failed"):
+            await anext(stream)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+
+        closing = asyncio.ensure_future(stream.aclose())
+        await asyncio.sleep(0)
+        assert not closing.done()
+        assert not cleanup_finished.is_set()
+        release_cleanup.set()
+        await asyncio.wait_for(closing, timeout=2)
+        assert cleanup_finished.is_set()
 
     async def test_async_request_intercept_runs_on_originating_loop(self):
         originating_loop = asyncio.get_running_loop()

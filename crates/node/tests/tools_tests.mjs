@@ -1121,6 +1121,49 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution intercept isolates concurrent branch scope-stack replacements', async () => {
+    const firstStack = lib.createScopeStack();
+    const secondStack = lib.createScopeStack();
+    const firstScope = lib.withScopeStack(firstStack, () => lib.getHandle().uuid);
+    const secondScope = lib.withScopeStack(secondStack, () => lib.getHandle().uuid);
+    let firstStackInstalled;
+    const firstInstalled = new Promise((resolve) => {
+      firstStackInstalled = resolve;
+    });
+    let secondStackInstalled;
+    const secondInstalled = new Promise((resolve) => {
+      secondStackInstalled = resolve;
+    });
+
+    registerToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements', 10, async (args, next) => {
+      const first = (async () => {
+        lib.setThreadScopeStack(firstStack);
+        firstStackInstalled();
+        await secondInstalled;
+        return next({ ...args, branch: 'first' });
+      })();
+      const second = (async () => {
+        await firstInstalled;
+        lib.setThreadScopeStack(secondStack);
+        secondStackInstalled();
+        return next({ ...args, branch: 'second' });
+      })();
+      return { result: await Promise.all([first, second]) };
+    });
+    try {
+      const result = await toolCallExecuteAsync('concurrent_scope_replacements_tool', {}, async (args) => ({
+        branch: args.branch,
+        scope: lib.getHandle().uuid,
+      }));
+      assert.deepEqual(result, [
+        { branch: 'first', scope: firstScope },
+        { branch: 'second', scope: secondScope },
+      ]);
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements');
+    }
+  });
+
   it('execution intercept rejects non-JSON next arguments without aborting Node', async () => {
     registerToolExecutionIntercept('node_tool_exec_bigint_next', 10, async (_args, next) => ({
       result: await next(1n),

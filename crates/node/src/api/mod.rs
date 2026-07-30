@@ -514,6 +514,7 @@ struct ScopedStreamCall {
     request: Json,
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
+    propagation_parent_uuid: String,
 }
 
 fn scoped_stream_callback_tsfn(
@@ -535,9 +536,13 @@ fn scoped_stream_callback_tsfn(
                 publication_buffer: ctx.value.publication_buffer,
             }
             .into_instance(ctx.env)?;
-            Ok(vec![request, unsafe {
-                JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw())
-            }])
+            Ok(vec![
+                request,
+                unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
+                ctx.env
+                    .create_string(&ctx.value.propagation_parent_uuid)?
+                    .into_unknown(),
+            ])
         },
     )?;
     tsfn.unref(env)?;
@@ -1644,6 +1649,17 @@ pub fn create_scope_stack() -> ScopeStack {
 /// Capture the current Relay causal parent for application-managed transport.
 #[napi]
 pub fn capture_propagation_context(env: Env) -> napi::Result<PropagationContext> {
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        return Ok(propagation_context_to_napi(
+            nemo_relay::api::runtime::PropagationContext {
+                version: nemo_relay::api::runtime::PropagationContext::VERSION,
+                root_uuid: None,
+                parent_uuid,
+            },
+        ));
+    }
     with_effective_scope_stack(&env, capture_propagation_context_handle)?
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
@@ -1660,6 +1676,17 @@ pub fn capture_propagation_context_with_root(
         .map(uuid::Uuid::parse_str)
         .transpose()
         .map_err(|error| napi::Error::from_reason(format!("invalid root UUID: {error}")))?;
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        return Ok(propagation_context_to_napi(
+            nemo_relay::api::runtime::PropagationContext {
+                version: nemo_relay::api::runtime::PropagationContext::VERSION,
+                root_uuid,
+                parent_uuid,
+            },
+        ));
+    }
     with_effective_scope_stack(&env, || {
         capture_propagation_context_with_root_handle(root_uuid)
     })?
@@ -2660,6 +2687,10 @@ pub fn llm_stream_call_execute(
     // so it knows where to send chunks.
     let func = std::sync::Arc::new(scoped_stream_callback_tsfn(&env, &func)?);
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
+        let propagation_parent_uuid = match capture_propagation_context_handle() {
+            Ok(context) => context.parent_uuid.to_string(),
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let closed = register_stream_channel(stream_id, tx);
@@ -2680,6 +2711,7 @@ pub fn llm_stream_call_execute(
                 request: wrapper,
                 scope_stack,
                 publication_buffer,
+                propagation_parent_uuid,
             },
             ThreadsafeFunctionCallMode::NonBlocking,
         );

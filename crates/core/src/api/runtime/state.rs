@@ -83,6 +83,10 @@ impl Stream for ContextualizedLlmStream {
 }
 
 impl LlmStreamInner for ContextualizedLlmStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        self.get_mut().inner.terminalize();
+    }
+
     fn close(
         self: Pin<&mut Self>,
     ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
@@ -94,7 +98,7 @@ impl LlmStreamInner for ContextualizedLlmStream {
     }
 }
 
-fn contextualize_stream(
+pub(crate) fn contextualize_stream(
     stream: LlmJsonStream,
     context: MiddlewareContinuationContext,
 ) -> LlmJsonStream {
@@ -118,6 +122,12 @@ impl Stream for ContinuationGuardedLlmStream {
 }
 
 impl LlmStreamInner for ContinuationGuardedLlmStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.guard.take();
+        this.inner.terminalize();
+    }
+
     fn close(
         self: Pin<&mut Self>,
     ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {

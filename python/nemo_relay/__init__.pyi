@@ -309,6 +309,7 @@ Description:
 """
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack]
+_propagation_parent_var: contextvars.ContextVar[str | None]
 
 def get_scope_stack() -> ScopeStack:
     """Return the current task's active scope stack, creating one if needed.

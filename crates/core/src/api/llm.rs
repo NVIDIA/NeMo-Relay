@@ -20,13 +20,14 @@ use crate::api::optimization::{
 use crate::api::runtime::LlmCodecIdentity;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
+use crate::api::runtime::state::contextualize_stream;
 use crate::api::runtime::subscriber_dispatcher::{
     dispatch_reserved_sanitized_event, dispatch_sanitized_event, dispatch_transformed_event,
 };
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
-    with_active_event_uuid,
+    MiddlewareContinuationContext, with_active_event_uuid,
 };
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
@@ -1692,7 +1693,10 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
                 state.llm_stream_build_execution_chain(&execution_name, func, &scope_locals)
             };
-            execution(intercepted_request).await
+            let execution_context = MiddlewareContinuationContext::capture();
+            execution(intercepted_request)
+                .await
+                .map(|stream| contextualize_stream(stream, execution_context))
         }),
     )
     .await;
