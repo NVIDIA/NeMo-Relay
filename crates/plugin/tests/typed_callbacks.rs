@@ -16,20 +16,21 @@ use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
     Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonStream, LlmNext,
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeAsyncCallbackState,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeEventSanitizeCb,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeHostApiV3, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
-    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
-    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH, NativePlugin,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareKind,
+    NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
+    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
+    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
+    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -335,6 +336,7 @@ static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestInte
 #[test]
 fn native_abi_v3_struct_sizes_are_self_describing() {
     assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 3);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH, 4);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -369,6 +371,9 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
                 0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
             ]
         );
+        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 472);
+        assert_eq!(host_api_v4_offsets(), [0, 440, 448, 456, 464]);
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
         assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
@@ -397,6 +402,9 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
                 0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
             ]
         );
+        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 232);
+        assert_eq!(host_api_v4_offsets(), [0, 216, 220, 224, 228]);
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
         assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
@@ -404,6 +412,22 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
         assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
         assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
     }
+}
+
+fn host_api_v4_offsets() -> [usize; 5] {
+    [
+        offset_of!(NemoRelayNativeHostApiV4, v3),
+        offset_of!(NemoRelayNativeHostApiV4, async_llm_next_invoke_result_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_llm_next_invoke_stream_v2),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_async_llm_execution_v2
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_async_llm_stream_execution_v2
+        ),
+    ]
 }
 
 fn host_api_v3_offsets() -> [usize; 16] {

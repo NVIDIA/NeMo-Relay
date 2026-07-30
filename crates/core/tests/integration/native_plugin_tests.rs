@@ -1198,7 +1198,7 @@ fn native_loader_rejects_manifest_contract_errors_before_loading_library() {
         &native_manifest_text(
             "fixture_native",
             &format!("={}", env!("CARGO_PKG_VERSION")),
-            "2",
+            "3",
             "libdoes-not-need-to-exist.so",
             "nemo_relay_fixture_native_plugin",
         ),
@@ -1244,6 +1244,61 @@ entrypoint = "fixture.worker:create_plugin"
         "worker manifest should fail native loading",
     );
     assert!(error.contains("only supports rust_dynamic"), "{error}");
+}
+
+#[test]
+fn native_api_v1_plugin_loads_unchanged_beside_native_api_v2() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_raw_manifest(
+        fixture.manifest_dir.path(),
+        &native_manifest_text(
+            "fixture_native",
+            &format!("={}", env!("CARGO_PKG_VERSION")),
+            "1",
+            &fixture.library_path.to_string_lossy(),
+            "nemo_relay_fixture_native_api_v1_plugin",
+        ),
+    );
+
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("native API v1 plugin should load against the preserved host table");
+    activation.clear();
+}
+
+#[test]
+fn native_api_v2_plugin_requires_the_v2_manifest_contract() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_raw_manifest(
+        fixture.manifest_dir.path(),
+        &native_manifest_text(
+            "fixture_native",
+            &format!("={}", env!("CARGO_PKG_VERSION")),
+            "2",
+            &fixture.library_path.to_string_lossy(),
+            "nemo_relay_fixture_native_api_v2_plugin",
+        ),
+    );
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("native API v2 plugin should receive the typed host table");
+    activation.clear();
+
+    let v1_manifest_ref = write_raw_manifest(
+        fixture.manifest_dir.path(),
+        &native_manifest_text(
+            "fixture_native",
+            &format!("={}", env!("CARGO_PKG_VERSION")),
+            "1",
+            &fixture.library_path.to_string_lossy(),
+            "nemo_relay_fixture_native_api_v2_plugin",
+        ),
+    );
+    let error = expect_native_load_error(
+        load_spec("fixture_native", &v1_manifest_ref),
+        "native API v2-only plugin must reject native API v1 negotiation",
+    );
+    assert!(error.contains("entry symbol"), "{error}");
 }
 
 #[test]

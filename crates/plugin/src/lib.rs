@@ -9,6 +9,7 @@
 //! Native plugins built with it communicate with a host through versioned
 //! C-compatible tables and host-owned string handles.
 
+use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void};
 use std::marker::{PhantomData, PhantomPinned};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -35,13 +36,15 @@ pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Map;
 
-/// Native plugin ABI version supported by this crate.
+/// Native ABI used by the original native API v1 SDK and export macro.
 ///
-/// Version 3 reserves the native async middleware extension. Hosts retain a
-/// version-2 table for already-built plugins during entry-point negotiation.
+/// Relay preserves this value so plugins rebuilt with the current SDK and the
+/// existing [`nemo_relay_plugin!`] macro remain native API v1 plugins.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 3;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
+/// ABI version that introduced typed LLM target dispatch and outcomes.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH: u32 = 4;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
@@ -897,6 +900,170 @@ pub type NemoRelayNativeAsyncNextResultCb = unsafe extern "C" fn(
     error: *const NemoRelayNativeString,
 );
 
+/// Provider protocol selected for one typed LLM dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmDispatchRouteV2 {
+    /// OpenAI Chat Completions.
+    OpenaiChat,
+    /// OpenAI Responses.
+    OpenaiResponses,
+    /// Anthropic Messages.
+    AnthropicMessages,
+}
+
+impl LlmDispatchRouteV2 {
+    /// Returns the stable Relay gateway route identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiChat => "openai_chat",
+            Self::OpenaiResponses => "openai_responses",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+}
+
+/// Explicit provider target supplied to Relay through native API v2.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct LlmDispatchTargetV2 {
+    /// Absolute HTTP(S) provider URL including the selected endpoint.
+    pub url: String,
+    /// Provider protocol used by the selected endpoint.
+    pub route: LlmDispatchRouteV2,
+}
+
+/// Typed LLM continuation invocation supplied through native API v2.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct LlmDispatchRequestV2 {
+    /// Replacement request passed to the Relay execution continuation.
+    pub request: LlmRequest,
+    /// Explicit provider target selected by the plugin.
+    pub target: LlmDispatchTargetV2,
+}
+
+/// Stable provider-failure classification exposed to native plugins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmUpstreamFailureClassV2 {
+    /// Provider connection could not be established or was interrupted.
+    Connection,
+    /// Provider request timed out.
+    Timeout,
+    /// Retryable HTTP status without a more specific provider classification.
+    RetryableStatus,
+    /// Provider rejected the request because its context window was exceeded.
+    ContextWindow,
+    /// Requested provider model is temporarily unavailable.
+    ModelUnavailable,
+    /// Provider authentication or authorization failed.
+    Authentication,
+    /// Provider rejected an invalid request.
+    InvalidRequest,
+    /// Other non-retryable provider failure.
+    Other,
+}
+
+/// Structured LLM continuation failure exposed through native API v2.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LlmCallErrorV2 {
+    /// Relay received a provider or provider-transport failure.
+    Upstream {
+        /// Stable failure classification.
+        class: LlmUpstreamFailureClassV2,
+        /// Whether Relay considers the failure safe to retry.
+        retryable: bool,
+        /// Provider HTTP status when a response was received.
+        status: Option<u16>,
+        /// Bounded provider response body or transport error.
+        body: String,
+        /// Safe response headers with credential-bearing fields removed.
+        headers: BTreeMap<String, String>,
+    },
+    /// A guardrail rejected the provider call.
+    GuardrailRejected {
+        /// Human-readable rejection reason.
+        message: String,
+    },
+    /// Relay rejected an invalid dispatch request.
+    InvalidRequest {
+        /// Human-readable validation failure.
+        message: String,
+    },
+    /// The caller cancelled the operation.
+    Cancelled {
+        /// Human-readable cancellation context.
+        message: String,
+    },
+    /// Relay could not complete the operation because of an internal failure.
+    Internal {
+        /// Human-readable internal failure.
+        message: String,
+    },
+}
+
+impl LlmCallErrorV2 {
+    /// Returns whether Relay classified this failure as retryable.
+    pub const fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Upstream {
+                retryable: true,
+                ..
+            }
+        )
+    }
+}
+
+/// Unary LLM continuation outcome delivered through native API v2.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LlmCallOutcomeV2 {
+    /// Provider call completed successfully.
+    Success {
+        /// Provider response JSON.
+        response: Json,
+    },
+    /// Provider call failed before producing a response.
+    Failure {
+        /// Structured Relay/provider failure.
+        error: LlmCallErrorV2,
+    },
+}
+
+/// Streaming LLM continuation event delivered through native API v2.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LlmStreamEventV2 {
+    /// One provider stream event.
+    Chunk {
+        /// Provider event JSON.
+        chunk: Json,
+    },
+    /// Provider stream completed successfully.
+    Done,
+    /// Provider stream failed before clean completion.
+    Failure {
+        /// Structured Relay/provider failure.
+        error: LlmCallErrorV2,
+    },
+}
+
+/// Receives one typed unary LLM continuation outcome.
+///
+/// `outcome_json` contains one serialized [`LlmCallOutcomeV2`] and is borrowed
+/// for the callback.
+pub type NemoRelayNativeAsyncLlmResultCbV2 =
+    unsafe extern "C" fn(user_data: *mut c_void, outcome_json: *const NemoRelayNativeString);
+
+/// Receives one typed streaming LLM continuation event.
+///
+/// `event_json` contains one serialized [`LlmStreamEventV2`] and is borrowed
+/// for the callback. Return `false` to cancel downstream production after the
+/// current callback.
+pub type NemoRelayNativeAsyncLlmStreamCbV2 =
+    unsafe extern "C" fn(user_data: *mut c_void, event_json: *const NemoRelayNativeString) -> bool;
+
 /// Incremental native LLM stream intercept callback.
 ///
 /// The callback owns `next` and `stream` and must release each exactly once.
@@ -1061,6 +1228,64 @@ pub struct NemoRelayNativeHostApiV3 {
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
 }
+
+/// ABI-v4 host extension implementing native API v2 typed LLM dispatch.
+///
+/// Its first field is the complete ABI-v3 table. Native API v1 plugins
+/// continue to receive ABI-v3 or ABI-v2 tables during entry-point negotiation.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV4 {
+    /// Compatibility prefix containing the ABI-v3 asynchronous middleware API.
+    pub v3: NemoRelayNativeHostApiV3,
+    /// Invokes a unary LLM continuation with an explicit target and structured
+    /// outcome.
+    pub async_llm_next_invoke_result_v2: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        dispatch_json: *const NemoRelayNativeString,
+        cb: NemoRelayNativeAsyncLlmResultCbV2,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+    /// Invokes a streaming LLM continuation with an explicit target and
+    /// structured incremental outcomes.
+    pub async_llm_next_invoke_stream_v2: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        dispatch_json: *const NemoRelayNativeString,
+        stream: *const NemoRelayNativeAsyncStream,
+        cb: NemoRelayNativeAsyncLlmStreamCbV2,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+    /// Registers a native API v2 unary LLM execution callback.
+    ///
+    /// Relay invokes the callback on its reusable blocking executor with the
+    /// active scope stack bound to that worker. Provider continuations invoked
+    /// through this table continue to execute on Relay's Tokio runtime.
+    pub plugin_context_register_async_llm_execution_v2: unsafe extern "C" fn(
+        ctx: *mut NemoRelayNativePluginContext,
+        name: *const NemoRelayNativeString,
+        priority: i32,
+        cb: NemoRelayNativeAsyncMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    )
+        -> NemoRelayStatus,
+    /// Registers a native API v2 incremental LLM stream execution callback.
+    ///
+    /// Relay starts the callback on its reusable blocking executor and exposes
+    /// the bounded output stream to the caller concurrently.
+    pub plugin_context_register_async_llm_stream_execution_v2:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            priority: i32,
+            cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus,
+}
+
+unsafe impl Send for NemoRelayNativeHostApiV4 {}
+unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
@@ -1787,6 +2012,14 @@ impl<'a> PluginContext<'a> {
     /// Returns the host ABI table backing this registration context.
     pub fn host_api(&self) -> &'a NemoRelayNativeHostApiV1 {
         self.host
+    }
+
+    /// Returns the native API v2 host extension when the plugin was loaded
+    /// through ABI v4.
+    pub fn host_api_v4(&self) -> Option<&'a NemoRelayNativeHostApiV4> {
+        (self.host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH
+            && self.host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>())
+        .then(|| unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV4) })
     }
 
     /// Returns a cloneable high-level runtime handle.
@@ -2617,6 +2850,54 @@ impl<'a> PluginContext<'a> {
         })
     }
 
+    /// Registers a native API v2 unary LLM execution callback.
+    ///
+    /// # Safety
+    /// The callback and user data must remain valid until deregistration or
+    /// `free_fn`. The callback owns its completion and `next` handles and must
+    /// settle/release them exactly once.
+    pub unsafe fn register_async_llm_execution_v2_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeAsyncMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        let Some(host) = self.host_api_v4() else {
+            return NemoRelayStatus::InvalidArg;
+        };
+        self.with_name(name, |_, name| unsafe {
+            (host.plugin_context_register_async_llm_execution_v2)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
+    /// Registers a native API v2 incremental LLM stream execution callback.
+    ///
+    /// # Safety
+    /// The callback and user data must remain valid until deregistration or
+    /// `free_fn`; callback-owned `next` and stream handles must each be
+    /// released exactly once.
+    pub unsafe fn register_async_llm_stream_execution_v2_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        let Some(host) = self.host_api_v4() else {
+            return NemoRelayStatus::InvalidArg;
+        };
+        self.with_name(name, |_, name| unsafe {
+            (host.plugin_context_register_async_llm_stream_execution_v2)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
     fn with_name(
         &self,
         name: &str,
@@ -3288,11 +3569,16 @@ impl<'a> OptionalHostJson<'a> {
 enum OwnedHostApi {
     V1(NemoRelayNativeHostApiV1),
     V3(NemoRelayNativeHostApiV3),
+    V4(NemoRelayNativeHostApiV4),
 }
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>()
+        {
+            Self::V4(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) })
+        } else if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
             Self::V3(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV3) })
@@ -3305,6 +3591,7 @@ impl OwnedHostApi {
         match self {
             Self::V1(host) => host,
             Self::V3(host) => &host.v1,
+            Self::V4(host) => &host.v3.v1,
         }
     }
 }
@@ -3582,7 +3869,38 @@ pub unsafe fn export_plugin<P: NativePlugin>(
     }
     unsafe { *out = NemoRelayNativePluginV1::default() };
     let host_ref = unsafe { &*host };
-    export_plugin_checked(host_ref, out, || plugin)
+    export_plugin_checked(
+        host_ref,
+        out,
+        NEMO_RELAY_NATIVE_ABI_VERSION,
+        std::mem::size_of::<NemoRelayNativeHostApiV1>(),
+        || plugin,
+    )
+}
+
+/// Initializes a native API v2 plugin descriptor for a Rust SDK plugin value.
+///
+/// # Safety
+/// `host` must point to a complete [`NemoRelayNativeHostApiV4`] table for the
+/// duration of the call, and `out` must point to writable memory for one
+/// [`NemoRelayNativePluginV1`] descriptor.
+pub unsafe fn export_plugin_v2<P: NativePlugin>(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+    plugin: P,
+) -> NemoRelayStatus {
+    if host.is_null() || out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = NemoRelayNativePluginV1::default() };
+    let host_ref = unsafe { &*host };
+    export_plugin_checked(
+        host_ref,
+        out,
+        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH,
+        std::mem::size_of::<NemoRelayNativeHostApiV4>(),
+        || plugin,
+    )
 }
 
 /// Initializes a native plugin descriptor from a constructor callback.
@@ -3606,11 +3924,22 @@ where
     }
     unsafe { *out = NemoRelayNativePluginV1::default() };
     let host_ref = unsafe { &*host };
-    export_plugin_checked(host_ref, out, constructor)
+    export_plugin_checked(
+        host_ref,
+        out,
+        NEMO_RELAY_NATIVE_ABI_VERSION,
+        std::mem::size_of::<NemoRelayNativeHostApiV1>(),
+        constructor,
+    )
 }
 
-fn export_plugin_checked<P, F>(
-    host_ref: &NemoRelayNativeHostApiV1,
+/// Initializes a native API v2 plugin descriptor from a constructor callback.
+///
+/// # Safety
+/// `host` and `out` must satisfy [`export_plugin_v2`]'s requirements.
+#[doc(hidden)]
+pub unsafe fn __export_plugin_v2_from_constructor<P, F>(
+    host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
     constructor: F,
 ) -> NemoRelayStatus
@@ -3618,10 +3947,35 @@ where
     P: NativePlugin,
     F: FnOnce() -> P,
 {
-    if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION {
+    if host.is_null() || out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = NemoRelayNativePluginV1::default() };
+    let host_ref = unsafe { &*host };
+    export_plugin_checked(
+        host_ref,
+        out,
+        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH,
+        std::mem::size_of::<NemoRelayNativeHostApiV4>(),
+        constructor,
+    )
+}
+
+fn export_plugin_checked<P, F>(
+    host_ref: &NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+    required_abi_version: u32,
+    required_struct_size: usize,
+    constructor: F,
+) -> NemoRelayStatus
+where
+    P: NativePlugin,
+    F: FnOnce() -> P,
+{
+    if host_ref.abi_version != required_abi_version {
         return NemoRelayStatus::InvalidArg;
     }
-    if host_ref.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV1>() {
+    if host_ref.struct_size < required_struct_size {
         return NemoRelayStatus::InvalidArg;
     }
 
@@ -3669,6 +4023,37 @@ macro_rules! nemo_relay_plugin {
                         $crate::__set_last_error_from_entry(
                             host,
                             "native plugin entry callback panicked",
+                        )
+                    };
+                    $crate::NemoRelayStatus::Internal
+                }
+            }
+        }
+    };
+}
+
+/// Exports a native API v2-only plugin entry symbol.
+///
+/// The generated entry rejects native API v1 host tables. Use this macro when
+/// the plugin requires typed LLM dispatch from [`NemoRelayNativeHostApiV4`].
+#[macro_export]
+macro_rules! nemo_relay_plugin_v2 {
+    ($symbol:ident, $constructor:expr) => {
+        #[doc = "Native API v2 plugin entry symbol generated by `nemo_relay_plugin_v2!`."]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $symbol(
+            host: *const $crate::NemoRelayNativeHostApiV1,
+            out: *mut $crate::NemoRelayNativePluginV1,
+        ) -> $crate::NemoRelayStatus {
+            match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| unsafe {
+                $crate::__export_plugin_v2_from_constructor(host, out, $constructor)
+            })) {
+                Ok(status) => status,
+                Err(_) => {
+                    unsafe {
+                        $crate::__set_last_error_from_entry(
+                            host,
+                            "native API v2 plugin entry callback panicked",
                         )
                     };
                     $crate::NemoRelayStatus::Internal

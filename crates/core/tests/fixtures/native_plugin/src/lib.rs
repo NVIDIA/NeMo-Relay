@@ -297,6 +297,35 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 }
 
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || FixtureNativePlugin);
+nemo_relay_plugin::nemo_relay_plugin_v2!(
+    nemo_relay_fixture_native_api_v2_plugin,
+    || FixtureNativePlugin
+);
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_api_v1_plugin(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    let Some(host_ref) = (unsafe { host.as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if host_ref.abi_version != 3
+        || host_ref.struct_size != std::mem::size_of::<NemoRelayNativeHostApiV3>()
+    {
+        return NemoRelayStatus::InvalidArg;
+    }
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "fixture_native",
+            None,
+            None,
+            Some(raw_noop_register),
+        )
+    }
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
