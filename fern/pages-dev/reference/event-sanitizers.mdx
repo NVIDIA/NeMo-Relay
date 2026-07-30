@@ -18,15 +18,15 @@ Choose a registry based on the event that you want to sanitize.
 
 | Registry | Events |
 | --- | --- |
-| Mark sanitizer | Every mark, including explicit, pending, plugin-runtime, and streaming marks |
-| Scope-start sanitizer | Every scope category with `scope_category = "start"` |
-| Scope-end sanitizer | Every scope category with `scope_category = "end"` |
+| Mark sanitizer | Every delivered mark, including explicit, pending, plugin-runtime, and streaming marks |
+| Scope-start sanitizer | Every delivered scope category with `scope_category = "start"` |
+| Scope-end sanitizer | Every delivered scope category with `scope_category = "end"` |
 
-Scope sanitizers apply to every scope category, including `tool` and `llm`.
-For tool and LLM events, the specialized request or response sanitizers run
-first. Your scope sanitizer then receives the already-sanitized event fields,
-which lets a general event policy inspect them without changing the real
-request or response.
+Scope sanitizers apply to every delivered scope category, including `tool` and
+`llm`. For tool and LLM events, the specialized request or response sanitizers
+run first. Your scope sanitizer then receives the already-sanitized event
+fields, which lets a general event policy inspect them without changing the
+real request or response.
 
 ## Callback Contract
 
@@ -47,6 +47,10 @@ Sanitizers can change only `data`, `category_profile`, and `metadata`. They
 cannot change event identity, parentage, timestamps, kind, scope category,
 semantic category, attributes, semantic input and output meaning, or schemas.
 
+Sanitizers are pure transformations. Do not use their callbacks for stateful
+side effects, such as metrics, logging, mutation, or I/O; Relay only guarantees
+the transformed observability payload.
+
 Registries run in priority order. Lower priorities run first, and each
 callback receives the fields returned by the callback before it. Invalid
 binding callback results fail open and preserve the current fields. In Node.js,
@@ -60,6 +64,10 @@ visible sanitizer chain, and subscribers, then enqueue that snapshot for
 sanitization and publication on a serial background dispatcher. Subscribers
 and exporters therefore receive the sanitized event after the emission call
 returns.
+
+Event sanitizers run only for events captured for delivery to a direct
+subscriber or an exporter-backed subscriber. With neither visible at emission,
+Relay does not invoke the sanitizer chain or start the dispatcher.
 
 The dispatcher processes snapshots in FIFO order, preserving scope start/end
 and mark ordering. Closing a scope or deregistering middleware after emission
