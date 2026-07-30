@@ -253,6 +253,7 @@ jobs:
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
               "$MUSLLINUX_INTERPRETER" -m pip install --no-cache-dir "maturin==$NEMO_RELAY_MATURIN_VERSION"
+              export PATH="$(dirname "$MUSLLINUX_INTERPRETER"):$PATH"
               "$MUSLLINUX_INTERPRETER" scripts/package_python_musllinux.py \
                 --version "$NEMO_RELAY_PACKAGE_VERSION" \
                 --out "$MUSLLINUX_WHEEL_DIRECTORY" \
