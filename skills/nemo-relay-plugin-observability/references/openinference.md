@@ -39,10 +39,11 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
   exporter rather than a standalone section or class. It supports
   `mark_projection`, `mark_exclude_names`, and `attribute_mappings`;
   `semantic_selector` and `capture_content` are unsupported.
-- For the 0.7 unified `OpenTelemetrySubscriber` path, inject secret-bearing
-  headers through the endpoint's `header_env`. Never place resolved credential
-  values in source code, committed configuration, command-line arguments,
-  prompts, examples, or diagnostics.
+- For the 0.7 Observability plugin path, inject secret-bearing headers through
+  `opentelemetry.endpoints[].header_env`; `header_env` is not a direct
+  `OpenTelemetrySubscriber` setting. Never place resolved credential values in
+  source code, committed configuration, command-line arguments, prompts,
+  examples, or diagnostics.
 - Start with `http_binary` transport and an OTLP/HTTP traces endpoint. In 0.6,
   use `grpc` only with an active Tokio runtime. In 0.7, the subscriber owns the
   runtime needed by `grpc`, including for synchronous direct construction.

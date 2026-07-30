@@ -26,9 +26,9 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
   `OpenTelemetrySubscriber` is separate from `OpenInferenceSubscriber`,
   `attribute_mappings` can alias projected attributes, and native gRPC requires
   an active Tokio runtime.
-- In 0.7, the plugin uses configuration version 3 and one
-  `OpenTelemetrySubscriber` owns typed endpoints for `full`, `gen_ai`, and
-  `openinference`.
+- In 0.7, the plugin uses configuration version 3. Each configured endpoint
+  creates an `OpenTelemetrySubscriber` for exactly one typed projection:
+  `full`, `gen_ai`, or `openinference`.
 - OpenTelemetry export maps NeMo Relay runtime events into OTLP traces for
   tracing backends and collectors.
 - Set `transport`, `endpoint`, and `service_name`, then add a namespace, version,
@@ -45,6 +45,8 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 - In 0.6, `attribute_mappings` remains available on the separate exporters.
 - The `gen_ai` projection emits no `nemo_relay.*` fields and omits messages,
   tool payloads, retrieval content, marks, rerankers, and unsupported scopes.
+- Although `gen_ai` does not emit guardrail or reranker spans, it retains their
+  parent context so supported descendant spans preserve their trace parentage.
 - The `gen_ai` projection follows the pinned OpenTelemetry GenAI
   semantic-conventions v1.42-era snapshot at commit
   `43633a68ef8f8ed87a1d5eb205990311ca708bf1`.

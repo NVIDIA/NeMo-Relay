@@ -4,13 +4,13 @@
     "question": "I want to use the nemo-relay-plugin-observability skill to add monitoring to my NeMo Relay application. Can you walk me through choosing the right observability path?",
     "expected_skill": "nemo-relay-plugin-observability",
     "expected_script": null,
-    "ground_truth": "The agent used nemo-relay-plugin-observability, established whether the application uses NeMo Relay 0.6 or 0.7, guided the user through the version-appropriate observability outputs, recommended one plugin-managed exporter as the default starting point, and provided relevant binding names for their language and version.",
+    "ground_truth": "The agent used nemo-relay-plugin-observability, established whether the application uses NeMo Relay 0.6 or 0.7, guided the user through the version-appropriate observability outputs, recommended verifying a plugin-managed exporter before adding others, and provided relevant binding names for their language and version.",
     "expected_behavior": [
       "The agent read the nemo-relay-plugin-observability SKILL.md before responding",
       "The agent determined the installed NeMo Relay version or asked for it before giving version-specific configuration",
       "The agent presented the observability output options with guidance on the separate 0.6 OpenTelemetry/OpenInference exporters and the unified typed 0.7 exporter",
-      "The agent recommended starting with one plugin-managed exporter and verifying it before adding another",
-      "The agent explained the shared lifecycle of creating, registering, running instrumented work, deregistering, flushing when needed, and shutting down",
+      "The agent recommended verifying a plugin-managed exporter before adding others",
+      "The agent explained the lifecycle operations for creating, registering, running instrumented work, flushing when needed, deregistering, and shutting down",
       "The agent referenced the appropriate binding names for the user's language or listed multiple language bindings",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
     ]
