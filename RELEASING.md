@@ -243,8 +243,7 @@ The release pipeline then:
      N-API binaries for x86_64 and ARM64.
    - `package-openclaw` packs the npm OpenClaw plugin package.
    - `package-python` builds platform `nemo-relay` wheels, including
-     `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels for tagged
-     releases.
+     `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
    - The CLI release-asset job uploads each platform `nemo-relay` binary,
      validates the Linux binaries on musllinux, and includes those binaries in

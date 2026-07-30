@@ -218,7 +218,7 @@ jobs:
   PackageMusllinux:
     name: Package (musllinux-${{ matrix.node_arch }})
     needs: [Test]
-    if: ${{ inputs.run_package && inputs.ref_type == 'tag' && !cancelled() && needs.Test.result == 'success' }}
+    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -242,6 +242,18 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
+      - name: Derive Node package version
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          version="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync("crates/node/package.json", "utf8")); if (!pkg.version) { throw new Error("crates/node/package.json missing version field"); } console.log(pkg.version);')"
+          if [[ "${{ inputs.ref_type }}" == "tag" ]]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${GITHUB_SHA::8}"
+          fi
+          printf 'NEMO_RELAY_NODE_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
       - name: Build and smoke-test musllinux Node package
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -253,7 +265,7 @@ jobs:
             --workdir "${NEMO_RELAY_CI_WORKSPACE}" \
             --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
             --env NEMO_RELAY_NODE_OUTPUT_DIR="$output_dir" \
-            --env NEMO_RELAY_NODE_VERSION="${{ inputs.ref_name }}" \
+            --env NEMO_RELAY_NODE_VERSION="${NEMO_RELAY_NODE_PACKAGE_VERSION}" \
             "${{ matrix.container_image }}" \
             sh -ceu '
               apk add --no-cache build-base curl
@@ -357,7 +369,7 @@ jobs:
   Consolidate:
     name: Consolidate
     needs: [Package, PackageMusllinux]
-    if: ${{ inputs.run_package && !cancelled() && needs.Package.result == 'success' && (needs.PackageMusllinux.result == 'success' || needs.PackageMusllinux.result == 'skipped') }}
+    if: ${{ inputs.run_package && !cancelled() && needs.Package.result == 'success' && needs.PackageMusllinux.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -376,14 +388,12 @@ jobs:
           path: npm-linux-arm64/
 
       - name: Download npm linux-musl-amd64 artifact
-        if: ${{ needs.PackageMusllinux.result == 'success' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-linux-musl-amd64
           path: npm-linux-musl-amd64/
 
       - name: Download npm linux-musl-arm64 artifact
-        if: ${{ needs.PackageMusllinux.result == 'success' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-linux-musl-arm64
@@ -412,10 +422,7 @@ jobs:
           set -euo pipefail
           mkdir -p combined
           first=true
-          dirs=(npm-linux-amd64 npm-linux-arm64 npm-macos-arm64 npm-windows-amd64 npm-windows-arm64)
-          if [ "${{ needs.PackageMusllinux.result }}" = "success" ]; then
-            dirs+=(npm-linux-musl-amd64 npm-linux-musl-arm64)
-          fi
+          dirs=(npm-linux-amd64 npm-linux-arm64 npm-linux-musl-amd64 npm-linux-musl-arm64 npm-macos-arm64 npm-windows-amd64 npm-windows-arm64)
           for dir in "${dirs[@]}"; do
             shopt -s nullglob
             tgzs=("${dir}"/*.tgz)

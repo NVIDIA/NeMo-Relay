@@ -169,7 +169,6 @@ jobs:
     if: >-
       ${{
         inputs.run_package &&
-        inputs.ref_type == 'tag' &&
         !cancelled() &&
         needs.Test.result == 'success'
       }}
@@ -211,9 +210,19 @@ jobs:
             echo "Error: failed to read maturin version from uv.lock" >&2
             exit 1
           fi
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [[ -z "$version" ]]; then
+            echo "Error: failed to read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "${{ inputs.ref_type }}" == "tag" ]]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${GITHUB_SHA::8}"
+          fi
           {
             printf 'NEMO_RELAY_MATURIN_VERSION=%s\n' "$maturin_version"
-            printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "${{ inputs.ref_name }}"
+            printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version"
           } >> "$GITHUB_ENV"
 
       - name: Create packaging output directory

@@ -260,7 +260,7 @@ jobs:
           cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
 
       - name: Verify CLI binary on musllinux
-        if: ${{ github.ref_type == 'tag' && matrix.musllinux_image != '' }}
+        if: ${{ matrix.musllinux_image != '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
