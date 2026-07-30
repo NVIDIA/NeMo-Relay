@@ -2991,13 +2991,93 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
     assert_eq!(resolved.dynamic_plugins.len(), 1);
     assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.explicit");
 
-    let scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved).unwrap();
+    let explicit_plugin_config =
+        explicit_plugin_config_path(server.config.as_ref(), server.plugin_config_path.as_ref());
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved).unwrap();
     let entry = find_record_by_id(&scopes, "acme.explicit")
         .unwrap()
         .expect("explicit-scope record");
     assert_eq!(entry.scope.to_string(), "explicit");
     assert_eq!(entry.plugins_toml_path, plugins_toml);
     assert_eq!(entry.state_path, state_path);
+}
+
+#[test]
+fn explicit_config_keeps_project_dynamic_plugin_lifecycle_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let project = temp.path().join("project");
+    let nested = project.join("nested");
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let project_config_dir = project.join(".nemo-relay");
+    let explicit_config_dir = temp.path().join("explicit");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&project_config_dir).unwrap();
+    std::fs::create_dir_all(&explicit_config_dir).unwrap();
+    let _cwd = CurrentDirGuard::enter(&nested);
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.project-layer");
+    std::fs::write(
+        project_config_dir.join("plugins.toml"),
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let explicit_config = explicit_config_dir.join("config.toml");
+    std::fs::write(&explicit_config, "").unwrap();
+
+    let resolved = resolve_plugins_config(Some(&explicit_config)).unwrap();
+    let explicit_plugin_config = explicit_plugin_config_path(Some(&explicit_config), None);
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.project-layer")
+        .unwrap()
+        .expect("project-layer record");
+
+    assert_eq!(entry.scope, RegistryScope::Project);
+    assert_eq!(
+        entry.plugins_toml_path.canonicalize().unwrap(),
+        project_config_dir
+            .join("plugins.toml")
+            .canonicalize()
+            .unwrap()
+    );
+}
+
+#[test]
+fn explicit_plugin_path_drives_plugin_command_lifecycle_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join("custom");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.explicit-plugin-path");
+    let plugin_config_path = config_dir.join("custom-plugins.toml");
+    std::fs::write(
+        &plugin_config_path,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let server = GatewayOverrides {
+        plugin_config_path: Some(plugin_config_path.clone()),
+        ..GatewayOverrides::default()
+    };
+
+    list(PluginsListRequest::default(), &server).unwrap();
+
+    let scopes = load_scoped_registries(Some(&plugin_config_path)).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.explicit-plugin-path")
+        .unwrap()
+        .expect("explicit plugin-path record");
+    assert_eq!(entry.scope, RegistryScope::Explicit);
+    assert_eq!(entry.plugins_toml_path, plugin_config_path);
+    assert_eq!(entry.state_path, config_dir.join(".dynamic-plugins.json"));
 }
 
 #[test]

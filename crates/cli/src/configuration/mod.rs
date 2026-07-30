@@ -95,7 +95,9 @@ struct FileAgentCommandConfig {
 pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedConfig, CliError> {
     let mut resolved = load_shared_config(args.config.as_ref(), args.plugin_config_path.as_ref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
-    enforce_required_dynamic_plugin_startup(args.config.as_ref(), &resolved)?;
+    let explicit_plugin_config =
+        explicit_plugin_config_path(args.config.as_ref(), args.plugin_config_path.as_ref());
+    enforce_required_dynamic_plugin_startup(explicit_plugin_config.as_ref(), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",
         event = "configuration_resolved",
@@ -859,10 +861,18 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
 }
 
 /// Resolves shared config for plugin-facing CLI commands without mutating gateway runtime fields.
+#[cfg(test)]
 pub(crate) fn resolve_plugins_config(
     explicit: Option<&PathBuf>,
 ) -> Result<ResolvedConfig, CliError> {
-    let resolved = load_shared_config(explicit, None)?;
+    resolve_plugins_config_with_path(explicit, None)
+}
+
+pub(crate) fn resolve_plugins_config_with_path(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Result<ResolvedConfig, CliError> {
+    let resolved = load_shared_config(explicit, plugin_config_path)?;
     log::info!(
         target: "nemo_relay.configuration",
         event = "plugin_configuration_resolved",
@@ -898,7 +908,8 @@ pub(crate) fn resolve_run_config(
         .parse()
         .expect("valid transparent bind address");
     if !command.dry_run {
-        enforce_required_dynamic_plugin_startup(config, &resolved)?;
+        let explicit_plugin_config = explicit_plugin_config_path(config, plugin_config_path);
+        enforce_required_dynamic_plugin_startup(explicit_plugin_config.as_ref(), &resolved)?;
     }
     log::info!(
         target: "nemo_relay.configuration",

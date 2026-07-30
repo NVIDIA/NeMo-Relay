@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,8 +11,7 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
 use crate::configuration::{
-    PLUGINS_TOML, global_plugin_config_path, project_plugin_config_path, user_config_dir,
-    user_plugin_config_path,
+    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
 };
 use crate::error::CliError;
 
@@ -109,9 +109,9 @@ impl ScopedRegistry {
 }
 
 pub(super) fn load_scoped_registries(
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
-    scoped_registry_layouts(explicit)?
+    scoped_registry_layouts(explicit_plugin_config)
         .into_iter()
         .map(|(scope, plugins_toml_path, state_path)| {
             Ok(ScopedRegistry {
@@ -126,18 +126,12 @@ pub(super) fn load_scoped_registries(
 
 pub(super) fn scoped_paths_for_add(
     scope: TargetScope,
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
 ) -> Result<(PathBuf, PathBuf, RegistryScope), CliError> {
-    if let Some(explicit) = explicit {
-        let parent = explicit.parent().ok_or_else(|| {
-            CliError::Config(format!(
-                "explicit config path {} has no parent directory",
-                explicit.display()
-            ))
-        })?;
+    if let Some(explicit_plugin_config) = explicit_plugin_config {
         return Ok((
-            parent.join(PLUGINS_TOML),
-            parent.join(DYNAMIC_PLUGIN_STATE_FILENAME),
+            explicit_plugin_config.clone(),
+            sibling_state_path(explicit_plugin_config),
             RegistryScope::Explicit,
         ));
     }
@@ -228,29 +222,25 @@ pub(super) fn find_record_by_id(
 }
 
 fn scoped_registry_layouts(
-    explicit: Option<&PathBuf>,
-) -> Result<Vec<(RegistryScope, PathBuf, PathBuf)>, CliError> {
-    if let Some(explicit) = explicit {
-        let parent = explicit.parent().ok_or_else(|| {
-            CliError::Config(format!(
-                "explicit config path {} has no parent directory",
-                explicit.display()
-            ))
-        })?;
-        let plugins_toml_path = parent.join(PLUGINS_TOML);
-        return Ok(vec![(
+    explicit_plugin_config: Option<&PathBuf>,
+) -> Vec<(RegistryScope, PathBuf, PathBuf)> {
+    let mut layouts = Vec::new();
+    if let Some(explicit_plugin_config) = explicit_plugin_config {
+        layouts.push((
             RegistryScope::Explicit,
+            explicit_plugin_config.clone(),
+            sibling_state_path(explicit_plugin_config),
+        ));
+    } else if let Some(plugins_toml_path) = user_plugin_config_path() {
+        layouts.push((
+            RegistryScope::User,
             plugins_toml_path.clone(),
             sibling_state_path(&plugins_toml_path),
-        )]);
+        ));
     }
 
-    let mut layouts = vec![(
-        RegistryScope::Global,
-        global_plugin_config_path(),
-        sibling_state_path(&global_plugin_config_path()),
-    )];
-    if let Ok(cwd) = std::env::current_dir() {
+    let user_only = std::env::var("NEMO_RELAY_CONFIG_SCOPE").ok().as_deref() == Some("user");
+    if !user_only && let Ok(cwd) = std::env::current_dir() {
         let plugins_toml_path = project_plugin_config_path(&cwd);
         layouts.push((
             RegistryScope::Project,
@@ -258,15 +248,23 @@ fn scoped_registry_layouts(
             sibling_state_path(&plugins_toml_path),
         ));
     }
-    if let Some(user_dir) = user_config_dir() {
-        let plugins_toml_path = user_dir.join(PLUGINS_TOML);
-        layouts.push((
-            RegistryScope::User,
-            plugins_toml_path.clone(),
-            sibling_state_path(&plugins_toml_path),
-        ));
+    let plugins_toml_path = global_plugin_config_path();
+    layouts.push((
+        RegistryScope::Global,
+        plugins_toml_path.clone(),
+        sibling_state_path(&plugins_toml_path),
+    ));
+
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(layouts.len());
+    for layout in layouts.into_iter().rev() {
+        let identity = layout.1.canonicalize().unwrap_or_else(|_| layout.1.clone());
+        if seen.insert(identity) {
+            unique.push(layout);
+        }
     }
-    Ok(layouts)
+    unique.reverse();
+    unique
 }
 
 fn read_registry(path: &Path) -> Result<DynamicPluginRegistry, CliError> {
