@@ -50,8 +50,8 @@ pub(crate) struct EnvironmentInfo {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ConfigurationInfo {
-    #[serde(skip)]
-    pub explicit_config: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explicit: Option<ConfigLayer>,
     pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,

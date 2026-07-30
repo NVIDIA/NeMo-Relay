@@ -160,14 +160,16 @@ def call_end(
             end event. When omitted, the runtime default end timestamp is used.
 
     Returns:
-        None: This function returns after the end event has been recorded.
+        None: This function returns after an immutable end-event snapshot and
+        its middleware/subscriber chains have been queued for publication.
 
     Notes:
-        ``call_end()`` applies sanitize-response guardrails to the emitted
-        end-event payload. ``response_codec`` and ``annotated_response`` enrich
-        observability output only and do not rewrite the recorded response.
-        Response codec failures are raised after the end event is emitted
-        without an annotation.
+        ``call_end()`` remains synchronous. Sanitize-response guardrails,
+        response-codec annotation, event sanitizers, and subscriber delivery
+        run later on Relay's serial publication path. Callback and codec
+        failures are logged and fail open; they cannot be raised by this call.
+        ``response_codec`` and ``annotated_response`` enrich observability
+        output only and do not rewrite the caller-owned response.
         ``timestamp`` must be a timezone-aware ``datetime``; strings and naive
         datetimes are rejected.
     """
@@ -386,8 +388,10 @@ def request_intercepts(name, request):
             intercept chain.
 
     Returns:
-        LLMRequestInterceptOutcome: The complete request, annotation, and
-        pending-mark outcome produced by the intercept chain.
+        LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]:
+        The complete request, annotation, and pending-mark outcome produced by
+        the intercept chain. Outside a running event loop this is returned
+        directly. Inside an event loop, await the returned value.
 
     Notes:
         This runs only the request-intercept chain. It does not execute
@@ -405,12 +409,16 @@ def conditional_execution(request):
             conditional-execution guardrails.
 
     Returns:
-        str | None: A rejection message if execution should be blocked,
-        otherwise ``None``.
+        None | Awaitable[None]: ``None`` when execution is allowed, returned
+        directly outside an event loop or through an awaitable inside one.
 
     Notes:
         This helper evaluates only conditional-execution guardrails and does
         not invoke request intercepts, codecs, or provider execution.
+
+    Raises:
+        RuntimeError: If a guardrail rejects the call or an asynchronous
+        guardrail is registered when called outside an event loop.
     """
     ensure_scope_stack()
     return _native_llm_conditional_execution(request)

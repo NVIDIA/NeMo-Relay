@@ -67,11 +67,11 @@ describe('callback error helpers', () => {
     }
   });
 
-  it('closed tool sanitize callbacks preserve the original payload and record the queue failure', () => {
+  it('closed tool sanitize callbacks preserve the original payload and record the queue failure', async () => {
     const args = {
       value: 1,
     };
-    const result = __testClosedToolCallback(
+    const result = await __testClosedToolCallback(
       () => ({
         ok: true,
       }),
@@ -140,5 +140,18 @@ describe('callback error helpers', () => {
         })),
       /PromiseAwareFn threadsafe function closed/i,
     );
+  });
+
+  it('PromiseAwareFn argument conversion failures reject without invoking the callback', async () => {
+    let invoked = false;
+    await assert.rejects(
+      () =>
+        __testClosedPromiseAwareCall(() => {
+          invoked = true;
+          return null;
+        }, true),
+      /forced PromiseAwareFn conversion failure/i,
+    );
+    assert.equal(invoked, false);
   });
 });

@@ -8,6 +8,7 @@
 //! Doc comments on `#[napi]` items are emitted into the generated `index.d.ts`.
 
 use napi_derive::napi;
+use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -94,6 +95,7 @@ impl From<CoreScopeType> for ScopeType {
 #[napi]
 pub struct ScopeStack {
     pub(crate) inner: ScopeStackHandle,
+    pub(crate) publication_buffer: Option<PublicationBuffer>,
 }
 
 #[napi]
@@ -103,13 +105,17 @@ impl ScopeStack {
     pub fn new() -> Self {
         Self {
             inner: create_scope_stack(),
+            publication_buffer: None,
         }
     }
 }
 
 impl From<ScopeStackHandle> for ScopeStack {
     fn from(h: ScopeStackHandle) -> Self {
-        Self { inner: h }
+        Self {
+            inner: h,
+            publication_buffer: None,
+        }
     }
 }
 

@@ -65,7 +65,7 @@ Use this table to select reusable Relay behavior or output:
 
 | Skill | Use It When |
 |---|---|
-| [`nemo-relay-plugin-observability`](nemo-relay-plugin-observability/SKILL.md) | Inspect or export Relay activity through subscribers, ATOF, ATIF, OpenTelemetry, or OpenInference. This is the recommended first plugin for most users. |
+| [`nemo-relay-plugin-observability`](nemo-relay-plugin-observability/SKILL.md) | Inspect or export Relay 0.6 or 0.7 activity through subscribers, ATOF, ATIF, OpenTelemetry, or OpenInference. This is the recommended first plugin for most users. |
 | [`nemo-relay-plugin-adaptive-tuning`](nemo-relay-plugin-adaptive-tuning/SKILL.md) | Configure and measure adaptive hints, tool parallelism, cache behavior, or other adaptive runtime features. |
 | [`nemo-relay-plugin-build`](nemo-relay-plugin-build/SKILL.md) | Package reusable runtime behavior as a validated, configuration-driven plugin for applications or integrations. |
 

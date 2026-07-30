@@ -200,6 +200,66 @@ describe('core plugins', () => {
       plugin.deregister(pluginKind);
     }
   });
+
+  it('snapshotted plugin execution intercepts survive configuration teardown', async () => {
+    const pluginKind = `node.test.execution-snapshot.${Date.now()}`;
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+
+    plugin.register(pluginKind, {
+      register(_config, context) {
+        context.registerToolExecutionIntercept('target', 100, async (args, next) => ({
+          result: {
+            ...(await next(args)),
+            snapshotted: true,
+          },
+        }));
+        context.registerToolExecutionIntercept('blocker', -100, async (args, next) => {
+          blockerEntered();
+          await release;
+          return { result: await next(args) };
+        });
+      },
+    });
+
+    try {
+      await plugin.initialize({
+        version: 1,
+        components: [
+          plugin.ComponentSpec('observability', {
+            version: 3,
+            atof: { enabled: false },
+          }),
+          adaptive.ComponentSpec({
+            version: 1,
+            state: { backend: adaptive.inMemoryBackend() },
+            adaptive_hints: adaptive.adaptiveHintsConfig(),
+          }),
+          plugin.ComponentSpec(pluginKind, {}),
+        ],
+      });
+      const execution = lib.toolCallExecute('plugin_snapshot_tool', {}, () => ({
+        downstream: true,
+      }));
+      await entered;
+      plugin.clear();
+      releaseBlocker();
+      assert.deepEqual(await execution, {
+        downstream: true,
+        snapshotted: true,
+      });
+    } finally {
+      releaseBlocker();
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
 });
 
 describe('adaptive helpers', () => {

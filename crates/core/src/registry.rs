@@ -40,6 +40,7 @@ pub(crate) trait RegistryEntry {
 /// Names must be unique within a registry. Attempting to [`register`](SortedRegistry::register)
 /// a duplicate name returns an error. Use [`deregister`](SortedRegistry::deregister) first
 /// to remove an existing entry before re-registering.
+#[derive(Clone)]
 pub(crate) struct SortedRegistry<T: RegistryEntry> {
     entries: HashMap<String, T>,
     sorted_keys: Vec<String>,

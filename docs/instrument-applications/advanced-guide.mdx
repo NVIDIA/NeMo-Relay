@@ -124,12 +124,14 @@ register_tool_sanitize_request_guardrail(
     "search.redact_api_key",
     10,
     Arc::new(|_tool_name, mut args| {
-        if let Some(object) = args.as_object_mut() {
-            if object.contains_key("api_key") {
-                object.insert("api_key".into(), json!("<redacted>"));
+        Box::pin(async move {
+            if let Some(object) = args.as_object_mut() {
+                if object.contains_key("api_key") {
+                    object.insert("api_key".into(), json!("<redacted>"));
+                }
             }
-        }
-        args
+            Ok(args)
+        })
     }),
 )?;
 
@@ -137,9 +139,11 @@ register_tool_conditional_execution_guardrail(
     "search.require_query",
     20,
     Arc::new(|_tool_name, args| {
-        Ok(match args.get("query").and_then(|value| value.as_str()) {
-            Some(query) if !query.is_empty() => None,
-            _ => Some("search.query is required".into()),
+        Box::pin(async move {
+            Ok(match args.get("query").and_then(|value| value.as_str()) {
+                Some(query) if !query.is_empty() => None,
+                _ => Some("search.query is required".into()),
+            })
         })
     }),
 )?;
@@ -194,11 +198,12 @@ Sanitize guardrails affect only the payload recorded on emitted events. Request 
 
 ### Node.js Callback Failures
 
-Node.js guardrail and request-intercept callbacks are synchronous. A thrown
-conditional-execution guardrail or request intercept rejects the managed call
-before protected execution or later middleware runs. A thrown sanitize guardrail
-or event sanitizer fails open, preserving the current emitted payload and
-recording the error for `getLastCallbackError()`.
+Node.js guardrail and request-intercept callbacks can return direct values or
+Promises. A thrown error or rejected Promise from a conditional-execution
+guardrail or request intercept rejects the managed call before protected
+execution or later middleware runs. A thrown error or rejected Promise from a
+sanitize guardrail or event sanitizer fails open, preserving the current emitted
+payload and recording the error for `getLastCallbackError()`.
 
 Scope-local variants are available through `nemo_relay.scope_local.register_*`, Node.js `scopeRegister*` helpers, and Rust `scope_register_*` functions.
 

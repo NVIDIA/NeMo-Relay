@@ -1,6 +1,6 @@
 ---
 title: "Migration Guides"
-description: "Upgrade NeMo Relay integrations and migrate LLM sanitizer callbacks, plugins, workers, and PII policy."
+description: "Upgrade NeMo Relay integrations and migrate async middleware, plugins, workers, LLM sanitizers, and PII policy."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -13,16 +13,114 @@ intervening release in sequence.
 
 ## Upgrade to NeMo Relay 0.7
 
-NeMo Relay 0.7 changes the LLM observability sanitizer contract across
-in-process bindings, native plugins, raw C FFI consumers, and worker plugins.
-Complete the following migrations before you run an existing sanitizer with a
-0.7 host.
+NeMo Relay 0.7 makes the Rust middleware callback contract asynchronous and
+adds awaitable middleware support across the in-process bindings, native
+plugins, and worker plugins. It also changes the LLM
+observability sanitizer contract. Complete the following migrations before you
+run existing middleware or a sanitizer with a 0.7 host.
 
 <Warning>
-Do not deploy a 0.6 sanitizer plugin or worker against a 0.7 host. The LLM
-callback signature, native ABI layout, and worker invocation schema changed.
-NeMo Relay does not adapt one-argument LLM sanitizer callbacks.
+A 0.6 native plugin can still load through the legacy v2 table fallback, but it
+is not compatible with the changed middleware and LLM sanitizer callback
+contracts or other changed ABI and schema behavior. Rebuild plugins and workers
+for 0.7 before using those surfaces. NeMo Relay does not adapt synchronous Rust
+middleware callbacks or one-argument LLM sanitizer callbacks.
 </Warning>
+
+### Migrate Middleware Callbacks
+
+The following callback families are now asynchronous: conditional execution
+guardrails, request intercepts, execution intercepts, tool and LLM sanitizers,
+and event sanitizers. Relay awaits each registered callback sequentially in
+priority order. A callback that rejects or returns an error preserves the
+existing error behavior for its middleware family.
+
+| Surface | 0.6 Callback | 0.7 Callback |
+| --- | --- | --- |
+| Rust | `Fn(...) -> Result<T>` | `Fn(...) -> Pin<Box<dyn Future<Output = Result<T>> + Send>>` |
+| Python | Direct return value | Direct return value or awaitable |
+| Node.js | Direct return value | Direct return value or `Promise` |
+| Go / raw C FFI | Synchronous callback | Synchronous callback |
+
+The experimental Go and raw C FFI callbacks remain synchronous. Relay waits
+for each callback on a native thread, so blocking I/O and other long-running
+callback work occupy that thread. No completion-based registration API is
+provided for these bindings.
+
+Python's standalone middleware helpers preserve their direct synchronous
+return when called without a running `asyncio` loop. In that mode, registered
+callbacks must also return direct values; an awaitable callback raises a clear
+runtime error. Call the helper from async Python and await its result when any
+entry may return an awaitable.
+
+For Rust, wrap the existing result in a ready async future, or use an async
+block when the callback needs to await work:
+
+```rust
+use std::sync::Arc;
+
+use nemo_relay::api::registry::register_tool_conditional_execution_guardrail;
+
+register_tool_conditional_execution_guardrail(
+    "policy",
+    10,
+    Arc::new(|_name, _args| {
+        Box::pin(async move {
+            // Await policy I/O here when needed.
+            Ok(None) // Return Some(reason) to block execution.
+        })
+    }),
+)?;
+```
+
+Rust middleware inputs that previously borrowed call data are now owned so
+they can live for the duration of the returned future. Update explicitly typed
+closures and named callback functions as follows:
+
+- Event sanitizers receive `Arc<Event>` instead of `&Event`.
+- Tool sanitizers, conditional guardrails, and request intercepts receive an
+  owned `String` tool name; tool conditional guardrails also receive an owned
+  `Json` payload instead of `&Json`.
+- LLM conditional guardrails receive an owned `LlmRequest` instead of
+  `&LlmRequest`, and LLM request intercepts receive an owned `String` call
+  name.
+
+Python and Node.js registration names are unchanged. Mark a Python callback
+`async def`, or return a Promise from Node.js, only when it needs asynchronous
+work; existing direct-value callbacks remain supported.
+
+<Warning>
+Do not introduce recursive middleware calls while converting callbacks to
+async. Event sanitizers, conditional-execution guardrails, request intercepts,
+execution intercepts, and subscribers must not call NeMo Relay APIs that run
+middleware, flush subscribers, wait on exporters, or clear plugins. Within
+these callbacks, scope operations remain supported at every nesting level,
+including replacement of the active stack with an arbitrary scope stack. Event
+emission is the only supported operation that can enqueue additional callback
+work. An execution intercept may also invoke its supplied `next` continuation.
+</Warning>
+
+When queued Python middleware has no live captured event loop—including when
+it was registered outside a loop or its registration loop has closed—the
+fallback uses `asyncio.run` with a fresh loop. Bare coroutine results are
+supported in that fallback; `Task` and `Future` instances bound to a different
+loop are not.
+
+Scope, mark, and manual tool/LLM lifecycle APIs remain synchronous. This
+includes `push_scope`, `pop_scope`, mark APIs, `tool_call`, `tool_call_end`,
+`llm_call`, and `llm_call_end`. These APIs snapshot the event and visible
+sanitizer/subscriber chain, then enqueue sanitization and publication on a
+serial dispatcher. Event subscribers and exporters therefore receive sanitized
+events later, in emission order. Do not add `await` to these lifecycle calls.
+Only enqueue-time validation and runtime-state errors are returned directly;
+middleware and codec errors discovered during queued publication are logged and
+handled according to their fail-open contracts.
+
+Python subscriber flushing is context-sensitive. Continue to call
+`nemo_relay.subscribers.flush()` from synchronous code. From a running
+`asyncio` event loop, replace that call with
+`await nemo_relay.subscribers.flush_async()` so queued async middleware can
+continue running; the synchronous flush raises in that context.
 
 ### Update LLM Sanitizer Callbacks
 
@@ -49,9 +147,11 @@ register_llm_sanitize_request_guardrail(
     "redact-request",
     10,
     Arc::new(|request, context| {
-        let _active_codec = context.resolve_codec();
-        // Apply policy, using _active_codec when normalized access is required.
-        Some(request)
+        Box::pin(async move {
+            let _active_codec = context.resolve_codec();
+            // Apply policy, using _active_codec when normalized access is required.
+            Ok(Some(request))
+        })
     }),
 )?;
 ```
@@ -115,8 +215,9 @@ Check every callback for an implicit empty return. In particular:
 - A Python function that reaches the end without `return` omits the payload.
 - A JavaScript callback that returns `null` or `undefined` omits the payload.
 - A Rust callback must return `Some(payload)` to retain the payload.
-- A sanitizer error reported through a plugin or binding boundary also omits
-  the payload and annotation.
+- A sanitizer error or panic fails open: Relay preserves the last valid payload
+  and annotation snapshot, logs or records the callback error, and continues
+  publication.
 
 Use omission only when recording the payload would be unsafe.
 
@@ -150,15 +251,15 @@ For complete in-process examples, refer to
 
 ### Migrate Worker Sanitizers
 
-All Rust worker sanitizer registrations now require callbacks that return
-futures. This change applies to mark, scope-start, scope-end, tool-request,
-tool-response, LLM-request, and LLM-response sanitizers. Conditional guardrails
-and request intercepts keep their existing synchronous contracts.
+All Rust worker middleware registrations now require callbacks that return
+futures. This includes conditional guardrails, request and execution intercepts,
+mark and scope event sanitizers, tool request/response sanitizers, and LLM
+request/response sanitizers. Python worker middleware can return either an
+immediate value or an awaitable. Python LLM sanitizers must still accept both
+the payload and directional context.
 
-Update Rust worker callbacks to use `async move` and return `Result` from the
-future. Python worker sanitizers can return either an immediate value or an
-awaitable, but Python LLM sanitizers must still accept both the payload and
-directional context.
+Update Rust worker callbacks to return `Box::pin(async move { ... })` and
+resolve to `Result` from the future.
 
 <Tabs>
 <Tab title="Rust Worker" language="rust">
@@ -167,13 +268,15 @@ directional context.
 ctx.register_llm_sanitize_request_guardrail(
     "redact-request",
     10,
-    |request, context| async move {
-        if let Some(codec) = context.resolve_codec() {
-            let annotated = codec.decode(&request).await?;
-            let request = codec.encode(&annotated, &request).await?;
-            return Ok(Some(request));
-        }
-        Ok(Some(request))
+    |request, context| {
+        Box::pin(async move {
+            if let Some(codec) = context.resolve_codec() {
+                let annotated = codec.decode(&request).await?;
+                let request = codec.encode(&annotated, &request).await?;
+                return Ok(Some(request));
+            }
+            Ok(Some(request))
+        })
     },
 );
 ```
@@ -218,15 +321,19 @@ The codec capability ID in the protocol is SDK-internal. Do not expose or
 persist it in plugin code. The host rejects forged, expired, unauthorized, and
 wrong-direction capability IDs.
 
-### Rebuild Native and Raw FFI Plugins
+### Rebuild Native Plugins and Raw FFI Consumers
 
-NeMo Relay 0.7 uses native ABI v2. Recompile native plugins against the 0.7
+NeMo Relay 0.7 uses native ABI v3. Recompile native plugins against the 0.7
 `nemo-relay-plugin` crate and rebuild raw FFI consumers against the generated
 0.7 header.
 
-If you already built a plugin against an earlier 0.7 ABI v2 prerelease, rebuild
-it again. The ABI version remains 2, but the prerelease LLM sanitizer callback
-slots and context layouts changed before release.
+The v3 table preserves the v2 prefix, and Relay retries a legacy v2 table when
+loading a plugin that rejects v3. That fallback supports loading, not
+compatibility with changed middleware, LLM sanitizer, ABI, or schema contracts.
+Rebuild native plugins that use the raw plugin ABI callbacks: native ABI v3
+adds completion-based async middleware registration, async execution
+continuations, and explicit cancellation/late-settlement behavior. This is
+separate from the synchronous `nemo-relay-ffi` middleware registration API.
 
 The plugin manifest value remains `compat.native_api = "1"`. This manifest
 contract version is separate from the host ABI version; do not change it to
@@ -243,7 +350,7 @@ after the callback returns. Release host-owned output strings with the standard
 host string release operation.
 
 For the complete ABI contract, refer to
-[Native ABI v2](/build-plugins/dynamic-plugins/native-dynamic/about#native-abi-v2).
+[Native ABI v3](/build-plugins/dynamic-plugins/native-dynamic/about#native-abi-v3).
 
 ### Update PII Redaction Configuration
 
@@ -294,7 +401,7 @@ Before deployment:
 2. Add the required directional context argument and optional payload result.
 3. Check that no callback implicitly returns `None`, `null`, or `undefined`.
 4. Convert every Rust worker sanitizer callback to an asynchronous callback.
-5. Rebuild native and raw FFI plugins against 0.7.
+5. Rebuild native plugins and raw FFI consumers against 0.7.
 6. Regenerate and redeploy workers with the matching 0.7 protocol and SDK.
 7. Remove fixed PII `codec` values from mixed-provider configurations.
 8. Test buffered and streaming calls for every provider and custom codec that

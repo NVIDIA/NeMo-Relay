@@ -8,7 +8,7 @@ use super::*;
 use std::ffi::CString;
 use std::sync::Arc;
 
-use pyo3::types::PyModule;
+use pyo3::types::{PyDict, PyList, PyModule};
 use serde_json::json;
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
@@ -16,6 +16,77 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let file_name = CString::new("py_callable_coverage_tests.py").unwrap();
     let module_name = CString::new("py_callable_coverage_tests").unwrap();
     PyModule::from_code(py, &code, &file_name, &module_name).unwrap()
+}
+
+struct InstalledContextModule {
+    previous_parent: Option<Py<PyAny>>,
+    previous_context: Option<Py<PyAny>>,
+}
+
+impl Drop for InstalledContextModule {
+    fn drop(&mut self) {
+        Python::attach(|py| {
+            let Ok(modules) = py.import("sys").and_then(|sys| sys.getattr("modules")) else {
+                return;
+            };
+            let Ok(modules) = modules.cast_into::<PyDict>() else {
+                return;
+            };
+            for (name, previous) in [
+                ("nemo_relay", self.previous_parent.take()),
+                (
+                    "nemo_relay._event_sanitizer_context",
+                    self.previous_context.take(),
+                ),
+            ] {
+                match previous {
+                    Some(module) => {
+                        let _ = modules.set_item(name, module);
+                    }
+                    None => {
+                        let _ = modules.del_item(name);
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn install_event_sanitizer_context_module(py: Python<'_>) -> InstalledContextModule {
+    let code = CString::new(include_str!(
+        "../../../../python/nemo_relay/_event_sanitizer_context.py"
+    ))
+    .unwrap();
+    let file_name = CString::new("_event_sanitizer_context.py").unwrap();
+    let module_name = CString::new("nemo_relay._event_sanitizer_context").unwrap();
+    let context = PyModule::from_code(py, &code, &file_name, &module_name).unwrap();
+    let parent = PyModule::new(py, "nemo_relay").unwrap();
+    parent
+        .setattr("__path__", PyList::empty(py))
+        .expect("test package path should be writable");
+    parent
+        .setattr("_event_sanitizer_context", &context)
+        .expect("test context module should be writable");
+    let modules = py
+        .import("sys")
+        .unwrap()
+        .getattr("modules")
+        .unwrap()
+        .cast_into::<PyDict>()
+        .unwrap();
+    let previous_parent = modules.get_item("nemo_relay").unwrap().map(Bound::unbind);
+    let previous_context = modules
+        .get_item("nemo_relay._event_sanitizer_context")
+        .unwrap()
+        .map(Bound::unbind);
+    modules.set_item("nemo_relay", parent).unwrap();
+    modules
+        .set_item("nemo_relay._event_sanitizer_context", context)
+        .unwrap();
+    InstalledContextModule {
+        previous_parent,
+        previous_context,
+    }
 }
 
 fn make_request() -> LlmRequest {
@@ -153,7 +224,13 @@ class RaisingResponseCodec:
             "model": "codec-model"
         }))
         .unwrap();
-        let outcome = request_intercept("llm", make_request(), Some(annotated.clone())).unwrap();
+        let outcome = runtime
+            .block_on(request_intercept(
+                "llm".to_string(),
+                make_request(),
+                Some(annotated.clone()),
+            ))
+            .unwrap();
         assert_eq!(
             outcome.annotated_request.unwrap().last_user_message(),
             Some("annotated")
@@ -163,7 +240,12 @@ class RaisingResponseCodec:
             module.getattr("request_bad_annotated").unwrap().unbind(),
         );
         assert!(
-            bad_request_intercept("llm", make_request(), Some(annotated))
+            runtime
+                .block_on(bad_request_intercept(
+                    "llm".to_string(),
+                    make_request(),
+                    Some(annotated),
+                ))
                 .unwrap_err()
                 .to_string()
                 .contains("must return LLMRequestInterceptOutcome")
@@ -173,7 +255,12 @@ class RaisingResponseCodec:
             module.getattr("request_short_tuple").unwrap().unbind(),
         );
         assert!(
-            short_request_intercept("llm", make_request(), None)
+            runtime
+                .block_on(short_request_intercept(
+                    "llm".to_string(),
+                    make_request(),
+                    None
+                ))
                 .unwrap_err()
                 .to_string()
                 .contains("must return LLMRequestInterceptOutcome")
@@ -189,12 +276,13 @@ class RaisingResponseCodec:
         let llm_response =
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_bad_json").unwrap().unbind())
                 .unwrap();
-        assert_eq!(
-            llm_response(
-                json!({"ok": true}),
-                nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
-            ),
-            None
+        assert!(
+            runtime
+                .block_on(llm_response(
+                    json!({"ok": true}),
+                    nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
+                ))
+                .is_err()
         );
 
         let bad_codec = PyLlmCodecWrapper {
@@ -331,18 +419,6 @@ async def coro_non_json():
         let coro_cancel_fn: Py<PyAny> = module.getattr("coro_cancel").unwrap().unbind();
         let coro_non_json_fn: Py<PyAny> = module.getattr("coro_non_json").unwrap().unbind();
 
-        assert!(
-            next_async_iter_coro(&Arc::new(stop_iter_cls.call0(py).unwrap()))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            next_async_iter_coro(&Arc::new(error_iter_cls.call0(py).unwrap()))
-                .unwrap_err()
-                .to_string()
-                .contains("next boom")
-        );
-
         let value_payload = crate::convert::json_to_py(py, &json!({"x": 1})).unwrap();
         let dropped_payload = crate::convert::json_to_py(py, &json!({"x": 2})).unwrap();
         let no_loop_payload = crate::convert::json_to_py(py, &json!({"x": 3})).unwrap();
@@ -351,6 +427,26 @@ async def coro_non_json():
         with_event_loop(py, |event_loop| {
             let _runtime = tokio::runtime::Runtime::new().unwrap();
             pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
+                let stop = next_async_iter_coro(&Arc::new(Python::attach(|py| {
+                    stop_iter_cls.call0(py).unwrap()
+                })))
+                .unwrap()
+                .unwrap();
+                assert!(await_async_iter_value(stop).await.unwrap().is_none());
+
+                let error = next_async_iter_coro(&Arc::new(Python::attach(|py| {
+                    error_iter_cls.call0(py).unwrap()
+                })))
+                .unwrap()
+                .unwrap();
+                assert!(
+                    await_async_iter_value(error)
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("next boom")
+                );
+
                 let value =
                     await_async_iter_value(Python::attach(|py| coro_value_fn.call0(py).unwrap()))
                         .await
@@ -451,11 +547,26 @@ async def coro_non_json():
             .unwrap();
         });
 
-        let no_loop_err = match stream_from_async_iter(no_loop_iter) {
+        let no_loop_err = match stream_from_async_iter(no_loop_iter, None) {
             Ok(_) => panic!("expected missing event loop error"),
             Err(err) => err,
         };
         assert!(no_loop_err.to_string().contains("no running event loop"));
+    });
+}
+
+#[test]
+fn continuation_scope_lookup_supports_native_only_embeddings() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        assert!(
+            python_invocation_scope_stack_from_module(
+                py,
+                "__nemo_relay_missing_wrapper_for_test__",
+            )
+            .unwrap()
+            .is_none()
+        );
     });
 }
 
@@ -483,8 +594,10 @@ async def collect_stream(awaitable):
 
         with_event_loop(py, |event_loop| {
             pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
+                let continuation_context = MiddlewareContinuationContext::capture();
                 let tool_next = PyToolNextFn {
                     inner: Arc::new(|args| Box::pin(async move { Ok(json!({"echo": args["x"]})) })),
+                    context: continuation_context.clone(),
                 };
                 let tool_awaitable = Python::attach(|py| {
                     tool_next.__call__(py, tool_args.bind(py)).unwrap().unbind()
@@ -505,6 +618,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|_| {
                         Box::pin(async { Err(FlowError::Internal("tool next boom".into())) })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let tool_err_awaitable = Python::attach(|py| {
                     tool_next_err
@@ -530,6 +644,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|request| {
                         Box::pin(async move { Ok(json!({"model": request.content["model"]})) })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let llm_awaitable = Python::attach(|py| {
                     llm_next
@@ -556,6 +671,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|_| {
                         Box::pin(async { Err(FlowError::Internal("llm next boom".into())) })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let llm_err_awaitable = Python::attach(|py| {
                     llm_next_err
@@ -590,6 +706,7 @@ async def collect_stream(awaitable):
                             ))
                         })
                     }),
+                    context: continuation_context.clone(),
                 };
                 let stream_awaitable = Python::attach(|py| {
                     stream_next
@@ -618,6 +735,7 @@ async def collect_stream(awaitable):
                     inner: Arc::new(|_| {
                         Box::pin(async { Err(FlowError::Internal("stream next boom".into())) })
                     }),
+                    context: continuation_context,
                 };
                 let stream_err_awaitable = Python::attach(|py| {
                     stream_next_err
@@ -651,18 +769,27 @@ async def collect_stream(awaitable):
 }
 
 #[test]
-fn event_sanitize_wrapper_covers_conversion_success_and_fail_closed_paths() {
+fn event_sanitize_wrapper_covers_conversion_success_and_error_propagation() {
     use nemo_relay::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
-    Python::attach(|py| {
-        let module = load_module(
-            py,
-            r#"
+    let (_context_module, sanitized_fn, async_sanitizer, raises_fn, invalid_fn) =
+        Python::attach(|py| {
+            let context_module = install_event_sanitizer_context_module(py);
+            let module = load_module(
+                py,
+                r#"
+import asyncio
+
 def sanitize(event, fields):
     assert event.kind == "mark"
     fields["data"] = {"safe": event.name}
     fields["metadata"] = None
+    return fields
+
+async def async_sanitize(event, fields):
+    await asyncio.sleep(0)
+    fields["data"] = {"async_safe": event.name}
     return fields
 
 def raises(event, fields):
@@ -671,35 +798,151 @@ def raises(event, fields):
 def invalid(event, fields):
     return "not fields"
 "#,
-        );
-        let event = Event::Mark(MarkEvent::new(
-            BaseEvent::builder().name("checkpoint").build(),
-            None,
-            None,
-        ));
-        let fields = EventSanitizeFields {
-            data: Some(json!({"secret": true})),
-            category_profile: None,
-            metadata: Some(json!({"secret": true})),
-        };
+            );
+            (
+                context_module,
+                wrap_py_event_sanitize_fn(module.getattr("sanitize").unwrap().unbind()),
+                wrap_py_event_sanitize_fn(module.getattr("async_sanitize").unwrap().unbind()),
+                wrap_py_event_sanitize_fn(module.getattr("raises").unwrap().unbind()),
+                wrap_py_event_sanitize_fn(module.getattr("invalid").unwrap().unbind()),
+            )
+        });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("checkpoint").build(),
+        None,
+        None,
+    ));
+    let fields = EventSanitizeFields {
+        data: Some(json!({"secret": true})),
+        category_profile: None,
+        metadata: Some(json!({"secret": true})),
+    };
 
-        let sanitized = wrap_py_event_sanitize_fn(module.getattr("sanitize").unwrap().unbind())(
-            &event,
-            fields.clone(),
-        );
-        assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
-        assert_eq!(sanitized.metadata, None);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let sanitized = runtime
+        .block_on(sanitized_fn(Arc::new(event.clone()), fields.clone()))
+        .unwrap();
+    assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
+    assert_eq!(sanitized.metadata, None);
 
-        let raised = wrap_py_event_sanitize_fn(module.getattr("raises").unwrap().unbind())(
-            &event,
-            fields.clone(),
-        );
-        assert_eq!(raised, EventSanitizeFields::default());
+    let async_sanitized = runtime
+        .block_on(async_sanitizer(Arc::new(event.clone()), fields.clone()))
+        .unwrap();
+    assert_eq!(
+        async_sanitized.data,
+        Some(json!({"async_safe": "checkpoint"}))
+    );
 
-        let invalid = wrap_py_event_sanitize_fn(module.getattr("invalid").unwrap().unbind())(
-            &event,
-            fields.clone(),
+    let raised = runtime
+        .block_on(raises_fn(Arc::new(event.clone()), fields.clone()))
+        .unwrap_err();
+    assert!(raised.to_string().contains("sanitize boom"));
+
+    let invalid = runtime
+        .block_on(invalid_fn(Arc::new(event), fields))
+        .unwrap_err();
+    assert!(
+        invalid
+            .to_string()
+            .contains("invalid event sanitizer result")
+    );
+}
+
+#[test]
+fn awaitable_middleware_wrappers_cover_success_and_failure() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let module = load_module(
+            py,
+            r#"
+async def tool_ok(name, args):
+    return {"name": name, "value": args["value"] + 1}
+
+async def tool_fail(name, args):
+    raise RuntimeError("async tool boom")
+
+async def llm_ok(request):
+    return None
+
+async def llm_fail(request):
+    raise RuntimeError("async llm boom")
+"#,
         );
-        assert_eq!(invalid, EventSanitizeFields::default());
+        let tool_ok = wrap_py_tool_fn(module.getattr("tool_ok").unwrap().unbind());
+        let tool_fail = wrap_py_tool_fn(module.getattr("tool_fail").unwrap().unbind());
+        let llm_ok = wrap_py_llm_conditional_fn(module.getattr("llm_ok").unwrap().unbind());
+        let llm_fail = wrap_py_llm_conditional_fn(module.getattr("llm_fail").unwrap().unbind());
+
+        with_event_loop(py, |event_loop| {
+            pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
+                assert_eq!(
+                    tool_ok("demo".into(), json!({"value": 1})).await.unwrap(),
+                    json!({"name": "demo", "value": 2})
+                );
+                assert!(
+                    tool_fail("demo".into(), json!({"value": 1}))
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("async tool boom")
+                );
+                assert_eq!(llm_ok(make_request()).await.unwrap(), None);
+                assert!(
+                    llm_fail(make_request())
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("async llm boom")
+                );
+                Ok(())
+            })
+            .unwrap();
+        });
+    });
+}
+
+#[test]
+fn background_middleware_accepts_custom_awaitables() {
+    let _python = crate::test_support::init_python_test();
+    let (_context_module, llm_custom) = Python::attach(|py| {
+        let context_module = install_event_sanitizer_context_module(py);
+        let module = load_module(
+            py,
+            r#"
+class CustomAwaitable:
+    def __await__(self):
+        async def resolve():
+            return None
+        return resolve().__await__()
+
+def llm_custom_awaitable(request):
+    return CustomAwaitable()
+"#,
+        );
+        (
+            context_module,
+            wrap_py_llm_conditional_fn(module.getattr("llm_custom_awaitable").unwrap().unbind()),
+        )
+    });
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    assert_eq!(runtime.block_on(llm_custom(make_request())).unwrap(), None);
+}
+
+#[test]
+fn execution_next_context_restores_scope() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let scope_stack = nemo_relay::api::runtime::create_scope_stack();
+        let context = nemo_relay::api::runtime::with_scope_stack(scope_stack.clone(), || {
+            MiddlewareContinuationContext::capture()
+        });
+
+        let observed =
+            tokio::spawn(async move { context.run(async move { current_scope_stack() }).await })
+                .await
+                .unwrap();
+
+        assert!(Arc::ptr_eq(&observed, &scope_stack));
     });
 }

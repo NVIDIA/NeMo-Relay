@@ -8,6 +8,8 @@ use std::ptr;
 
 use tokio_stream::StreamExt;
 
+use super::test_support::resolve;
+
 unsafe extern "C" fn tool_conditional_error_cb(
     _user_data: *mut libc::c_void,
     _name: *const c_char,
@@ -172,7 +174,7 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         .unwrap();
 
     let conditional = wrap_tool_conditional_fn(tool_conditional_error_cb, ptr::null_mut(), None);
-    let conditional_err = conditional("tool", &json!({})).unwrap_err();
+    let conditional_err = resolve(conditional("tool".into(), json!({}))).unwrap_err();
     assert!(
         conditional_err
             .to_string()
@@ -243,7 +245,7 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
 
     let intercept_error =
         wrap_llm_request_intercept_fn(llm_request_intercept_status_error_cb, ptr::null_mut(), None);
-    let err = intercept_error("llm", request.clone(), None).unwrap_err();
+    let err = resolve(intercept_error("llm".into(), request.clone(), None)).unwrap_err();
     assert!(
         err.to_string()
             .contains("request intercept callback failed")
@@ -254,7 +256,7 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
         ptr::null_mut(),
         None,
     );
-    let err = intercept_null("llm", request.clone(), None).unwrap_err();
+    let err = resolve(intercept_null("llm".into(), request.clone(), None)).unwrap_err();
     assert!(err.to_string().contains("null out_outcome_json"));
 
     let intercept_invalid_annotated = wrap_llm_request_intercept_fn(
@@ -262,22 +264,28 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
         ptr::null_mut(),
         None,
     );
-    let err = intercept_invalid_annotated("llm", request.clone(), None).unwrap_err();
+    let err = resolve(intercept_invalid_annotated(
+        "llm".into(),
+        request.clone(),
+        None,
+    ))
+    .unwrap_err();
     assert!(
         err.to_string()
             .contains("invalid LLM request intercept outcome JSON")
     );
 
     let sanitize = wrap_llm_sanitize_request_fn(llm_request_passthrough_cb, ptr::null_mut(), None);
-    let sanitized = sanitize(
+    let sanitized = resolve(sanitize(
         request.clone(),
         nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
-    )
+    ))
+    .unwrap()
     .expect("non-null sanitizer result");
     assert_eq!(sanitized.content, request.content);
 
     let conditional = wrap_llm_conditional_fn(llm_conditional_error_cb, ptr::null_mut(), None);
-    let conditional_err = conditional(&request).unwrap_err();
+    let conditional_err = resolve(conditional(request.clone())).unwrap_err();
     assert!(
         conditional_err
             .to_string()
@@ -359,12 +367,16 @@ fn test_sanitizer_context_resolves_directional_ffi_codecs() {
             "preserve": true
         }),
     };
-    let sanitized =
-        wrap_llm_sanitize_request_fn(llm_request_codec_round_trip_cb, ptr::null_mut(), None)(
-            request.clone(),
-            LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
-        )
-        .expect("codec round trip returns a request");
+    let sanitized = resolve(wrap_llm_sanitize_request_fn(
+        llm_request_codec_round_trip_cb,
+        ptr::null_mut(),
+        None,
+    )(
+        request.clone(),
+        LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+    ))
+    .unwrap()
+    .expect("codec round trip returns a request");
     assert_eq!(sanitized.content, request.content);
 
     let response = json!({
@@ -376,11 +388,15 @@ fn test_sanitizer_context_resolves_directional_ffi_codecs() {
             "finish_reason": "stop"
         }]
     });
-    let sanitized =
-        wrap_llm_sanitize_response_fn(llm_response_codec_decode_cb, ptr::null_mut(), None)(
-            response.clone(),
-            LlmSanitizeResponseContext::for_response_codec(Some(codec)),
-        )
-        .expect("codec decode returns a response");
+    let sanitized = resolve(wrap_llm_sanitize_response_fn(
+        llm_response_codec_decode_cb,
+        ptr::null_mut(),
+        None,
+    )(
+        response.clone(),
+        LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+    ))
+    .unwrap()
+    .expect("codec decode returns a response");
     assert_eq!(sanitized, response);
 }

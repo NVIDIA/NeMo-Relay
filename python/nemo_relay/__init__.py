@@ -22,7 +22,8 @@ The main entry points are:
 Top-level exports also include:
 
 - scope stack helpers such as ``get_scope_stack()``, ``create_scope_stack()``,
-  ``set_thread_scope_stack()``, and ``scope_stack_active()``
+  ``fork_asyncio_context()``, ``set_thread_scope_stack()``, and
+  ``scope_stack_active()``
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
@@ -165,28 +166,35 @@ class EventSanitizeFields(TypedDict):
 
 #: Guardrail callback that sanitizes emitted tool request or response payloads.
 #: Arguments are the tool name and JSON payload. The return value is the JSON
-#: payload recorded on the emitted event. Exceptions propagate through the
-#: lifecycle call that invoked the guardrail.
-ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json]
-EventSanitizeGuardrail: TypeAlias = Callable[["Event", EventSanitizeFields], EventSanitizeFields]
+#: payload recorded on the emitted event. Exceptions fail open and preserve the
+#: last valid observability payload.
+ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
+EventSanitizeGuardrail: TypeAlias = Callable[
+    ["Event", EventSanitizeFields], EventSanitizeFields | Awaitable[EventSanitizeFields]
+]
 #: Guardrail callback that can block tool execution by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
-ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
+ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 #: Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 #: Callbacks receive ``(request, context)``. Returning ``None`` omits the LLM observability
 #: payload and annotation without changing the caller-visible request.
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeRequestContext"], Optional[LLMRequest]]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[
+    [LLMRequest, "LlmSanitizeRequestContext"],
+    Optional[LLMRequest] | Awaitable[Optional[LLMRequest]],
+]
 #: Guardrail callback that sanitizes an emitted JSON LLM response payload.
 #: Callbacks receive ``(response, context)`` and can return ``None`` to omit
 #: observability payload and annotation without changing the caller response.
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[Json, "LlmSanitizeResponseContext"], Optional[Json]]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[
+    [Json, "LlmSanitizeResponseContext"], Optional[Json] | Awaitable[Optional[Json]]
+]
 #: Guardrail callback that can block an LLM call by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
-LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
+LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str] | Awaitable[Optional[str]]]
 #: Request intercept callback that rewrites tool arguments before execution.
 #: Arguments are the tool name and current JSON payload. The return value
 #: becomes the payload seen by later request intercepts and tool execution.
-ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json]
+ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json | Awaitable[Json]]
 #: Execution intercept callback that wraps tool execution with middleware
 #: behavior. The callback receives the tool name, current arguments, and the
 #: next callable. It may await and return ``next(args)`` or short-circuit.
@@ -198,7 +206,7 @@ ToolExecutionIntercept: TypeAlias = Callable[
 #: and pending-mark outcome passed to later intercepts and managed execution.
 LlmRequestIntercept: TypeAlias = Callable[
     [str, LLMRequest, AnnotatedLLMRequest | None],
-    LLMRequestInterceptOutcome,
+    LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome],
 ]
 #: Execution intercept callback that wraps non-streaming LLM execution. The
 #: callback receives the logical LLM name, request, and next callable. It may
@@ -234,6 +242,10 @@ from nemo_relay import (  # noqa: E402
 )
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
+_propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_parent",
+    default=None,
+)
 
 
 def get_scope_stack() -> ScopeStack:
@@ -407,12 +419,16 @@ def create_scope_stack() -> ScopeStack:
 def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport."""
     get_scope_stack()
+    if parent_uuid := _propagation_parent_var.get():
+        return PropagationContext(parent_uuid)
     return _capture_propagation_context()
 
 
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
     """Capture the current parent with an optional stable application session root."""
     get_scope_stack()
+    if parent_uuid := _propagation_parent_var.get():
+        return PropagationContext(parent_uuid, root_uuid)
     return _capture_propagation_context_with_root(root_uuid)
 
 
@@ -421,9 +437,56 @@ def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeSta
     return _create_scope_stack_from_propagation(context)
 
 
+def fork_asyncio_context() -> contextvars.Context:
+    """Create an asyncio child context with an isolated Relay scope stack.
+
+    Capture the current Relay parent, then install an isolated stack seeded
+    from that parent into a copy of the current Python context. Use the
+    returned context when creating a child task so concurrent tasks cannot
+    mutate the same scope stack.
+
+    Returns:
+        contextvars.Context: A copy of the current context with an isolated
+            Relay scope stack. Other context variable values are preserved.
+
+    Notes:
+        The child stack preserves event parentage but does not transfer
+        scope-local middleware or subscribers. Call this before the child task
+        starts; it cannot retrofit isolation onto an already-running task. Pass
+        the returned context to ``asyncio.create_task(..., context=...)`` or
+        ``asyncio.TaskGroup.create_task(..., context=...)``.
+
+    Example::
+
+        import asyncio
+
+        import nemo_relay
+
+        async def worker() -> None:
+            with nemo_relay.scope.scope("worker", nemo_relay.ScopeType.Function):
+                await asyncio.sleep(0)
+
+        async def main() -> None:
+            with nemo_relay.scope.scope("parent", nemo_relay.ScopeType.Agent):
+                task = asyncio.create_task(
+                    worker(),
+                    context=nemo_relay.fork_asyncio_context(),
+                )
+                await task
+    """
+    propagation = capture_propagation_context()
+    stack = create_scope_stack_from_propagation(propagation)
+    child_context = contextvars.copy_context()
+    child_context.run(_scope_stack_var.set, stack)
+    return child_context
+
+
 @contextmanager
 def use_scope_stack(stack: ScopeStack):
     """Temporarily install ``stack`` in the current Python context."""
+    current_stack = _scope_stack_var.get(None)
+    if current_stack is not None:
+        _sync_thread_scope_stack(current_stack)
     previous_native_stack = _capture_thread_scope_stack()
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)
@@ -507,6 +570,7 @@ __all__ = [
     "capture_propagation_context",
     "capture_propagation_context_with_root",
     "create_scope_stack_from_propagation",
+    "fork_asyncio_context",
     "get_scope_stack",
     "scope_stack_active",
     "propagate_scope_to_thread",

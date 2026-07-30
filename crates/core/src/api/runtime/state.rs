@@ -10,9 +10,14 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+
+use futures_util::{FutureExt, Stream};
 
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
@@ -21,16 +26,21 @@ use crate::api::event::{
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
+use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, LlmStreamInner, ToolConditionalFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn,
+    ToolSanitizeFn,
+};
+use crate::api::runtime::continuation_context::{
+    MiddlewareContinuationContext, MiddlewareContinuationGuard, MiddlewareContinuationLease,
 };
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
-use crate::api::shared::sanitize_event;
+use crate::api::shared::snapshot_event_sanitizers;
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{
     CreateToolHandleParams, EndToolHandleParams, ToolExecutionInterceptOutcome,
@@ -40,11 +50,154 @@ use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
     merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
 };
+use crate::error::FlowError;
 use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
+
+struct ContinuationGuardedLlmStream {
+    inner: LlmJsonStream,
+    guard: Option<MiddlewareContinuationGuard>,
+}
+
+struct ContextualizedLlmStream {
+    inner: LlmJsonStream,
+    context: MiddlewareContinuationContext,
+}
+
+impl Stream for ContextualizedLlmStream {
+    type Item = crate::error::Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let context = this.context.clone();
+        let inner = &mut this.inner;
+        let future = context.run(futures_util::future::poll_fn(|inner_cx| {
+            Pin::new(&mut *inner).poll_next(inner_cx)
+        }));
+        tokio::pin!(future);
+        future.poll(cx)
+    }
+}
+
+impl LlmStreamInner for ContextualizedLlmStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        self.get_mut().inner.terminalize();
+    }
+
+    fn close(
+        self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let this = self.get_mut();
+            let context = this.context.clone();
+            context.run(this.inner.close()).await
+        })
+    }
+}
+
+pub(crate) fn contextualize_stream(
+    stream: LlmJsonStream,
+    context: MiddlewareContinuationContext,
+) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(ContextualizedLlmStream {
+        inner: stream,
+        context,
+    })
+}
+
+impl Stream for ContinuationGuardedLlmStream {
+    type Item = crate::error::Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.inner).poll_next(cx);
+        if matches!(&result, Poll::Ready(None)) {
+            this.guard.take();
+        }
+        result
+    }
+}
+
+impl LlmStreamInner for ContinuationGuardedLlmStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.guard.take();
+        this.inner.terminalize();
+    }
+
+    fn close(
+        self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let this = self.get_mut();
+            let guard = this.guard.take();
+            let result = this.inner.close().await;
+            drop(guard);
+            result
+        })
+    }
+}
+
+fn guard_stream_continuation(
+    stream: LlmJsonStream,
+    guard: MiddlewareContinuationGuard,
+) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(ContinuationGuardedLlmStream {
+        inner: stream,
+        guard: Some(guard),
+    })
+}
+
+struct GuardrailScopeCompletion<'a> {
+    handle: Option<ScopeHandle>,
+    subscribers: &'a [EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+}
+
+impl GuardrailScopeCompletion<'_> {
+    fn new(
+        handle: ScopeHandle,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> GuardrailScopeCompletion<'_> {
+        GuardrailScopeCompletion {
+            handle: Some(handle),
+            subscribers,
+            scope_stack,
+        }
+    }
+
+    fn finish(mut self, output: Json) {
+        let handle = self.handle.take().expect("guardrail scope handle");
+        NemoRelayContextState::emit_guardrail_scope_end(
+            &handle,
+            output,
+            self.subscribers,
+            self.scope_stack.clone(),
+        );
+    }
+}
+
+impl Drop for GuardrailScopeCompletion<'_> {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        NemoRelayContextState::emit_guardrail_scope_end(
+            &handle,
+            json!({
+                "allowed": false,
+                "cancelled": true,
+                "error": "guardrail evaluation cancelled",
+            }),
+            self.subscribers,
+            self.scope_stack.clone(),
+        );
+    }
+}
 
 /// Process-global runtime state backing middleware and event emission.
 ///
@@ -191,17 +344,9 @@ impl NemoRelayContextState {
     /// # Parameters
     /// - `event`: Fully constructed lifecycle event to deliver.
     /// - `subscribers`: Subscribers that should observe the event.
+    #[cfg(test)]
     pub(crate) fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
         let _ = subscriber_dispatcher::dispatch_event(event, subscribers);
-    }
-
-    /// Queue an event and report whether the asynchronous dispatcher accepted it.
-    ///
-    /// Subscriber callbacks still run asynchronously. This acknowledgement only
-    /// covers queue acceptance and is used by bounded observability cursors so a
-    /// transient dispatcher failure does not permanently discard evidence.
-    pub(crate) fn try_emit_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
-        subscriber_dispatcher::dispatch_event(event, subscribers)
     }
 
     /// Build a standalone mark event.
@@ -571,6 +716,7 @@ impl NemoRelayContextState {
         metadata: Option<Json>,
         input: Json,
         subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
     ) -> ScopeHandle {
         let handle = ScopeHandle::builder()
             .name(name)
@@ -592,9 +738,13 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        if let Some(event) = sanitize_event(event) {
-            Self::emit_event(&event, subscribers);
-        }
+        let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+        subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            subscribers,
+            scope_stack,
+        );
         handle
     }
 
@@ -602,6 +752,7 @@ impl NemoRelayContextState {
         handle: &ScopeHandle,
         output: Json,
         subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
     ) {
         let event = Event::Scope(ScopeEvent::new(
             BaseEvent::builder()
@@ -617,9 +768,13 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        if let Some(event) = sanitize_event(event) {
-            Self::emit_event(&event, subscribers);
-        }
+        let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+        subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            subscribers,
+            scope_stack,
+        );
     }
 
     /// Snapshot event sanitizer entries in priority order.
@@ -634,23 +789,35 @@ impl NemoRelayContextState {
     }
 
     /// Apply an event sanitizer snapshot to the mutable observability fields.
-    pub(crate) fn event_sanitize_snapshot_chain(
+    pub(crate) async fn event_sanitize_snapshot_chain(
         mut event: Event,
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
         for entry in entries {
-            if catch_unwind(AssertUnwindSafe(|| {
-                let fields = (entry.payload)(&event, event.sanitize_fields());
-                event.apply_sanitize_fields(fields);
-            }))
-            .is_err()
-            {
-                log::error!(
+            let fields = event.sanitize_fields();
+            let callback = Arc::clone(&entry.payload);
+            let context = Arc::new(event);
+            let callback_context = Arc::clone(&context);
+            let outcome = AssertUnwindSafe(async move { callback(callback_context, fields).await })
+                .catch_unwind()
+                .await;
+            event = Arc::try_unwrap(context).unwrap_or_else(|context| (*context).clone());
+            match outcome {
+                Ok(Ok(fields)) => event.apply_sanitize_fields(fields),
+                Ok(Err(error)) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_failed",
+                    sanitizer = entry.name.as_str(),
+                    event_name = event.name();
+                    "Event sanitizer failed; preserving the last valid event snapshot: {error}"
+                ),
+                Err(_) => log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_panicked",
-                    guardrail = entry.name.as_str();
+                    sanitizer = entry.name.as_str(),
+                    event_name = event.name();
                     "Event sanitizer panicked; publishing the latest valid event snapshot"
-                );
+                ),
             }
         }
         event
@@ -684,14 +851,36 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized JSON payload after every provided guardrail has run.
-    pub(crate) fn tool_sanitize_request_snapshot_chain(
+    pub(crate) async fn tool_sanitize_request_snapshot_chain(
         name: &str,
         args: Json,
         entries: &[Guardrail<ToolSanitizeFn>],
     ) -> Json {
         let mut value = args;
         for entry in entries {
-            value = (entry.payload)(name, value);
+            let callback = Arc::clone(&entry.payload);
+            let callback_name = name.to_string();
+            let current = value.clone();
+            match AssertUnwindSafe(async move { callback(callback_name, current).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(next)) => value = next,
+                Ok(Err(error)) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_request_sanitizer_failed",
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
+                    "Tool request sanitizer failed; preserving the last valid payload: {error}"
+                ),
+                Err(_) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_request_sanitizer_panicked",
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
+                    "Tool request sanitizer panicked; preserving the last valid payload"
+                ),
+            }
         }
         value
     }
@@ -724,14 +913,36 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized JSON payload after every provided guardrail has run.
-    pub(crate) fn tool_sanitize_response_snapshot_chain(
+    pub(crate) async fn tool_sanitize_response_snapshot_chain(
         name: &str,
         result: Json,
         entries: &[Guardrail<ToolSanitizeFn>],
     ) -> Json {
         let mut value = result;
         for entry in entries {
-            value = (entry.payload)(name, value);
+            let callback = Arc::clone(&entry.payload);
+            let callback_name = name.to_string();
+            let current = value.clone();
+            match AssertUnwindSafe(async move { callback(callback_name, current).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(next)) => value = next,
+                Ok(Err(error)) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_response_sanitizer_failed",
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
+                    "Tool response sanitizer failed; preserving the last valid payload: {error}"
+                ),
+                Err(_) => log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "tool_response_sanitizer_panicked",
+                    sanitizer = entry.name.as_str(),
+                    tool_name = name;
+                    "Tool response sanitizer panicked; preserving the last valid payload"
+                ),
+            }
         }
         value
     }
@@ -781,7 +992,7 @@ impl NemoRelayContextState {
     /// # Errors
     /// Propagates any error returned by a guardrail callback after emitting the
     /// corresponding guardrail scope end event.
-    pub(crate) fn tool_conditional_execution_snapshot_chain(
+    pub(crate) async fn tool_conditional_execution_snapshot_chain(
         name: &str,
         args: &Json,
         entries: &[Guardrail<ToolConditionalFn>],
@@ -790,6 +1001,7 @@ impl NemoRelayContextState {
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
         for entry in entries {
+            let scope_stack = super::current_scope_stack();
             let handle = Self::emit_guardrail_scope_start(
                 &entry.name,
                 parent_uuid,
@@ -799,8 +1011,23 @@ impl NemoRelayContextState {
                     "target_name": name,
                 }),
                 subscribers,
+                scope_stack.clone(),
             );
-            let result = (entry.payload)(name, args);
+            let completion = GuardrailScopeCompletion::new(handle, subscribers, scope_stack);
+            let callback = Arc::clone(&entry.payload);
+            let callback_name = name.to_string();
+            let callback_args = args.clone();
+            let result =
+                match AssertUnwindSafe(async move { callback(callback_name, callback_args).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(FlowError::Internal(format!(
+                        "tool conditional guardrail '{}' panicked",
+                        entry.name
+                    ))),
+                };
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -816,7 +1043,7 @@ impl NemoRelayContextState {
                     "error": error.to_string(),
                 }),
             };
-            Self::emit_guardrail_scope_end(&handle, output, subscribers);
+            completion.finish(output);
             if let Some(error) = result? {
                 return Ok(Some(error));
             }
@@ -859,14 +1086,27 @@ impl NemoRelayContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub(crate) fn tool_request_intercepts_snapshot_chain(
+    pub(crate) async fn tool_request_intercepts_snapshot_chain(
         name: &str,
         args: Json,
         entries: &[Intercept<ToolInterceptFn>],
     ) -> crate::error::Result<Json> {
         let mut value = args;
         for entry in entries {
-            value = (entry.payload.callable)(name, value)?;
+            let callback = Arc::clone(&entry.payload.callable);
+            let callback_name = name.to_string();
+            value = match AssertUnwindSafe(async move { callback(callback_name, value).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(FlowError::Internal(format!(
+                        "tool request intercept '{}' panicked",
+                        entry.name
+                    )));
+                }
+            };
             if entry.payload.break_chain {
                 break;
             }
@@ -908,18 +1148,21 @@ impl NemoRelayContextState {
             next = Arc::new(move |args| {
                 let callable = callable.clone();
                 let current_name = current_name.clone();
+                let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
                 let next_sequence = Arc::new(AtomicUsize::new(0));
                 let downstream_marks = Arc::new(Mutex::new(Vec::new()));
                 let raw_next: ToolExecutionNextFn = {
                     let current_next = current_next.clone();
+                    let continuation = continuation.clone();
                     let next_sequence = next_sequence.clone();
                     let downstream_marks = downstream_marks.clone();
                     Arc::new(move |args| {
                         let sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
                         let current_next = current_next.clone();
+                        let invocation = continuation.begin();
                         let downstream_marks = downstream_marks.clone();
                         Box::pin(async move {
-                            let outcome = current_next(args).await?;
+                            let outcome = invocation?.invoke(move || current_next(args)).await?;
                             downstream_marks
                                 .lock()
                                 .expect("tool pending mark accumulator lock poisoned")
@@ -929,7 +1172,9 @@ impl NemoRelayContextState {
                     })
                 };
                 Box::pin(async move {
-                    let mut outcome = callable(&current_name, args, raw_next).await?;
+                    let outcome = callable(&current_name, args, raw_next).await;
+                    drop(continuation_guard);
+                    let mut outcome = outcome?;
                     let mut downstream_batches = std::mem::take(
                         &mut *downstream_marks
                             .lock()
@@ -976,14 +1221,45 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized [`LlmRequest`] after every provided guardrail has run.
-    pub(crate) fn llm_sanitize_request_snapshot_chain(
+    pub(crate) async fn llm_sanitize_request_snapshot_chain(
         request: LlmRequest,
         context: LlmSanitizeRequestContext,
         entries: &[Guardrail<LlmSanitizeRequestFn>],
     ) -> Option<LlmRequest> {
         let mut value = Some(request);
         for entry in entries {
-            value = value.and_then(|value| (entry.payload)(value, context.clone()));
+            if let Some(current) = value.take() {
+                let callback = Arc::clone(&entry.payload);
+                let callback_value = current.clone();
+                let callback_context = context.clone();
+                match AssertUnwindSafe(
+                    async move { callback(callback_value, callback_context).await },
+                )
+                .catch_unwind()
+                .await
+                {
+                    Ok(Ok(next)) => value = next,
+                    Ok(Err(error)) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_request_sanitizer_failed",
+                            sanitizer = entry.name.as_str(),
+                            preserved_value = "last_valid_request";
+                            "LLM request sanitizer failed; preserving the last valid request: {error}"
+                        );
+                        value = Some(current);
+                    }
+                    Err(_) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_request_sanitizer_panicked",
+                            sanitizer = entry.name.as_str();
+                            "LLM request sanitizer panicked; preserving the last valid request"
+                        );
+                        value = Some(current);
+                    }
+                }
+            }
         }
         value
     }
@@ -1015,14 +1291,45 @@ impl NemoRelayContextState {
     ///
     /// # Returns
     /// The sanitized response payload after every provided guardrail has run.
-    pub(crate) fn llm_sanitize_response_snapshot_chain(
+    pub(crate) async fn llm_sanitize_response_snapshot_chain(
         response: Json,
         context: LlmSanitizeResponseContext,
         entries: &[Guardrail<LlmSanitizeResponseFn>],
     ) -> Option<Json> {
         let mut value = Some(response);
         for entry in entries {
-            value = value.and_then(|value| (entry.payload)(value, context.clone()));
+            if let Some(current) = value.take() {
+                let callback = Arc::clone(&entry.payload);
+                let callback_value = current.clone();
+                let callback_context = context.clone();
+                match AssertUnwindSafe(
+                    async move { callback(callback_value, callback_context).await },
+                )
+                .catch_unwind()
+                .await
+                {
+                    Ok(Ok(next)) => value = next,
+                    Ok(Err(error)) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_response_sanitizer_failed",
+                            sanitizer = entry.name.as_str(),
+                            preserved_value = "last_valid_response";
+                            "LLM response sanitizer failed; preserving the last valid response: {error}"
+                        );
+                        value = Some(current);
+                    }
+                    Err(_) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "llm_response_sanitizer_panicked",
+                            sanitizer = entry.name.as_str();
+                            "LLM response sanitizer panicked; preserving the last valid response"
+                        );
+                        value = Some(current);
+                    }
+                }
+            }
         }
         value
     }
@@ -1071,7 +1378,7 @@ impl NemoRelayContextState {
     /// # Errors
     /// Propagates any error returned by a guardrail callback after emitting the
     /// corresponding guardrail scope end event.
-    pub(crate) fn llm_conditional_execution_snapshot_chain(
+    pub(crate) async fn llm_conditional_execution_snapshot_chain(
         request: &LlmRequest,
         entries: &[Guardrail<LlmConditionalFn>],
         subscribers: &[EventSubscriberFn],
@@ -1079,6 +1386,7 @@ impl NemoRelayContextState {
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
         for entry in entries {
+            let scope_stack = super::current_scope_stack();
             let handle = Self::emit_guardrail_scope_start(
                 &entry.name,
                 parent_uuid,
@@ -1087,8 +1395,21 @@ impl NemoRelayContextState {
                     "kind": "llm_conditional_execution",
                 }),
                 subscribers,
+                scope_stack.clone(),
             );
-            let result = (entry.payload)(request);
+            let completion = GuardrailScopeCompletion::new(handle, subscribers, scope_stack);
+            let callback = Arc::clone(&entry.payload);
+            let callback_request = request.clone();
+            let result = match AssertUnwindSafe(async move { callback(callback_request).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(FlowError::Internal(format!(
+                    "LLM conditional guardrail '{}' panicked",
+                    entry.name
+                ))),
+            };
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -1104,7 +1425,7 @@ impl NemoRelayContextState {
                     "error": error.to_string(),
                 }),
             };
-            Self::emit_guardrail_scope_end(&handle, output, subscribers);
+            completion.finish(output);
             if let Some(error) = result? {
                 return Ok(Some(error));
             }
@@ -1151,7 +1472,7 @@ impl NemoRelayContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub(crate) fn llm_request_intercepts_snapshot_chain(
+    pub(crate) async fn llm_request_intercepts_snapshot_chain(
         name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
@@ -1166,11 +1487,12 @@ impl NemoRelayContextState {
             codec_active,
             None,
         )
+        .await
     }
 
     /// Run a request-intercept snapshot while ingesting optimization evidence
     /// directly into the managed call's bounded accumulator.
-    pub(crate) fn llm_request_intercepts_snapshot_chain_with_recorder(
+    pub(crate) async fn llm_request_intercepts_snapshot_chain_with_recorder(
         name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
@@ -1184,7 +1506,22 @@ impl NemoRelayContextState {
         let mut optimization_contributions = Vec::new();
         for entry in entries {
             let input_content = request_value.content.clone();
-            let outcome = (entry.payload.callable)(name, request_value, annotated_value)?;
+            let callback = Arc::clone(&entry.payload.callable);
+            let callback_name = name.to_string();
+            let outcome = match AssertUnwindSafe(async move {
+                callback(callback_name, request_value, annotated_value).await
+            })
+            .catch_unwind()
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(FlowError::Internal(format!(
+                        "LLM request intercept '{}' panicked",
+                        entry.name
+                    )));
+                }
+            };
             if codec_active && outcome.request.content != input_content {
                 return Err(crate::error::FlowError::InvalidArgument(format!(
                     "LLM request intercept '{}' changed request.content while a request codec is active; modify annotated_request instead",
@@ -1243,7 +1580,24 @@ impl NemoRelayContextState {
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
-            next = Arc::new(move |request| callable(&current_name, request, current_next.clone()));
+            next = Arc::new(move |request| {
+                let callable = callable.clone();
+                let current_next = current_next.clone();
+                let current_name = current_name.clone();
+                Box::pin(async move {
+                    let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
+                    let raw_next: LlmExecutionNextFn = Arc::new(move |request| {
+                        let invocation = continuation.begin();
+                        let current_next = current_next.clone();
+                        Box::pin(
+                            async move { invocation?.invoke(move || current_next(request)).await },
+                        )
+                    });
+                    let result = callable(&current_name, request, raw_next).await;
+                    drop(continuation_guard);
+                    result
+                })
+            });
         }
         next
     }
@@ -1276,7 +1630,26 @@ impl NemoRelayContextState {
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
-            next = Arc::new(move |request| callable(&current_name, request, current_next.clone()));
+            next = Arc::new(move |request| {
+                let callable = callable.clone();
+                let current_next = current_next.clone();
+                let current_name = current_name.clone();
+                Box::pin(async move {
+                    let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
+                    let raw_next: LlmStreamExecutionNextFn = Arc::new(move |request| {
+                        let invocation = continuation.begin();
+                        let current_next = current_next.clone();
+                        Box::pin(async move {
+                            let invocation = invocation?;
+                            let context = invocation.context().clone();
+                            let stream = invocation.invoke(move || current_next(request)).await?;
+                            Ok(contextualize_stream(stream, context))
+                        })
+                    });
+                    let result = callable(&current_name, request, raw_next).await;
+                    result.map(|stream| guard_stream_continuation(stream, continuation_guard))
+                })
+            });
         }
         next
     }
@@ -1292,3 +1665,7 @@ impl Default for NemoRelayContextState {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/runtime_state_tests.rs"]
+mod tests;

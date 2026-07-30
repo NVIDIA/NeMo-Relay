@@ -132,8 +132,8 @@ type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 type EventSanitizeFn =
     Arc<dyn Fn(&Event, EventSanitizeFields) -> BoxFutureResult<EventSanitizeFields> + Send + Sync>;
 type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> BoxFutureResult<Json> + Send + Sync>;
-type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
-type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
+type ToolConditionalFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Option<String>> + Send + Sync>;
+type ToolRequestFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Json> + Send + Sync>;
 type ToolExecutionFn = Arc<
     dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
 >;
@@ -261,9 +261,13 @@ impl WorkerResponseCodec {
             .await
     }
 }
-type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
+type LlmConditionalFn = Arc<dyn Fn(LlmRequest) -> BoxFutureResult<Option<String>> + Send + Sync>;
 type LlmRequestFn = Arc<
-    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
+    dyn Fn(
+            String,
+            LlmRequest,
+            Option<AnnotatedLlmRequest>,
+        ) -> BoxFutureResult<LlmRequestInterceptOutcome>
         + Send
         + Sync,
 >;
@@ -456,13 +460,14 @@ impl PluginContext {
     }
 
     /// Registers a tool conditional-execution guardrail.
-    pub fn register_tool_conditional_execution_guardrail<F>(
+    pub fn register_tool_conditional_execution_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&str, &Json) -> Result<Option<String>> + Send + Sync + 'static,
+        F: Fn(String, Json) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -470,20 +475,22 @@ impl PluginContext {
             priority,
             false,
         );
-        self.handlers
-            .tool_conditionals
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.tool_conditionals.insert(
+            name.into(),
+            Arc::new(move |tool_name, value| Box::pin(callback(tool_name, value))),
+        );
     }
 
     /// Registers a tool request intercept.
-    pub fn register_tool_request_intercept<F>(
+    pub fn register_tool_request_intercept<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         break_chain: bool,
         callback: F,
     ) where
-        F: Fn(&str, Json) -> Result<Json> + Send + Sync + 'static,
+        F: Fn(String, Json) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Json>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -491,9 +498,10 @@ impl PluginContext {
             priority,
             break_chain,
         );
-        self.handlers
-            .tool_requests
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.tool_requests.insert(
+            name.into(),
+            Arc::new(move |tool_name, value| Box::pin(callback(tool_name, value))),
+        );
     }
 
     /// Registers a tool execution intercept.
@@ -501,6 +509,9 @@ impl PluginContext {
     /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
     /// [`ToolNext::call`] continues the chain and returns only the raw
     /// downstream result JSON; Relay retains downstream pending marks.
+    /// `ToolNext` may be called repeatedly or concurrently while the callback
+    /// is active. Each call snapshots its visible worker scope stack, and Relay
+    /// rejects late calls or cancels unfinished calls when the callback settles.
     pub fn register_tool_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -567,13 +578,14 @@ impl PluginContext {
     }
 
     /// Registers an LLM conditional-execution guardrail.
-    pub fn register_llm_conditional_execution_guardrail<F>(
+    pub fn register_llm_conditional_execution_guardrail<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync + 'static,
+        F: Fn(LlmRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -581,23 +593,22 @@ impl PluginContext {
             priority,
             false,
         );
-        self.handlers
-            .llm_conditionals
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.llm_conditionals.insert(
+            name.into(),
+            Arc::new(move |request| Box::pin(callback(request))),
+        );
     }
 
     /// Registers an LLM request intercept.
-    pub fn register_llm_request_intercept<F>(
+    pub fn register_llm_request_intercept<F, Fut>(
         &mut self,
         name: &str,
         priority: i32,
         break_chain: bool,
         callback: F,
     ) where
-        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(String, LlmRequest, Option<AnnotatedLlmRequest>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<LlmRequestInterceptOutcome>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -605,12 +616,19 @@ impl PluginContext {
             priority,
             break_chain,
         );
-        self.handlers
-            .llm_requests
-            .insert(name.into(), Arc::new(callback));
+        self.handlers.llm_requests.insert(
+            name.into(),
+            Arc::new(move |model_name, request, annotated| {
+                Box::pin(callback(model_name, request, annotated))
+            }),
+        );
     }
 
     /// Registers an LLM execution intercept.
+    ///
+    /// [`LlmNext::call`] may run repeatedly or concurrently while the callback
+    /// is active. Each call snapshots its visible worker scope stack, and Relay
+    /// rejects late calls or cancels unfinished calls when the callback settles.
     pub fn register_llm_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -633,6 +651,11 @@ impl PluginContext {
     }
 
     /// Registers an LLM stream execution intercept.
+    ///
+    /// [`LlmStreamNext::call`] may run repeatedly or concurrently. Each call
+    /// snapshots its visible worker scope stack. The interceptor's returned
+    /// stream keeps the callback active until it closes; Relay then rejects
+    /// late calls and cancels unfinished calls.
     pub fn register_llm_stream_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -915,6 +938,10 @@ pub struct ToolNext {
 
 impl ToolNext {
     /// Calls the remaining tool execution chain.
+    ///
+    /// Calls may be repeated or concurrent while the owning interceptor is
+    /// active. Each call receives an isolated snapshot of the scope stack
+    /// visible here. Calls still unfinished when the interceptor settles fail.
     pub async fn call(&self, value: Json) -> Result<Json> {
         let mut client = self.runtime.host_client().await?;
         let response = client
@@ -923,6 +950,7 @@ impl ToolNext {
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
                 value: Some(json_envelope(JSON_SCHEMA, &value)?),
+                scope: self.runtime.current_scope_context(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -940,6 +968,10 @@ pub struct LlmNext {
 
 impl LlmNext {
     /// Calls the remaining LLM execution chain.
+    ///
+    /// Calls may be repeated or concurrent while the owning interceptor is
+    /// active. Each call receives an isolated snapshot of the scope stack
+    /// visible here. Calls still unfinished when the interceptor settles fail.
     pub async fn call(&self, request: LlmRequest) -> Result<Json> {
         let mut client = self.runtime.host_client().await?;
         let response = client
@@ -948,6 +980,7 @@ impl LlmNext {
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
                 request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
+                scope: self.runtime.current_scope_context(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -965,6 +998,11 @@ pub struct LlmStreamNext {
 
 impl LlmStreamNext {
     /// Calls the remaining LLM streaming execution chain.
+    ///
+    /// Calls may be repeated or concurrent while the owning interceptor stream
+    /// is active. Each call receives an isolated snapshot of the scope stack
+    /// visible here. A returned downstream stream has its ordinary lifetime,
+    /// but unfinished calls are cancelled when the interceptor stream closes.
     pub async fn call(&self, request: LlmRequest) -> Result<JsonStream> {
         let scope = self.runtime.current_scope_context();
         let mut client = self.runtime.host_client().await?;
@@ -974,6 +1012,7 @@ impl LlmStreamNext {
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
                 request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
+                scope: scope.clone(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
@@ -1711,10 +1750,10 @@ impl WorkerService {
                     .await
             }
             RegistrationSurface::ToolConditionalExecutionGuardrail => {
-                self.invoke_tool_conditional_response(request, scope)
+                self.invoke_tool_conditional_response(request, scope).await
             }
             RegistrationSurface::ToolRequestIntercept => {
-                self.invoke_tool_request_response(request, scope)
+                self.invoke_tool_request_response(request, scope).await
             }
             RegistrationSurface::ToolExecutionIntercept => {
                 self.invoke_tool_execution_response(request, scope).await
@@ -1747,28 +1786,26 @@ impl WorkerService {
         ))
     }
 
-    fn invoke_tool_conditional_response(
+    async fn invoke_tool_conditional_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
         let handler = self.tool_conditional(&request.registration_name)?;
-        Ok(guardrail_response(with_thread_scope(scope, || {
-            handler(&payload.tool_name, &payload.value)
-        })?))
+        let future = with_thread_scope(scope, || handler(payload.tool_name, payload.value));
+        Ok(guardrail_response(future.await?))
     }
 
-    fn invoke_tool_request_response(
+    async fn invoke_tool_request_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
         let handler = self.tool_request(&request.registration_name)?;
-        Ok(json_response(with_thread_scope(scope, || {
-            handler(&payload.tool_name, payload.value)
-        })?))
+        let future = with_thread_scope(scope, || handler(payload.tool_name, payload.value));
+        Ok(json_response(future.await?))
     }
 
     async fn invoke_tool_execution_response(
@@ -1802,10 +1839,10 @@ impl WorkerService {
                     .await
             }
             RegistrationSurface::LlmConditionalExecutionGuardrail => {
-                self.invoke_llm_conditional_response(request, scope)
+                self.invoke_llm_conditional_response(request, scope).await
             }
             RegistrationSurface::LlmRequestIntercept => {
-                self.invoke_llm_request_response(request, scope)
+                self.invoke_llm_request_response(request, scope).await
             }
             RegistrationSurface::LlmExecutionIntercept => {
                 self.invoke_llm_execution_response(request, scope).await
@@ -1848,7 +1885,7 @@ impl WorkerService {
         }
     }
 
-    fn invoke_llm_conditional_response(
+    async fn invoke_llm_conditional_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
@@ -1856,12 +1893,11 @@ impl WorkerService {
         let payload = llm_payload(request.payload)?;
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let handler = self.llm_conditional(&request.registration_name)?;
-        Ok(guardrail_response(with_thread_scope(scope, || {
-            handler(&request_value)
-        })?))
+        let future = with_thread_scope(scope, || handler(request_value));
+        Ok(guardrail_response(future.await?))
     }
 
-    fn invoke_llm_request_response(
+    async fn invoke_llm_request_response(
         &self,
         request: InvokeRequest,
         scope: &Option<ScopeContext>,
@@ -1880,8 +1916,9 @@ impl WorkerService {
             .transpose()?;
         let handler = self.llm_request(&request.registration_name)?;
         let outcome = with_thread_scope(scope, || {
-            handler(&payload.model_name, request_value, annotated)
-        })?;
+            handler(payload.model_name, request_value, annotated)
+        })
+        .await?;
         llm_request_response(outcome)
     }
 

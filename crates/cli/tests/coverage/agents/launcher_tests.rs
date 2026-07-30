@@ -1874,6 +1874,7 @@ async fn transparent_launcher_does_not_initialize_logging_sinks_directly() {
 
 #[tokio::test]
 async fn dry_run_does_not_hydrate_dynamic_plugin_lifecycle_state() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();

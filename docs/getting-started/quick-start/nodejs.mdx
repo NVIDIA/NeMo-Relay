@@ -86,7 +86,7 @@ async function main() {
     console.log(llmResult);
   });
 
-  flushSubscribers();
+  await flushSubscribers();
   await new Promise((resolve) => setImmediate(resolve));
   deregisterSubscriber("quickstart-printer");
 }

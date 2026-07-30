@@ -320,6 +320,7 @@ message ToolNextRequest {
   string auth_token = 2;
   string continuation_id = 3;
   JsonEnvelope value = 4;
+  ScopeContext scope = 5;
 }
 
 message LlmNextRequest {
@@ -327,6 +328,7 @@ message LlmNextRequest {
   string auth_token = 2;
   string continuation_id = 3;
   JsonEnvelope request = 4;
+  ScopeContext scope = 5;
 }
 
 message LlmStreamNextRequest {
@@ -334,6 +336,7 @@ message LlmStreamNextRequest {
   string auth_token = 2;
   string continuation_id = 3;
   JsonEnvelope request = 4;
+  ScopeContext scope = 5;
 }
 
 message LlmCodecDecodeRequest {

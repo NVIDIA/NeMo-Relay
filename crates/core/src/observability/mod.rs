@@ -583,15 +583,5 @@ where
 mod attribute_projection_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::{relay_span_id, relay_trace_id};
-    use uuid::Uuid;
-
-    #[test]
-    fn relay_id_conversions_preserve_zero_bytes() {
-        let uuid = Uuid::nil();
-
-        assert_eq!(relay_trace_id(uuid).to_bytes(), [0; 16]);
-        assert_eq!(relay_span_id(uuid).to_bytes(), [0; 8]);
-    }
-}
+#[path = "../../tests/unit/observability/mod_tests.rs"]
+mod tests;

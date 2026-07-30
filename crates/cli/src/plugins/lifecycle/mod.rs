@@ -17,9 +17,11 @@ use nemo_relay::plugin::dynamic::{
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use crate::configuration::resolve_plugins_config;
 use crate::configuration::{
-    ResolvedConfig, ResolvedDynamicPluginConfig, load_bounded_dynamic_plugin_manifest_bytes,
-    resolve_plugins_config,
+    ResolvedConfig, ResolvedDynamicPluginConfig, explicit_plugin_config_path,
+    load_bounded_dynamic_plugin_manifest_bytes, resolve_plugins_config_with_path,
 };
 use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::filesystem::bounded::{
@@ -85,6 +87,10 @@ pub(crate) fn test_python_environment_digest_calls() -> usize {
     self::environment::environment_tree_digest_calls()
 }
 
+fn lifecycle_plugin_config_path(server: &GatewayOverrides) -> Option<PathBuf> {
+    explicit_plugin_config_path(server.config.as_ref(), server.plugin_config_path.as_ref())
+}
+
 pub(crate) fn add(command: PluginsAddRequest, server: &GatewayOverrides) -> Result<(), CliError> {
     add_with_environment_runner(command, server, &ProcessPythonEnvironmentCommandRunner)
 }
@@ -96,8 +102,12 @@ fn add_with_environment_runner(
 ) -> Result<(), CliError> {
     const COMMAND: &str = "plugins add";
 
-    let resolved = resolve_plugins_config(server.config.as_ref())?;
-    let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+    let explicit_plugin_config = lifecycle_plugin_config_path(server);
+    let resolved = resolve_plugins_config_with_path(
+        server.config.as_ref(),
+        server.plugin_config_path.as_ref(),
+    )?;
+    let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
     let (manifest, manifest_ref) = load_manifest_for_action("add", &command.path)?;
     let plugin_id = manifest.plugin.id.trim().to_owned();
     load_config_schema_for_manifest(&manifest, &manifest_ref)?;
@@ -112,15 +122,17 @@ fn add_with_environment_runner(
         None => false,
     };
 
-    if server.config.is_some() && scope_flags_selected(&command.scope) {
+    if explicit_plugin_config.is_some() && scope_flags_selected(&command.scope) {
         return Err(CliError::Config(
-            "--config cannot be combined with --user, --project, or --global for `plugins add`"
+            "--config cannot be combined with --user, --project, or --global for `plugins add`; the same applies to --plugin-config-path"
                 .into(),
         ));
     }
 
-    let (plugins_toml_path, state_path, scope) =
-        scoped_paths_for_add(target_scope(&command.scope)?, server.config.as_ref())?;
+    let (plugins_toml_path, state_path, scope) = scoped_paths_for_add(
+        target_scope(&command.scope)?,
+        explicit_plugin_config.as_ref(),
+    )?;
     let scope_index = ensure_scope(&mut scopes, scope, plugins_toml_path.clone(), state_path);
     let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
     let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
@@ -231,10 +243,11 @@ fn cleanup_provisioned_environment(state_path: &Path, plugin_id: &str, environme
 }
 
 pub(crate) fn enforce_required_dynamic_plugin_startup(
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<(), CliError> {
-    let (scopes, touched_scope_indices) = load_and_hydrate_scopes_with_updates(explicit, resolved)?;
+    let (scopes, touched_scope_indices) =
+        load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved)?;
     for scope_index in touched_scope_indices {
         scopes[scope_index].save()?;
     }
@@ -267,7 +280,10 @@ pub(crate) fn validate(
                     format!("dynamic plugin target '{}' does not exist", command.target),
                 ));
             }
-            let resolved = resolve_plugins_config(server.config.as_ref())?;
+            let resolved = resolve_plugins_config_with_path(
+                server.config.as_ref(),
+                server.plugin_config_path.as_ref(),
+            )?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &path)?;
             validate_python_entrypoint_artifact(&manifest, &manifest_ref)
                 .map_err(CliError::Config)?;
@@ -304,9 +320,13 @@ pub(crate) fn validate(
             Ok(())
         }
         PluginTarget::Id(plugin_id) => {
-            let resolved = resolve_plugins_config(server.config.as_ref())?;
+            let explicit_plugin_config = lifecycle_plugin_config_path(server);
+            let resolved = resolve_plugins_config_with_path(
+                server.config.as_ref(),
+                server.plugin_config_path.as_ref(),
+            )?;
             let host_config_by_id = host_config_by_id(&resolved);
-            let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+            let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
             let entry = find_registered_entry(&scopes, "plugins validate", &plugin_id)?;
             let manifest_ref = manifest_ref_from_record(&entry.record)?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &manifest_ref)?;
@@ -364,9 +384,13 @@ pub(crate) fn validate(
 }
 
 pub(crate) fn list(command: PluginsListRequest, server: &GatewayOverrides) -> Result<(), CliError> {
-    let resolved = resolve_plugins_config(server.config.as_ref())?;
+    let explicit_plugin_config = lifecycle_plugin_config_path(server);
+    let resolved = resolve_plugins_config_with_path(
+        server.config.as_ref(),
+        server.plugin_config_path.as_ref(),
+    )?;
     let host_config_by_id = host_config_by_id(&resolved);
-    let scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
     let records = collect_records(&scopes, command.all);
     if records.is_empty() {
         if command.json {
@@ -404,9 +428,13 @@ pub(crate) fn inspect(
     command: PluginsInspectRequest,
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
-    let resolved = resolve_plugins_config(server.config.as_ref())?;
+    let explicit_plugin_config = lifecycle_plugin_config_path(server);
+    let resolved = resolve_plugins_config_with_path(
+        server.config.as_ref(),
+        server.plugin_config_path.as_ref(),
+    )?;
     let host_config_by_id = host_config_by_id(&resolved);
-    let scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
     let entry = find_registered_entry(&scopes, "plugins inspect", &command.id)?;
     let manifest_ref = manifest_ref_from_record(&entry.record)?;
     let (manifest, manifest_ref) = load_manifest_for_action("inspect", &manifest_ref)?;
@@ -451,10 +479,14 @@ pub(crate) fn remove(
     command: PluginsRemoveRequest,
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
-    let mut scopes = load_scoped_registries(server.config.as_ref())?;
+    let explicit_plugin_config = lifecycle_plugin_config_path(server);
+    let mut scopes = load_scoped_registries(explicit_plugin_config.as_ref())?;
     if find_record_by_id(&scopes, &command.id)?.is_none() {
-        let resolved = resolve_plugins_config(server.config.as_ref())?;
-        scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+        let resolved = resolve_plugins_config_with_path(
+            server.config.as_ref(),
+            server.plugin_config_path.as_ref(),
+        )?;
+        scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
     }
     let entry = find_registered_entry(&scopes, "plugins remove", &command.id)?;
     let original_plugins_toml = std::fs::read(&entry.plugins_toml_path).ok();
@@ -1743,26 +1775,26 @@ fn make_snapshot_removable(root: &Path) {
 }
 
 pub(crate) fn active_dynamic_plugin_components(
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
-    active_dynamic_plugin_components_inner(explicit, resolved, true)
+    active_dynamic_plugin_components_inner(explicit_plugin_config, resolved, true)
 }
 
 pub(crate) fn active_dynamic_plugin_components_for_identity(
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
-    let scopes = load_scoped_registries(explicit)?;
+    let scopes = load_scoped_registries(explicit_plugin_config)?;
     active_dynamic_plugin_components_from_scopes(&scopes, resolved, false)
 }
 
 fn active_dynamic_plugin_components_inner(
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
     create_activation_snapshots: bool,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
-    let scopes = load_and_hydrate_scopes(explicit, resolved)?;
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config, resolved)?;
     active_dynamic_plugin_components_from_scopes(&scopes, resolved, create_activation_snapshots)
 }
 
@@ -1838,9 +1870,13 @@ fn mutate_enabled_state(
     } else {
         "plugins disable"
     };
+    let explicit_plugin_config = lifecycle_plugin_config_path(server);
     let mut scopes = if enabled {
-        let resolved = resolve_plugins_config(server.config.as_ref())?;
-        let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+        let resolved = resolve_plugins_config_with_path(
+            server.config.as_ref(),
+            server.plugin_config_path.as_ref(),
+        )?;
+        let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
         let entry = find_registered_entry(&scopes, command, &plugin_id)?;
         if entry.record.is_tombstoned() {
             return Err(plugin_refused(
@@ -1905,7 +1941,7 @@ fn mutate_enabled_state(
         }
         scopes
     } else {
-        load_scoped_registries(server.config.as_ref())?
+        load_scoped_registries(explicit_plugin_config.as_ref())?
     };
     let entry = find_registered_entry(&scopes, command, &plugin_id)?;
     if entry.record.is_tombstoned() {
@@ -1941,10 +1977,11 @@ fn mutate_enabled_state(
 }
 
 fn load_and_hydrate_scopes(
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
-    let (scopes, touched_scope_indices) = load_and_hydrate_scopes_with_updates(explicit, resolved)?;
+    let (scopes, touched_scope_indices) =
+        load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved)?;
     for scope_index in touched_scope_indices {
         scopes[scope_index].save()?;
     }
@@ -1952,10 +1989,10 @@ fn load_and_hydrate_scopes(
 }
 
 fn load_and_hydrate_scopes_with_updates(
-    explicit: Option<&PathBuf>,
+    explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<(Vec<ScopedRegistry>, Vec<usize>), CliError> {
-    let mut scopes = load_scoped_registries(explicit)?;
+    let mut scopes = load_scoped_registries(explicit_plugin_config)?;
     let mut touched_scope_indices = BTreeSet::new();
     for plugin in &resolved.dynamic_plugins {
         let scope_index = scopes

@@ -44,37 +44,39 @@ pub(crate) fn snapshot_event_subscribers(
     Ok(state.collect_event_subscribers(&scope_local_subscribers))
 }
 
-/// Apply the event sanitizer chain visible on the current scope stack.
-pub(crate) fn sanitize_event(event: Event) -> Option<Event> {
-    sanitize_event_with_scope_stack(event, &current_scope_stack())
-}
-
-/// Apply the event sanitizer chain visible on a captured scope stack.
-pub(crate) fn sanitize_event_with_scope_stack(
-    event: Event,
-    scope_stack: &ScopeStackHandle,
-) -> Option<Event> {
-    let entries = snapshot_event_sanitizers(&event, scope_stack)?;
-    Some(NemoRelayContextState::event_sanitize_snapshot_chain(
-        event, &entries,
-    ))
-}
-
-/// Snapshot the event sanitizer chain visible on a captured scope stack.
+/// Snapshot the event sanitizers visible to an event without invoking them.
 ///
-/// The snapshot remains valid after the emitting scope is removed, allowing
-/// synchronous scope and mark APIs to enqueue publication without changing
-/// which scope-local middleware observes the event.
+/// Scope and mark emission use this to capture middleware ownership while the
+/// scope is still active, then let the serial dispatcher sanitize and publish
+/// the immutable event snapshot later. This keeps public scope APIs
+/// synchronous while ensuring scope removal cannot affect queued work.
 pub(crate) fn snapshot_event_sanitizers(
     event: &Event,
     scope_stack: &ScopeStackHandle,
 ) -> Option<Vec<Guardrail<EventSanitizeFn>>> {
-    Some({
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+    let entries = {
+        let scope_guard = match scope_stack.read() {
+            Ok(guard) => guard,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_snapshot_failed";
+                    "Event sanitizer snapshot failed open because the scope stack lock is poisoned; publishing without event sanitizers: {error}"
+                );
+                return None;
+            }
+        };
         let context = global_context();
         let state = match context.read() {
             Ok(state) => state,
-            Err(_) => return None,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_snapshot_failed";
+                    "Event sanitizer snapshot failed open because the runtime context lock is poisoned; publishing without event sanitizers: {error}"
+                );
+                return None;
+            }
         };
         match &event {
             Event::Mark(_) => {
@@ -105,7 +107,8 @@ pub(crate) fn snapshot_event_sanitizers(
                 )
             }
         }
-    })
+    };
+    Some(entries)
 }
 
 pub(crate) fn ensure_runtime_owner() -> Result<()> {
@@ -211,26 +214,26 @@ pub(crate) type InterceptedLlmRequest = (
 );
 
 #[cfg(test)]
-pub(crate) fn run_request_intercepts_with_codec(
+pub(crate) async fn run_request_intercepts_with_codec(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
 ) -> Result<InterceptedLlmRequest> {
-    run_request_intercepts_with_codec_inner(name, request, codec, None)
+    run_request_intercepts_with_codec_inner(name, request, codec, None).await
 }
 
 /// Run request intercepts and record optimization contributions directly into
 /// the managed call's bounded accumulator as each intercept completes.
-pub(crate) fn run_request_intercepts_with_codec_and_recorder(
+pub(crate) async fn run_request_intercepts_with_codec_and_recorder(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
     recorder: &crate::api::optimization::LlmOptimizationRecorder,
 ) -> Result<InterceptedLlmRequest> {
-    run_request_intercepts_with_codec_inner(name, request, codec, Some(recorder))
+    run_request_intercepts_with_codec_inner(name, request, codec, Some(recorder)).await
 }
 
-fn run_request_intercepts_with_codec_inner(
+async fn run_request_intercepts_with_codec_inner(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
@@ -243,7 +246,9 @@ fn run_request_intercepts_with_codec_inner(
 
     let entries = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let scope_locals = scope_guard
             .collect_scope_local_registries(|registries| &registries.llm_request_intercepts);
 
@@ -261,7 +266,8 @@ fn run_request_intercepts_with_codec_inner(
             &entries,
             codec.is_some(),
             recorder,
-        )?;
+        )
+        .await?;
     let mut request = outcome.request;
     inject_dynamo_session_ids(&mut request);
     let pending_marks = outcome.pending_marks;

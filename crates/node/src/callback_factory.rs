@@ -3,11 +3,21 @@
 
 //! Cached JavaScript callback wrapper factories for the Node binding.
 
-use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
+use napi::bindgen_prelude::FromNapiValue;
+use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue, ValueType};
+use nemo_relay::api::runtime::ScopeStackHandle;
+use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v1";
+use crate::types::ScopeStack;
+
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v9";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
+  const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
+  const eventSanitizerContext = new AsyncLocalStorage();
+  const publicationStates = new Map();
+  let nextPublicationContextId = 0;
+
   function jsonValue(value, seen = new Set()) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') {
       return value;
@@ -49,6 +59,84 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return result;
   }
 
+  function callPromise(
+    fn,
+    arg0,
+    spread,
+    next,
+    resolve,
+    reject,
+    publication,
+    publicationContextId,
+    scopeStack,
+    registerAbort,
+  ) {
+    const controller = new AbortController();
+    registerAbort(() => controller.abort());
+    let ownsPublicationState = false;
+    let publicationState;
+    if (publicationContextId !== undefined) {
+      publicationState = publicationStates.get(publicationContextId);
+      if (publicationState === undefined && publication) {
+        publicationContextId = String(++nextPublicationContextId);
+        publicationState = { active: true };
+        publicationStates.set(publicationContextId, publicationState);
+        ownsPublicationState = true;
+      } else if (publicationState === undefined) {
+        publicationState = { active: false };
+      }
+    } else if (publication) {
+      publicationContextId = String(++nextPublicationContextId);
+      publicationState = { active: true };
+      publicationStates.set(publicationContextId, publicationState);
+      ownsPublicationState = true;
+    } else {
+      publicationState = { active: false };
+    }
+    const token = {
+      publicationState,
+      publicationContextId,
+      scopeStack,
+    };
+    const settlePublication = () => {
+      if (ownsPublicationState) {
+        publicationState.active = false;
+        publicationStates.delete(publicationContextId);
+      }
+      token.scopeStack = null;
+    };
+    const safeNext = next === undefined
+      ? undefined
+      : (value) => next(
+        jsonValue(value === undefined ? null : value),
+        eventSanitizerContext.getStore()?.scopeStack,
+      );
+    const invoke = () => {
+      Promise.resolve().then(() => (
+        safeNext === undefined
+          ? (spread ? fn(...arg0, controller.signal) : fn(arg0, controller.signal))
+          : (spread ? fn(...arg0, safeNext, controller.signal) : fn(arg0, safeNext, controller.signal))
+      )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
+        settlePublication();
+        resolve(value);
+      }, (error) => {
+        settlePublication();
+        let message = 'unknown error';
+        try {
+          if (typeof error === 'string') {
+            message = error;
+          } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+            message = String(error);
+          } else if (error != null && typeof error.message === 'string') {
+            message = error.message;
+          }
+        } catch {}
+        reject(message);
+      });
+    };
+    eventSanitizerContext.run(token, invoke);
+  }
+
   return {
     execution(fn) {
       return function __nemo_relay_execution_wrapper(...args) {
@@ -66,15 +154,105 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     },
 
     promise(fn) {
-      return function __nemo_relay_promise_wrapper(error, arg0, next, resolve, reject) {
+      return function __nemo_relay_promise_wrapper(
+        error,
+        arg0,
+        spread,
+        next,
+        resolve,
+        reject,
+        publication,
+        publicationContextId,
+        scopeStack,
+        registerAbort,
+      ) {
         if (error != null) {
-          reject(error);
+          let message = 'unknown error';
+          try {
+            message = String(error?.message ?? error);
+          } catch {}
+          if (typeof reject === 'function') {
+            reject(message);
+          }
           return;
         }
-        Promise.resolve().then(() => (
-          next === undefined ? fn(arg0) : fn(arg0, next)
-        )).then((value) => jsonValue(value === undefined ? null : value)).then(resolve, reject);
+        callPromise(
+          fn,
+          arg0,
+          spread,
+          next,
+          resolve,
+          reject,
+          publication,
+          publicationContextId,
+          scopeStack,
+          registerAbort,
+        );
       };
+    },
+
+    scopedStream(fn) {
+      return function __nemo_relay_scoped_stream_wrapper(arg, scopeStack, propagationParentUuid) {
+        const current = eventSanitizerContext.getStore();
+        const token = {
+          publicationState: current?.publicationState ?? { active: false },
+          publicationContextId: current?.publicationContextId,
+          scopeStack,
+          propagationParentUuid,
+        };
+        return eventSanitizerContext.run(token, () => fn(arg));
+      };
+    },
+
+    publicationCallbackActive() {
+      return eventSanitizerContext.getStore()?.publicationState.active === true;
+    },
+
+    eventSanitizerCallbackContextId() {
+      const current = eventSanitizerContext.getStore();
+      return current?.publicationState.active === true
+        ? current.publicationContextId
+        : undefined;
+    },
+
+    callbackScopeStack() {
+      return eventSanitizerContext.getStore()?.scopeStack;
+    },
+
+    callbackPropagationParentUuid() {
+      return eventSanitizerContext.getStore()?.propagationParentUuid;
+    },
+
+    withCallbackScopeStack(scopeStack, fn) {
+      const current = eventSanitizerContext.getStore();
+      if (current === undefined) {
+        return { active: false };
+      }
+      const token = {
+        publicationState: current.publicationState,
+        publicationContextId: current.publicationContextId,
+        scopeStack,
+        propagationParentUuid: current.propagationParentUuid,
+      };
+      try {
+        return { active: true, value: eventSanitizerContext.run(token, fn) };
+      } finally {
+        token.scopeStack = null;
+      }
+    },
+
+    setCallbackScopeStack(scopeStack) {
+      const current = eventSanitizerContext.getStore();
+      if (current === undefined) {
+        return false;
+      }
+      eventSanitizerContext.enterWith({
+        publicationState: current.publicationState,
+        publicationContextId: current.publicationContextId,
+        scopeStack,
+        propagationParentUuid: current.propagationParentUuid,
+      });
+      return true;
     },
   };
 })()"#;
@@ -121,4 +299,104 @@ pub(crate) fn wrap_execution_callback(env: &Env, func: &JsFunction) -> napi::Res
 
 pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
     wrap_callback(env, func, "promise")
+}
+
+pub(crate) fn wrap_scoped_stream_callback(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "scopedStream")
+}
+
+pub(crate) fn publication_callback_active(env: &Env) -> napi::Result<bool> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("publicationCallbackActive")?;
+    callback
+        .call::<JsUnknown>(None, &[])?
+        .coerce_to_bool()?
+        .get_value()
+}
+
+pub(crate) fn event_sanitizer_callback_context_id(env: &Env) -> napi::Result<Option<String>> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("eventSanitizerCallbackContextId")?;
+    let value = callback.call::<JsUnknown>(None, &[])?;
+    if matches!(value.get_type()?, ValueType::Undefined | ValueType::Null) {
+        return Ok(None);
+    }
+    value
+        .coerce_to_string()?
+        .into_utf8()?
+        .into_owned()
+        .map(Some)
+}
+
+pub(crate) fn callback_scope_stack(
+    env: &Env,
+) -> napi::Result<Option<(ScopeStackHandle, Option<PublicationBuffer>)>> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("callbackScopeStack")?;
+    let value = callback.call::<JsUnknown>(None, &[])?;
+    if matches!(value.get_type()?, ValueType::Undefined | ValueType::Null) {
+        return Ok(None);
+    }
+    let stack = unsafe { <&ScopeStack as FromNapiValue>::from_napi_value(env.raw(), value.raw())? };
+    Ok(Some((
+        stack.inner.clone(),
+        stack.publication_buffer.clone(),
+    )))
+}
+
+pub(crate) fn callback_propagation_parent_uuid(env: &Env) -> napi::Result<Option<String>> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("callbackPropagationParentUuid")?;
+    let value = callback.call::<JsUnknown>(None, &[])?;
+    if matches!(value.get_type()?, ValueType::Undefined | ValueType::Null) {
+        return Ok(None);
+    }
+    value
+        .coerce_to_string()?
+        .into_utf8()?
+        .into_owned()
+        .map(Some)
+}
+
+pub(crate) fn with_callback_scope_stack(
+    env: &Env,
+    stack: &ScopeStack,
+    callback: &JsFunction,
+) -> napi::Result<Option<JsUnknown>> {
+    let factories = callback_factories(env)?;
+    let with_stack: JsFunction = factories.get_named_property("withCallbackScopeStack")?;
+    let publication_buffer = callback_scope_stack(env)?
+        .and_then(|(_, buffer)| buffer)
+        .or_else(|| stack.publication_buffer.clone());
+    let stack = ScopeStack {
+        inner: stack.inner.clone(),
+        publication_buffer,
+    }
+    .into_instance(*env)?;
+    let outcome = with_stack.call(None, &[as_unknown(env, &stack), as_unknown(env, callback)])?;
+    let outcome = unsafe { JsObject::from_raw_unchecked(env.raw(), outcome.raw()) };
+    if !outcome.get_named_property::<bool>("active")? {
+        return Ok(None);
+    }
+    outcome.get_named_property("value").map(Some)
+}
+
+pub(crate) fn set_callback_scope_stack(env: &Env, stack: &ScopeStack) -> napi::Result<bool> {
+    let factories = callback_factories(env)?;
+    let set_stack: JsFunction = factories.get_named_property("setCallbackScopeStack")?;
+    let publication_buffer = callback_scope_stack(env)?
+        .and_then(|(_, buffer)| buffer)
+        .or_else(|| stack.publication_buffer.clone());
+    let stack = ScopeStack {
+        inner: stack.inner.clone(),
+        publication_buffer,
+    }
+    .into_instance(*env)?;
+    set_stack
+        .call::<JsUnknown>(None, &[as_unknown(env, &stack)])?
+        .coerce_to_bool()?
+        .get_value()
 }

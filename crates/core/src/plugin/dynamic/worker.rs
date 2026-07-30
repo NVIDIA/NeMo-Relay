@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
@@ -12,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
     RelayHostRuntime, RelayHostRuntimeServer,
@@ -58,10 +60,13 @@ use tower::service_fn;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
+use crate::api::runtime::subscriber_dispatcher::{
+    PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
+};
 use crate::api::runtime::{
-    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmSanitizeRequestContext,
-    LlmSanitizeResponseContext, LlmStreamExecutionNextFn, ToolExecutionNextFn, current_scope_stack,
-    with_scope_stack,
+    EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
+    MiddlewareContinuationContext, ToolExecutionNextFn, current_scope_stack, with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -1126,14 +1131,16 @@ impl WorkerPluginInstance {
     ) -> crate::plugin::Result<()> {
         let instance = Arc::new(self.clone_for_callback());
         let callback_name = name.to_owned();
-        let callback = Arc::new(move |event: &Event, _fields: EventSanitizeFields| {
-            instance
-                .invoke_event_sanitize(&callback_name, surface, event)
-                .unwrap_or_else(|_| {
-                    instance.log_callback_fallback(&callback_name, surface);
-                    EventSanitizeFields::default()
+        let callback: EventSanitizeFn =
+            Arc::new(move |event: Arc<Event>, _fields: EventSanitizeFields| {
+                let instance = instance.clone();
+                let callback_name = callback_name.clone();
+                Box::pin(async move {
+                    instance
+                        .invoke_event_sanitize(&callback_name, surface, &event)
+                        .await
                 })
-        });
+            });
         match surface {
             RegistrationSurface::MarkSanitizeGuardrail => {
                 ctx.register_mark_sanitize_guardrail(name, priority, callback)
@@ -1164,18 +1171,13 @@ impl WorkerPluginInstance {
                     name,
                     priority,
                     Arc::new(move |tool_name, value| {
-                        instance
-                            .invoke_tool_json(
-                                &callback_name,
-                                surface,
-                                tool_name,
-                                value.clone(),
-                                None,
-                            )
-                            .unwrap_or_else(|_| {
-                                instance.log_callback_fallback(&callback_name, surface);
-                                value
-                            })
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        Box::pin(async move {
+                            instance
+                                .invoke_tool_json(&callback_name, surface, &tool_name, value, None)
+                                .await
+                        })
                     }),
                 ),
             RegistrationSurface::ToolSanitizeResponseGuardrail => ctx
@@ -1183,18 +1185,13 @@ impl WorkerPluginInstance {
                     name,
                     priority,
                     Arc::new(move |tool_name, value| {
-                        instance
-                            .invoke_tool_json(
-                                &callback_name,
-                                surface,
-                                tool_name,
-                                value.clone(),
-                                None,
-                            )
-                            .unwrap_or_else(|_| {
-                                instance.log_callback_fallback(&callback_name, surface);
-                                value
-                            })
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        Box::pin(async move {
+                            instance
+                                .invoke_tool_json(&callback_name, surface, &tool_name, value, None)
+                                .await
+                        })
                     }),
                 ),
             RegistrationSurface::ToolConditionalExecutionGuardrail => ctx
@@ -1202,7 +1199,13 @@ impl WorkerPluginInstance {
                     name,
                     priority,
                     Arc::new(move |tool_name, value| {
-                        instance.invoke_tool_guardrail(&callback_name, tool_name, value.clone())
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        Box::pin(async move {
+                            instance
+                                .invoke_tool_guardrail(&callback_name, &tool_name, value)
+                                .await
+                        })
                     }),
                 ),
             RegistrationSurface::ToolRequestIntercept => ctx.register_tool_request_intercept(
@@ -1210,7 +1213,13 @@ impl WorkerPluginInstance {
                 priority,
                 registration.break_chain,
                 Arc::new(move |tool_name, value| {
-                    instance.invoke_tool_json(&callback_name, surface, tool_name, value, None)
+                    let instance = instance.clone();
+                    let callback_name = callback_name.clone();
+                    Box::pin(async move {
+                        instance
+                            .invoke_tool_json(&callback_name, surface, &tool_name, value, None)
+                            .await
+                    })
                 }),
             ),
             RegistrationSurface::ToolExecutionIntercept => ctx.register_tool_execution_intercept(
@@ -1251,12 +1260,13 @@ impl WorkerPluginInstance {
                     name,
                     priority,
                     Arc::new(move |request, context| {
-                        instance
-                            .invoke_llm_sanitize_request(&callback_name, request.clone(), context)
-                            .unwrap_or_else(|_| {
-                                instance.log_callback_fallback(&callback_name, surface);
-                                None
-                            })
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        Box::pin(async move {
+                            instance
+                                .invoke_llm_sanitize_request(&callback_name, request, context)
+                                .await
+                        })
                     }),
                 ),
             RegistrationSurface::LlmSanitizeResponseGuardrail => ctx
@@ -1264,12 +1274,13 @@ impl WorkerPluginInstance {
                     name,
                     priority,
                     Arc::new(move |value, context| {
-                        instance
-                            .invoke_llm_sanitize_response(&callback_name, value.clone(), context)
-                            .unwrap_or_else(|_| {
-                                instance.log_callback_fallback(&callback_name, surface);
-                                None
-                            })
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        Box::pin(async move {
+                            instance
+                                .invoke_llm_sanitize_response(&callback_name, value, context)
+                                .await
+                        })
                     }),
                 ),
             RegistrationSurface::LlmConditionalExecutionGuardrail => ctx
@@ -1277,7 +1288,11 @@ impl WorkerPluginInstance {
                     name,
                     priority,
                     Arc::new(move |request| {
-                        instance.invoke_llm_guardrail(&callback_name, request.clone())
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        Box::pin(async move {
+                            instance.invoke_llm_guardrail(&callback_name, request).await
+                        })
                     }),
                 ),
             RegistrationSurface::LlmRequestIntercept => ctx.register_llm_request_intercept(
@@ -1285,12 +1300,18 @@ impl WorkerPluginInstance {
                 priority,
                 registration.break_chain,
                 Arc::new(move |model_name, request, annotated| {
-                    instance.invoke_llm_request_intercept(
-                        &callback_name,
-                        model_name,
-                        request,
-                        annotated,
-                    )
+                    let instance = instance.clone();
+                    let callback_name = callback_name.clone();
+                    Box::pin(async move {
+                        instance
+                            .invoke_llm_request_intercept(
+                                &callback_name,
+                                &model_name,
+                                request,
+                                annotated,
+                            )
+                            .await
+                    })
                 }),
             ),
             RegistrationSurface::LlmExecutionIntercept => ctx.register_llm_execution_intercept(
@@ -1483,7 +1504,7 @@ impl WorkerPluginCallback {
         }
     }
 
-    fn invoke_event_sanitize(
+    async fn invoke_event_sanitize(
         &self,
         registration_name: &str,
         surface: RegistrationSurface,
@@ -1495,7 +1516,7 @@ impl WorkerPluginCallback {
             None,
             Some(invoke_request_payload_event(event)),
         );
-        let value = json_from_invoke_response(self.invoke_blocking(request)?)?;
+        let value = json_from_invoke_response(self.invoke_async(request).await?)?;
         serde_json::from_value(value).map_err(|err| {
             FlowError::Internal(format!(
                 "worker returned invalid event sanitize fields: {err}"
@@ -1503,7 +1524,7 @@ impl WorkerPluginCallback {
         })
     }
 
-    fn invoke_tool_json(
+    async fn invoke_tool_json(
         &self,
         registration_name: &str,
         surface: RegistrationSurface,
@@ -1517,10 +1538,10 @@ impl WorkerPluginCallback {
             continuation_id,
             Some(invoke_request_payload_tool(tool_name, value)),
         );
-        json_from_invoke_response(self.invoke_blocking(request)?)
+        json_from_invoke_response(self.invoke_async(request).await?)
     }
 
-    fn invoke_tool_guardrail(
+    async fn invoke_tool_guardrail(
         &self,
         registration_name: &str,
         tool_name: &str,
@@ -1532,7 +1553,7 @@ impl WorkerPluginCallback {
             None,
             Some(invoke_request_payload_tool(tool_name, value)),
         );
-        guardrail_from_invoke_response(self.invoke_blocking(request)?)
+        guardrail_from_invoke_response(self.invoke_async(request).await?)
     }
 
     async fn invoke_tool_execution(
@@ -1544,7 +1565,7 @@ impl WorkerPluginCallback {
     ) -> FlowResult<ToolExecutionInterceptOutcome> {
         let continuation_id = self
             .host_state
-            .insert_continuation(Continuation::Tool(next))?;
+            .insert_continuation(Continuation::tool(next))?;
         let request = self.base_request(
             registration_name,
             RegistrationSurface::ToolExecutionIntercept,
@@ -1575,7 +1596,7 @@ impl WorkerPluginCallback {
         }
     }
 
-    fn invoke_llm_sanitize_request(
+    async fn invoke_llm_sanitize_request(
         &self,
         registration_name: &str,
         request: LlmRequest,
@@ -1613,10 +1634,10 @@ impl WorkerPluginCallback {
             context.codec_capability_id = Some(capability_id.clone());
             capability_id
         });
-        let response = self.invoke_blocking(invoke);
-        if let Some(capability_id) = capability_id {
-            self.host_state.remove_codec(&capability_id);
-        }
+        let _capability_guard = capability_id.as_ref().map(|capability_id| {
+            WorkerCodecCapabilityGuard::new(Arc::clone(&self.host_state), capability_id.clone())
+        });
+        let response = self.invoke_async(invoke).await;
         optional_json_from_invoke_response(response?)?
             .map(serde_json::from_value)
             .transpose()
@@ -1625,7 +1646,7 @@ impl WorkerPluginCallback {
             })
     }
 
-    fn invoke_llm_sanitize_response(
+    async fn invoke_llm_sanitize_response(
         &self,
         registration_name: &str,
         response: Json,
@@ -1663,14 +1684,14 @@ impl WorkerPluginCallback {
             context.codec_capability_id = Some(capability_id.clone());
             capability_id
         });
-        let response = self.invoke_blocking(invoke);
-        if let Some(capability_id) = capability_id {
-            self.host_state.remove_codec(&capability_id);
-        }
+        let _capability_guard = capability_id.as_ref().map(|capability_id| {
+            WorkerCodecCapabilityGuard::new(Arc::clone(&self.host_state), capability_id.clone())
+        });
+        let response = self.invoke_async(invoke).await;
         optional_json_from_invoke_response(response?)
     }
 
-    fn invoke_llm_guardrail(
+    async fn invoke_llm_guardrail(
         &self,
         registration_name: &str,
         request: LlmRequest,
@@ -1681,10 +1702,10 @@ impl WorkerPluginCallback {
             None,
             Some(invoke_request_payload_llm("", Some(request), None, None)),
         );
-        guardrail_from_invoke_response(self.invoke_blocking(invoke)?)
+        guardrail_from_invoke_response(self.invoke_async(invoke).await?)
     }
 
-    fn invoke_llm_request_intercept(
+    async fn invoke_llm_request_intercept(
         &self,
         registration_name: &str,
         model_name: &str,
@@ -1702,7 +1723,7 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
-        let response = self.invoke_blocking(invoke)?;
+        let response = self.invoke_async(invoke).await?;
         match response.result {
             Some(invoke_response_result::Result::LlmRequest(result)) => {
                 let outcome = required_envelope(result.outcome, "llm request intercept outcome")?;
@@ -1734,7 +1755,7 @@ impl WorkerPluginCallback {
     ) -> FlowResult<Json> {
         let continuation_id = self
             .host_state
-            .insert_continuation(Continuation::Llm(next))?;
+            .insert_continuation(Continuation::llm(next))?;
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmExecutionIntercept,
@@ -1758,7 +1779,7 @@ impl WorkerPluginCallback {
     ) -> FlowResult<LlmJsonStream> {
         let continuation_id = self
             .host_state
-            .insert_continuation(Continuation::LlmStream(next))?;
+            .insert_continuation(Continuation::llm_stream(next))?;
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmStreamExecutionIntercept,
@@ -1773,6 +1794,7 @@ impl WorkerPluginCallback {
         let mut client = self.client.clone();
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
+        let (next_ready_tx, next_ready_rx) = oneshot::channel();
         self.runtime.spawn(async move {
             let result = tokio::select! {
                 result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))) => result,
@@ -1782,6 +1804,7 @@ impl WorkerPluginCallback {
                     return;
                 }
             };
+            let _ = next_ready_tx.send(());
             match result {
                 Ok(response) => {
                     let mut stream = response.into_inner();
@@ -1825,6 +1848,11 @@ impl WorkerPluginCallback {
             }
             guard.finish();
         });
+        next_ready_rx.await.map_err(|_| {
+            FlowError::Internal(
+                "worker stream invocation ended before the downstream stream opened".into(),
+            )
+        })?;
         Ok(LlmJsonStream::new(
             tokio_stream::wrappers::ReceiverStream::new(rx),
         ))
@@ -1837,9 +1865,10 @@ impl WorkerPluginCallback {
         continuation_id: Option<String>,
         payload: Option<invoke_request_payload::Payload>,
     ) -> InvokeRequest {
-        let scope_stack_id = self
-            .host_state
-            .insert_invocation_scope_stack(current_scope_stack());
+        let scope_stack_id = self.host_state.insert_invocation_scope_stack(
+            current_scope_stack(),
+            capture_nested_publication_buffer(),
+        );
         InvokeRequest {
             activation_id: self.activation_id.clone(),
             auth_token: self.host_state.auth_token.clone(),
@@ -1860,8 +1889,25 @@ impl WorkerPluginCallback {
     }
 
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
-        self.invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
-            .await
+        let callback_name = request.registration_name.clone();
+        let surface = request.surface;
+        let result = self
+            .invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
+            .await;
+        if let Err(error) = &result {
+            let surface_name = RegistrationSurface::try_from(surface)
+                .map(|surface| surface.as_str_name())
+                .unwrap_or("UNKNOWN");
+            log::warn!(
+                target: "nemo_relay.worker",
+                event = "worker_callback_failed",
+                plugin_id = self.plugin_kind.as_str(),
+                callback = callback_name.as_str(),
+                surface = surface_name;
+                "Worker plugin callback failed: {error}"
+            );
+        }
+        result
     }
 
     async fn invoke_async_with_timeout(
@@ -2049,6 +2095,26 @@ struct WorkerCodecCapability {
     direction: WorkerCodecDirection,
 }
 
+struct WorkerCodecCapabilityGuard {
+    host_state: Arc<WorkerHostRuntimeState>,
+    capability_id: String,
+}
+
+impl WorkerCodecCapabilityGuard {
+    fn new(host_state: Arc<WorkerHostRuntimeState>, capability_id: String) -> Self {
+        Self {
+            host_state,
+            capability_id,
+        }
+    }
+}
+
+impl Drop for WorkerCodecCapabilityGuard {
+    fn drop(&mut self) {
+        self.host_state.remove_codec(&self.capability_id);
+    }
+}
+
 enum WorkerCodecDirection {
     Request(Arc<dyn LlmCodec>),
     Response(Arc<dyn LlmResponseCodec>),
@@ -2056,6 +2122,7 @@ enum WorkerCodecDirection {
 
 struct StoredScopeStack {
     handle: crate::api::runtime::ScopeStackHandle,
+    publication_buffer: Option<PublicationBuffer>,
     invocation_base_depth: Option<usize>,
 }
 
@@ -2195,6 +2262,7 @@ impl WorkerHostRuntimeState {
     fn insert_invocation_scope_stack(
         &self,
         stack: crate::api::runtime::ScopeStackHandle,
+        publication_buffer: Option<PublicationBuffer>,
     ) -> String {
         let id = format!("invoke-{}", Uuid::now_v7());
         let Ok(mut stacks) = self.scope_stacks.lock() else {
@@ -2226,6 +2294,7 @@ impl WorkerHostRuntimeState {
             id.clone(),
             StoredScopeStack {
                 handle: stack,
+                publication_buffer,
                 invocation_base_depth: Some(invocation_base_depth),
             },
         );
@@ -2332,6 +2401,7 @@ impl WorkerHostRuntimeState {
             .ok_or_else(|| Status::not_found("continuation not found"))
     }
 
+    #[cfg(test)]
     fn stack(&self, id: &str) -> Result<Option<crate::api::runtime::ScopeStackHandle>, Status> {
         if id.is_empty() {
             return Ok(None);
@@ -2344,13 +2414,67 @@ impl WorkerHostRuntimeState {
             .map(Some)
             .ok_or_else(|| Status::not_found("scope stack not found"))
     }
+
+    fn invocation_context(&self, id: &str) -> Result<Option<StoredInvocationContext>, Status> {
+        if id.is_empty() {
+            return Ok(None);
+        }
+        self.scope_stacks
+            .lock()
+            .map_err(|err| Status::internal(format!("scope stack lock poisoned: {err}")))?
+            .get(id)
+            .map(|stored| StoredInvocationContext {
+                scope_stack: stored.handle.clone(),
+                publication_buffer: stored.publication_buffer.clone(),
+            })
+            .map(Some)
+            .ok_or_else(|| Status::not_found("scope stack not found"))
+    }
+}
+
+#[derive(Clone)]
+struct StoredInvocationContext {
+    scope_stack: crate::api::runtime::ScopeStackHandle,
+    publication_buffer: Option<PublicationBuffer>,
 }
 
 #[derive(Clone)]
 enum Continuation {
-    Tool(ToolExecutionNextFn),
-    Llm(LlmExecutionNextFn),
-    LlmStream(LlmStreamExecutionNextFn),
+    Tool {
+        next: ToolExecutionNextFn,
+        context: MiddlewareContinuationContext,
+    },
+    Llm {
+        next: LlmExecutionNextFn,
+        context: MiddlewareContinuationContext,
+    },
+    LlmStream {
+        next: LlmStreamExecutionNextFn,
+        context: MiddlewareContinuationContext,
+    },
+}
+
+impl Continuation {
+    fn tool(next: ToolExecutionNextFn) -> Self {
+        Self::Tool {
+            next,
+            context: MiddlewareContinuationContext::capture(),
+        }
+    }
+
+    fn llm(next: LlmExecutionNextFn) -> Self {
+        Self::Llm {
+            next,
+            context: MiddlewareContinuationContext::capture(),
+        }
+    }
+
+    fn llm_stream(next: LlmStreamExecutionNextFn) -> Self {
+        Self::LlmStream {
+            next,
+            context: MiddlewareContinuationContext::capture(),
+        }
+    }
 }
 
 struct WorkerHostRuntimeService {
@@ -2455,8 +2579,10 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         };
         let result = if handle.scope_stack_id.is_empty() {
             pop()
-        } else if let Some(stack) = self.state.stack(&handle.scope_stack_id)? {
-            with_scope_stack(stack, pop)
+        } else if let Some(context) = self.state.invocation_context(&handle.scope_stack_id)? {
+            with_nested_publication_buffer(context.publication_buffer, || {
+                with_scope_stack(context.scope_stack, pop)
+            })
         } else {
             pop()
         };
@@ -2479,6 +2605,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 id.clone(),
                 StoredScopeStack {
                     handle: crate::api::runtime::create_scope_stack(),
+                    publication_buffer: None,
                     invocation_base_depth: None,
                 },
             );
@@ -2514,16 +2641,25 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
         let continuation = self.state.continuation(&request.continuation_id)?;
-        let Continuation::Tool(next) = continuation else {
+        let Continuation::Tool { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not a tool continuation",
             ));
         };
+        let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
         let value =
             required_envelope(request.value, "tool next value").map_err(status_from_flow)?;
         let value = decode_json_envelope::<Json>(&value)
             .map_err(|err| Status::invalid_argument(format!("invalid tool next JSON: {err}")))?;
-        let result = next(value).await;
+        let result = AssertUnwindSafe(context.invoke(move || next(value)))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|payload| {
+                Err(FlowError::Internal(format!(
+                    "worker tool continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )))
+            });
         Ok(Response::new(json_result(result)))
     }
 
@@ -2535,16 +2671,25 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
         let continuation = self.state.continuation(&request.continuation_id)?;
-        let Continuation::Llm(next) = continuation else {
+        let Continuation::Llm { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM continuation",
             ));
         };
+        let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
         let request =
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
             .map_err(|err| Status::invalid_argument(format!("invalid LLM next request: {err}")))?;
-        let result = next(request).await;
+        let result = AssertUnwindSafe(context.invoke(move || next(request)))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|payload| {
+                Err(FlowError::Internal(format!(
+                    "worker LLM continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )))
+            });
         Ok(Response::new(json_result(result)))
     }
 
@@ -2559,18 +2704,61 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
         let continuation = self.state.continuation(&request.continuation_id)?;
-        let Continuation::LlmStream(next) = continuation else {
+        let Continuation::LlmStream { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM stream continuation",
             ));
         };
+        let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
         let request = required_envelope(request.request, "llm stream next request")
             .map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
             Status::invalid_argument(format!("invalid LLM stream next request: {err}"))
         })?;
-        let stream = next(request).await.map_err(status_from_flow)?;
-        let mapped = stream.map(|item| match item {
+        let stream = AssertUnwindSafe(context.invoke(move || next(request)))
+            .catch_unwind()
+            .await
+            .map_err(|payload| {
+                Status::internal(format!(
+                    "worker stream continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                ))
+            })?
+            .map_err(status_from_flow)?;
+        let (tx, rx) = mpsc::channel(16);
+        tokio::spawn(async move {
+            context
+                .run(async move {
+                    let mut stream = stream;
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = tx.closed() => break,
+                            item = AssertUnwindSafe(stream.next()).catch_unwind() => {
+                                match item {
+                                    Ok(Some(item)) => {
+                                        if tx.send(item).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Ok(None) => break,
+                                    Err(payload) => {
+                                        let _ = tx
+                                            .send(Err(FlowError::Internal(format!(
+                                                "worker stream continuation panicked: {}",
+                                                panic_payload_message(payload.as_ref())
+                                            ))))
+                                            .await;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                })
+                .await;
+        });
+        let mapped = tokio_stream::wrappers::ReceiverStream::new(rx).map(|item| match item {
             Ok(value) => Ok(StreamChunk {
                 item: Some(stream_chunk_item::Item::Value(json_envelope_infallible(
                     JSON_SCHEMA,
@@ -2659,6 +2847,26 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
 }
 
 impl WorkerHostRuntimeService {
+    fn isolated_continuation_context(
+        &self,
+        context: &MiddlewareContinuationContext,
+        scope: Option<&ScopeContext>,
+    ) -> Result<MiddlewareContinuationContext, Status> {
+        let Some(stack_id) = scope
+            .map(|scope| scope.scope_stack_id.as_str())
+            .filter(|stack_id| !stack_id.is_empty())
+        else {
+            return context.isolated().map_err(status_from_flow);
+        };
+        let selected = self
+            .state
+            .invocation_context(stack_id)?
+            .ok_or_else(|| Status::not_found("scope stack not found"))?;
+        context
+            .isolated_with_scope_stack(&selected.scope_stack)
+            .map_err(status_from_flow)
+    }
+
     fn with_stack<T>(
         &self,
         scope: Option<&ScopeContext>,
@@ -2667,14 +2875,16 @@ impl WorkerHostRuntimeService {
         let Some(stack_id) = scope.map(|scope| scope.scope_stack_id.as_str()) else {
             return f();
         };
-        let Some(stack) = self
+        let Some(context) = self
             .state
-            .stack(stack_id)
+            .invocation_context(stack_id)
             .map_err(|err| FlowError::Internal(err.to_string()))?
         else {
             return f();
         };
-        with_scope_stack(stack, f)
+        with_nested_publication_buffer(context.publication_buffer, || {
+            with_scope_stack(context.scope_stack, f)
+        })
     }
 }
 

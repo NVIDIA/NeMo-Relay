@@ -207,6 +207,358 @@ fn recv_middleware_option_string_result(
     }
 }
 
+async fn await_middleware_json_result(
+    rx: tokio::sync::oneshot::Receiver<Json>,
+    error_prefix: &str,
+) -> Result<Json> {
+    let value = rx
+        .await
+        .map_err(|error| FlowError::Internal(format!("{error_prefix}: {error}")))?;
+    unwrap_middleware_result(value, error_prefix)
+}
+
+async fn await_middleware_json_or_value(
+    rx: tokio::sync::oneshot::Receiver<Json>,
+    error_prefix: &str,
+    fallback: Json,
+) -> Json {
+    match await_middleware_json_result(rx, error_prefix).await {
+        Ok(value) => value,
+        Err(error) => {
+            record_callback_error(error.to_string());
+            fallback
+        }
+    }
+}
+
+async fn await_middleware_option_string_result(
+    rx: tokio::sync::oneshot::Receiver<Json>,
+    error_prefix: &str,
+) -> Result<Option<String>> {
+    match await_middleware_json_result(rx, error_prefix).await? {
+        Json::Null => Ok(None),
+        Json::String(value) => Ok(Some(value)),
+        other => Err(FlowError::Internal(format!(
+            "{error_prefix}: expected string or null, got {other:?}",
+        ))),
+    }
+}
+
+/// Wrap a Promise-aware JS `(name, args) => string | null` tool guardrail.
+pub fn wrap_js_tool_conditional_promise_fn(func: Arc<PromiseAwareFn>) -> ToolConditionalFn {
+    Arc::new(move |name: String, args: Json| {
+        let func = func.clone();
+        Box::pin(async move {
+            let value = func
+                .call_spread(vec![Json::String(name), args])
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))?;
+            match value {
+                Json::Null => Ok(None),
+                Json::String(reason) => Ok(Some(reason)),
+                other => {
+                    let error = FlowError::Internal(format!(
+                        "JS tool conditional callback failed: expected string or null, got {other:?}"
+                    ));
+                    record_callback_error(error.to_string());
+                    Err(error)
+                }
+            }
+        })
+    })
+}
+
+/// Wrap a Promise-aware JS `(name, args) => Json` tool request intercept.
+pub fn wrap_js_tool_request_intercept_promise_fn(func: Arc<PromiseAwareFn>) -> ToolInterceptFn {
+    Arc::new(move |name: String, args: Json| {
+        let func = func.clone();
+        Box::pin(async move {
+            func.call_spread(vec![Json::String(name), args])
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))
+        })
+    })
+}
+
+/// Wrap a Promise-aware JS tool sanitizer.
+pub fn wrap_js_tool_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> ToolSanitizeFn {
+    Arc::new(move |name: String, value: Json| {
+        let func = func.clone();
+        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+        Box::pin(async move {
+            let args = vec![Json::String(name), value];
+            let result = if publication {
+                func.call_spread_for_publication(args).await
+            } else {
+                func.call_spread(args).await
+            };
+            result.inspect_err(|error| {
+                record_callback_error(error.to_string());
+            })
+        })
+    })
+}
+
+/// Wrap a Promise-aware JS LLM request sanitizer.
+pub fn wrap_js_llm_sanitize_request_promise_fn(func: Arc<PromiseAwareFn>) -> LlmSanitizeRequestFn {
+    Arc::new(
+        move |request: LlmRequest, context: LlmSanitizeRequestContext| {
+            let func = func.clone();
+            let publication =
+                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+            Box::pin(async move {
+                let request = serde_json::to_value(request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM sanitize request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let context = js_llm_sanitize_request_context(&context);
+                let build_args: crate::promise_call::Arg0Builder = Box::new(move |env| {
+                    let mut args = env.create_array_with_length(2)?;
+                    let request = unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            env.raw(),
+                            Json::to_napi_value(env.raw(), request)?,
+                        )
+                    };
+                    args.set_element(0, request)?;
+                    args.set_element(1, js_llm_sanitize_request_context_to_napi(env, context)?)?;
+                    Ok(js_object_to_unknown(env, args))
+                });
+                let value = if publication {
+                    func.call_spread_with_arg0_for_publication(build_args).await
+                } else {
+                    func.call_spread_with_arg0(build_args).await
+                }
+                .inspect_err(|error| {
+                    record_callback_error(error.to_string());
+                })?;
+                if value.is_null() {
+                    Ok(None)
+                } else {
+                    serde_json::from_value(value)
+                        .map(Some)
+                        .map_err(|error| {
+                            let error = FlowError::Internal(format!(
+                                "JS LLM sanitize request callback failed: failed to deserialize LlmRequest: {error}"
+                            ));
+                            record_callback_error(error.to_string());
+                            error
+                        })
+                }
+            })
+        },
+    )
+}
+
+/// Wrap a Promise-aware JS LLM response sanitizer.
+pub fn wrap_js_llm_sanitize_response_promise_fn(
+    func: Arc<PromiseAwareFn>,
+) -> LlmSanitizeResponseFn {
+    Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
+        let func = func.clone();
+        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+        Box::pin(async move {
+            let context = js_llm_sanitize_response_context(&context);
+            let build_args: crate::promise_call::Arg0Builder = Box::new(move |env| {
+                let mut args = env.create_array_with_length(2)?;
+                let response = unsafe {
+                    JsUnknown::from_raw_unchecked(
+                        env.raw(),
+                        Json::to_napi_value(env.raw(), response)?,
+                    )
+                };
+                args.set_element(0, response)?;
+                args.set_element(1, js_llm_sanitize_response_context_to_napi(env, context)?)?;
+                Ok(js_object_to_unknown(env, args))
+            });
+            let value = if publication {
+                func.call_spread_with_arg0_for_publication(build_args).await
+            } else {
+                func.call_spread_with_arg0(build_args).await
+            }
+            .inspect_err(|error| {
+                record_callback_error(error.to_string());
+            })?;
+            Ok((!value.is_null()).then_some(value))
+        })
+    })
+}
+
+/// Wrap a Promise-aware JS `(request) => string | null` LLM guardrail.
+pub fn wrap_js_llm_conditional_promise_fn(func: Arc<PromiseAwareFn>) -> LlmConditionalFn {
+    Arc::new(move |request: LlmRequest| {
+        let func = func.clone();
+        Box::pin(async move {
+            let request = serde_json::to_value(request).map_err(|error| {
+                let error = FlowError::Internal(format!(
+                    "failed to serialize JS LLM conditional request: {error}"
+                ));
+                record_callback_error(error.to_string());
+                error
+            })?;
+            let value = func
+                .call(request)
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))?;
+            match value {
+                Json::Null => Ok(None),
+                Json::String(reason) => Ok(Some(reason)),
+                other => {
+                    let error = FlowError::Internal(format!(
+                        "JS LLM conditional callback failed: expected string or null, got {other:?}"
+                    ));
+                    record_callback_error(error.to_string());
+                    Err(error)
+                }
+            }
+        })
+    })
+}
+
+/// Wrap a Promise-aware JS LLM request intercept.
+pub fn wrap_js_llm_request_intercept_promise_fn(
+    func: Arc<PromiseAwareFn>,
+) -> LlmRequestInterceptFn {
+    Arc::new(
+        move |name: String, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
+            let func = func.clone();
+            Box::pin(async move {
+                let request = serde_json::to_value(request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let annotated = serde_json::to_value(annotated).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept annotation: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let value = serde_json::json!({
+                    "name": name,
+                    "request": request,
+                    "annotated": annotated,
+                });
+                let value = func.call(value).await.inspect_err(|error| {
+                    record_callback_error(error.to_string());
+                })?;
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct JsOutcome {
+                    request: LlmRequest,
+                    #[serde(default)]
+                    annotated: Option<AnnotatedLlmRequest>,
+                    #[serde(default)]
+                    pending_marks: Vec<JsPendingMarkSpec>,
+                    #[serde(default)]
+                    optimization_contributions: Vec<LlmOptimizationContribution>,
+                }
+                let outcome: JsOutcome = serde_json::from_value(value).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "invalid JS LLM request intercept outcome: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                Ok(LlmRequestInterceptOutcome {
+                    request: outcome.request,
+                    annotated_request: outcome.annotated,
+                    pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+                    optimization_contributions: outcome.optimization_contributions,
+                })
+            })
+        },
+    )
+}
+
+/// Wrap a Promise-aware JS event sanitizer.
+///
+/// All lifecycle publication invokes these callbacks from Relay's serial
+/// dispatcher. The invocation context is also used by queued tool and LLM
+/// observability sanitizers so a flush cannot wait on its own publication.
+pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSanitizeFn {
+    Arc::new(move |event: Arc<Event>, fields: CoreEventSanitizeFields| {
+        let func = func.clone();
+        Box::pin(async move {
+            let event_json = JsEvent::try_from_event(&event)
+                .map(JsEvent::into_json)
+                .map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS event sanitizer context: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+            let js_fields = EventSanitizeFields {
+                data: fields.data,
+                category_profile: fields
+                    .category_profile
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        let error = FlowError::Internal(format!(
+                            "failed to serialize JS event sanitizer category profile: {error}"
+                        ));
+                        record_callback_error(error.to_string());
+                        error
+                    })?,
+                metadata: fields.metadata,
+            };
+            let args = vec![
+                event_json,
+                serde_json::to_value(js_fields).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS event sanitizer fields: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?,
+            ];
+            let publication =
+                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+            let value = if publication {
+                func.call_spread_for_publication(args).await
+            } else {
+                func.call_spread(args).await
+            }
+            .inspect_err(|error| {
+                // Scope and mark publication happens on the dispatcher
+                // thread. Preserve the event (the core fails open) while
+                // making the binding-visible failure available to Node.
+                record_callback_error(error.to_string());
+            })?;
+            let fields = event_sanitize_fields_from_json(value).map_err(|error| {
+                let error =
+                    FlowError::Internal(format!("invalid JS event sanitizer result: {error}"));
+                record_callback_error(error.to_string());
+                error
+            })?;
+            let category_profile = fields
+                .category_profile
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| {
+                    let error =
+                        FlowError::Internal(format!("invalid JS event sanitizer result: {error}"));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+            Ok(CoreEventSanitizeFields {
+                data: fields.data,
+                category_profile,
+                metadata: fields.metadata,
+            })
+        })
+    })
+}
+
 fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Json {
     rx.recv().unwrap_or_else(|e| {
         record_callback_error(format!("{error_prefix}: {e}"));
@@ -249,28 +601,25 @@ pub fn wrap_js_tool_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
 ) -> ToolSanitizeFn {
     let func = Arc::new(func);
-    Arc::new(move |name: &str, args: Json| {
+    Arc::new(move |name: String, args: Json| {
         let func = func.clone();
-        let name = name.to_string();
-        let fallback = args.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = func.call_with_return_value(
-            (name, args),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Option<Json>| {
-                let _ = tx.send(callback_json(val));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            record_callback_error(format!(
-                "nemo_relay: failed to queue JS tool callback: {status:?}"
-            ));
-            return fallback;
-        }
-        // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
-        // errors through the type system. Log the error so failures are not silent.
-        recv_middleware_json_or_value(rx, "nemo_relay: JS tool callback failed", fallback)
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                (name, args),
+                ThreadsafeFunctionCallMode::Blocking,
+                move |val: Option<Json>| {
+                    let _ = tx.send(callback_json(val));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS tool callback: {status:?}"
+                )));
+            }
+            await_middleware_json_result(rx, "nemo_relay: JS tool callback failed").await
+        })
     })
 }
 
@@ -279,25 +628,25 @@ pub fn wrap_js_tool_conditional_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
 ) -> ToolConditionalFn {
     let func = Arc::new(func);
-    Arc::new(move |name: &str, args: &Json| {
+    Arc::new(move |name: String, args: Json| {
         let func = func.clone();
-        let name = name.to_string();
-        let args = args.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = func.call_with_return_value(
-            (name, args),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Option<Json>| {
-                let _ = tx.send(callback_json(val));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            return Err(FlowError::Internal(format!(
-                "failed to queue JS tool conditional callback: {status:?}",
-            )));
-        }
-        recv_middleware_option_string_result(rx, "JS tool conditional callback failed")
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                (name, args),
+                ThreadsafeFunctionCallMode::Blocking,
+                move |val: Option<Json>| {
+                    let _ = tx.send(callback_json(val));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS tool conditional callback: {status:?}",
+                )));
+            }
+            await_middleware_option_string_result(rx, "JS tool conditional callback failed").await
+        })
     })
 }
 
@@ -306,24 +655,25 @@ pub fn wrap_js_tool_request_intercept_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
 ) -> ToolInterceptFn {
     let func = Arc::new(func);
-    Arc::new(move |name: &str, args: Json| {
+    Arc::new(move |name: String, args: Json| {
         let func = func.clone();
-        let name = name.to_string();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = func.call_with_return_value(
-            (name, args),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Option<Json>| {
-                let _ = tx.send(callback_json(val));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            return Err(FlowError::Internal(format!(
-                "failed to queue JS tool callback: {status:?}",
-            )));
-        }
-        recv_middleware_json_result(rx, "JS tool callback failed")
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                (name, args),
+                ThreadsafeFunctionCallMode::Blocking,
+                move |val: Option<Json>| {
+                    let _ = tx.send(callback_json(val));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS tool callback: {status:?}",
+                )));
+            }
+            await_middleware_json_result(rx, "JS tool callback failed").await
+        })
     })
 }
 
@@ -367,57 +717,66 @@ pub fn wrap_js_llm_request_intercept_fn(
 ) -> LlmRequestInterceptFn {
     let func = Arc::new(func);
     Arc::new(
-        move |name: &str,
-              request: LlmRequest,
-              annotated: Option<AnnotatedLlmRequest>|
-              -> Result<LlmRequestInterceptOutcome> {
+        move |name: String, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
             let func = func.clone();
-            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-            let annotated_json = annotated
-                .as_ref()
-                .map(|a| serde_json::to_value(a).unwrap_or(Json::Null))
-                .unwrap_or(Json::Null);
-            let arg = serde_json::json!({
-                "name": name,
-                "request": req_json,
-                "annotated": annotated_json,
-            });
-            let (tx, rx) = std::sync::mpsc::channel();
-            let status = func.call_with_return_value(
-                arg,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Option<Json>| {
-                    let _ = tx.send(callback_json(val));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS LLM request intercept callback: {status:?}",
-                )));
-            }
-            let result =
-                recv_middleware_json_result(rx, "JS LLM request intercept callback failed")?;
+            Box::pin(async move {
+                let req_json = serde_json::to_value(&request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let annotated_json = serde_json::to_value(annotated).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM request intercept annotation: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let arg = serde_json::json!({
+                    "name": name,
+                    "request": req_json,
+                    "annotated": annotated_json,
+                });
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let status = func.call_with_return_value(
+                    arg,
+                    ThreadsafeFunctionCallMode::Blocking,
+                    move |val: Option<Json>| {
+                        let _ = tx.send(callback_json(val));
+                        Ok(())
+                    },
+                );
+                if status != napi::Status::Ok {
+                    return Err(FlowError::Internal(format!(
+                        "failed to queue JS LLM request intercept callback: {status:?}",
+                    )));
+                }
+                let result =
+                    await_middleware_json_result(rx, "JS LLM request intercept callback failed")
+                        .await?;
 
-            #[derive(Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct JsOutcome {
-                request: LlmRequest,
-                #[serde(default)]
-                annotated: Option<AnnotatedLlmRequest>,
-                #[serde(default)]
-                pending_marks: Vec<JsPendingMarkSpec>,
-                #[serde(default)]
-                optimization_contributions: Vec<LlmOptimizationContribution>,
-            }
-            let outcome: JsOutcome = serde_json::from_value(result).map_err(|e| {
-                FlowError::Internal(format!("invalid JS LLM request intercept outcome: {e}"))
-            })?;
-            Ok(LlmRequestInterceptOutcome {
-                request: outcome.request,
-                annotated_request: outcome.annotated,
-                pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
-                optimization_contributions: outcome.optimization_contributions,
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct JsOutcome {
+                    request: LlmRequest,
+                    #[serde(default)]
+                    annotated: Option<AnnotatedLlmRequest>,
+                    #[serde(default)]
+                    pending_marks: Vec<JsPendingMarkSpec>,
+                    #[serde(default)]
+                    optimization_contributions: Vec<LlmOptimizationContribution>,
+                }
+                let outcome: JsOutcome = serde_json::from_value(result).map_err(|e| {
+                    FlowError::Internal(format!("invalid JS LLM request intercept outcome: {e}"))
+                })?;
+                Ok(LlmRequestInterceptOutcome {
+                    request: outcome.request,
+                    annotated_request: outcome.annotated,
+                    pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+                    optimization_contributions: outcome.optimization_contributions,
+                })
             })
         },
     )
@@ -431,40 +790,49 @@ pub fn wrap_js_llm_sanitize_request_fn(
     let func = Arc::new(func);
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
-            let context = js_llm_sanitize_request_context(&context);
-            let request = serde_json::to_value(request).unwrap_or(Json::Null);
-            let (tx, rx) = std::sync::mpsc::channel();
-            if func.call_with_return_value(
-                (request.clone(), context),
-                ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
-                },
-            ) != napi::Status::Ok
-            {
-                record_callback_error(
-                    "nemo_relay: failed to queue JS LLM sanitize request callback",
-                );
-                return None;
-            }
-            let value = recv_middleware_json_or_value(
-                rx,
-                "nemo_relay: JS LLM request sanitizer callback failed",
-                Json::Null,
-            );
-            if value.is_null() {
-                return None;
-            }
-            serde_json::from_value(value).map_or_else(
-            |error| {
-                record_callback_error(format!(
-                    "nemo_relay: JS LLM sanitize request callback failed: failed to deserialize LlmRequest: {error}"
-                ));
-                None
-            },
-            Some,
-        )
+            let func = func.clone();
+            Box::pin(async move {
+                let context = js_llm_sanitize_request_context(&context);
+                let request = serde_json::to_value(request).map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JS LLM sanitize request: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if func.call_with_return_value(
+                    (request, context),
+                    ThreadsafeFunctionCallMode::Blocking,
+                    move |value: Option<Json>| {
+                        let _ = tx.send(callback_json(value));
+                        Ok(())
+                    },
+                ) != napi::Status::Ok
+                {
+                    record_callback_error(
+                        "nemo_relay: failed to queue JS LLM sanitize request callback",
+                    );
+                    return Err(FlowError::Internal(
+                        "failed to queue JS LLM sanitize request callback".into(),
+                    ));
+                }
+                let value = await_middleware_json_result(
+                    rx,
+                    "nemo_relay: JS LLM request sanitizer callback failed",
+                )
+                .await
+                .inspect_err(|error| record_callback_error(error.to_string()))?;
+                if value.is_null() {
+                    return Ok(None);
+                }
+                serde_json::from_value(value)
+                .map(Some)
+                .map_err(|error| FlowError::Internal(format!(
+                    "JS LLM sanitize request callback failed: failed to deserialize LlmRequest: {error}"
+                )))
+                .inspect_err(|error| record_callback_error(error.to_string()))
+            })
         },
     )
 }
@@ -476,26 +844,34 @@ pub fn wrap_js_llm_sanitize_response_fn(
 ) -> LlmSanitizeResponseFn {
     let func = Arc::new(func);
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
-        let context = js_llm_sanitize_response_context(&context);
-        let (tx, rx) = std::sync::mpsc::channel();
-        if func.call_with_return_value(
-            (response, context),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |value: Option<Json>| {
-                let _ = tx.send(callback_json(value));
-                Ok(())
-            },
-        ) != napi::Status::Ok
-        {
-            record_callback_error("nemo_relay: failed to queue JS LLM sanitize response callback");
-            return None;
-        }
-        let value = recv_middleware_json_or_value(
-            rx,
-            "nemo_relay: JS LLM response sanitizer callback failed",
-            Json::Null,
-        );
-        Some(value).and_then(|value| (!value.is_null()).then_some(value))
+        let func = func.clone();
+        Box::pin(async move {
+            let context = js_llm_sanitize_response_context(&context);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if func.call_with_return_value(
+                (response, context),
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            ) != napi::Status::Ok
+            {
+                record_callback_error(
+                    "nemo_relay: failed to queue JS LLM sanitize response callback",
+                );
+                return Err(FlowError::Internal(
+                    "failed to queue JS LLM sanitize response callback".into(),
+                ));
+            }
+            let value = await_middleware_json_result(
+                rx,
+                "nemo_relay: JS LLM response sanitizer callback failed",
+            )
+            .await
+            .inspect_err(|error| record_callback_error(error.to_string()))?;
+            Ok((!value.is_null()).then_some(value))
+        })
     })
 }
 
@@ -649,24 +1025,32 @@ pub fn wrap_js_llm_conditional_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> LlmConditionalFn {
     let func = Arc::new(func);
-    Arc::new(move |request: &LlmRequest| {
+    Arc::new(move |request: LlmRequest| {
         let func = func.clone();
-        let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = func.call_with_return_value(
-            req_json,
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Option<Json>| {
-                let _ = tx.send(callback_json(val));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            return Err(FlowError::Internal(format!(
-                "failed to queue JS LLM conditional callback: {status:?}",
-            )));
-        }
-        recv_middleware_option_string_result(rx, "JS LLM conditional callback failed")
+        Box::pin(async move {
+            let req_json = serde_json::to_value(request).map_err(|error| {
+                let error = FlowError::Internal(format!(
+                    "failed to serialize JS LLM conditional request: {error}"
+                ));
+                record_callback_error(error.to_string());
+                error
+            })?;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                req_json,
+                ThreadsafeFunctionCallMode::Blocking,
+                move |val: Option<Json>| {
+                    let _ = tx.send(callback_json(val));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS LLM conditional callback: {status:?}",
+                )));
+            }
+            await_middleware_option_string_result(rx, "JS LLM conditional callback failed").await
+        })
     })
 }
 
@@ -774,80 +1158,6 @@ pub fn wrap_js_event_subscriber(
             record_callback_error(format!(
                 "nemo_relay: failed to queue JS event subscriber callback: {status:?}"
             ));
-        }
-    })
-}
-
-/// Wrap a JS event sanitizer: ``(event, fields) => fields``.
-pub fn wrap_js_event_sanitize_fn(
-    func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
-) -> EventSanitizeFn {
-    let func = Arc::new(func);
-    Arc::new(move |event: &Event, fields: CoreEventSanitizeFields| {
-        let event_json = match JsEvent::try_from_event(event) {
-            Ok(event) => event.into_json(),
-            Err(error) => {
-                record_callback_error(format!(
-                    "nemo_relay: failed to serialize JS event sanitizer context: {error}"
-                ));
-                return CoreEventSanitizeFields::default();
-            }
-        };
-        let js_fields = EventSanitizeFields {
-            data: fields.data.clone(),
-            category_profile: fields
-                .category_profile
-                .as_ref()
-                .and_then(|value| serde_json::to_value(value).ok()),
-            metadata: fields.metadata.clone(),
-        };
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = func.call_with_return_value(
-            (
-                event_json,
-                serde_json::to_value(js_fields).unwrap_or(Json::Null),
-            ),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |value: Option<Json>| {
-                let _ = tx.send(callback_json(value));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            record_callback_error(format!(
-                "nemo_relay: failed to queue JS event sanitizer callback: {status:?}"
-            ));
-            return CoreEventSanitizeFields::default();
-        }
-        let sanitized = (|| -> Result<_> {
-            let result =
-                recv_middleware_json_result(rx, "nemo_relay: JS event sanitizer callback failed")?;
-            let result = event_sanitize_fields_from_json(result).map_err(|error| {
-                FlowError::Internal(format!(
-                    "nemo_relay: invalid JS event sanitizer result: {error}"
-                ))
-            })?;
-            let category_profile = result
-                .category_profile
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|error| {
-                    FlowError::Internal(format!(
-                        "nemo_relay: invalid JS event sanitizer result: {error}"
-                    ))
-                })?;
-            Ok(CoreEventSanitizeFields {
-                data: result.data,
-                category_profile,
-                metadata: result.metadata,
-            })
-        })();
-        match sanitized {
-            Ok(sanitized) => sanitized,
-            Err(error) => {
-                record_callback_error(error.to_string());
-                CoreEventSanitizeFields::default()
-            }
         }
     })
 }

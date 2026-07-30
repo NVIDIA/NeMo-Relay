@@ -38,7 +38,7 @@ use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
 
-use crate::convert::{c_str_to_json, json_to_c_string};
+use crate::convert::json_to_c_string;
 use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};
 use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
@@ -48,6 +48,10 @@ use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
 /// Optional destructor for user data passed to callbacks.
 /// Called when the runtime no longer needs the associated callback.
+///
+/// Middleware callbacks may run concurrently on Relay runtime or publication
+/// threads. Callers must keep `user_data` valid and thread-safe until this
+/// destructor runs.
 pub type NemoRelayFreeFn = Option<unsafe extern "C" fn(user_data: *mut libc::c_void)>;
 
 /// Callback for tool request/response sanitization guardrails and intercepts.
@@ -76,7 +80,10 @@ pub type NemoRelayToolExecCb =
 
 /// Runtime-provided "next" callback for tool execution middleware chain.
 /// Call this from an intercept to invoke the next layer (or original function).
-/// `next_ctx` is an opaque pointer managed by the runtime.
+/// `next_ctx` is borrowed and valid only until the intercept callback returns;
+/// callers must not retain it or invoke `next_fn` asynchronously. The returned
+/// string belongs to the caller and must be released with
+/// `nemo_relay_string_free`.
 pub type NemoRelayToolExecNextFn =
     unsafe extern "C" fn(args_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
@@ -169,6 +176,10 @@ pub type NemoRelayLlmExecCb =
 
 /// Runtime-provided "next" callback for LLM execution middleware chain.
 /// Takes a native JSON C string, returns a response JSON C string.
+/// `next_ctx` is borrowed and valid only until the intercept callback returns;
+/// callers must not retain it or invoke `next_fn` asynchronously. The returned
+/// string belongs to the caller and must be released with
+/// `nemo_relay_string_free`.
 pub type NemoRelayLlmExecNextFn =
     unsafe extern "C" fn(native_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
@@ -321,14 +332,18 @@ pub fn wrap_tool_sanitize_fn(
     free_fn: NemoRelayFreeFn,
 ) -> ToolSanitizeFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |name: &str, args: Json| {
-        let c_name = CString::new(name).unwrap_or_default();
-        let c_args = json_to_c_string(&args);
-        let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nemo_relay_string_free_internal(c_args) };
-        let result = ptr_to_json(result_ptr);
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |name: String, args: Json| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let c_name = CString::new(name).unwrap_or_default();
+            let c_args = json_to_c_string(&args);
+            let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
+            unsafe { nemo_relay_string_free_internal(c_args) };
+            let result = json_result_from_ptr(result_ptr, "tool sanitize callback returned null");
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -339,22 +354,25 @@ pub fn wrap_tool_conditional_fn(
     free_fn: NemoRelayFreeFn,
 ) -> ToolConditionalFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |name: &str, args: &Json| {
-        clear_last_error();
-        let c_name = CString::new(name).unwrap_or_default();
-        let c_args = json_to_c_string(args);
-        let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nemo_relay_string_free_internal(c_args) };
-        let result = if result_ptr.is_null() {
-            match last_error_message() {
-                Some(message) => Err(FlowError::Internal(message)),
-                None => Ok(None),
-            }
-        } else {
-            Ok(ptr_to_opt_string(result_ptr))
-        };
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |name: String, args: Json| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let c_name = CString::new(name).unwrap_or_default();
+            let c_args = json_to_c_string(&args);
+            let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
+            unsafe { nemo_relay_string_free_internal(c_args) };
+            let result = if result_ptr.is_null() {
+                match last_error_message() {
+                    Some(message) => Err(FlowError::Internal(message)),
+                    None => Ok(None),
+                }
+            } else {
+                Ok(ptr_to_opt_string(result_ptr))
+            };
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -365,16 +383,19 @@ pub fn wrap_tool_request_intercept_fn(
     free_fn: NemoRelayFreeFn,
 ) -> ToolInterceptFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |name: &str, args: Json| {
-        clear_last_error();
-        let c_name = CString::new(name).unwrap_or_default();
-        let c_args = json_to_c_string(&args);
-        let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nemo_relay_string_free_internal(c_args) };
-        let result =
-            json_result_from_ptr(result_ptr, "tool request intercept callback returned null");
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |name: String, args: Json| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let c_name = CString::new(name).unwrap_or_default();
+            let c_args = json_to_c_string(&args);
+            let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
+            unsafe { nemo_relay_string_free_internal(c_args) };
+            let result =
+                json_result_from_ptr(result_ptr, "tool request intercept callback returned null");
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -388,12 +409,13 @@ pub fn wrap_tool_exec_fn(
     Box::new(move |args: Json| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
             unsafe { nemo_relay_string_free_internal(c_args) };
-            let result = json_result_from_ptr(result_ptr, "tool execution callback failed")?;
+            let result = json_result_from_ptr(result_ptr, "tool execution callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
-            Ok(result)
+            result
         })
     })
 }
@@ -444,12 +466,14 @@ pub fn wrap_tool_exec_intercept_fn(
             }
 
             let c_args = json_to_c_string(&args);
+            clear_last_error();
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
             unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
             unsafe { nemo_relay_string_free_internal(c_args) };
             let outcome_json =
-                json_result_from_ptr(result_ptr, "tool execution intercept callback failed")?;
+                json_result_from_ptr(result_ptr, "tool execution intercept callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
+            let outcome_json = outcome_json?;
             serde_json::from_value::<ToolExecutionInterceptOutcome>(outcome_json).map_err(|error| {
                 FlowError::Internal(format!(
                     "invalid tool execution intercept outcome JSON: {error}"
@@ -515,13 +539,14 @@ pub fn wrap_llm_exec_intercept_fn(
 
                 let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
                 let c_request = json_to_c_string(&request_json);
+                clear_last_error();
                 let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
                 unsafe { nemo_relay_string_free_internal(c_request) };
                 let result =
-                    json_result_from_ptr(result_ptr, "LLM execution intercept callback failed")?;
+                    json_result_from_ptr(result_ptr, "LLM execution intercept callback failed");
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
-                Ok(result)
+                result
             })
         },
     )
@@ -590,6 +615,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
 
                 let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
                 let c_request = json_to_c_string(&request_json);
+                clear_last_error();
                 let result_ptr =
                     unsafe { cb(ud.ptr, c_request, llm_stream_next_trampoline, next_ctx) };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn)) };
@@ -597,8 +623,9 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                 let result = json_result_from_ptr(
                     result_ptr,
                     "LLM stream execution intercept callback failed",
-                )?;
+                );
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
+                let result = result?;
                 let stream = tokio_stream::once(Ok(result));
                 Ok(LlmJsonStream::new(stream))
             })
@@ -617,64 +644,67 @@ pub fn wrap_llm_request_intercept_fn(
 ) -> LlmRequestInterceptFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
-        move |name: &str, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
-            clear_last_error();
-            let c_name = CString::new(name).unwrap_or_default();
-            let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+        move |name: String, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
+            let ud = ud.clone();
+            Box::pin(async move {
+                clear_last_error();
+                let c_name = CString::new(name).unwrap_or_default();
+                let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
 
-            // Serialize annotated to JSON C string if present, else null
-            let c_annotated = match &annotated {
-                Some(a) => {
-                    let s = serde_json::to_string(a).unwrap_or_else(|_| "null".to_string());
-                    CString::new(s).unwrap_or_default()
+                // Serialize annotated to JSON C string if present, else null
+                let c_annotated = match &annotated {
+                    Some(a) => {
+                        let s = serde_json::to_string(a).unwrap_or_else(|_| "null".to_string());
+                        CString::new(s).unwrap_or_default()
+                    }
+                    None => CString::default(),
+                };
+                let annotated_ptr = if annotated.is_some() {
+                    c_annotated.as_ptr()
+                } else {
+                    std::ptr::null()
+                };
+
+                let mut out_outcome: *mut c_char = std::ptr::null_mut();
+
+                let status = unsafe {
+                    cb(
+                        ud.ptr,
+                        c_name.as_ptr(),
+                        ffi_req,
+                        annotated_ptr,
+                        &mut out_outcome,
+                    )
+                };
+
+                // Free the input request
+                unsafe { drop(Box::from_raw(ffi_req)) };
+
+                if status != NemoRelayStatus::Ok {
+                    unsafe { nemo_relay_string_free_internal(out_outcome) };
+                    let message = last_error_message()
+                        .unwrap_or_else(|| "request intercept callback failed".to_string());
+                    return Err(FlowError::Internal(message));
                 }
-                None => CString::default(),
-            };
-            let annotated_ptr = if annotated.is_some() {
-                c_annotated.as_ptr()
-            } else {
-                std::ptr::null()
-            };
 
-            let mut out_outcome: *mut c_char = std::ptr::null_mut();
-
-            let status = unsafe {
-                cb(
-                    ud.ptr,
-                    c_name.as_ptr(),
-                    ffi_req,
-                    annotated_ptr,
-                    &mut out_outcome,
-                )
-            };
-
-            // Free the input request
-            unsafe { drop(Box::from_raw(ffi_req)) };
-
-            if status != NemoRelayStatus::Ok {
+                if out_outcome.is_null() {
+                    return Err(FlowError::Internal(
+                        "request intercept returned null out_outcome_json".to_string(),
+                    ));
+                }
+                let outcome = unsafe { CStr::from_ptr(out_outcome) }
+                    .to_str()
+                    .map_err(|error| FlowError::Internal(format!("invalid outcome UTF-8: {error}")))
+                    .and_then(|json| {
+                        serde_json::from_str::<LlmRequestInterceptOutcome>(json).map_err(|error| {
+                            FlowError::Internal(format!(
+                                "invalid LLM request intercept outcome JSON: {error}"
+                            ))
+                        })
+                    });
                 unsafe { nemo_relay_string_free_internal(out_outcome) };
-                let message = last_error_message()
-                    .unwrap_or_else(|| "request intercept callback failed".to_string());
-                return Err(FlowError::Internal(message));
-            }
-
-            if out_outcome.is_null() {
-                return Err(FlowError::Internal(
-                    "request intercept returned null out_outcome_json".to_string(),
-                ));
-            }
-            let outcome = unsafe { CStr::from_ptr(out_outcome) }
-                .to_str()
-                .map_err(|error| FlowError::Internal(format!("invalid outcome UTF-8: {error}")))
-                .and_then(|json| {
-                    serde_json::from_str::<LlmRequestInterceptOutcome>(json).map_err(|error| {
-                        FlowError::Internal(format!(
-                            "invalid LLM request intercept outcome JSON: {error}"
-                        ))
-                    })
-                });
-            unsafe { nemo_relay_string_free_internal(out_outcome) };
-            outcome
+                outcome
+            })
         },
     )
 }
@@ -688,35 +718,41 @@ pub fn wrap_llm_sanitize_request_fn(
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
         move |request: LlmRequest, context: LlmSanitizeRequestContext| {
-            clear_last_error();
-            let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
-                Ok(identity) => identity,
-                Err(error) => {
-                    set_last_error(&error.to_string());
-                    return None;
+            let ud = ud.clone();
+            Box::pin(async move {
+                clear_last_error();
+                let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        set_last_error(&error.to_string());
+                        return Err(error);
+                    }
+                };
+                let codec = context
+                    .resolve_codec()
+                    .map(crate::types::FfiLlmSanitizeRequestCodec);
+                let ffi_context = NemoRelayLlmSanitizeRequestContext {
+                    codec_kind,
+                    codec_id: codec_id
+                        .as_ref()
+                        .map_or(std::ptr::null(), |name| name.as_ptr()),
+                    codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
+                };
+                let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+                let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
+                if result_ptr.is_null() {
+                    unsafe { drop(Box::from_raw(ffi_req)) };
+                    return match last_error_message() {
+                        Some(message) => Err(FlowError::Internal(message)),
+                        None => Ok(None),
+                    };
                 }
-            };
-            let codec = context
-                .resolve_codec()
-                .map(crate::types::FfiLlmSanitizeRequestCodec);
-            let ffi_context = NemoRelayLlmSanitizeRequestContext {
-                codec_kind,
-                codec_id: codec_id
-                    .as_ref()
-                    .map_or(std::ptr::null(), |name| name.as_ptr()),
-                codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
-            };
-            let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
-            let result_ptr = unsafe { cb(ud.ptr, ffi_req, ffi_context) };
-            if result_ptr.is_null() {
+                if result_ptr == ffi_req {
+                    return Ok(Some(unsafe { Box::from_raw(ffi_req) }.0));
+                }
                 unsafe { drop(Box::from_raw(ffi_req)) };
-                return None;
-            }
-            if result_ptr == ffi_req {
-                return Some(unsafe { Box::from_raw(ffi_req) }.0);
-            }
-            unsafe { drop(Box::from_raw(ffi_req)) };
-            Some(unsafe { Box::from_raw(result_ptr) }.0)
+                Ok(Some(unsafe { Box::from_raw(result_ptr) }.0))
+            })
         },
     )
 }
@@ -729,38 +765,57 @@ pub fn wrap_llm_sanitize_response_fn(
 ) -> LlmSanitizeResponseFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
-        clear_last_error();
-        let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
-            Ok(identity) => identity,
-            Err(error) => {
-                set_last_error(&error.to_string());
-                return None;
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let (codec_kind, codec_id) = match ffi_codec_identity(context.codec()) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    set_last_error(&error.to_string());
+                    return Err(error);
+                }
+            };
+            let codec = context
+                .resolve_codec()
+                .map(crate::types::FfiLlmSanitizeResponseCodec);
+            let ffi_context = NemoRelayLlmSanitizeResponseContext {
+                codec_kind,
+                codec_id: codec_id
+                    .as_ref()
+                    .map_or(std::ptr::null(), |name| name.as_ptr()),
+                codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
+            };
+            let response_json = json_to_c_string(&response);
+            let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };
+            if result_ptr.is_null() {
+                unsafe { nemo_relay_string_free_internal(response_json) };
+                return match last_error_message() {
+                    Some(message) => Err(FlowError::Internal(message)),
+                    None => Ok(None),
+                };
             }
-        };
-        let codec = context
-            .resolve_codec()
-            .map(crate::types::FfiLlmSanitizeResponseCodec);
-        let ffi_context = NemoRelayLlmSanitizeResponseContext {
-            codec_kind,
-            codec_id: codec_id
-                .as_ref()
-                .map_or(std::ptr::null(), |name| name.as_ptr()),
-            codec: codec.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
-        };
-        let response_json = json_to_c_string(&response);
-        let result_ptr = unsafe { cb(ud.ptr, response_json, ffi_context) };
-        if result_ptr.is_null() {
-            unsafe { nemo_relay_string_free_internal(response_json) };
-            return None;
-        }
-        let result = c_str_to_json(result_ptr);
-        unsafe {
-            nemo_relay_string_free_internal(response_json);
-            if result_ptr != response_json {
-                nemo_relay_string_free_internal(result_ptr);
+            let result = unsafe { CStr::from_ptr(result_ptr) }
+                .to_str()
+                .map_err(|error| {
+                    FlowError::Internal(format!(
+                        "LLM response sanitizer returned invalid UTF-8: {error}"
+                    ))
+                })
+                .and_then(|value| {
+                    serde_json::from_str(value).map_err(|error| {
+                        FlowError::Internal(format!(
+                            "LLM response sanitizer returned invalid JSON: {error}"
+                        ))
+                    })
+                });
+            unsafe {
+                nemo_relay_string_free_internal(response_json);
+                if result_ptr != response_json {
+                    nemo_relay_string_free_internal(result_ptr);
+                }
             }
-        }
-        result
+            result.map(Some)
+        })
     })
 }
 
@@ -790,20 +845,23 @@ pub fn wrap_llm_conditional_fn(
     free_fn: NemoRelayFreeFn,
 ) -> LlmConditionalFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |request: &LlmRequest| {
-        clear_last_error();
-        let ffi_req = FfiLLMRequest(request.clone());
-        let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
-        let result = if result_ptr.is_null() {
-            match last_error_message() {
-                Some(message) => Err(FlowError::Internal(message)),
-                None => Ok(None),
-            }
-        } else {
-            Ok(ptr_to_opt_string(result_ptr))
-        };
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |request: LlmRequest| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let ffi_req = FfiLLMRequest(request);
+            let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
+            let result = if result_ptr.is_null() {
+                match last_error_message() {
+                    Some(message) => Err(FlowError::Internal(message)),
+                    None => Ok(None),
+                }
+            } else {
+                Ok(ptr_to_opt_string(result_ptr))
+            };
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -818,13 +876,14 @@ pub fn wrap_llm_exec_fn(
     Box::new(move |request: LlmRequest| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
             unsafe { nemo_relay_string_free_internal(c_request) };
-            let result = json_result_from_ptr(result_ptr, "LLM execution callback failed")?;
+            let result = json_result_from_ptr(result_ptr, "LLM execution callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
-            Ok(result)
+            result
         })
     })
 }
@@ -843,12 +902,14 @@ pub fn wrap_llm_stream_exec_fn(
     Box::new(move |request: LlmRequest| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
             unsafe { nemo_relay_string_free_internal(c_request) };
-            let result = json_result_from_ptr(result_ptr, "LLM stream execution callback failed")?;
+            let result = json_result_from_ptr(result_ptr, "LLM stream execution callback failed");
             unsafe { nemo_relay_string_free_internal(result_ptr) };
+            let result = result?;
             // The C callback returns the full response as a single JSON value for stream
             // We emit it as a single-item stream
             let stream = tokio_stream::once(Ok(result));
@@ -918,14 +979,20 @@ pub fn wrap_event_sanitize_fn(
     free_fn: NemoRelayFreeFn,
 ) -> EventSanitizeFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |event: &Event, fields: EventSanitizeFields| {
-        let ffi_event = FfiEvent(event.clone());
-        let fields_json = json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
-        let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
-        unsafe { nemo_relay_string_free_internal(fields_json) };
-        let result = serde_json::from_value(ptr_to_json(result_ptr)).unwrap_or_default();
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
+    Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            let ffi_event = FfiEvent((*event).clone());
+            let fields_json =
+                json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
+            let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
+            unsafe { nemo_relay_string_free_internal(fields_json) };
+            let result = serde_json::from_value(ptr_to_json(result_ptr)).map_err(|error| {
+                FlowError::Internal(format!("invalid event sanitizer result: {error}"))
+            });
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 
@@ -1025,7 +1092,11 @@ fn json_result_from_ptr(ptr: *mut c_char, fallback: &str) -> Result<Json> {
         let message = last_error_message().unwrap_or_else(|| fallback.to_string());
         return Err(FlowError::Internal(message));
     }
-    Ok(ptr_to_json(ptr))
+    let value = unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .map_err(|error| FlowError::Internal(format!("{fallback}: invalid UTF-8: {error}")))?;
+    serde_json::from_str(value)
+        .map_err(|error| FlowError::Internal(format!("{fallback}: invalid JSON: {error}")))
 }
 
 fn ptr_to_opt_string(ptr: *mut c_char) -> Option<String> {
@@ -1045,6 +1116,10 @@ unsafe fn nemo_relay_string_free_internal(ptr: *mut c_char) {
         drop(unsafe { CString::from_raw(ptr) });
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
 
 #[cfg(test)]
 #[path = "../tests/unit/callable_tests.rs"]

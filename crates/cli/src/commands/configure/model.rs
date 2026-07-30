@@ -42,9 +42,10 @@ pub(crate) fn plugins_edit_command_for_scope(
     scope: ConfigScope,
     explicit_path: Option<PathBuf>,
 ) -> PluginsEditRequest {
-    let scope = match scope {
-        ConfigScope::Project | ConfigScope::Both => ConfigurationScope::Project,
-        ConfigScope::Global => ConfigurationScope::User,
+    let scope = match (&explicit_path, scope) {
+        (Some(_), _) => ConfigurationScope::User,
+        (None, ConfigScope::Project | ConfigScope::Both) => ConfigurationScope::Project,
+        (None, ConfigScope::Global) => ConfigurationScope::User,
     };
     PluginsEditRequest {
         scope,

@@ -35,6 +35,7 @@ class Platform:
     npm_cpu: str
     wheel_platforms: tuple[str, ...]
     executable: str
+    libc: str | None = None
 
     @property
     def npm_package(self) -> str:
@@ -46,20 +47,40 @@ PLATFORMS = {
     platform.target: platform
     for platform in (
         Platform(
-            "x86_64-unknown-linux-musl",
+            "x86_64-unknown-linux-gnu",
             "linux-x64",
             "linux",
             "x64",
-            ("manylinux_2_17_x86_64", "musllinux_1_2_x86_64"),
+            ("manylinux_2_17_x86_64",),
             "nemo-relay",
+            "glibc",
         ),
         Platform(
-            "aarch64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
             "linux-arm64",
             "linux",
             "arm64",
-            ("manylinux_2_17_aarch64", "musllinux_1_2_aarch64"),
+            ("manylinux_2_17_aarch64",),
             "nemo-relay",
+            "glibc",
+        ),
+        Platform(
+            "x86_64-unknown-linux-musl",
+            "linux-x64-musl",
+            "linux",
+            "x64",
+            ("musllinux_1_2_x86_64",),
+            "nemo-relay",
+            "musl",
+        ),
+        Platform(
+            "aarch64-unknown-linux-musl",
+            "linux-arm64-musl",
+            "linux",
+            "arm64",
+            ("musllinux_1_2_aarch64",),
+            "nemo-relay",
+            "musl",
         ),
         Platform(
             "aarch64-apple-darwin",
@@ -179,7 +200,7 @@ def add_tar_bytes(archive: tarfile.TarFile, path: str, content: bytes, mode: int
 
 def build_npm_platform(binary: Path, platform: Platform, version: str, output: Path) -> Path:
     """Build an OS- and CPU-constrained npm package containing the CLI binary."""
-    filename = f"nemo-relay-bin-npm-{platform.npm_os}-{platform.npm_cpu}-{version}.tgz"
+    filename = f"nemo-relay-bin-npm-{platform.npm_suffix}-{version}.tgz"
     destination = output / filename
     manifest = {
         "name": platform.npm_package,
@@ -191,6 +212,8 @@ def build_npm_platform(binary: Path, platform: Platform, version: str, output: P
         "license": LICENSE,
         "repository": {"type": "git", "url": f"git+{REPOSITORY}.git"},
     }
+    if platform.libc is not None:
+        manifest["libc"] = [platform.libc]
     with tarfile.open(destination, "w:gz") as archive:
         add_tar_bytes(archive, "package/package.json", json.dumps(manifest, indent=2).encode() + b"\n")
         add_tar_bytes(
@@ -205,13 +228,14 @@ def build_npm_platform(binary: Path, platform: Platform, version: str, output: P
 
 def launcher_source() -> bytes:
     """Return the Node.js launcher that selects the installed native package."""
-    mapping = {
-        f"{platform.npm_os}-{platform.npm_cpu}": {
+    mapping: dict[str, dict[str, dict[str, str]]] = {}
+    for platform in PLATFORMS.values():
+        key = f"{platform.npm_os}-{platform.npm_cpu}"
+        libc = platform.libc or "default"
+        mapping.setdefault(key, {})[libc] = {
             "package": platform.npm_package,
             "executable": platform.executable,
         }
-        for platform in PLATFORMS.values()
-    }
     return (
         "#!/usr/bin/env node\n"
         "// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n"
@@ -220,7 +244,10 @@ def launcher_source() -> bytes:
         "const path = require('node:path');\n\n"
         f"const platforms = {json.dumps(mapping, indent=2)};\n"
         "const key = `${process.platform}-${process.arch}`;\n"
-        "const selected = platforms[key];\n"
+        "const libc = process.platform === 'linux'\n"
+        "  ? (process.report?.getReport?.().header.glibcVersionRuntime ? 'glibc' : 'musl')\n"
+        "  : 'default';\n"
+        "const selected = platforms[key]?.[libc] ?? platforms[key]?.default;\n"
         "if (!selected) {\n"
         "  console.error(`nemo-relay-cli-bin does not support ${process.platform}/${process.arch}`);\n"
         "  process.exit(1);\n"

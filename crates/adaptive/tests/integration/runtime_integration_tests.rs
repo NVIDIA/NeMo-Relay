@@ -605,6 +605,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
             content: json!({"messages": []}),
         },
     )
+    .await
     .unwrap();
     assert_eq!(request.request.content["messages"], json!([]));
 
@@ -739,9 +740,11 @@ impl Plugin for HeaderPlugin {
                 false,
                 Arc::new(|_name, mut request, annotated| {
                     request.headers.insert("x-plugin".into(), json!("set"));
-                    Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                        request, annotated,
-                    ))
+                    Box::pin(async move {
+                        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                            request, annotated,
+                        ))
+                    })
                 }),
             )?;
             ctx.register_tool_request_intercept(
@@ -752,7 +755,7 @@ impl Plugin for HeaderPlugin {
                     if let Json::Object(ref mut map) = args {
                         map.insert("x-tool-plugin".into(), json!(true));
                     }
-                    Ok(args)
+                    Box::pin(async move { Ok(args) })
                 }),
             )?;
             ctx.register_llm_execution_intercept(
@@ -823,6 +826,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
             content: json!({"messages": []}),
         },
     )
+    .await
     .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!("set")));
 

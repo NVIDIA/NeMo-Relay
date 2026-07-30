@@ -139,9 +139,11 @@ fn assert_llm_request_intercept_registered(name: &str) {
             i32::MAX,
             false,
             Arc::new(|_name, request, annotated| {
-                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                    request, annotated,
-                ))
+                Box::pin(async move {
+                    Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                        request, annotated,
+                    ))
+                })
             }),
         ),
         name,
@@ -154,9 +156,11 @@ fn assert_llm_request_intercept_absent(name: &str) {
         i32::MAX,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                request, annotated,
-            ))
+            Box::pin(async move {
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
+            })
         }),
     )
     .unwrap();
@@ -565,6 +569,7 @@ async fn adaptive_hints_feature_registers_request_intercept() {
             content: json!({}),
         },
     )
+    .await
     .unwrap();
     assert!(request.request.headers.contains_key(AGENT_HINTS_HEADER_KEY));
 
@@ -730,9 +735,11 @@ async fn registration_context_registers_all_supported_callback_types() {
         5,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                request, annotated,
-            ))
+            Box::pin(async move {
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
+            })
         }),
     )
     .unwrap();

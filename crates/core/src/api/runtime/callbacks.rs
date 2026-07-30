@@ -27,8 +27,14 @@ use crate::json::Json;
 ///
 /// The callback receives the current event as immutable context and the fields
 /// it may replace. Later callbacks observe fields returned by earlier entries.
-pub type EventSanitizeFn =
-    Arc<dyn Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync>;
+pub type EventSanitizeFn = Arc<
+    dyn Fn(
+            Arc<Event>,
+            EventSanitizeFields,
+        ) -> Pin<Box<dyn Future<Output = Result<EventSanitizeFields>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Sanitize a tool request payload before the runtime records it.
 ///
@@ -42,7 +48,8 @@ pub type EventSanitizeFn =
 ///
 /// # Returns
 /// Sanitized JSON payload for the emitted event.
-pub type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
+pub type ToolSanitizeFn =
+    Arc<dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Decide whether a tool call is allowed to continue.
 ///
 /// The callback receives the tool name and the current argument payload. It can
@@ -64,7 +71,11 @@ pub type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// guardrail evaluation.
-pub type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
+pub type ToolConditionalFn = Arc<
+    dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Rewrite tool arguments before execution.
 ///
 /// Tool request intercepts run in priority order and can transform the JSON
@@ -80,7 +91,8 @@ pub type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> +
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
-pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
+pub type ToolInterceptFn =
+    Arc<dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Continuation type invoked by tool execution intercepts.
 ///
 /// Execution intercepts receive this callable as their `next` continuation and
@@ -97,6 +109,12 @@ pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
 pub type ToolExecutionNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Wrap or replace tool execution.
@@ -308,8 +326,14 @@ impl LlmSanitizeResponseContext {
 ///
 /// The context is always supplied and distinguishes no codec, built-in codecs,
 /// runtime-registered codecs, and opaque active codecs.
-pub type LlmSanitizeRequestFn =
-    Arc<dyn Fn(LlmRequest, LlmSanitizeRequestContext) -> Option<LlmRequest> + Send + Sync>;
+pub type LlmSanitizeRequestFn = Arc<
+    dyn Fn(
+            LlmRequest,
+            LlmSanitizeRequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<LlmRequest>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Sanitize an LLM response before the runtime records it.
 ///
 /// These callbacks rewrite the JSON response payload captured on LLM-end
@@ -325,8 +349,14 @@ pub type LlmSanitizeRequestFn =
 ///
 /// The context is always supplied and distinguishes no codec, built-in codecs,
 /// runtime-registered codecs, and opaque active codecs.
-pub type LlmSanitizeResponseFn =
-    Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> Option<Json> + Send + Sync>;
+pub type LlmSanitizeResponseFn = Arc<
+    dyn Fn(
+            Json,
+            LlmSanitizeResponseContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Json>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,
@@ -346,7 +376,11 @@ pub type LlmSanitizeResponseFn =
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// guardrail evaluation.
-pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
+pub type LlmConditionalFn = Arc<
+    dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Rewrite or annotate an LLM request before execution.
 ///
 /// Request intercepts can transform the wire request, attach or replace a
@@ -368,7 +402,11 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
 pub type LlmRequestInterceptFn = Arc<
-    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
+    dyn Fn(
+            String,
+            LlmRequest,
+            Option<AnnotatedLlmRequest>,
+        ) -> Pin<Box<dyn Future<Output = Result<LlmRequestInterceptOutcome>> + Send>>
         + Send
         + Sync,
 >;
@@ -385,6 +423,12 @@ pub type LlmRequestInterceptFn = Arc<
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
 pub type LlmExecutionNextFn =
     Arc<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Wrap or replace non-streaming LLM execution.
@@ -448,6 +492,10 @@ impl LlmJsonStream {
     pub async fn close(&mut self) -> Result<()> {
         self.inner.as_mut().close().await
     }
+
+    pub(crate) fn terminalize(&mut self) {
+        self.inner.as_mut().terminalize();
+    }
 }
 
 impl Stream for LlmJsonStream {
@@ -460,6 +508,10 @@ impl Stream for LlmJsonStream {
 
 /// Internal close-aware stream implementation.
 pub trait LlmStreamInner: Stream<Item = Result<Json>> + Send {
+    /// Release lifecycle guards once the consumer-visible stream has ended
+    /// while retaining the producer for a later explicit close.
+    fn terminalize(self: Pin<&mut Self>) {}
+
     /// Stop the producer and wait for cleanup. Implementations must be idempotent.
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
@@ -540,6 +592,16 @@ pub(crate) type LlmStreamExecutionRegistryRefs<'a> = &'a [LlmStreamExecutionRegi
 /// # Errors
 /// The future resolves to an error when the remaining streaming execution
 /// chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
+/// Returning an interceptor stream extends that active lifetime until the
+/// stream closes, which permits lazy stream adapters to call `next` while they
+/// are being consumed. A stream successfully returned by `next` keeps its
+/// ordinary stream lifetime.
 pub type LlmStreamExecutionNextFn = Arc<
     dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>> + Send + Sync,
 >;

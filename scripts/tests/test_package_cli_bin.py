@@ -32,18 +32,21 @@ def required_member(archive: tarfile.TarFile, name: str) -> IO[bytes]:
 
 
 class PackageCliBinTests(unittest.TestCase):
-    def test_packages_linux_binary_for_python_and_npm(self) -> None:
+    def test_packages_linux_binaries_for_python_and_npm(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             binary = output / "nemo-relay"
             binary.write_bytes(b"test-binary")
-            platform = PACKAGE_CLI_BIN.PLATFORMS["x86_64-unknown-linux-musl"]
+            gnu_platform = PACKAGE_CLI_BIN.PLATFORMS["x86_64-unknown-linux-gnu"]
+            musl_platform = PACKAGE_CLI_BIN.PLATFORMS["x86_64-unknown-linux-musl"]
 
             previous_directory = Path.cwd()
             try:
                 os.chdir(output)
-                wheel = PACKAGE_CLI_BIN.build_wheel(binary, platform, "0.7.0-rc.1", output)
-                native = PACKAGE_CLI_BIN.build_npm_platform(binary, platform, "0.7.0-rc.1", output)
+                wheel = PACKAGE_CLI_BIN.build_wheel(binary, gnu_platform, "0.7.0-rc.1", output)
+                native = PACKAGE_CLI_BIN.build_npm_platform(binary, gnu_platform, "0.7.0-rc.1", output)
+                musl_wheel = PACKAGE_CLI_BIN.build_wheel(binary, musl_platform, "0.7.0-rc.1", output)
+                musl_native = PACKAGE_CLI_BIN.build_npm_platform(binary, musl_platform, "0.7.0-rc.1", output)
                 launcher = PACKAGE_CLI_BIN.build_npm_launcher("0.7.0-rc.1", output)
             finally:
                 os.chdir(previous_directory)
@@ -56,17 +59,25 @@ class PackageCliBinTests(unittest.TestCase):
                 self.assertTrue(stat.S_ISREG(script_mode))
                 self.assertEqual(stat.S_IMODE(script_mode), 0o755)
                 wheel_metadata = archive.read(next(name for name in names if name.endswith("/WHEEL")))
-                self.assertIn(b"Tag: py3-none-musllinux_1_2_x86_64", wheel_metadata)
+                self.assertIn(b"Tag: py3-none-manylinux_2_17_x86_64", wheel_metadata)
+
+            self.assertIn("0.7.0rc1-py3-none-musllinux_1_2_x86_64", musl_wheel.name)
 
             self.assertEqual(native.name, "nemo-relay-bin-npm-linux-x64-0.7.0-rc.1.tgz")
             with tarfile.open(native) as archive:
                 manifest = json.load(required_member(archive, "package/package.json"))
                 self.assertEqual(manifest["os"], ["linux"])
                 self.assertEqual(manifest["cpu"], ["x64"])
+                self.assertEqual(manifest["libc"], ["glibc"])
                 self.assertEqual(
                     required_member(archive, "package/bin/nemo-relay").read(),
                     b"test-binary",
                 )
+
+            self.assertEqual(musl_native.name, "nemo-relay-bin-npm-linux-x64-musl-0.7.0-rc.1.tgz")
+            with tarfile.open(musl_native) as archive:
+                manifest = json.load(required_member(archive, "package/package.json"))
+                self.assertEqual(manifest["libc"], ["musl"])
 
             self.assertEqual(launcher.name, "nemo-relay-bin-npm-0.7.0-rc.1.tgz")
             with tarfile.open(launcher) as archive:
@@ -74,6 +85,10 @@ class PackageCliBinTests(unittest.TestCase):
                 self.assertEqual(manifest["bin"]["nemo-relay"], "bin/nemo-relay.js")
                 self.assertEqual(
                     manifest["optionalDependencies"]["nemo-relay-cli-bin-linux-x64"],
+                    "0.7.0-rc.1",
+                )
+                self.assertEqual(
+                    manifest["optionalDependencies"]["nemo-relay-cli-bin-linux-x64-musl"],
                     "0.7.0-rc.1",
                 )
                 launcher_path = output / "launcher/package/bin/nemo-relay.js"

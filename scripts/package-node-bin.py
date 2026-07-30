@@ -39,6 +39,8 @@ PLATFORMS = {
     for platform in (
         Platform("linux-amd64", "linux-x64-gnu", "linux", "x64", "nemo-relay.linux-x64-gnu.node", "glibc"),
         Platform("linux-arm64", "linux-arm64-gnu", "linux", "arm64", "nemo-relay.linux-arm64-gnu.node", "glibc"),
+        Platform("linux-musl-amd64", "linux-x64-musl", "linux", "x64", "nemo-relay.linux-x64-musl.node", "musl"),
+        Platform("linux-musl-arm64", "linux-arm64-musl", "linux", "arm64", "nemo-relay.linux-arm64-musl.node", "musl"),
         Platform("macos-arm64", "darwin-arm64", "darwin", "arm64", "nemo-relay.darwin-arm64.node"),
         Platform("windows-amd64", "win32-x64-msvc", "win32", "x64", "nemo-relay.win32-x64-msvc.node"),
         Platform("windows-arm64", "win32-arm64-msvc", "win32", "arm64", "nemo-relay.win32-arm64-msvc.node"),
@@ -90,7 +92,10 @@ def build_native_package(node_dir: Path, platform: Platform, version: str, outpu
     binary = node_dir / platform.binary
     if not binary.is_file():
         raise FileNotFoundError(f"Node native binary does not exist: {binary}")
-    destination = output / f"nemo-relay-node-npm-{platform.npm_os}-{platform.npm_cpu}-{version}.tgz"
+    artifact_suffix = f"{platform.npm_os}-{platform.npm_cpu}"
+    if platform.libc == "musl":
+        artifact_suffix += "-musl"
+    destination = output / f"nemo-relay-node-npm-{artifact_suffix}-{version}.tgz"
     with tarfile.open(destination, "w:gz") as archive:
         add_tar_bytes(archive, "package/package.json", json.dumps(manifest, indent=2).encode() + b"\n")
         add_tar_bytes(archive, f"package/{platform.binary}", binary.read_bytes(), mode=0o755)
