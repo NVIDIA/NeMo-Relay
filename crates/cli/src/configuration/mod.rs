@@ -19,7 +19,9 @@ use nemo_relay::logging::LoggingConfig;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
 };
-use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
+use nemo_relay::plugin::{
+    PluginError, deduplicate_plugin_config_paths, merge_plugin_config_documents,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::{digest, hmac};
 use serde::Deserialize;
@@ -1389,24 +1391,6 @@ where
             contributing_sources,
         })),
     }
-}
-
-/// Removes physical duplicates while preserving the highest-precedence path.
-fn deduplicate_plugin_config_paths<I>(paths: I) -> Vec<PathBuf>
-where
-    I: IntoIterator<Item = PathBuf>,
-{
-    let paths = paths.into_iter().collect::<Vec<_>>();
-    let mut seen = HashSet::new();
-    let mut unique = Vec::with_capacity(paths.len());
-    for path in paths.into_iter().rev() {
-        let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if seen.insert(identity) {
-            unique.push(path);
-        }
-    }
-    unique.reverse();
-    unique
 }
 
 fn apply_plugin_toml_config(resolved: &mut ResolvedConfig, plugin_toml: Option<PluginTomlConfig>) {

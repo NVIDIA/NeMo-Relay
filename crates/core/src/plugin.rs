@@ -1652,7 +1652,9 @@ where
 }
 
 /// Removes physical duplicates while preserving the highest-precedence path.
-fn deduplicate_plugin_config_paths<I>(paths: I) -> Vec<PathBuf>
+/// Internal: `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn deduplicate_plugin_config_paths<I>(paths: I) -> Vec<PathBuf>
 where
     I: IntoIterator<Item = PathBuf>,
 {
