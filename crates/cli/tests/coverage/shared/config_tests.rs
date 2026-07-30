@@ -609,8 +609,9 @@ fn agent_inference_uses_executable_basename() {
 
 #[test]
 fn explicit_toml_config_maps_supported_sections() {
-    let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
     let path = temp.path().join("config.toml");
     std::fs::write(
         &path,
@@ -1096,6 +1097,8 @@ mode = "overwrite"
 #[test]
 fn plugins_toml_path_resolution_tracks_config_scope() {
     let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
     let explicit = temp.path().join("custom-config.toml");
     assert_eq!(
         plugin_config_paths(Some(&explicit), None),
