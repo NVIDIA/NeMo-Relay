@@ -27,7 +27,7 @@ use crate::response_cache::store::CACHE_SCHEMA_VERSION;
 
 /// Top-level request-body keys that never affect the answer and are always
 /// dropped before fingerprinting (IDs, routing, bookkeeping, streaming flag).
-pub const DEFAULT_SKIP_KEYS: &[&str] = &["stream", "user", "metadata", "service_tier", "store"];
+pub const DEFAULT_SKIP_KEYS: &[&str] = &["stream", "user", "metadata", "store"];
 
 /// Relay-owned Switchyard backend partition. It is always keyed and never
 /// depends on the user-configured header allowlist.

@@ -79,6 +79,54 @@ fn built_in_noise_fields_do_not_change_the_key() {
 }
 
 #[test]
+fn service_tier_partitions_normalized_and_raw_keys() {
+    let config = cache_all_config();
+    let chat = |tier: &str| {
+        request(json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "service_tier": tier
+        }))
+    };
+    let default = chat("default");
+    let priority = chat("priority");
+    for request in [&default, &priority] {
+        assert_eq!(
+            resolved_body("openai", request).1,
+            Some("openai_chat"),
+            "service-tier coverage must exercise normalized keying"
+        );
+    }
+    assert_ne!(
+        key_of("openai", &default, &config),
+        key_of("openai", &priority, &config),
+        "normalized service tiers can select different provider capacity"
+    );
+
+    let raw = |tier: &str| {
+        request(json!({
+            "model": "vendor-model",
+            "prompt": "hi",
+            "service_tier": tier
+        }))
+    };
+    let auto = raw("auto");
+    let standard_only = raw("standard_only");
+    for request in [&auto, &standard_only] {
+        assert_eq!(
+            resolved_body("custom-provider", request).1,
+            None,
+            "custom-provider coverage must exercise raw fallback keying"
+        );
+    }
+    assert_ne!(
+        key_of("custom-provider", &auto, &config),
+        key_of("custom-provider", &standard_only, &config),
+        "raw-fallback service tiers must remain answer-determining"
+    );
+}
+
+#[test]
 fn legacy_skip_keys_cannot_collapse_normalized_fields() {
     // `skip_keys` was removed before schema v1 shipped. If an old draft config
     // still carries it, serde ignores the unknown field and exact-match keying

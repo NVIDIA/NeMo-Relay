@@ -236,10 +236,12 @@ Successful upstream status codes, headers, and original JSON formatting are not
 forwarded. This keeps the selected result coherent when an execution intercept
 invokes `next` more than once, including concurrent retry or hedging attempts.
 Provider and transport failures remain attached to the individual failed
-attempt instead of using successful-response metadata. Managed provider
-failures use Relay's JSON error envelope; Relay preserves an upstream error
-status when one is available and uses HTTP `502` for transport failures or
-malformed successful responses.
+attempt instead of using successful-response metadata. For ordinary managed
+requests, Relay preserves the provider status, body, and response headers when
+the provider returns an HTTP error. Relay also preserves an undecodable
+buffered response. Retry-aware routing uses structured provider failures
+internally so it can select another target. Relay uses its JSON error envelope
+with HTTP `502` for transport failures.
 
 For ordinary provider requests, Relay resolves credentials in this order:
 

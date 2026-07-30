@@ -65,6 +65,16 @@ fn chat_request_with_token_cap(prompt: &str, token_cap: &str) -> LlmRequest {
     request
 }
 
+fn chat_request_with_service_tier(prompt: &str, service_tier: &str) -> LlmRequest {
+    let mut request = chat_request(prompt);
+    request
+        .content
+        .as_object_mut()
+        .expect("chat request body must be an object")
+        .insert("service_tier".to_string(), json!(service_tier));
+    request
+}
+
 fn chat_request_for_backend(prompt: &str, backend: &str) -> LlmRequest {
     let mut request = chat_request(prompt);
     request
@@ -339,6 +349,60 @@ async fn buffered_openai_token_cap_spellings_do_not_share_entries() {
         current_calls.load(Ordering::SeqCst),
         1,
         "the current spelling must miss rather than reuse the legacy request"
+    );
+}
+
+#[tokio::test]
+async fn buffered_service_tiers_do_not_share_entries() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    let default_calls = Arc::new(AtomicUsize::new(0));
+    let default_provider = counting_provider(
+        Arc::clone(&default_calls),
+        json!({"source": "default", "service_tier": "default"}),
+    );
+    let priority_calls = Arc::new(AtomicUsize::new(0));
+    let priority_provider = counting_provider(
+        Arc::clone(&priority_calls),
+        json!({"source": "priority", "service_tier": "priority"}),
+    );
+
+    let default = call(
+        &default_provider,
+        chat_request_with_service_tier("same prompt", "default"),
+    )
+    .await;
+    let default_repeat = call(
+        &default_provider,
+        chat_request_with_service_tier("same prompt", "default"),
+    )
+    .await;
+    let priority = call(
+        &priority_provider,
+        chat_request_with_service_tier("same prompt", "priority"),
+    )
+    .await;
+
+    assert_eq!(
+        default,
+        json!({"source": "default", "service_tier": "default"})
+    );
+    assert_eq!(default_repeat, default);
+    assert_eq!(
+        priority,
+        json!({"source": "priority", "service_tier": "priority"})
+    );
+    assert_eq!(
+        default_calls.load(Ordering::SeqCst),
+        1,
+        "the same service tier must remain cacheable"
+    );
+    assert_eq!(
+        priority_calls.load(Ordering::SeqCst),
+        1,
+        "a different service tier must miss rather than reuse the cached response"
     );
 }
 

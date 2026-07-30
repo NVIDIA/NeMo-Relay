@@ -11,7 +11,7 @@ use request::*;
 use response::*;
 use routes::*;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use async_stream::stream;
@@ -53,6 +53,7 @@ const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-rou
 const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
+const CAPTURED_UPSTREAM_FAILURE_PREFIX: &str = "nemo-relay-gateway-upstream-attempt:";
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
@@ -80,6 +81,52 @@ pub(crate) async fn passthrough(
         .await?;
     run_managed_gateway(state, prepared, prep).await
 }
+
+/// Exact failure material from one ordinary upstream attempt.
+///
+/// Retry-aware Switchyard attempts use [`FlowError::Upstream`] for routing.
+/// Ordinary attempts keep their original HTTP bytes and multi-value headers so
+/// the selected attempt can be relayed without a shared last-write-wins slot.
+enum CapturedUpstreamFailure {
+    Response {
+        status: StatusCode,
+        headers: HeaderMap,
+        bytes: Bytes,
+    },
+    Transport(reqwest::Error),
+}
+
+#[derive(Default)]
+struct CapturedUpstreamFailures {
+    entries: Mutex<HashMap<uuid::Uuid, CapturedUpstreamFailure>>,
+}
+
+impl CapturedUpstreamFailures {
+    fn capture(&self, failure: CapturedUpstreamFailure, description: &str) -> FlowError {
+        let token = uuid::Uuid::now_v7();
+        self.entries
+            .lock()
+            .expect("captured upstream failures lock poisoned")
+            .insert(token, failure);
+        FlowError::Internal(format!(
+            "{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token} {description}"
+        ))
+    }
+
+    fn take(&self, error: &FlowError) -> Option<CapturedUpstreamFailure> {
+        let FlowError::Internal(message) = error else {
+            return None;
+        };
+        let encoded = message.strip_prefix(CAPTURED_UPSTREAM_FAILURE_PREFIX)?;
+        let token = encoded.split_once(' ')?.0.parse().ok()?;
+        self.entries
+            .lock()
+            .expect("captured upstream failures lock poisoned")
+            .remove(&token)
+    }
+}
+
+type CapturedUpstreamFailuresRef = Arc<CapturedUpstreamFailures>;
 
 // Runs the managed pipeline for a prepared gateway request. Streaming and non-streaming branches
 // share the same prep + codec dispatch but diverge in how the runtime drives the upstream call.
@@ -201,7 +248,8 @@ async fn run_managed_buffered(
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
 ) -> Result<Response<Body>, CliError> {
-    let func = build_buffered_func(state.clone(), &prepared);
+    let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
+    let func = build_buffered_func(state.clone(), &prepared, upstream_failures.clone());
     let GatewayCallPrep {
         scope_stack,
         session_id,
@@ -253,15 +301,22 @@ async fn run_managed_buffered(
                 .sessions
                 .finish_gateway_call(&session_id, session_finish)
                 .await;
+            if let Some(failure) = upstream_failures.take(&error) {
+                return selected_upstream_failure(failure);
+            }
             Err(translate_runtime_error(error))
         }
     }
 }
 
-// Builds the managed-execution callback for a non-streaming route. Every invocation returns only
-// its own JSON or typed upstream failure, so concurrent attempts cannot overwrite shared transport
-// metadata.
-fn build_buffered_func(state: AppState, prepared: &PreparedGatewayRequest) -> LlmExecutionNextFn {
+// Builds the managed-execution callback for a non-streaming route. Every failure carries either
+// retry-routing data or an opaque token for that exact attempt, so concurrent attempts cannot
+// overwrite one another's transport metadata.
+fn build_buffered_func(
+    state: AppState,
+    prepared: &PreparedGatewayRequest,
+    upstream_failures: CapturedUpstreamFailuresRef,
+) -> LlmExecutionNextFn {
     let http = state.http.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
@@ -276,8 +331,10 @@ fn build_buffered_func(state: AppState, prepared: &PreparedGatewayRequest) -> Ll
         let url = url.clone();
         let body_bytes = body_bytes.clone();
         let headers = headers.clone();
+        let upstream_failures = upstream_failures.clone();
         Box::pin(async move {
-            let response = forward_upstream_request(
+            let retry_aware = retry_aware_dispatch(&request);
+            let response = match forward_upstream_request(
                 &http,
                 &method,
                 &url,
@@ -287,22 +344,61 @@ fn build_buffered_func(state: AppState, prepared: &PreparedGatewayRequest) -> Ll
                 forwarding,
             )
             .await
-            .map_err(|error| FlowError::Upstream(transport_failure(&error)))?;
+            {
+                Ok(response) => response,
+                Err(error) if retry_aware => {
+                    return Err(FlowError::Upstream(transport_failure(&error)));
+                }
+                Err(error) => {
+                    let description = error.to_string();
+                    return Err(upstream_failures
+                        .capture(CapturedUpstreamFailure::Transport(error), &description));
+                }
+            };
             let status = response.status();
             let response_headers = response_headers(response.headers());
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|error| FlowError::Upstream(transport_failure(&error)))?;
+            let bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(error) if retry_aware => {
+                    return Err(FlowError::Upstream(transport_failure(&error)));
+                }
+                Err(error) => {
+                    let description = error.to_string();
+                    return Err(upstream_failures
+                        .capture(CapturedUpstreamFailure::Transport(error), &description));
+                }
+            };
             if !status.is_success() {
-                return Err(FlowError::Upstream(http_failure(
-                    status,
-                    &response_headers,
-                    &bytes,
-                )));
+                if retry_aware {
+                    return Err(FlowError::Upstream(http_failure(
+                        status,
+                        &response_headers,
+                        &bytes,
+                    )));
+                }
+                return Err(upstream_failures.capture(
+                    CapturedUpstreamFailure::Response {
+                        status,
+                        headers: response_headers,
+                        bytes,
+                    },
+                    &format!("upstream returned {status}"),
+                ));
             }
-            serde_json::from_slice::<Value>(&bytes)
-                .map_err(|_| FlowError::Upstream(invalid_json_failure(&response_headers)))
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(response) => Ok(response),
+                Err(_) if retry_aware => {
+                    Err(FlowError::Upstream(invalid_json_failure(&response_headers)))
+                }
+                Err(_) => Err(upstream_failures.capture(
+                    CapturedUpstreamFailure::Response {
+                        status,
+                        headers: response_headers,
+                        bytes,
+                    },
+                    "upstream returned a non-JSON success response",
+                )),
+            }
         })
     })
 }
@@ -317,7 +413,8 @@ async fn run_managed_streaming(
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
 ) -> Result<Response<Body>, CliError> {
-    let func = build_streaming_func(state.clone(), &prepared);
+    let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
+    let func = build_streaming_func(state.clone(), &prepared, upstream_failures.clone());
     let provider_route = prepared.provider;
 
     // Streaming routes that lack a codec fall back to byte passthrough. The runtime requires a
@@ -382,6 +479,9 @@ async fn run_managed_streaming(
                 .sessions
                 .finish_gateway_call(&session_id, session_finish)
                 .await;
+            if let Some(failure) = upstream_failures.take(&error) {
+                return selected_upstream_failure(failure);
+            }
             return Err(translate_runtime_error(error));
         }
     };
@@ -406,11 +506,12 @@ async fn run_managed_streaming(
     build_response(StatusCode::OK, headers, body)
 }
 
-// Builds the streaming managed-execution callback. Each invocation returns its own stream or typed
-// upstream failure without publishing transport metadata through a shared side channel.
+// Builds the streaming managed-execution callback. Each failure carries either retry-routing data
+// or an opaque token for that exact attempt, without publishing a shared last-response slot.
 fn build_streaming_func(
     state: AppState,
     prepared: &PreparedGatewayRequest,
+    upstream_failures: CapturedUpstreamFailuresRef,
 ) -> LlmStreamExecutionNextFn {
     let http = state.http.clone();
     let method = prepared.method.clone();
@@ -426,8 +527,10 @@ fn build_streaming_func(
         let url = url.clone();
         let body_bytes = body_bytes.clone();
         let headers = headers.clone();
+        let upstream_failures = upstream_failures.clone();
         Box::pin(async move {
-            let response = forward_upstream_request(
+            let retry_aware = retry_aware_dispatch(&request);
+            let response = match forward_upstream_request(
                 &http,
                 &method,
                 &url,
@@ -437,19 +540,46 @@ fn build_streaming_func(
                 forwarding,
             )
             .await
-            .map_err(|error| FlowError::Upstream(transport_failure(&error)))?;
+            {
+                Ok(response) => response,
+                Err(error) if retry_aware => {
+                    return Err(FlowError::Upstream(transport_failure(&error)));
+                }
+                Err(error) => {
+                    let description = error.to_string();
+                    return Err(upstream_failures
+                        .capture(CapturedUpstreamFailure::Transport(error), &description));
+                }
+            };
             let status = response.status();
             let response_headers = response_headers(response.headers());
             if !status.is_success() {
-                let bytes = response
-                    .bytes()
-                    .await
-                    .map_err(|error| FlowError::Upstream(transport_failure(&error)))?;
-                return Err(FlowError::Upstream(http_failure(
-                    status,
-                    &response_headers,
-                    &bytes,
-                )));
+                let bytes = match response.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(error) if retry_aware => {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
+                    Err(error) => {
+                        let description = error.to_string();
+                        return Err(upstream_failures
+                            .capture(CapturedUpstreamFailure::Transport(error), &description));
+                    }
+                };
+                if retry_aware {
+                    return Err(FlowError::Upstream(http_failure(
+                        status,
+                        &response_headers,
+                        &bytes,
+                    )));
+                }
+                return Err(upstream_failures.capture(
+                    CapturedUpstreamFailure::Response {
+                        status,
+                        headers: response_headers,
+                        bytes,
+                    },
+                    &format!("upstream returned {status}"),
+                ));
             }
             let json_stream = sse_json_stream(response);
             Ok(json_stream)
@@ -1004,13 +1134,23 @@ fn translate_runtime_error(error: FlowError) -> CliError {
     }
 }
 
-#[cfg(test)]
 fn retry_aware_dispatch(request: &LlmRequest) -> bool {
     request
         .headers
         .get(INTERNAL_RETRY_AWARE_HEADER)
         .and_then(Value::as_str)
         .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Response<Body>, CliError> {
+    match failure {
+        CapturedUpstreamFailure::Response {
+            status,
+            headers,
+            bytes,
+        } => build_response(status, headers, Body::from(bytes)),
+        CapturedUpstreamFailure::Transport(error) => Err(CliError::Upstream(error)),
+    }
 }
 
 fn transport_failure(error: &reqwest::Error) -> UpstreamFailure {

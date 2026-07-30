@@ -1051,9 +1051,15 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
             allow_environment_provider_auth: false,
         },
     };
-    let func = build_streaming_func(state, &prepared);
+    let func = build_streaming_func(
+        state,
+        &prepared,
+        Arc::new(CapturedUpstreamFailures::default()),
+    );
+    let mut request_headers = Map::new();
+    request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
     let request = LlmRequest {
-        headers: Map::new(),
+        headers: request_headers,
         content: json!({}),
     };
 
@@ -1114,9 +1120,15 @@ async fn buffered_body_read_failure_stays_structured() {
             allow_environment_provider_auth: false,
         },
     };
-    let func = build_buffered_func(state, &prepared);
+    let func = build_buffered_func(
+        state,
+        &prepared,
+        Arc::new(CapturedUpstreamFailures::default()),
+    );
+    let mut request_headers = Map::new();
+    request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
     let error = func(LlmRequest {
-        headers: Map::new(),
+        headers: request_headers,
         content: json!({}),
     })
     .await
@@ -1160,9 +1172,15 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
             allow_environment_provider_auth: false,
         },
     };
-    let func = build_buffered_func(state, &prepared);
+    let func = build_buffered_func(
+        state,
+        &prepared,
+        Arc::new(CapturedUpstreamFailures::default()),
+    );
+    let mut request_headers = Map::new();
+    request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
     let error = func(LlmRequest {
-        headers: Map::new(),
+        headers: request_headers,
         content: json!({}),
     })
     .await
