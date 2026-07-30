@@ -5,7 +5,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -3208,11 +3208,12 @@ fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     let cwd = temp.path().join("workdir");
-    let config = temp.path().join("explicit/config.toml");
+    let config = temp.path().join("explicit").join("config.toml");
+    let workspace_config = cwd.join(".nemo-relay").join("config.toml");
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream\n").unwrap();
+    std::fs::write(&workspace_config, "[upstream\n").unwrap();
     std::fs::write(&config, "[upstream]\n").unwrap();
 
     let output = Command::new(gateway_bin())
@@ -3232,12 +3233,14 @@ fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
     assert_eq!(report["configuration"]["explicit"]["status"], "pass");
     assert_eq!(report["configuration"]["explicit"]["active"], true);
     assert_eq!(
-        report["configuration"]["workspace"]["path"],
-        cwd.canonicalize()
-            .unwrap()
-            .join(".nemo-relay/config.toml")
-            .display()
-            .to_string()
+        PathBuf::from(
+            report["configuration"]["workspace"]["path"]
+                .as_str()
+                .unwrap()
+        )
+        .canonicalize()
+        .unwrap(),
+        workspace_config.canonicalize().unwrap()
     );
     assert_eq!(report["configuration"]["workspace"]["status"], "fail");
     assert_eq!(report["configuration"]["workspace"]["active"], false);
@@ -3273,11 +3276,12 @@ fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
     let cwd = temp.path().join("workdir");
     let config_dir = temp.path().join("explicit");
     let config = config_dir.join("config.toml");
+    let project_plugins = cwd.join(".nemo-relay").join("plugins.toml");
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
+    std::fs::write(&project_plugins, "components = [\n").unwrap();
 
     std::fs::write(&config, "[upstream\n").unwrap();
     let invalid_config = Command::new(gateway_bin())
@@ -3319,13 +3323,20 @@ fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
     assert!(!invalid_project_plugins.status.success());
     let stdout = String::from_utf8_lossy(&invalid_project_plugins.stdout);
     assert!(stdout.contains("invalid plugin TOML"));
-    assert!(stdout.contains(&cwd.join(".nemo-relay/plugins.toml").display().to_string()));
+    assert!(
+        [
+            project_plugins.display().to_string(),
+            project_plugins
+                .canonicalize()
+                .unwrap()
+                .display()
+                .to_string(),
+        ]
+        .iter()
+        .any(|path| stdout.contains(path))
+    );
 
-    std::fs::write(
-        cwd.join(".nemo-relay/plugins.toml"),
-        "version = 1\ncomponents = []\n",
-    )
-    .unwrap();
+    std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
     let valid_config = Command::new(gateway_bin())
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", &xdg)
@@ -3338,14 +3349,14 @@ fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
     let plugin_configs = report["configuration"]["plugin_configs"]
         .as_array()
         .unwrap();
-    for path in [
-        config_dir.join("plugins.toml"),
-        cwd.join(".nemo-relay/plugins.toml").canonicalize().unwrap(),
-    ] {
+    for path in [config_dir.join("plugins.toml"), project_plugins] {
         assert!(
             plugin_configs
                 .iter()
-                .any(|config| config["path"] == path.display().to_string()),
+                .filter_map(|config| config["path"].as_str())
+                .map(PathBuf::from)
+                .filter_map(|reported| reported.canonicalize().ok())
+                .any(|reported| reported == path.canonicalize().unwrap()),
             "doctor should report layered plugin source {}",
             path.display()
         );

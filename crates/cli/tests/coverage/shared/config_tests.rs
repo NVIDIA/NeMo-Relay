@@ -53,25 +53,30 @@ fn config_paths_layer_explicit_or_user_then_project_then_system() {
     let project = temp.path().join("project");
     let child = project.join("nested");
     let xdg = temp.path().join("xdg");
-    let project_config = project.join(".nemo-relay/config.toml");
+    let project_config = project.join(".nemo-relay").join("config.toml");
     std::fs::create_dir_all(&child).unwrap();
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
     std::fs::write(&project_config, "").unwrap();
-    let discovered_project_config = project_config.canonicalize().unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(&child, &xdg);
+    let discovered_project_config = std::env::current_dir()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(".nemo-relay")
+        .join("config.toml");
     let system_config = PathBuf::from("/etc/nemo-relay/config.toml");
 
     assert_eq!(
         config_paths_scoped(None, false),
         vec![
-            xdg.join("nemo-relay/config.toml"),
+            xdg.join("nemo-relay").join("config.toml"),
             discovered_project_config.clone(),
             system_config.clone(),
         ]
     );
 
-    let explicit_config = temp.path().join("managed/config.toml");
+    let explicit_config = temp.path().join("managed").join("config.toml");
     assert_eq!(
         config_paths_scoped(Some(&explicit_config), false),
         vec![
@@ -93,25 +98,30 @@ fn plugin_config_paths_layer_explicit_or_user_then_project_then_system() {
     let project = temp.path().join("project");
     let child = project.join("nested");
     let xdg = temp.path().join("xdg");
-    let project_plugins = project.join(".nemo-relay/plugins.toml");
+    let project_plugins = project.join(".nemo-relay").join("plugins.toml");
     std::fs::create_dir_all(&child).unwrap();
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
     std::fs::write(&project_plugins, "version = 1\n").unwrap();
-    let discovered_project_plugins = project_plugins.canonicalize().unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(&child, &xdg);
+    let discovered_project_plugins = std::env::current_dir()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(".nemo-relay")
+        .join("plugins.toml");
     let system_plugins = PathBuf::from("/etc/nemo-relay/plugins.toml");
 
     assert_eq!(
         plugin_config_paths_scoped(None, None, false),
         vec![
-            xdg.join("nemo-relay/plugins.toml"),
+            xdg.join("nemo-relay").join("plugins.toml"),
             discovered_project_plugins.clone(),
             system_plugins.clone(),
         ]
     );
 
-    let explicit_config = temp.path().join("managed/config.toml");
+    let explicit_config = temp.path().join("managed").join("config.toml");
     let explicit_plugins = explicit_config.parent().unwrap().join("plugins.toml");
     assert_eq!(
         plugin_config_paths_scoped(Some(&explicit_config), None, false),
@@ -122,7 +132,7 @@ fn plugin_config_paths_layer_explicit_or_user_then_project_then_system() {
         ]
     );
 
-    let override_plugins = temp.path().join("override/plugins.toml");
+    let override_plugins = temp.path().join("override").join("plugins.toml");
     assert_eq!(
         plugin_config_paths_scoped(Some(&explicit_config), Some(&override_plugins), false),
         vec![
@@ -309,7 +319,7 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
     );
 
     let project_plugins = project.join(".nemo-relay/plugins.toml");
-    let user_plugins = xdg.join("nemo-relay/plugins.toml");
+    let user_plugins = xdg.join("nemo-relay").join("plugins.toml");
     std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
     std::fs::create_dir_all(user_plugins.parent().unwrap()).unwrap();
     std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
@@ -342,20 +352,23 @@ fn effective_plugin_toml_sources_replace_user_with_explicit_and_include_project(
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(&explicit_dir).unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
+    let discovered_project_plugins = std::env::current_dir()
+        .unwrap()
+        .join(".nemo-relay")
+        .join("plugins.toml");
 
     let explicit_config = explicit_dir.join("config.toml");
     let explicit_plugins = explicit_dir.join("plugins.toml");
     std::fs::write(&explicit_config, "").unwrap();
     std::fs::write(&explicit_plugins, "version = 1\ncomponents = []\n").unwrap();
     std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
-    let project_plugins = project.join(".nemo-relay/plugins.toml");
+    let project_plugins = project.join(".nemo-relay").join("plugins.toml");
     std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
-    let project_plugins = project_plugins.canonicalize().unwrap();
     let user_plugins = xdg.join("nemo-relay/plugins.toml");
     std::fs::create_dir_all(user_plugins.parent().unwrap()).unwrap();
     std::fs::write(&user_plugins, "components = [\n").unwrap();
 
-    let mut expected = vec![explicit_plugins, project_plugins];
+    let mut expected = vec![explicit_plugins, discovered_project_plugins];
     expected.sort();
     assert_eq!(
         effective_plugin_toml_sources(Some(&explicit_config), None).unwrap(),
