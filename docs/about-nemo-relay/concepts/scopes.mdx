@@ -184,9 +184,19 @@ tokio::spawn(TASK_SCOPE_STACK.scope(stack, async {
 </Tab>
 <Tab title="Node.js" language="javascript">
 
-Node.js does not yet provide an asynchronous scope-forking helper. Its
-`withScopeStack()` API is synchronous and must not be used to bind work across
-an `await` boundary.
+Use `withScopeStack()` to bind each asynchronous branch to its isolated stack.
+The stack remains active until the branch's returned Promise settles, while the
+calling context is restored immediately.
+
+```javascript
+const [first, second] = await Promise.all([
+  withScopeStack(firstStack, async () => runWorker("first")),
+  withScopeStack(secondStack, async () => runWorker("second")),
+]);
+```
+
+`setThreadScopeStack()` mutates the current thread or async resource. Do not use
+it to isolate concurrent branches that begin in the same synchronous callback.
 
 </Tab>
 </Tabs>

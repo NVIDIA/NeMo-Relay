@@ -485,9 +485,10 @@ pub fn push_stream_chunk(stream_id: f64, chunk: Json) -> bool {
 /// Signal that a stream is complete. Drops the sender so the Rust
 /// receiver sees the channel as closed.
 #[napi]
-pub fn end_stream(stream_id: f64) {
+pub fn end_stream(env: Env, stream_id: f64) -> napi::Result<()> {
     let id = stream_id as u64;
     finish_stream_channel(id, Ok(()));
+    callback_factory::expire_callback_context(&env)
 }
 
 /// # Safety
@@ -1720,10 +1721,13 @@ pub fn create_scope_stack_from_propagation(
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
-/// Run a synchronous callback with an isolated scope stack installed.
+/// Run a callback with an isolated scope stack installed.
 ///
-/// The stack is restored before this function returns. Asynchronous callbacks
-/// must not rely on this installation after their first `await`.
+/// The caller's stack is restored immediately after callback invocation. When
+/// the callback returns a Promise, the requested stack remains active for that
+/// Promise until it settles and is then expired for inherited detached work.
+/// Use this helper instead of `setThreadScopeStack` to isolate concurrent async
+/// branches.
 #[napi]
 pub fn with_scope_stack(
     env: Env,
@@ -1752,7 +1756,10 @@ pub fn current_scope_stack(env: Env) -> napi::Result<ScopeStack> {
     Ok(ScopeStack::from(current_scope_stack_handle()))
 }
 
-/// Binds a scope stack to the current thread.
+/// Binds a scope stack to the current thread or async resource.
+///
+/// This mutates the current execution resource. Use `withScopeStack` when
+/// concurrent asynchronous branches need isolated stack replacements.
 #[napi]
 pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> napi::Result<()> {
     if callback_factory::set_callback_scope_stack(&env, stack)? {

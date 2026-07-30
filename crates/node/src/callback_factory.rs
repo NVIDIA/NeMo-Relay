@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v9";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v10";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -69,6 +69,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     publication,
     publicationContextId,
     scopeStack,
+    propagationParentUuid,
     registerAbort,
   ) {
     const controller = new AbortController();
@@ -97,6 +98,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       publicationState,
       publicationContextId,
       scopeStack,
+      propagationParentUuid,
     };
     const settlePublication = () => {
       if (ownsPublicationState) {
@@ -104,6 +106,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         publicationStates.delete(publicationContextId);
       }
       token.scopeStack = null;
+      token.propagationParentUuid = undefined;
     };
     const safeNext = next === undefined
       ? undefined
@@ -164,6 +167,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         publication,
         publicationContextId,
         scopeStack,
+        propagationParentUuid,
         registerAbort,
       ) {
         if (error != null) {
@@ -186,6 +190,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           publication,
           publicationContextId,
           scopeStack,
+          propagationParentUuid,
           registerAbort,
         );
       };
@@ -225,20 +230,32 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
 
     withCallbackScopeStack(scopeStack, fn) {
       const current = eventSanitizerContext.getStore();
-      if (current === undefined) {
-        return { active: false };
-      }
       const token = {
-        publicationState: current.publicationState,
-        publicationContextId: current.publicationContextId,
+        publicationState: current?.publicationState ?? { active: false },
+        publicationContextId: current?.publicationContextId,
         scopeStack,
-        propagationParentUuid: current.propagationParentUuid,
+        propagationParentUuid: current?.propagationParentUuid,
       };
-      try {
-        return { active: true, value: eventSanitizerContext.run(token, fn) };
-      } finally {
+      const expire = () => {
         token.scopeStack = null;
+        token.propagationParentUuid = undefined;
+      };
+      let value;
+      try {
+        value = eventSanitizerContext.run(token, fn);
+      } catch (error) {
+        expire();
+        throw error;
       }
+      if (
+        value !== null
+        && (typeof value === 'object' || typeof value === 'function')
+        && typeof value.then === 'function'
+      ) {
+        return { active: true, value: Promise.resolve(value).finally(expire) };
+      }
+      expire();
+      return { active: true, value };
     },
 
     setCallbackScopeStack(scopeStack) {
@@ -253,6 +270,15 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         propagationParentUuid: current.propagationParentUuid,
       });
       return true;
+    },
+
+    expireCallbackContext() {
+      const current = eventSanitizerContext.getStore();
+      if (current === undefined) {
+        return;
+      }
+      current.scopeStack = null;
+      current.propagationParentUuid = undefined;
     },
   };
 })()"#;
@@ -359,6 +385,13 @@ pub(crate) fn callback_propagation_parent_uuid(env: &Env) -> napi::Result<Option
         .into_utf8()?
         .into_owned()
         .map(Some)
+}
+
+pub(crate) fn expire_callback_context(env: &Env) -> napi::Result<()> {
+    let factories = callback_factories(env)?;
+    let expire: JsFunction = factories.get_named_property("expireCallbackContext")?;
+    expire.call::<JsUnknown>(None, &[])?;
+    Ok(())
 }
 
 pub(crate) fn with_callback_scope_stack(

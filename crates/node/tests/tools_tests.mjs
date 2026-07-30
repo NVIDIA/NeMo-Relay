@@ -1007,6 +1007,47 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution callbacks preserve the managed propagation parent across await', async () => {
+    const events = [];
+    const observed = [];
+    registerSubscriber('node_tool_exec_propagation_parent', (event) => events.push(event));
+    registerToolExecutionIntercept('node_tool_exec_propagation_parent', 10, async (args, next) => {
+      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid]);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid]);
+      return { result: await next(args) };
+    });
+    try {
+      const result = await toolCallExecuteAsync('propagation_parent_tool', {}, async () => {
+        observed.push(['provider-before', lib.capturePropagationContext().parentUuid]);
+        await new Promise((resolve) => setImmediate(resolve));
+        observed.push(['provider-after', lib.capturePropagationContext().parentUuid]);
+        return { ok: true };
+      });
+      assert.deepEqual(result, { ok: true });
+      await waitForSubscriberCallbacks(() =>
+        events.some(
+          (event) =>
+            event.name === 'propagation_parent_tool' && event.kind === 'scope' && event.scope_category === 'end',
+        ),
+      );
+      const start = events.find(
+        (event) =>
+          event.name === 'propagation_parent_tool' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed tool start event');
+      assert.deepEqual(observed, [
+        ['intercept-before', start.uuid],
+        ['intercept-after', start.uuid],
+        ['provider-before', start.uuid],
+        ['provider-after', start.uuid],
+      ]);
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_propagation_parent');
+      deregisterSubscriber('node_tool_exec_propagation_parent');
+    }
+  });
+
   it('execution intercept rejects a detached next call after settlement', async () => {
     let releaseLateNext;
     const lateGate = new Promise((resolve) => {
@@ -1134,21 +1175,24 @@ describe('Tool intercepts', () => {
     const secondInstalled = new Promise((resolve) => {
       secondStackInstalled = resolve;
     });
+    let parentScope;
 
     registerToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements', 10, async (args, next) => {
-      const first = (async () => {
-        lib.setThreadScopeStack(firstStack);
+      parentScope = lib.getHandle().uuid;
+      const first = lib.withScopeStack(firstStack, async () => {
         firstStackInstalled();
         await secondInstalled;
         return next({ ...args, branch: 'first' });
-      })();
-      const second = (async () => {
+      });
+      const second = lib.withScopeStack(secondStack, async () => {
         await firstInstalled;
-        lib.setThreadScopeStack(secondStack);
         secondStackInstalled();
         return next({ ...args, branch: 'second' });
-      })();
-      return { result: await Promise.all([first, second]) };
+      });
+      const branches = await Promise.all([first, second]);
+      assert.equal(lib.getHandle().uuid, parentScope);
+      const parent = await next({ ...args, branch: 'parent' });
+      return { result: [...branches, parent] };
     });
     try {
       const result = await toolCallExecuteAsync('concurrent_scope_replacements_tool', {}, async (args) => ({
@@ -1158,6 +1202,7 @@ describe('Tool intercepts', () => {
       assert.deepEqual(result, [
         { branch: 'first', scope: firstScope },
         { branch: 'second', scope: secondScope },
+        { branch: 'parent', scope: parentScope },
       ]);
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements');

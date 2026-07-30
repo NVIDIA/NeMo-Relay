@@ -25,7 +25,8 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_task_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
-    MiddlewareContinuationContext, ScopeStackHandle, current_scope_stack,
+    MiddlewareContinuationContext, ScopeStackHandle, capture_propagation_context,
+    current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
@@ -89,6 +90,7 @@ struct CallArgs {
     publication_context_id: Option<String>,
     /// Scope stack captured when Relay invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
+    propagation_parent_uuid: String,
     publication_buffer: Option<PublicationBuffer>,
     continuation_context: Option<MiddlewareContinuationContext>,
     cancellation: CallCancellation,
@@ -427,6 +429,10 @@ impl PromiseAwareFn {
                         }
                         None => undefined_to_unknown(&ctx.env)?,
                     };
+                    let propagation_parent_uuid = json_to_unknown(
+                        &ctx.env,
+                        Json::String(ctx.value.propagation_parent_uuid),
+                    )?;
                     let (resolve, reject) =
                         build_completion_unknowns(&ctx.env, ctx.value.completion)?;
                     let register_abort =
@@ -440,6 +446,7 @@ impl PromiseAwareFn {
                         publication,
                         publication_context_id,
                         scope_stack,
+                        propagation_parent_uuid,
                         register_abort,
                     ])
                 })();
@@ -560,6 +567,7 @@ impl PromiseAwareFn {
         let continuation_context = next
             .as_ref()
             .map(|_| MiddlewareContinuationContext::capture());
+        let propagation_parent_uuid = capture_propagation_context()?.parent_uuid.to_string();
         let tsfn = self
             .tsfn
             .lock()
@@ -578,6 +586,7 @@ impl PromiseAwareFn {
                 // Publication context also lets queued tool/LLM observability
                 // sanitizers avoid waiting on their own publication.
                 scope_stack: Some(current_scope_stack()),
+                propagation_parent_uuid,
                 publication_buffer: capture_nested_publication_buffer(),
                 continuation_context,
                 cancellation,
