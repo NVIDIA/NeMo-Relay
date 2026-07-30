@@ -559,9 +559,15 @@ fn plugins_edit_command_for_scope_targets_expected_plugin_scope() {
 fn plugins_edit_command_for_scope_preserves_explicit_plugin_path() {
     let path = PathBuf::from("/managed/plugins.toml");
 
-    let command = plugins_edit_command_for_scope(ConfigScope::Global, Some(path.clone()));
-
-    assert_eq!(command.explicit_path, Some(path));
+    for scope in [ConfigScope::Project, ConfigScope::Global, ConfigScope::Both] {
+        let command = plugins_edit_command_for_scope(scope, Some(path.clone()));
+        assert_eq!(command.explicit_path, Some(path.clone()));
+        assert_eq!(
+            command.scope,
+            crate::plugins::ConfigurationScope::User,
+            "the inherited explicit file is the selected low/user plugin layer"
+        );
+    }
 }
 
 #[test]

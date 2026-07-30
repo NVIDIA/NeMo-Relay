@@ -16,6 +16,11 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
             .iter()
             .any(|agent| matches!(agent.status, Status::Fail))
         || report.host_plugins.iter().any(|plugin| !plugin.ok())
+        || report
+            .configuration
+            .explicit
+            .as_ref()
+            .is_some_and(|layer| matches!(layer.status, Status::Fail))
         || matches!(report.configuration.workspace.status, Status::Fail)
         || matches!(report.configuration.global.status, Status::Fail)
         || matches!(report.configuration.system.status, Status::Fail)
@@ -38,6 +43,11 @@ pub(super) fn report_has_warn(report: &DoctorReport) -> bool {
             .iter()
             .any(|agent| matches!(agent.status, Status::Warn))
         || report.host_plugins.iter().any(|plugin| !plugin.ok())
+        || report
+            .configuration
+            .explicit
+            .as_ref()
+            .is_some_and(|layer| matches!(layer.status, Status::Warn))
         || matches!(report.configuration.workspace.status, Status::Warn)
         || matches!(report.configuration.global.status, Status::Warn)
         || matches!(report.configuration.system.status, Status::Warn)
@@ -86,13 +96,11 @@ pub(super) fn format_human_environment(out: &mut String, report: &DoctorReport) 
 
 pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport) {
     out.push_str("  Configuration\n");
-    let workspace_label = if report.configuration.explicit_config {
-        "Explicit"
-    } else {
-        "Workspace"
-    };
+    if let Some(explicit) = &report.configuration.explicit {
+        out.push_str(&format!("    Explicit   {}\n", format_layer(explicit)));
+    }
     out.push_str(&format!(
-        "    {workspace_label:<11}{}\n",
+        "    Workspace  {}\n",
         format_layer(&report.configuration.workspace)
     ));
     out.push_str(&format!(

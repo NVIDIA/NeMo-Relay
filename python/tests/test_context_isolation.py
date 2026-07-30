@@ -4,6 +4,7 @@
 """Tests for per-request scope stack isolation via ContextVar."""
 
 import asyncio
+import contextvars
 import uuid
 
 import pytest
@@ -92,6 +93,44 @@ def test_rootless_and_root_parent_propagation_contexts_install_current_handle():
     root_stack = nemo_relay.create_scope_stack_from_propagation(nemo_relay.PropagationContext(parent_uuid, parent_uuid))
     with nemo_relay.use_scope_stack(root_stack):
         assert nemo_relay.scope.get_handle().uuid == parent_uuid
+
+
+async def test_fork_asyncio_context_isolates_siblings_and_preserves_parentage():
+    marker = contextvars.ContextVar("fork-marker", default="missing")
+    marker.set("parent")
+
+    async def child(name, delay):
+        assert marker.get() == "parent"
+        with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Function) as handle:
+            await asyncio.sleep(delay)
+            result = await nemo_relay.tools.execute("forked-tool", {"name": name}, lambda args: args)
+            return handle, result, nemo_relay.get_scope_stack()
+
+    with nemo_relay.scope.scope("fork-parent", nemo_relay.ScopeType.Agent) as parent:
+        parent_stack = nemo_relay.get_scope_stack()
+        nemo_relay.scope_local.register_tool_request(
+            parent,
+            "fork-parent-local",
+            1,
+            False,
+            lambda name, args: {**args, "scope_local": True},
+        )
+        first = asyncio.create_task(child("first", 0.0), context=nemo_relay.fork_asyncio_context())
+        second = asyncio.create_task(child("second", 0.01), context=nemo_relay.fork_asyncio_context())
+        (first_handle, first_result, first_stack), (second_handle, second_result, second_stack) = await asyncio.gather(
+            first, second
+        )
+
+        assert nemo_relay.get_scope_stack() is parent_stack
+        assert nemo_relay.scope.get_handle().uuid == parent.uuid
+
+    assert first_handle.parent_uuid == parent.uuid
+    assert second_handle.parent_uuid == parent.uuid
+    assert first_stack is not second_stack
+    assert first_stack is not parent_stack
+    assert second_stack is not parent_stack
+    assert first_result == {"name": "first"}
+    assert second_result == {"name": "second"}
 
 
 def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native_scope_stack):
