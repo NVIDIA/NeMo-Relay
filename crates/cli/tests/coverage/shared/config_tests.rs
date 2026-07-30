@@ -802,6 +802,42 @@ anthropic_auth_header = "Basic file-anthropic"
 }
 
 #[test]
+fn matching_endpoint_environment_overrides_preserve_file_provider_auth_headers() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let path = temp.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[upstream]
+openai_base_url = "http://same-openai"
+openai_auth_header = "Bearer file-openai"
+anthropic_base_url = "http://same-anthropic"
+anthropic_auth_header = "Basic file-anthropic"
+"#,
+    )
+    .unwrap();
+    scope.set_base_urls("http://same-openai", "http://same-anthropic");
+
+    let resolved = resolve_server_config(&GatewayOverrides {
+        config: Some(path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap();
+
+    assert_eq!(
+        resolved.gateway.openai_auth_header.as_deref(),
+        Some("Bearer file-openai")
+    );
+    assert_eq!(
+        resolved.gateway.anthropic_auth_header.as_deref(),
+        Some("Basic file-anthropic")
+    );
+}
+
+#[test]
 fn invalid_provider_auth_header_errors_do_not_expose_secret_values() {
     let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
@@ -2000,6 +2036,7 @@ fn cli_run_overrides_config_values() {
         r#"
 [upstream]
 openai_base_url = "http://file-openai"
+openai_auth_header = "Bearer file-openai"
 "#,
     )
     .unwrap();
@@ -2018,6 +2055,7 @@ openai_base_url = "http://file-openai"
     let resolved = resolve_run_config(&command, None).unwrap();
 
     assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
+    assert!(resolved.gateway.openai_auth_header.is_none());
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "cli" })));
 }
 
@@ -2031,6 +2069,7 @@ fn run_inherits_top_level_server_flags_when_subcommand_flags_are_absent() {
         r#"
 [upstream]
 openai_base_url = "http://file-openai"
+openai_auth_header = "Bearer file-openai"
 "#,
     )
     .unwrap();
@@ -2054,6 +2093,7 @@ openai_base_url = "http://file-openai"
     let resolved = resolve_run_config(&command, Some(&server)).unwrap();
 
     assert_eq!(resolved.gateway.openai_base_url, "http://top-level-openai");
+    assert!(resolved.gateway.openai_auth_header.is_none());
 }
 
 #[test]
@@ -2063,7 +2103,17 @@ fn server_resolution_applies_all_server_overrides() {
     std::fs::create_dir_all(&xdg).unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
     let config_path = isolated_config_path(&temp);
-    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        &config_path,
+        r#"
+[upstream]
+openai_base_url = "http://file-openai"
+openai_auth_header = "Bearer file-openai"
+anthropic_base_url = "http://file-anthropic"
+anthropic_auth_header = "Basic file-anthropic"
+"#,
+    )
+    .unwrap();
     let args = GatewayOverrides {
         config: Some(config_path),
         bind: Some("127.0.0.1:0".parse().unwrap()),
@@ -2079,7 +2129,9 @@ fn server_resolution_applies_all_server_overrides() {
 
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
+    assert!(resolved.gateway.openai_auth_header.is_none());
     assert_eq!(resolved.gateway.anthropic_base_url, "http://cli-anthropic");
+    assert!(resolved.gateway.anthropic_auth_header.is_none());
     assert_eq!(resolved.gateway.max_hook_payload_bytes, 222);
     assert_eq!(resolved.gateway.max_passthrough_body_bytes, 333);
     assert_eq!(resolved.gateway.plugin_config, None);

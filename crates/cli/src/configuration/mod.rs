@@ -922,10 +922,18 @@ fn apply_run_overrides(config: &mut GatewayConfig, command: &RunOverrides) -> Re
 // from JSON options whose errors should include field context.
 fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunOverrides) {
     if let Some(value) = &command.openai_base_url {
-        config.openai_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.openai_base_url,
+            &mut config.openai_auth_header,
+            value.clone(),
+        );
     }
     if let Some(value) = &command.anthropic_base_url {
-        config.anthropic_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.anthropic_base_url,
+            &mut config.anthropic_auth_header,
+            value.clone(),
+        );
     }
 }
 
@@ -951,10 +959,18 @@ fn apply_server_overrides(
         config.bind = value;
     }
     if let Some(value) = &args.openai_base_url {
-        config.openai_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.openai_base_url,
+            &mut config.openai_auth_header,
+            value.clone(),
+        );
     }
     if let Some(value) = &args.anthropic_base_url {
-        config.anthropic_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.anthropic_base_url,
+            &mut config.anthropic_auth_header,
+            value.clone(),
+        );
     }
     if let Some(value) = args.max_hook_payload_bytes {
         config.max_hook_payload_bytes = validate_body_limit("max hook payload bytes", value)?;
@@ -1535,10 +1551,11 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     }
     let openai_auth_header = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
-        config.openai_base_url = value;
-        if openai_auth_header.is_none() {
-            config.openai_auth_header = None;
-        }
+        replace_upstream_base_url(
+            &mut config.openai_base_url,
+            &mut config.openai_auth_header,
+            value,
+        );
     }
     if let Some(value) = openai_auth_header {
         config.openai_auth_header = Some(validate_auth_header(
@@ -1548,10 +1565,11 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     }
     let anthropic_auth_header = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
-        config.anthropic_base_url = value;
-        if anthropic_auth_header.is_none() {
-            config.anthropic_auth_header = None;
-        }
+        replace_upstream_base_url(
+            &mut config.anthropic_base_url,
+            &mut config.anthropic_auth_header,
+            value,
+        );
     }
     if let Some(value) = anthropic_auth_header {
         config.anthropic_auth_header = Some(validate_auth_header(
@@ -1568,6 +1586,17 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
             parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
     }
     Ok(())
+}
+
+fn replace_upstream_base_url(
+    base_url: &mut String,
+    auth_header: &mut Option<String>,
+    replacement: String,
+) {
+    if *base_url != replacement {
+        *auth_header = None;
+    }
+    *base_url = replacement;
 }
 
 fn validate_auth_header(name: &str, value: String) -> Result<String, CliError> {
