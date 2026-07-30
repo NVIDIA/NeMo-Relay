@@ -51,7 +51,7 @@ class PackageCliBinTests(unittest.TestCase):
             finally:
                 os.chdir(previous_directory)
 
-            self.assertIn("0.7.0rc1-py3-none-manylinux_2_28_x86_64", wheel.name)
+            self.assertIn("0.7.0rc1-py3-none-manylinux_2_17_x86_64", wheel.name)
             with zipfile.ZipFile(wheel) as archive:
                 names = archive.namelist()
                 script = next(info for info in archive.infolist() if info.filename.endswith(".data/scripts/nemo-relay"))
@@ -59,7 +59,7 @@ class PackageCliBinTests(unittest.TestCase):
                 self.assertTrue(stat.S_ISREG(script_mode))
                 self.assertEqual(stat.S_IMODE(script_mode), 0o755)
                 wheel_metadata = archive.read(next(name for name in names if name.endswith("/WHEEL")))
-                self.assertIn(b"Tag: py3-none-manylinux_2_28_x86_64", wheel_metadata)
+                self.assertIn(b"Tag: py3-none-manylinux_2_17_x86_64", wheel_metadata)
 
             self.assertIn("0.7.0rc1-py3-none-musllinux_1_2_x86_64", musl_wheel.name)
 
