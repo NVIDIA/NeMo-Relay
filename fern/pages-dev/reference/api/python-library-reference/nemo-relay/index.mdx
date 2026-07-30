@@ -77,6 +77,14 @@ def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeSta
 
 Create an isolated stack seeded from a received propagation context.
 
+### `fork_asyncio_context`
+
+```python
+def fork_asyncio_context() -> contextvars.Context
+```
+
+Create an asyncio child context with an isolated Relay scope stack.
+
 ### `use_scope_stack`
 
 ```python
