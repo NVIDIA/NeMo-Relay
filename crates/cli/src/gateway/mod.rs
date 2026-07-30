@@ -102,23 +102,23 @@ struct CapturedUpstreamFailures {
 }
 
 impl CapturedUpstreamFailures {
-    fn capture(&self, failure: CapturedUpstreamFailure, description: &str) -> FlowError {
+    fn capture(&self, failure: CapturedUpstreamFailure) -> FlowError {
         let token = uuid::Uuid::now_v7();
         self.entries
             .lock()
             .expect("captured upstream failures lock poisoned")
             .insert(token, failure);
-        FlowError::Internal(format!(
-            "{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token} {description}"
-        ))
+        FlowError::Internal(format!("{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token}"))
     }
 
     fn take(&self, error: &FlowError) -> Option<CapturedUpstreamFailure> {
         let FlowError::Internal(message) = error else {
             return None;
         };
-        let encoded = message.strip_prefix(CAPTURED_UPSTREAM_FAILURE_PREFIX)?;
-        let token = encoded.split_once(' ')?.0.parse().ok()?;
+        let token = message
+            .strip_prefix(CAPTURED_UPSTREAM_FAILURE_PREFIX)?
+            .parse()
+            .ok()?;
         self.entries
             .lock()
             .expect("captured upstream failures lock poisoned")
@@ -350,9 +350,9 @@ fn build_buffered_func(
                     return Err(FlowError::Upstream(transport_failure(&error)));
                 }
                 Err(error) => {
-                    let description = error.to_string();
-                    return Err(upstream_failures
-                        .capture(CapturedUpstreamFailure::Transport(error), &description));
+                    return Err(
+                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                    );
                 }
             };
             let status = response.status();
@@ -363,9 +363,9 @@ fn build_buffered_func(
                     return Err(FlowError::Upstream(transport_failure(&error)));
                 }
                 Err(error) => {
-                    let description = error.to_string();
-                    return Err(upstream_failures
-                        .capture(CapturedUpstreamFailure::Transport(error), &description));
+                    return Err(
+                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                    );
                 }
             };
             if !status.is_success() {
@@ -376,28 +376,26 @@ fn build_buffered_func(
                         &bytes,
                     )));
                 }
-                return Err(upstream_failures.capture(
-                    CapturedUpstreamFailure::Response {
+                return Err(
+                    upstream_failures.capture(CapturedUpstreamFailure::Response {
                         status,
                         headers: response_headers,
                         bytes,
-                    },
-                    &format!("upstream returned {status}"),
-                ));
+                    }),
+                );
             }
             match serde_json::from_slice::<Value>(&bytes) {
                 Ok(response) => Ok(response),
                 Err(_) if retry_aware => {
                     Err(FlowError::Upstream(invalid_json_failure(&response_headers)))
                 }
-                Err(_) => Err(upstream_failures.capture(
-                    CapturedUpstreamFailure::Response {
+                Err(_) => Err(
+                    upstream_failures.capture(CapturedUpstreamFailure::Response {
                         status,
                         headers: response_headers,
                         bytes,
-                    },
-                    "upstream returned a non-JSON success response",
-                )),
+                    }),
+                ),
             }
         })
     })
@@ -546,9 +544,9 @@ fn build_streaming_func(
                     return Err(FlowError::Upstream(transport_failure(&error)));
                 }
                 Err(error) => {
-                    let description = error.to_string();
-                    return Err(upstream_failures
-                        .capture(CapturedUpstreamFailure::Transport(error), &description));
+                    return Err(
+                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                    );
                 }
             };
             let status = response.status();
@@ -560,9 +558,9 @@ fn build_streaming_func(
                         return Err(FlowError::Upstream(transport_failure(&error)));
                     }
                     Err(error) => {
-                        let description = error.to_string();
-                        return Err(upstream_failures
-                            .capture(CapturedUpstreamFailure::Transport(error), &description));
+                        return Err(
+                            upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                        );
                     }
                 };
                 if retry_aware {
@@ -572,14 +570,13 @@ fn build_streaming_func(
                         &bytes,
                     )));
                 }
-                return Err(upstream_failures.capture(
-                    CapturedUpstreamFailure::Response {
+                return Err(
+                    upstream_failures.capture(CapturedUpstreamFailure::Response {
                         status,
                         headers: response_headers,
                         bytes,
-                    },
-                    &format!("upstream returned {status}"),
-                ));
+                    }),
+                );
             }
             let json_stream = sse_json_stream(response);
             Ok(json_stream)

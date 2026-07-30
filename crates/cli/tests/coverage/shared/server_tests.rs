@@ -3097,9 +3097,29 @@ async fn gateway_rejects_unsupported_paths() {
 }
 
 #[tokio::test]
-async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
+async fn gateway_upstream_transport_error_url_is_opaque_in_events() {
+    const SECRET_USERNAME: &str = "secret-upstream-user";
+    const MODEL: &str = "gpt-opaque-transport-error-test";
+    let subscriber_name = "server-gateway-opaque-transport-error-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_events = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = captured_events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && event.name() == "openai.chat_completions"
+                && event.model_name() == Some(MODEL)
+            {
+                captured.lock().unwrap().push(event.to_json_value());
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
     let mut config = test_config();
-    config.openai_base_url = "http://127.0.0.1:1".into();
+    config.openai_base_url = format!("http://{SECRET_USERNAME}:password@127.0.0.1:1").into();
     let app = router(config);
     let response = app
         .oneshot(
@@ -3109,7 +3129,7 @@ async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "model": "gpt-test",
+                        "model": MODEL,
                         "messages": [{ "role": "user", "content": "hello" }]
                     })
                     .to_string(),
@@ -3120,6 +3140,22 @@ async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    flush_subscribers().unwrap();
+
+    let events = captured_events.lock().unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    assert!(
+        !event.to_string().contains(SECRET_USERNAME),
+        "upstream credentials leaked into the event: {event}"
+    );
+    let description = event["metadata"]["otel.status_description"]
+        .as_str()
+        .expect("failed call should have an error status description");
+    let token = description
+        .strip_prefix("internal error: nemo-relay-gateway-upstream-attempt:")
+        .expect("event status should contain only the captured failure token");
+    assert!(uuid::Uuid::parse_str(token).is_ok(), "{description}");
 }
 
 #[tokio::test]
