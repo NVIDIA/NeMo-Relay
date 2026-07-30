@@ -3350,14 +3350,26 @@ fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
         .as_array()
         .unwrap();
     for path in [config_dir.join("plugins.toml"), project_plugins] {
-        assert!(
-            plugin_configs
-                .iter()
-                .filter_map(|config| config["path"].as_str())
-                .map(PathBuf::from)
-                .filter_map(|reported| reported.canonicalize().ok())
-                .any(|reported| reported == path.canonicalize().unwrap()),
-            "doctor should report layered plugin source {}",
+        let expected = path.canonicalize().unwrap();
+        let layer = plugin_configs
+            .iter()
+            .find(|config| {
+                config["path"]
+                    .as_str()
+                    .map(PathBuf::from)
+                    .and_then(|reported| reported.canonicalize().ok())
+                    .is_some_and(|reported| reported == expected)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "doctor should report layered plugin source {}",
+                    path.display()
+                )
+            });
+        assert_ne!(
+            layer["status"],
+            "fail",
+            "doctor should clear invalid diagnostics for {}",
             path.display()
         );
     }
