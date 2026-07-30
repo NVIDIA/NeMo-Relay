@@ -1329,10 +1329,15 @@ describe('LLM intercepts', () => {
     const started = new Promise((resolve) => {
       providerStarted = resolve;
     });
+    let providerAborted;
+    const aborted = new Promise((resolve) => {
+      providerAborted = resolve;
+    });
     let downstream;
     let providerSideEffects = 0;
     registerLlmExecutionIntercept('node_llm_exec_abort_started_provider', 10, async (native, next) => {
       downstream = next(native);
+      void downstream.catch(() => {});
       await started;
       return { source: 'intercept' };
     });
@@ -1345,7 +1350,14 @@ describe('LLM intercepts', () => {
           await Promise.race([
             providerGate,
             new Promise((_, reject) => {
-              signal.addEventListener('abort', () => reject(new Error('provider aborted')), { once: true });
+              signal.addEventListener(
+                'abort',
+                () => {
+                  providerAborted();
+                  reject(new Error('provider aborted'));
+                },
+                { once: true },
+              );
             }),
           ]);
           providerSideEffects += 1;
@@ -1359,8 +1371,8 @@ describe('LLM intercepts', () => {
       );
       assert.deepEqual(result, { source: 'intercept' });
       await assert.rejects(downstream, /execution continuation is no longer active/i);
+      await assertCompletesWithin(aborted, 'provider did not receive cancellation after continuation revocation');
       releaseProvider();
-      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(providerSideEffects, 0);
     } finally {
       releaseProvider?.();
