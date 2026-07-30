@@ -1,7 +1,7 @@
 ---
 title: "Adaptive Configuration"
 sidebar-title: "Configuration"
-description: "Configure the built-in Adaptive component, including state, telemetry, hints, and ACG."
+description: "Configure the built-in Adaptive component, including state, telemetry, hints, ACG, and response caching."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -32,6 +32,7 @@ The top-level adaptive object contains:
 | `adaptive_hints` | Request hint-injection behavior. |
 | `tool_parallelism` | Tool scheduling observation or scheduling behavior. |
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
+| `response_cache` | Exact-match LLM response caching. Requires a non-empty trust-domain `namespace`. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
 The requested area pages cover [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg) and
@@ -45,6 +46,12 @@ policy remain whole-plugin settings:
 - Keep `tool_parallelism.mode = "observe_only"` until scheduling behavior has
   been validated.
 - Keep `policy.unsupported_value = "error"` for rollout safety.
+
+Treat `response_cache.namespace` as a security boundary, not only a key prefix.
+One response-cache configuration must not span mutually untrusted tenants or
+upstreams. Use separate Relay gateway/cache deployments for those trust domains,
+or leave response caching disabled. Validation rejects an empty or whitespace-only
+namespace for both in-memory and Redis backends.
 
 ## `plugins.toml` Example
 

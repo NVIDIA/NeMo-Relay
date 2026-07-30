@@ -119,7 +119,8 @@ func NewAcgConfig() AcgConfig {
 	return nemo_relay.NewAcgConfig()
 }
 
-// NewResponseCacheConfig returns default response cache settings.
+// NewResponseCacheConfig returns default response cache settings. Set Namespace
+// to one cache trust domain before validation.
 func NewResponseCacheConfig() ResponseCacheConfig {
 	return nemo_relay.NewResponseCacheConfig()
 }

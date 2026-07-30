@@ -33,6 +33,7 @@ fn request(content: Json) -> LlmRequest {
 
 fn cache_all_config() -> ResponseCacheConfig {
     ResponseCacheConfig {
+        namespace: "key-test".to_string(),
         cache_nondeterministic: true,
         ..ResponseCacheConfig::default()
     }

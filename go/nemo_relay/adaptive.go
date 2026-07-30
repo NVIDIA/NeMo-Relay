@@ -75,7 +75,9 @@ type ResponseCacheConfig struct {
 	// TTLSeconds is how long a stored answer stays reusable, in seconds (> 0).
 	// Nil delegates to Rust's default (3600); a pointer to 0 is rejected.
 	TTLSeconds *uint64 `json:"ttl_seconds,omitempty"`
-	// Namespace is folded into every key to separate environments/tenants.
+	// Namespace is a required, non-empty cache trust domain folded into every
+	// key. One configured cache must not span mutually untrusted tenants or
+	// upstreams; the empty constructor value is rejected at validation.
 	Namespace string `json:"namespace,omitempty"`
 	// Priority is the execution-intercept priority; lower runs first/outermost.
 	// Nil delegates to Rust's default (50); a pointer to 0 selects outermost.
@@ -177,8 +179,9 @@ func NewAcgConfig() AcgConfig {
 
 // NewResponseCacheConfig returns default response cache settings, mirroring
 // the Rust ResponseCacheConfig defaults (exact-request keying with nondeterministic
-// caching disabled). Backend is left nil so the core applies its in-memory default;
-// set it for redis or to tune the in-memory budget.
+// caching disabled). Set Namespace to one cache trust domain before validation.
+// Backend is left nil so the core applies its in-memory default; set it for redis
+// or to tune the in-memory budget.
 func NewResponseCacheConfig() ResponseCacheConfig {
 	ttlSeconds := uint64(3600)
 	priority := int32(50)

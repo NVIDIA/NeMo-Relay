@@ -47,6 +47,13 @@ fn reset_global() {
     *state = NemoRelayContextState::new();
 }
 
+fn scoped_cache_config() -> ResponseCacheConfig {
+    ResponseCacheConfig {
+        namespace: "response-cache-integration-test".to_string(),
+        ..ResponseCacheConfig::default()
+    }
+}
+
 /// A provider stub that counts how many times it actually runs and returns a
 /// canned body carrying token usage and cost.
 fn counting_provider(calls: Arc<AtomicUsize>, body: Json) -> LlmExecutionNextFn {
@@ -187,7 +194,7 @@ async fn stream_call(provider: &LlmStreamExecutionNextFn, request: LlmRequest) -
 async fn exact_repeat_is_a_hit_that_skips_the_provider_and_returns_the_response_unchanged() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = counting_provider(Arc::clone(&calls), sample_body());
@@ -217,7 +224,7 @@ async fn exact_repeat_is_a_hit_that_skips_the_provider_and_returns_the_response_
 async fn a_different_request_is_a_miss() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = counting_provider(Arc::clone(&calls), sample_body());
@@ -236,7 +243,7 @@ async fn a_different_request_is_a_miss() {
 async fn cosmetic_noise_still_hits_the_cache() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = counting_provider(Arc::clone(&calls), sample_body());
@@ -278,7 +285,7 @@ async fn cosmetic_noise_still_hits_the_cache() {
 async fn stateful_responses_calls_bypass_the_cache() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = counting_provider(Arc::clone(&calls), sample_body());
@@ -308,6 +315,7 @@ async fn nondeterministic_calls_emit_bypass_marks_and_run_live() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     activate_cache(ResponseCacheConfig {
+        namespace: "determinism-test".to_string(),
         cache_nondeterministic: false,
         ..ResponseCacheConfig::default()
     })
@@ -374,6 +382,7 @@ async fn invalid_config_is_rejected_by_validation() {
         response_cache: Some(ResponseCacheConfig {
             ttl_seconds: 0,
             bypass_rate: 2.0,
+            namespace: "invalid-config-test".to_string(),
             ..ResponseCacheConfig::default()
         }),
         ..AdaptiveConfig::default()
@@ -406,7 +415,10 @@ async fn unknown_and_unavailable_backends_are_rejected_by_validation() {
     register_adaptive_component().unwrap();
 
     let validate = |kind: &str| {
-        let mut config = ResponseCacheConfig::default();
+        let mut config = ResponseCacheConfig {
+            namespace: "backend-validation-test".to_string(),
+            ..ResponseCacheConfig::default()
+        };
         config.backend.kind = kind.to_string();
         validate_plugin_config(&PluginConfig {
             components: vec![
@@ -450,7 +462,7 @@ async fn unknown_and_unavailable_backends_are_rejected_by_validation() {
 async fn hit_preserves_usage_on_the_end_event_and_reports_savings_on_the_mark() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // Capture every event so we can inspect the LLM end events + cache marks.
     let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
@@ -528,7 +540,7 @@ async fn hit_preserves_usage_on_the_end_event_and_reports_savings_on_the_mark() 
 async fn errors_are_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let error_body = json!({"error": {"message": "rate limited", "type": "rate_limit"}});
@@ -548,7 +560,7 @@ async fn errors_are_not_cached() {
 async fn error_null_success_bodies_are_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // Real OpenAI-Responses success bodies carry `"error": null`; a key-presence
     // check would silently disable caching for that whole surface.
@@ -576,7 +588,7 @@ async fn error_null_success_bodies_are_cached() {
 async fn non_final_status_bodies_are_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // An incomplete/failed body is not a complete, replayable answer.
     let calls = Arc::new(AtomicUsize::new(0));
@@ -602,7 +614,7 @@ async fn non_final_status_bodies_are_not_cached() {
 async fn miss_mark_is_emitted_even_when_the_provider_errors() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
     let sink = Arc::clone(&captured);
@@ -676,7 +688,7 @@ async fn streaming_repeat_is_a_hit_that_skips_the_provider_and_replays_the_aggre
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     // Streaming aggregation infers its codec from the request surface.
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let chunks = openai_chat_stream_chunks();
@@ -714,7 +726,7 @@ async fn streaming_repeat_is_a_hit_that_skips_the_provider_and_replays_the_aggre
 async fn partially_consumed_stream_close_does_not_cache_and_closes_upstream_once() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let close_calls = Arc::new(AtomicUsize::new(0));
@@ -753,7 +765,7 @@ async fn partially_consumed_stream_close_does_not_cache_and_closes_upstream_once
 async fn stream_cleanup_error_is_idempotent_and_prevents_caching() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let close_calls = Arc::new(AtomicUsize::new(0));
@@ -788,7 +800,7 @@ async fn stream_cleanup_error_is_idempotent_and_prevents_caching() {
 async fn naturally_completed_stream_closes_upstream_before_cache_commit() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let close_calls = Arc::new(AtomicUsize::new(0));
@@ -817,7 +829,7 @@ async fn streaming_unrecognized_shape_without_a_codec_runs_live() {
     reset_global();
     // No codec, and a body the surface detector does not recognize (no
     // messages/system/input) -> nothing to aggregate -> each call runs live.
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = counting_stream_provider(Arc::clone(&calls), openai_chat_stream_chunks());
@@ -885,7 +897,7 @@ async fn no_codec_mis_inferred_empty_aggregate_is_not_cached() {
     // repeat runs live instead of serving a wrong empty response.
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let foreign_chunks = vec![
@@ -920,7 +932,7 @@ fn anthropic_stream_chunks_with_inband_error() -> Vec<Json> {
 async fn streaming_inband_error_is_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = counting_stream_provider(
@@ -955,7 +967,7 @@ async fn streaming_inband_error_is_not_cached() {
 async fn thinking_streams_are_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // The anthropic collector drops thinking/signature deltas, so a stored
     // thinking aggregate would replay a gutted, unsigned block.
@@ -987,7 +999,7 @@ async fn thinking_streams_are_not_cached() {
 async fn refusal_only_streams_are_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // The chat collector has no refusal handling: a refusal-only stream
     // aggregates to a choice with no content and no tool calls, and a replay
@@ -1017,7 +1029,7 @@ async fn refusal_only_streams_are_not_cached() {
 async fn buffered_refusal_entry_is_not_replayed_to_a_streaming_caller() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // The chunk synthesizer has no refusal delta, so replaying this buffered
     // body to a streaming caller would carry no content at all.
@@ -1068,7 +1080,7 @@ async fn buffered_refusal_entry_is_not_replayed_to_a_streaming_caller() {
 }
 
 #[tokio::test]
-async fn misconfigured_headers_and_backends_are_rejected_by_validation() {
+async fn unsafe_cache_scope_headers_and_backends_are_rejected_by_validation() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     register_adaptive_component().unwrap();
@@ -1084,7 +1096,28 @@ async fn misconfigured_headers_and_backends_are_rejected_by_validation() {
         })
     };
 
+    for namespace in ["", " \t"] {
+        let report = validate(ResponseCacheConfig {
+            namespace: namespace.to_string(),
+            ..ResponseCacheConfig::default()
+        });
+        assert!(
+            report.has_errors(),
+            "an empty cache trust domain must fail validation: {:?}",
+            report.diagnostics
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "response_cache.missing_namespace"),
+            "an empty cache trust domain must be rejected: {:?}",
+            report.diagnostics
+        );
+    }
+
     let report = validate(ResponseCacheConfig {
+        namespace: "validation-test".to_string(),
         header_allowlist: vec!["Authorization".to_string()],
         ..ResponseCacheConfig::default()
     });
@@ -1097,7 +1130,24 @@ async fn misconfigured_headers_and_backends_are_rejected_by_validation() {
         report.diagnostics
     );
 
-    let mut zeroed = ResponseCacheConfig::default();
+    let report = validate(ResponseCacheConfig {
+        namespace: "validation-test".to_string(),
+        header_allowlist: vec!["anthropic-api-key".to_string()],
+        ..ResponseCacheConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "response_cache.auth_header_allowlisted"),
+        "provider auth headers must never be allowlisted into keys: {:?}",
+        report.diagnostics
+    );
+
+    let mut zeroed = ResponseCacheConfig {
+        namespace: "validation-test".to_string(),
+        ..ResponseCacheConfig::default()
+    };
     zeroed
         .backend
         .config
@@ -1112,7 +1162,10 @@ async fn misconfigured_headers_and_backends_are_rejected_by_validation() {
         report.diagnostics
     );
 
-    let mut mistyped = ResponseCacheConfig::default();
+    let mut mistyped = ResponseCacheConfig {
+        namespace: "validation-test".to_string(),
+        ..ResponseCacheConfig::default()
+    };
     mistyped
         .backend
         .config
@@ -1127,7 +1180,10 @@ async fn misconfigured_headers_and_backends_are_rejected_by_validation() {
         report.diagnostics
     );
 
-    let mut mistyped_prefix = ResponseCacheConfig::default();
+    let mut mistyped_prefix = ResponseCacheConfig {
+        namespace: "validation-test".to_string(),
+        ..ResponseCacheConfig::default()
+    };
     mistyped_prefix.backend.kind = "redis".to_string();
     mistyped_prefix
         .backend
@@ -1148,7 +1204,7 @@ async fn misconfigured_headers_and_backends_are_rejected_by_validation() {
 async fn truncated_stream_without_a_terminal_event_is_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // A clean end-of-file after N deltas (proxy idle-timeout, upstream abort
     // without a finish event) is a truncated answer: every collector finalizes
@@ -1175,7 +1231,7 @@ async fn truncated_stream_without_a_terminal_event_is_not_cached() {
 async fn multi_choice_stream_with_an_unfinished_choice_is_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // n=2: choice 0 finishes but choice 1 never carries a finish_reason before
     // the clean EOF — a truncation of choice 1. One finished choice must not
@@ -1209,7 +1265,7 @@ async fn no_codec_system_less_anthropic_uses_provider_hint_and_caches() {
     // assembles a non-empty aggregate and the repeat is a hit.
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = counting_stream_provider(Arc::clone(&calls), anthropic_stream_chunks());
@@ -1249,7 +1305,7 @@ async fn no_codec_buffered_and_streaming_share_one_store_entry() {
     // is a hit (not a re-run) in BOTH directions.
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
-    activate_cache(ResponseCacheConfig::default()).await;
+    activate_cache(scoped_cache_config()).await;
 
     // Direction A: streaming miss stores the inferred-codec aggregate; a buffered
     // repeat of the same request is served from it (buffered provider skipped).
@@ -1304,6 +1360,7 @@ async fn cache_coexists_with_acg_execution_intercept() {
         }),
         acg: Some(AcgComponentConfig::default()),
         response_cache: Some(ResponseCacheConfig {
+            namespace: "acg-coexistence-test".to_string(),
             priority: 40,
             ..ResponseCacheConfig::default()
         }),

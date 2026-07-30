@@ -197,7 +197,11 @@ impl Default for AcgComponentConfig {
 pub struct ResponseCacheConfig {
     /// How long a stored answer stays reusable, in seconds.
     pub ttl_seconds: u64,
-    /// Namespace folded into every key to separate environments/tenants.
+    /// Required, non-empty trust-domain partition folded into every key.
+    ///
+    /// One response-cache namespace must not span mutually untrusted tenants
+    /// or upstreams. The empty default is an unconfigured sentinel rejected
+    /// when the response-cache section is enabled.
     pub namespace: String,
     /// Execution-intercept priority; lower runs first/outermost (default `50`).
     pub priority: i32,

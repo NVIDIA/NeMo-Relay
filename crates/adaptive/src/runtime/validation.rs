@@ -97,6 +97,15 @@ pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
 /// so a misconfiguration is caught at startup instead of producing surprising
 /// runtime behavior.
 fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConfig) {
+    if config.namespace.trim().is_empty() {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.missing_namespace",
+            Some("namespace"),
+            "namespace must identify one trusted cache-sharing domain; do not enable one \
+             response cache across mutually untrusted tenants or upstreams"
+                .to_string(),
+        ));
+    }
     if config.ttl_seconds == 0 {
         report.diagnostics.push(response_cache_error(
             "response_cache.invalid_ttl",
@@ -126,6 +135,7 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
         "set-cookie",
         "x-api-key",
         "api-key",
+        "anthropic-api-key",
         "x-goog-api-key",
     ];
     for name in &config.header_allowlist {
@@ -182,17 +192,6 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
                     "key_prefix must be a string".to_string(),
                 ));
             }
-            // A shared redis cache with no namespace mixes every caller's
-            // responses together — caution against cross-tenant reuse.
-            if config.namespace.is_empty() {
-                report.diagnostics.push(response_cache_warning(
-                    "response_cache.shared_empty_namespace",
-                    Some("namespace"),
-                    "redis backend with an empty namespace shares cached responses across all \
-                     callers; set a namespace per environment/tenant"
-                        .to_string(),
-                ));
-            }
         }
         other => report.diagnostics.push(response_cache_error(
             "response_cache.unknown_backend",
@@ -204,10 +203,6 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
 
 fn response_cache_error(code: &str, field: Option<&str>, message: String) -> ConfigDiagnostic {
     response_cache_diag(DiagnosticLevel::Error, code, field, message)
-}
-
-fn response_cache_warning(code: &str, field: Option<&str>, message: String) -> ConfigDiagnostic {
-    response_cache_diag(DiagnosticLevel::Warning, code, field, message)
 }
 
 fn response_cache_diag(

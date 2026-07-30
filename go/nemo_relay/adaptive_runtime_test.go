@@ -227,6 +227,7 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	//    section is actually validated end-to-end (a dropped section would yield no
 	//    diagnostic at all), not merely carried in the struct.
 	bad := NewResponseCacheConfig()
+	bad.Namespace = "go-harness"
 	bad.BypassRate = 2.0
 	badConfig := NewAdaptiveConfig()
 	badConfig.ResponseCache = &bad
@@ -283,9 +284,22 @@ func TestResponseCacheConfigPreservesOmissionAndExplicitZero(t *testing.T) {
 		}
 	})
 
+	t.Run("missing namespace remains invalid", func(t *testing.T) {
+		report := validate(t, ResponseCacheConfig{})
+		found := false
+		for _, diagnostic := range report.Diagnostics {
+			if diagnostic.Code == "response_cache.missing_namespace" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected response_cache.missing_namespace, got %#v", report.Diagnostics)
+		}
+	})
+
 	t.Run("explicit TTL zero remains invalid", func(t *testing.T) {
 		zero := uint64(0)
-		responseCache := ResponseCacheConfig{TTLSeconds: &zero}
+		responseCache := ResponseCacheConfig{TTLSeconds: &zero, Namespace: "dev"}
 		if got := marshal(t, responseCache)["ttl_seconds"]; got != float64(0) {
 			t.Fatalf("explicit ttl_seconds=0 was not preserved: %#v", got)
 		}
@@ -303,7 +317,7 @@ func TestResponseCacheConfigPreservesOmissionAndExplicitZero(t *testing.T) {
 
 	t.Run("explicit priority zero remains valid", func(t *testing.T) {
 		zero := int32(0)
-		responseCache := ResponseCacheConfig{Priority: &zero}
+		responseCache := ResponseCacheConfig{Priority: &zero, Namespace: "dev"}
 		decoded := marshal(t, responseCache)
 		if got := decoded["priority"]; got != float64(0) {
 			t.Fatalf("explicit priority=0 was not preserved: %#v", got)

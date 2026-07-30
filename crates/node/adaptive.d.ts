@@ -55,6 +55,10 @@ export interface AcgConfig {
 /** Opt-in LLM response cache (exact-match) settings. */
 export interface ResponseCacheConfig {
   ttlSeconds?: number;
+  /**
+   * Required non-empty cache trust domain. One configured cache must not span
+   * mutually untrusted tenants or upstreams.
+   */
   namespace?: string;
   priority?: number;
   bypassRate?: number;
@@ -66,6 +70,7 @@ export interface ResponseCacheConfig {
 
 interface ResponseCachePluginConfig {
   ttl_seconds?: number;
+  /** Required non-empty cache trust domain. */
   namespace?: string;
   priority?: number;
   bypass_rate?: number;

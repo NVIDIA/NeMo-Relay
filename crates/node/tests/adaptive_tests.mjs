@@ -272,7 +272,13 @@ describe('adaptive helpers', () => {
   });
 
   it('serializes response-cache config at both native boundaries', () => {
-    const config = { version: 1, responseCache: { ttlSeconds: 0 } };
+    const unscoped = adaptive.validateConfig({ version: 1, responseCache: {} });
+    assert.ok(unscoped.diagnostics.some(({ code }) => code === 'response_cache.missing_namespace'));
+
+    const config = {
+      version: 1,
+      responseCache: { ttlSeconds: 0, namespace: 'node-test' },
+    };
     assert.equal(adaptive.validateConfig(config).diagnostics[0].code, 'response_cache.invalid_ttl');
     assert.throws(() => new adaptive.AdaptiveRuntime(config), /ttl_seconds must be greater than 0/);
   });

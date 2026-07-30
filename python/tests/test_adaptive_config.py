@@ -184,11 +184,26 @@ class TestDynamicConfigContract:
         )
         assert report["diagnostics"] == []
 
+    def test_unscoped_response_cache_is_rejected(self):
+        report = plugin.validate(
+            plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig()))])
+        )
+        codes = {diag["code"] for diag in report["diagnostics"]}
+        assert "response_cache.missing_namespace" in codes
+
     def test_invalid_response_cache_section_is_rejected(self):
         report = plugin.validate(
             plugin.PluginConfig(
                 components=[
-                    ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(ttl_seconds=0, bypass_rate=2.0)))
+                    ComponentSpec(
+                        AdaptiveConfig(
+                            response_cache=ResponseCacheConfig(
+                                ttl_seconds=0,
+                                namespace="invalid-config-test",
+                                bypass_rate=2.0,
+                            )
+                        )
+                    )
                 ]
             )
         )

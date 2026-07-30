@@ -189,7 +189,9 @@ class ResponseCacheConfig:
 
     Args:
         ttl_seconds: How long a stored answer stays reusable, in seconds.
-        namespace: Namespace folded into every key to separate environments/tenants.
+        namespace: Required non-empty cache trust domain folded into every key.
+            One configured cache must not span mutually untrusted tenants or upstreams;
+            the empty default is an unconfigured sentinel rejected at validation.
         priority: Execution-intercept priority. Lower runs first/outermost.
         bypass_rate: Probability in ``[0.0, 1.0]`` of skipping the cache and running live.
         cache_nondeterministic: Cache nondeterministic requests too; ``False``
