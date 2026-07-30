@@ -32,7 +32,7 @@ The release pipeline publishes these package surfaces from a tag push:
 |---|---|
 | crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-switchyard`, `nemo-relay-ffi`, `nemo-relay-cli` |
 | PyPI | `nemo-relay`, `nemo-relay-plugin`, `nemo-relay-cli-bin` |
-| npm | `nemo-relay-node` and its five platform packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and its five platform packages |
+| npm | `nemo-relay-node` and its seven platform packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and its seven platform packages |
 | GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, CLI and Node npm tarballs, and checksums |
 | Fern | The documentation site |
 
@@ -153,6 +153,7 @@ Before you create a release tag, confirm the following:
      `nemo-relay-node-win32-arm64-msvc`
    - npm trusted publishers are configured for `nemo-relay-cli-bin` and
      `nemo-relay-cli-bin-linux-x64`, `nemo-relay-cli-bin-linux-arm64`,
+     `nemo-relay-cli-bin-linux-x64-musl`, `nemo-relay-cli-bin-linux-arm64-musl`,
      `nemo-relay-cli-bin-darwin-arm64`, `nemo-relay-cli-bin-win32-x64`, and
      `nemo-relay-cli-bin-win32-arm64`
 5. The GitHub Release entry is ready to become the only canonical release-notes
@@ -262,8 +263,9 @@ The release pipeline then:
    - `package-python` builds platform `nemo-relay` wheels, including
      `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
-   - The Rust CLI matrix validates its Linux binaries on musllinux and packages
-     each prebuilt binary as a
+   - The Rust CLI matrix builds GNU Linux binaries in manylinux containers and
+     musl Linux binaries natively, validates each in its matching container, and
+     packages each prebuilt binary as a
      `nemo-relay-cli-bin` wheel and npm platform package, and creates the npm
      launcher package once.
    - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
@@ -323,7 +325,7 @@ npm trusted publishing has its own registry-side constraints:
 
 - Each npm package can only have one trusted publisher configured at a time.
 - Configure trusted publishers for `nemo-relay-node`, all seven Node platform
-  packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and all five CLI
+  packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and all seven CLI
   platform packages before pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
@@ -358,7 +360,7 @@ After the release is live, verify:
 2. The `nemo-relay` and `nemo-relay-cli-bin` wheels are visible on PyPI, and
    `pip install "nemo-relay[cli]"` exposes `nemo-relay`.
 3. The `nemo-relay-node`, its five platform packages, `nemo-relay-openclaw`,
-   `nemo-relay-cli-bin`, and its five platform packages are visible on npm.
+   `nemo-relay-cli-bin`, and its seven platform packages are visible on npm.
 4. The Unix and Windows installers resolve the new stable tag and verify
    matching CLI release asset checksums on their supported platforms.
 5. The Fern documentation site shows the expected version and release notes.
