@@ -15,6 +15,8 @@ use switchyard_protocol::text_response;
 
 use super::*;
 
+const CLASSIFIER_VERDICT: &str = r#"{"recommended_route":"efficient","p_solve":0.9,"confidence":0.95,"abstain":false,"capability_boundary":"supported","primary_rule":"SUP-1","crux":"bounded task"}"#;
+
 fn binding(protocol: WireProtocol, model: &str, weight: f64) -> TargetBinding {
     TargetBinding {
         model: model.into(),
@@ -41,6 +43,88 @@ fn chat_config() -> SwitchyardConfig {
         enabled_inbound_profiles: BTreeSet::from([WireProtocol::OpenaiChat]),
         ..SwitchyardConfig::default()
     }
+}
+
+fn classifier_config(session_affinity: bool) -> SwitchyardConfig {
+    SwitchyardConfig {
+        algorithm: AlgorithmConfig::LlmClassifier {
+            classifier_target: "classifier".into(),
+            weak_target: "weak".into(),
+            strong_target: "strong".into(),
+            base_threshold: 0.5,
+            min_confidence: 0.5,
+            capability_elevated_floor: Some(0.8),
+            session_affinity,
+            message_hash_fallback: false,
+        },
+        targets: BTreeMap::from([
+            (
+                "classifier".into(),
+                binding(WireProtocol::OpenaiChat, "provider/classifier", 1.0),
+            ),
+            (
+                "weak".into(),
+                binding(WireProtocol::OpenaiChat, "provider/weak", 1.0),
+            ),
+            (
+                "strong".into(),
+                binding(WireProtocol::OpenaiChat, "provider/strong", 1.0),
+            ),
+        ]),
+        default_targets: ProtocolDefaults {
+            openai_chat: "strong".into(),
+            ..ProtocolDefaults::default()
+        },
+        enabled_inbound_profiles: BTreeSet::from([WireProtocol::OpenaiChat]),
+        ..SwitchyardConfig::default()
+    }
+}
+
+async fn run_buffered_classifier(classifier_protocol: WireProtocol) -> (Json, Vec<LlmRequest>) {
+    let mut config = classifier_config(false);
+    config.targets.insert(
+        "classifier".into(),
+        binding(
+            classifier_protocol,
+            match classifier_protocol {
+                WireProtocol::OpenaiChat => "provider/classifier",
+                WireProtocol::OpenaiResponses => "provider/classifier-responses",
+                WireProtocol::AnthropicMessages => unreachable!(),
+            },
+            1.0,
+        ),
+    );
+    let runtime = SwitchyardRuntime::new(config).unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&requests);
+    let next: LlmExecutionNextFn = Arc::new(move |request| {
+        let captured = Arc::clone(&captured);
+        Box::pin(async move {
+            let model = request.content["model"].as_str().unwrap().to_string();
+            captured.lock().unwrap().push(request.clone());
+            if model.starts_with("provider/classifier") {
+                return Ok(match classifier_protocol {
+                    WireProtocol::OpenaiChat => {
+                        assert!(request.content["response_format"].is_object());
+                        chat_response(&model, CLASSIFIER_VERDICT)
+                    }
+                    WireProtocol::OpenaiResponses => {
+                        assert!(request.content["text"]["format"].is_object());
+                        responses_response(&model, CLASSIFIER_VERDICT)
+                    }
+                    WireProtocol::AnthropicMessages => unreachable!(),
+                });
+            }
+            Ok(chat_response(&model, "efficient answer"))
+        })
+    });
+
+    let response = runtime
+        .execute_buffered("openai.chat_completions", chat_request(), next)
+        .await
+        .unwrap();
+    let requests = requests.lock().unwrap().clone();
+    (response, requests)
 }
 
 fn chat_request() -> LlmRequest {
@@ -96,6 +180,55 @@ fn chat_chunk(model: &str, text: &str) -> Json {
     })
 }
 
+fn responses_response(model: &str, text: &str) -> Json {
+    json!({
+        "id": "resp-test",
+        "object": "response",
+        "status": "completed",
+        "model": model,
+        "output": [{
+            "type": "message",
+            "id": "msg-test",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}]
+        }],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+    })
+}
+
+fn anthropic_response(model: &str, text: &str) -> Json {
+    json!({
+        "id": "msg-test",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    })
+}
+
+fn request_for(protocol: WireProtocol) -> LlmRequest {
+    let mut request = chat_request();
+    request.content = match protocol {
+        WireProtocol::OpenaiChat => request.content,
+        WireProtocol::OpenaiResponses => json!({
+            "model": "caller/model",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }]
+        }),
+        WireProtocol::AnthropicMessages => json!({
+            "model": "caller/model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 32
+        }),
+    };
+    request
+}
+
 fn provider_error(class: UpstreamFailureClass, status: Option<u16>) -> FlowError {
     FlowError::Upstream(UpstreamFailure {
         status,
@@ -127,6 +260,53 @@ fn random_configuration_rejects_invalid_targets_and_weights() {
     assert!(validate_config(&config).is_err());
 }
 
+#[test]
+fn classifier_configuration_validates_targets_thresholds_and_translation_support() {
+    assert!(validate_config(&classifier_config(false)).is_ok());
+
+    let mut config = classifier_config(false);
+    config.targets.remove("classifier");
+    assert!(
+        validate_config(&config)
+            .unwrap_err()
+            .contains("algorithm target \"classifier\" is not configured")
+    );
+
+    let mut config = classifier_config(false);
+    if let AlgorithmConfig::LlmClassifier { base_threshold, .. } = &mut config.algorithm {
+        *base_threshold = 1.5;
+    }
+    assert!(
+        validate_config(&config)
+            .unwrap_err()
+            .contains("base_threshold must be between 0 and 1")
+    );
+
+    let mut config = classifier_config(false);
+    let classifier = config.targets.get_mut("classifier").unwrap();
+    classifier.protocol = WireProtocol::AnthropicMessages;
+    classifier.endpoint = WireProtocol::AnthropicMessages.endpoint().into();
+    assert!(
+        validate_config(&config)
+            .unwrap_err()
+            .contains("structured response format")
+    );
+
+    let mut config = classifier_config(false);
+    if let AlgorithmConfig::LlmClassifier {
+        message_hash_fallback,
+        ..
+    } = &mut config.algorithm
+    {
+        *message_hash_fallback = true;
+    }
+    assert!(
+        validate_config(&config)
+            .unwrap_err()
+            .contains("message_hash_fallback requires session_affinity")
+    );
+}
+
 #[tokio::test]
 async fn run_stream_requires_relay_to_fulfill_the_provider_call() {
     let runtime = SwitchyardRuntime::new(chat_config()).unwrap();
@@ -154,6 +334,273 @@ async fn run_stream_requires_relay_to_fulfill_the_provider_call() {
 
     let returned = steps.next().await.unwrap().unwrap();
     assert!(matches!(returned, Step::ReturnToAgent(_)));
+}
+
+#[tokio::test]
+async fn classifier_run_stream_offloads_the_judge_and_routed_calls_to_relay() {
+    let runtime = SwitchyardRuntime::new(classifier_config(false)).unwrap();
+    let request = runtime
+        .libsy_request(WireProtocol::OpenaiChat, &chat_request(), false)
+        .unwrap();
+    let mut steps = runtime
+        .algorithm
+        .clone()
+        .run_stream(LibsyContext::default(), request);
+
+    let Step::CallLlm(classifier) = steps.next().await.unwrap().unwrap() else {
+        panic!("expected classifier CallLlm before the routing decision");
+    };
+    assert_eq!(classifier.get_decision().selected_model(), "classifier");
+    assert!(!classifier.get_decision().is_routed_call());
+    assert!(
+        classifier
+            .get_request()
+            .llm_request
+            .output
+            .response_format
+            .is_some()
+    );
+    classifier
+        .respond(Ok(LibsyResponse {
+            llm_response: LlmResponse::Agg(text_response(
+                Some("provider/classifier".into()),
+                CLASSIFIER_VERDICT,
+            )),
+            metadata: None,
+        }))
+        .unwrap();
+
+    let Step::Decision(decision) = steps.next().await.unwrap().unwrap() else {
+        panic!("expected final routing decision after the classifier response");
+    };
+    assert_eq!(decision.selected_model(), "weak");
+    assert_eq!(decision.routing_tier(), Some("weak"));
+    assert!(decision.is_routed_call());
+
+    let Step::CallLlm(routed) = steps.next().await.unwrap().unwrap() else {
+        panic!("expected routed CallLlm");
+    };
+    assert_eq!(routed.get_decision().selected_model(), "weak");
+    routed
+        .respond(Ok(LibsyResponse {
+            llm_response: LlmResponse::Agg(text_response(Some("provider/weak".into()), "answer")),
+            metadata: None,
+        }))
+        .unwrap();
+
+    assert!(matches!(
+        steps.next().await.unwrap().unwrap(),
+        Step::ReturnToAgent(_)
+    ));
+}
+
+#[tokio::test]
+async fn buffered_classifier_dispatches_the_judge_then_the_selected_target() {
+    let (response, requests) = run_buffered_classifier(WireProtocol::OpenaiChat).await;
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        "efficient answer"
+    );
+
+    let models = requests
+        .iter()
+        .map(|request| request.content["model"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(models, vec!["provider/classifier", "provider/weak"]);
+    assert_eq!(
+        requests[1].content["provider_extension"],
+        json!({"preserve": true})
+    );
+}
+
+#[tokio::test]
+async fn buffered_classifier_supports_an_openai_responses_judge_target() {
+    let (response, requests) = run_buffered_classifier(WireProtocol::OpenaiResponses).await;
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        "efficient answer"
+    );
+    let models = requests
+        .iter()
+        .map(|request| request.content["model"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        models,
+        vec!["provider/classifier-responses", "provider/weak"]
+    );
+}
+
+#[tokio::test]
+#[ignore = "blocked by LIBSY-GAP-005 in the pinned Switchyard revision"]
+async fn classifier_prompt_is_encoded_as_a_system_instruction() {
+    let (_, chat_requests) = run_buffered_classifier(WireProtocol::OpenaiChat).await;
+    assert_eq!(chat_requests[0].content["messages"][0]["role"], "system");
+
+    let (_, responses_requests) = run_buffered_classifier(WireProtocol::OpenaiResponses).await;
+    assert!(responses_requests[0].content["instructions"].is_string());
+}
+
+#[tokio::test]
+async fn buffered_classifier_routes_responses_and_anthropic_inbound_profiles() {
+    for (inbound, call_name) in [
+        (WireProtocol::OpenaiResponses, "openai.responses"),
+        (WireProtocol::AnthropicMessages, "anthropic.messages"),
+    ] {
+        let mut config = classifier_config(false);
+        config.targets.insert(
+            "weak".into(),
+            binding(inbound, &format!("provider/weak-{}", inbound.label()), 1.0),
+        );
+        config.enabled_inbound_profiles = BTreeSet::from([inbound]);
+        config.default_targets = ProtocolDefaults::default();
+        match inbound {
+            WireProtocol::OpenaiResponses => {
+                config.default_targets.openai_responses = "weak".into()
+            }
+            WireProtocol::AnthropicMessages => {
+                config.default_targets.anthropic_messages = "weak".into()
+            }
+            WireProtocol::OpenaiChat => unreachable!(),
+        }
+        let runtime = SwitchyardRuntime::new(config).unwrap();
+        let next: LlmExecutionNextFn = Arc::new(move |request| {
+            Box::pin(async move {
+                let model = request.content["model"].as_str().unwrap().to_string();
+                if model == "provider/classifier" {
+                    return Ok(chat_response(&model, CLASSIFIER_VERDICT));
+                }
+                Ok(match inbound {
+                    WireProtocol::OpenaiResponses => {
+                        assert!(request.content["input"].is_array());
+                        responses_response(&model, "efficient answer")
+                    }
+                    WireProtocol::AnthropicMessages => {
+                        assert!(request.content["messages"].is_array());
+                        anthropic_response(&model, "efficient answer")
+                    }
+                    WireProtocol::OpenaiChat => unreachable!(),
+                })
+            })
+        });
+
+        let response = runtime
+            .execute_buffered(call_name, request_for(inbound), next)
+            .await
+            .unwrap();
+        assert!(
+            response.to_string().contains("efficient answer"),
+            "classifier response for {inbound:?}: {response}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn unavailable_classifier_fails_closed_without_retrying_the_judge() {
+    let runtime = SwitchyardRuntime::new(classifier_config(false)).unwrap();
+    let models = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&models);
+    let next: LlmExecutionNextFn = Arc::new(move |request| {
+        let captured = Arc::clone(&captured);
+        Box::pin(async move {
+            let model = request.content["model"].as_str().unwrap().to_string();
+            captured.lock().unwrap().push(model.clone());
+            if model == "provider/classifier" {
+                return Err(provider_error(UpstreamFailureClass::Connection, None));
+            }
+            Ok(chat_response(&model, "capable answer"))
+        })
+    });
+
+    let response = runtime
+        .execute_buffered("openai.chat_completions", chat_request(), next)
+        .await
+        .unwrap();
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        "capable answer"
+    );
+    assert_eq!(
+        *models.lock().unwrap(),
+        vec!["provider/classifier", "provider/strong"]
+    );
+}
+
+#[tokio::test]
+async fn classifier_reconsults_on_retry_without_session_affinity() {
+    let mut config = classifier_config(false);
+    config.max_retries = 1;
+    let runtime = SwitchyardRuntime::new(config).unwrap();
+    let weak_calls = Arc::new(AtomicUsize::new(0));
+    let weak_call_count = Arc::clone(&weak_calls);
+    let models = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&models);
+    let next: LlmExecutionNextFn = Arc::new(move |request| {
+        let weak_call_count = Arc::clone(&weak_call_count);
+        let captured = Arc::clone(&captured);
+        Box::pin(async move {
+            let model = request.content["model"].as_str().unwrap().to_string();
+            captured.lock().unwrap().push(model.clone());
+            if model == "provider/classifier" {
+                return Ok(chat_response(&model, CLASSIFIER_VERDICT));
+            }
+            if weak_call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(provider_error(
+                    UpstreamFailureClass::RetryableStatus,
+                    Some(503),
+                ));
+            }
+            Ok(chat_response(&model, "retried answer"))
+        })
+    });
+
+    let response = runtime
+        .execute_buffered("openai.chat_completions", chat_request(), next)
+        .await
+        .unwrap();
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        "retried answer"
+    );
+    assert_eq!(
+        *models.lock().unwrap(),
+        vec![
+            "provider/classifier",
+            "provider/weak",
+            "provider/classifier",
+            "provider/weak"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn classifier_session_affinity_skips_repeated_judge_calls() {
+    let runtime = SwitchyardRuntime::new(classifier_config(true)).unwrap();
+    let models = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&models);
+    let next: LlmExecutionNextFn = Arc::new(move |request| {
+        let captured = Arc::clone(&captured);
+        Box::pin(async move {
+            let model = request.content["model"].as_str().unwrap().to_string();
+            captured.lock().unwrap().push(model.clone());
+            let text = if model == "provider/classifier" {
+                CLASSIFIER_VERDICT
+            } else {
+                "answer"
+            };
+            Ok(chat_response(&model, text))
+        })
+    });
+
+    for _ in 0..2 {
+        runtime
+            .execute_buffered("openai.chat_completions", chat_request(), next.clone())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        *models.lock().unwrap(),
+        vec!["provider/classifier", "provider/weak", "provider/weak"]
+    );
 }
 
 #[tokio::test]
@@ -365,6 +812,120 @@ async fn concurrent_runs_dispatch_independently() {
         assert!(result.unwrap().is_ok());
     }
     assert_eq!(calls.load(Ordering::SeqCst), 16);
+}
+
+#[tokio::test]
+async fn streaming_classifier_dispatches_streamed_judge_and_routed_calls() {
+    let runtime = SwitchyardRuntime::new(classifier_config(false)).unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&requests);
+    let next: LlmStreamExecutionNextFn = Arc::new(move |request| {
+        let captured = Arc::clone(&captured);
+        Box::pin(async move {
+            let model = request.content["model"].as_str().unwrap().to_string();
+            captured.lock().unwrap().push(request);
+            let text = if model == "provider/classifier" {
+                CLASSIFIER_VERDICT
+            } else {
+                "streamed answer"
+            };
+            Ok(LlmJsonStream::new(stream::iter([Ok(chat_chunk(
+                &model, text,
+            ))])))
+        })
+    });
+
+    let output = runtime
+        .execute_stream("openai.chat_completions", chat_request(), next)
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(output.iter().all(Result::is_ok));
+    assert!(
+        output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .any(|event| event["choices"][0]["delta"]["content"] == "streamed answer")
+    );
+
+    let requests = requests.lock().unwrap();
+    let models = requests
+        .iter()
+        .map(|request| request.content["model"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(models, vec!["provider/classifier", "provider/weak"]);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.content["stream"] == true)
+    );
+    assert!(requests[0].content["response_format"].is_object());
+}
+
+#[tokio::test]
+async fn streaming_classifier_supports_an_openai_responses_judge_target() {
+    let mut config = classifier_config(false);
+    config.targets.insert(
+        "classifier".into(),
+        binding(
+            WireProtocol::OpenaiResponses,
+            "provider/classifier-responses",
+            1.0,
+        ),
+    );
+    let runtime = SwitchyardRuntime::new(config).unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&requests);
+    let next: LlmStreamExecutionNextFn = Arc::new(move |request| {
+        let captured = Arc::clone(&captured);
+        Box::pin(async move {
+            let model = request.content["model"].as_str().unwrap().to_string();
+            captured.lock().unwrap().push(request);
+            if model == "provider/classifier-responses" {
+                return Ok(LlmJsonStream::new(stream::iter([
+                    Ok(json!({
+                        "type": "response.created",
+                        "response": {"id": "resp-test", "model": model}
+                    })),
+                    Ok(json!({
+                        "type": "response.output_text.delta",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": CLASSIFIER_VERDICT
+                    })),
+                ])));
+            }
+            Ok(LlmJsonStream::new(stream::iter([Ok(chat_chunk(
+                &model,
+                "streamed answer",
+            ))])))
+        })
+    });
+
+    let output = runtime
+        .execute_stream("openai.chat_completions", chat_request(), next)
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(output.iter().all(Result::is_ok));
+    assert!(
+        output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .any(|event| event["choices"][0]["delta"]["content"] == "streamed answer")
+    );
+    let requests = requests.lock().unwrap();
+    let models = requests
+        .iter()
+        .map(|request| request.content["model"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        models,
+        vec!["provider/classifier-responses", "provider/weak"]
+    );
+    assert!(requests[0].content["text"]["format"].is_object());
 }
 
 #[tokio::test]

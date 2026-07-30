@@ -7,7 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-switchyard` is NeMo Relay's experimental in-process integration
 with [NVIDIA NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard).
-It runs libsy's random router inside Relay through `Algorithm::run_stream`.
+It runs libsy's weighted random router or judge-backed LLM classifier inside
+Relay through `Algorithm::run_stream`.
 
 Relay owns provider target bindings, credentials, transport, retries, fallback,
 and observability. libsy emits routing decisions and requests provider calls;
@@ -66,6 +67,31 @@ authorization = "PROVIDER_AUTHORIZATION"
 Target-map keys are libsy semantic names. Relay configuration remains
 authoritative for the physical model, protocol, endpoint, URL, and credentials.
 Version-1 Decision API configuration is rejected with a migration error.
+
+For classifier routing, configure one Relay target for the judge plus weak and
+strong routed targets:
+
+```toml
+[components.config.algorithm]
+kind = "llm_classifier"
+classifier_target = "classifier"
+weak_target = "fast"
+strong_target = "quality"
+base_threshold = 0.5
+min_confidence = 0.5
+
+[components.config.targets.classifier]
+model = "provider/classifier"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "https://provider.example.com"
+```
+
+The classifier consultation and the selected model call are both emitted by
+`run_stream` and dispatched by Relay. Under the pinned lossless translation
+policy, the classifier target must use OpenAI Chat or OpenAI Responses because
+its request requires a structured response format. Weak and strong targets may
+use any supported protocol.
 
 Build and test the optional CLI integration with:
 

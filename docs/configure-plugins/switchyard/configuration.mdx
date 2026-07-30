@@ -8,8 +8,8 @@ position: 2
 SPDX-License-Identifier: Apache-2.0 */}
 
 The Switchyard component runs libsy in process. It currently supports the
-random router in enforce mode for OpenAI Chat, OpenAI Responses, and Anthropic
-Messages managed LLM calls.
+weighted random router and LLM classifier in enforce mode for OpenAI Chat,
+OpenAI Responses, and Anthropic Messages managed LLM calls.
 
 ## Complete Example
 
@@ -79,7 +79,7 @@ weight = 0
 | `priority` | `0` | Relay LLM execution-intercept priority. |
 | `max_retries` | `3` | Provider retries after the initial libsy run. Maximum: `10`. |
 | `enabled_inbound_profiles` | All three protocols | Managed Relay profiles intercepted by this component. |
-| `algorithm` | Random without a seed | libsy algorithm configuration. Only `kind = "random"` is supported. |
+| `algorithm` | Random without a seed | libsy algorithm configuration. Supports `kind = "random"` and `kind = "llm_classifier"`. |
 | `targets` | Required | Semantic target names mapped to Relay-owned provider bindings. |
 | `default_targets` | Required per enabled profile | Same-protocol targets used for trusted fallback. |
 
@@ -88,6 +88,40 @@ weight = 0
 `seed` is optional. Configure it for repeatable QA sequences. Each target's
 nonnegative `weight` participates in libsy's weighted selection; `0` excludes a
 target from normal routing while retaining it as a trusted fallback.
+
+### LLM Classifier Algorithm
+
+The classifier consults one model, evaluates its structured verdict, and then
+routes the original request to either the weak or strong target:
+
+```toml
+[components.config.algorithm]
+kind = "llm_classifier"
+classifier_target = "classifier"
+weak_target = "fast"
+strong_target = "quality"
+base_threshold = 0.5
+min_confidence = 0.5
+capability_elevated_floor = 0.8
+session_affinity = false
+message_hash_fallback = false
+```
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `classifier_target` | Required | Semantic target for the classifier consultation. Must use `openai_chat` or `openai_responses` under the pinned lossless translation contract. |
+| `weak_target` | Required | Efficient target selected when the verdict meets the configured thresholds. |
+| `strong_target` | Required | Capable target selected for invalid, abstained, unavailable, or below-threshold verdicts. |
+| `base_threshold` | Required | Lowest classifier `p_solve` that selects the weak target. Range: `0.0`–`1.0`. |
+| `min_confidence` | `0.0` | Lowest classifier confidence that permits weak-target routing. |
+| `capability_elevated_floor` | None | Higher `p_solve` threshold for uncertain, unsupported, or unmatched capability verdicts. |
+| `session_affinity` | `false` | Reuse the first decision for later requests carrying the same session identity. |
+| `message_hash_fallback` | `false` | Use the first user-message hash when no session identity is available. Requires `session_affinity`. |
+
+Both the classifier consultation and the selected target call are ordinary
+`CallLlm` steps fulfilled by Relay. The classifier target uses Relay's normal
+binding, authentication, dispatch, and Switchyard translation path; the plugin
+does not use `switchyard-llm-client`.
 
 ### Target Bindings
 
@@ -124,9 +158,12 @@ engine. The component does not invoke NeMo Relay codecs for provider conversion.
 
 ## Retry and Fallback
 
-Every retry starts a new libsy run and obtains a fresh random decision. Relay
-returns the actual provider error to libsy before classifying the original typed
-Relay error for retry.
+Every retry starts a new libsy run. Random routing obtains a fresh selection.
+The classifier runs again unless session affinity already retained the routing
+decision. Relay returns the actual provider error to libsy before classifying
+the original typed Relay error for retry. A failed classifier consultation is
+handled by libsy's fail-closed policy and routes to the strong target; it does
+not cause Relay to retry the judge.
 
 Streaming retries are allowed only before the first provider event. Once the
 first event commits the stream, later errors are delivered to the caller and do
@@ -135,6 +172,15 @@ not trigger another provider call.
 When attempts are exhausted or a non-retryable routing or translation error
 occurs, Relay dispatches the configured same-protocol fallback exactly once.
 
+## Observability
+
+Relay emits `switchyard.routing.requested`, `switchyard.routing.call`,
+`switchyard.routing.decision`, `switchyard.routing.retry`,
+`switchyard.routing.error`, and `switchyard.routing.fallback` mark events from
+real libsy lifecycle data. The `algorithm` field uses libsy's algorithm name.
+Classifier call marks set `is_routed_call = false`; the selected weak or strong
+call and the final decision set it to `true`.
+
 ## Current Limits
 
 - No decision-only or observe-only mode.
@@ -142,5 +188,7 @@ occurs, Relay dispatches the configured same-protocol fallback exactly once.
 - No Switchyard-owned provider client, service, or ATOF ingestion.
 - No synthesized decision IDs, confidence, baselines, or optimization
   contributions.
+- Streaming traffic requires the configured classifier target to support
+  streamed structured-output responses.
 - Provider features that cannot be represented losslessly across protocols are
   rejected.

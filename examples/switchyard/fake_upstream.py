@@ -8,6 +8,19 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+CLASSIFIER_VERDICT = json.dumps(
+    {
+        "recommended_route": "efficient",
+        "p_solve": 0.9,
+        "confidence": 0.95,
+        "abstain": False,
+        "capability_boundary": "supported",
+        "primary_rule": "SUP-1",
+        "crux": "bounded task",
+    },
+    separators=(",", ":"),
+)
+
 
 class Handler(BaseHTTPRequestHandler):
     log_path: Path
@@ -18,6 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         with self.log_path.open("a", encoding="utf-8") as output:
             output.write(json.dumps({"path": self.path, "body": body}) + "\n")
         model = body.get("model", "fake-model")
+        content = CLASSIFIER_VERDICT if model == "provider/classifier" else "fake"
         if body.get("stream"):
             chunks = [
                 {
@@ -28,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
                     "choices": [
                         {
                             "index": 0,
-                            "delta": {"role": "assistant", "content": "fake"},
+                            "delta": {"role": "assistant", "content": content},
                             "finish_reason": None,
                         }
                     ],
@@ -58,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "fake"},
+                    "message": {"role": "assistant", "content": content},
                     "finish_reason": "stop",
                 }
             ],

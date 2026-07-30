@@ -1181,6 +1181,7 @@ pub(super) fn switchyard_configured(config: &SwitchyardConfig) -> bool {
 pub(super) fn switchyard_summary(state: &ComponentEditorState<SwitchyardConfig>) -> String {
     let algorithm = match &state.config.algorithm {
         AlgorithmConfig::Random { .. } => "random",
+        AlgorithmConfig::LlmClassifier { .. } => "llm classifier",
     };
     format!(
         "component {}, algorithm {}, targets {}",

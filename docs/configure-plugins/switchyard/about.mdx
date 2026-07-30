@@ -13,9 +13,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 > library contract may change before the compatible Switchyard 0.2 crates are
 > published.
 
-The Switchyard component runs libsy's random router inside NeMo Relay. Relay
-drives `Algorithm::run_stream`, performs every provider call, and sends the real
-response or error back through `CallLlmRequest::respond`.
+The Switchyard component runs libsy's weighted random router or LLM classifier
+inside NeMo Relay. Relay drives `Algorithm::run_stream`, performs every
+provider call, and sends the real response or error back through
+`CallLlmRequest::respond`.
 
 There is no `switchyard-server`, Decision API, service health check, Switchyard
 LLM client, or dedicated Switchyard ATOF receiver.
@@ -47,7 +48,7 @@ flowchart LR
 
 | Owner | Responsibilities |
 | --- | --- |
-| libsy | Random target selection, decision emission, algorithm lifecycle, and consuming the response supplied by Relay. |
+| libsy | Random selection or classifier consultation and tier selection, decision emission, algorithm lifecycle, and consuming each response supplied by Relay. |
 | `switchyard-translation` | Decode and encode OpenAI Chat, OpenAI Responses, and Anthropic Messages requests, buffered responses, and stream events. |
 | NeMo Relay | Provider bindings, credentials, URL and endpoint selection, physical dispatch, retries, trusted fallback, scopes, and observability. |
 
@@ -67,6 +68,11 @@ examples/switchyard/run-real-e2e.sh
 
 The example starts Relay and one fake provider, exercises deterministic routing
 between two semantic targets, and validates buffered and streaming fidelity.
+
+The classifier follows the same architecture but produces two provider-call
+steps: a classifier consultation followed by the selected weak or strong
+target. Both calls use Relay's configured target bindings and
+`switchyard-translation`.
 
 Continue with [Switchyard Configuration](./configuration.mdx) for the complete
 version-2 schema.

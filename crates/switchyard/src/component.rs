@@ -25,7 +25,7 @@ use nemo_relay::plugin::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json, json};
-use switchyard_libsy::algorithms::Random;
+use switchyard_libsy::algorithms::{LlmTaskClassifier, Random, TaskClassifierConfig};
 use switchyard_libsy::{
     Algorithm, CallLlmRequest, Context as LibsyContext, Decision, LibsyError, LlmResponse,
     LlmTarget, LlmTargetSet, Request as LibsyRequest, Response as LibsyResponse, Step,
@@ -152,6 +152,29 @@ pub enum AlgorithmConfig {
         /// Optional deterministic random seed.
         #[serde(default)]
         seed: Option<u64>,
+    },
+    /// Judge-backed routing between efficient and capable targets.
+    LlmClassifier {
+        /// Semantic target used for the classifier consultation.
+        classifier_target: String,
+        /// Semantic target used for tasks the classifier considers efficient.
+        weak_target: String,
+        /// Semantic target used for tasks requiring the capable tier.
+        strong_target: String,
+        /// Lowest solve probability that selects the weak target.
+        base_threshold: f64,
+        /// Lowest classifier confidence that permits weak-target routing.
+        #[serde(default)]
+        min_confidence: f64,
+        /// Higher solve-probability floor for uncertain capability verdicts.
+        #[serde(default)]
+        capability_elevated_floor: Option<f64>,
+        /// Reuse the first routing decision for subsequent requests in a session.
+        #[serde(default)]
+        session_affinity: bool,
+        /// Key affinity from the first user message when session metadata is absent.
+        #[serde(default)]
+        message_hash_fallback: bool,
     },
 }
 
@@ -545,6 +568,7 @@ impl SwitchyardRuntime {
                     self.emit_decision(decision.as_ref(), attempt, mark_metadata.clone());
                 }
                 Ok(Step::CallLlm(call)) => {
+                    self.emit_call(call.get_decision(), attempt, mark_metadata.clone());
                     self.serve_buffered_call(
                         *call,
                         headers.clone(),
@@ -584,6 +608,7 @@ impl SwitchyardRuntime {
                     self.emit_decision(decision.as_ref(), attempt, mark_metadata.clone());
                 }
                 Ok(Step::CallLlm(call)) => {
+                    self.emit_call(call.get_decision(), attempt, mark_metadata.clone());
                     self.serve_stream_call(
                         *call,
                         headers.clone(),
@@ -613,6 +638,7 @@ impl SwitchyardRuntime {
     ) -> switchyard_libsy::Result<()> {
         let routed = call.get_routed().clone();
         let target_name = routed.decision.selected_model().to_string();
+        let is_routed_call = routed.decision.is_routed_call();
         let result = async {
             let metadata = routed.request.metadata.clone();
             let (target_protocol, request) =
@@ -620,7 +646,9 @@ impl SwitchyardRuntime {
             let response = match next(request).await {
                 Ok(response) => response,
                 Err(error) => {
-                    remember_provider_error(&provider_error, &error);
+                    if is_routed_call {
+                        remember_provider_error(&provider_error, &error);
+                    }
                     return Err(flow_to_client_error(error, &target_name));
                 }
             };
@@ -646,6 +674,7 @@ impl SwitchyardRuntime {
     ) -> switchyard_libsy::Result<()> {
         let routed = call.get_routed().clone();
         let target_name = routed.decision.selected_model().to_string();
+        let is_routed_call = routed.decision.is_routed_call();
         let result = async {
             let metadata = routed.request.metadata.clone();
             let (target_protocol, request) =
@@ -653,14 +682,18 @@ impl SwitchyardRuntime {
             let mut upstream = match next(request).await {
                 Ok(upstream) => upstream,
                 Err(error) => {
-                    remember_provider_error(&provider_error, &error);
+                    if is_routed_call {
+                        remember_provider_error(&provider_error, &error);
+                    }
                     return Err(flow_to_client_error(error, &target_name));
                 }
             };
             let first = match upstream.next().await {
                 Some(Ok(first)) => first,
                 Some(Err(error)) => {
-                    remember_provider_error(&provider_error, &error);
+                    if is_routed_call {
+                        remember_provider_error(&provider_error, &error);
+                    }
                     return Err(flow_to_client_error(error, &target_name));
                 }
                 None => {
@@ -832,7 +865,7 @@ impl SwitchyardRuntime {
         emit_mark(
             "switchyard.routing.requested",
             json!({
-                "algorithm": "random",
+                "algorithm": self.algorithm.name(),
                 "routing_attempt": attempt,
                 "inbound_profile": inbound.label(),
             }),
@@ -844,7 +877,22 @@ impl SwitchyardRuntime {
         emit_mark(
             "switchyard.routing.decision",
             json!({
-                "algorithm": "random",
+                "algorithm": self.algorithm.name(),
+                "routing_attempt": attempt,
+                "semantic_target": decision.selected_model(),
+                "routing_tier": decision.routing_tier(),
+                "is_routed_call": decision.is_routed_call(),
+                "reasoning": decision.reasoning(),
+            }),
+            metadata,
+        );
+    }
+
+    fn emit_call(&self, decision: &dyn Decision, attempt: u32, metadata: Json) {
+        emit_mark(
+            "switchyard.routing.call",
+            json!({
+                "algorithm": self.algorithm.name(),
                 "routing_attempt": attempt,
                 "semantic_target": decision.selected_model(),
                 "routing_tier": decision.routing_tier(),
@@ -859,7 +907,7 @@ impl SwitchyardRuntime {
         emit_mark(
             "switchyard.routing.retry",
             json!({
-                "algorithm": "random",
+                "algorithm": self.algorithm.name(),
                 "routing_attempt": attempt,
                 "retry_reason": reason,
             }),
@@ -871,7 +919,7 @@ impl SwitchyardRuntime {
         emit_mark(
             "switchyard.routing.error",
             json!({
-                "algorithm": "random",
+                "algorithm": self.algorithm.name(),
                 "routing_attempt": attempt,
                 "error_class": class,
                 "error": error,
@@ -884,7 +932,7 @@ impl SwitchyardRuntime {
         emit_mark(
             "switchyard.routing.fallback",
             json!({
-                "algorithm": "random",
+                "algorithm": self.algorithm.name(),
                 "fallback_reason": reason,
                 "fallback_route": self.config.default_targets.target(inbound),
                 "inbound_profile": inbound.label(),
@@ -916,24 +964,62 @@ impl RunFailure {
 }
 
 fn build_algorithm(config: &SwitchyardConfig) -> Result<Arc<dyn Algorithm>, String> {
-    let targets = config
-        .targets
-        .keys()
-        .map(|name| LlmTarget {
-            semantic_name: name.clone(),
-            llm_client: None,
-        })
-        .collect::<Vec<_>>();
-    let weights = config
-        .targets
-        .values()
-        .map(|target| target.weight)
-        .collect::<Vec<_>>();
+    let target = |name: &str| {
+        config
+            .targets
+            .contains_key(name)
+            .then(|| LlmTarget {
+                semantic_name: name.to_string(),
+                llm_client: None,
+            })
+            .ok_or_else(|| format!("algorithm target {name:?} is not configured"))
+    };
     match &config.algorithm {
         AlgorithmConfig::Random { seed } => {
+            let targets = config
+                .targets
+                .keys()
+                .map(|name| target(name))
+                .collect::<Result<Vec<_>, _>>()?;
+            let weights = config
+                .targets
+                .values()
+                .map(|target| target.weight)
+                .collect::<Vec<_>>();
             Random::new(LlmTargetSet::new(targets), Some(weights), *seed)
                 .map(|algorithm| Arc::new(algorithm) as Arc<dyn Algorithm>)
                 .map_err(|error| error.to_string())
+        }
+        AlgorithmConfig::LlmClassifier {
+            classifier_target,
+            weak_target,
+            strong_target,
+            base_threshold,
+            min_confidence,
+            capability_elevated_floor,
+            session_affinity,
+            message_hash_fallback,
+        } => {
+            let classifier = target(classifier_target)?;
+            if config.targets[classifier_target].protocol == WireProtocol::AnthropicMessages {
+                return Err(format!(
+                    "classifier target {classifier_target:?} must use openai_chat or openai_responses because the pinned lossless translation policy cannot encode its structured response format for anthropic_messages"
+                ));
+            }
+            LlmTaskClassifier::new(
+                classifier,
+                target(weak_target)?,
+                target(strong_target)?,
+                TaskClassifierConfig {
+                    base_threshold: *base_threshold,
+                    min_confidence: *min_confidence,
+                    capability_elevated_floor: *capability_elevated_floor,
+                    session_affinity: *session_affinity,
+                    message_hash_fallback: *message_hash_fallback,
+                },
+            )
+            .map(|algorithm| Arc::new(algorithm) as Arc<dyn Algorithm>)
+            .map_err(|error| error.to_string())
         }
     }
 }

@@ -5,9 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # libsy Contract Assessment
 
-This assessment covers the Relay-native random-router integration driven
-through `Algorithm::run_stream`. Relay performs provider calls and returns each
-real response, stream, or error through `CallLlmRequest::respond`.
+This assessment covers the Relay-native random-router and LLM-classifier
+integrations driven through `Algorithm::run_stream`. Relay performs provider
+calls and returns each real response, stream, or error through
+`CallLlmRequest::respond`.
 
 The initial assessment uses Switchyard revision
 `c8ca731adec50c948739a71157ce283ed360ea8a`. Development revisions keep
@@ -47,6 +48,11 @@ The pinned library supports the required random-router lifecycle:
 - typed libsy orchestration and common provider-client errors;
 - buffered request and response translation with exact same-format
   preservation.
+
+The same driver can serve the classifier's two-call lifecycle: a classifier
+consultation followed by the selected weak or strong target. The classifier
+prompt-role gap below must be resolved upstream before that integration is
+ready for review.
 
 ## LIBSY-GAP-003: Exact Raw Stream-Event Preservation
 
@@ -108,9 +114,43 @@ dedicated model-unavailable category.
 - **Relay test unblocked:** A contract test proving that model-unavailable
   reaches an algorithm as a distinct typed failure.
 
+## LIBSY-GAP-005: Classifier Prompt Instruction Role
+
+**Description:** The LLM classifier's governing prompt must reach the provider
+as a system-level instruction, not as ordinary user content.
+
+- **Priority:** P0 for classifier routing correctness.
+- **Affected Relay behavior:** Relay dispatches the classifier `CallLlm`
+  exactly as libsy constructs it. It must not rewrite neutral message roles
+  around the Switchyard translation contract.
+- **Pinned behavior:** `CapabilityJudge` inserts its prompt as
+  `Message { role: System }`, while the OpenAI Chat encoder maps system roles
+  found in the normal message list to `user`. The classifier therefore receives
+  its policy prompt at the wrong privilege level.
+- **Reproducer:** Start `LlmTaskClassifier::run_stream`, inspect its first
+  `CallLlm`, encode that request as OpenAI Chat, and observe
+  `messages[0].role == "user"`.
+- **Required behavior:** Build the classifier prompt in
+  `LlmRequest.instructions` with `Role::System`. Switchyard's protocol encoders
+  then map it to the provider's native system-instruction field.
+- **Proposed API area:** `switchyard-libsy::algorithms::LlmTaskClassifier`
+  request construction; no Relay API or codec change.
+- **Upstream work:** `feat/libsy-classifier-system-instruction`.
+- **Switchyard issue/PR:** Pending focused upstream review. The Relay
+  development pin will include the resolving commit alongside the stream
+  preservation commit until compatible Switchyard 0.2 crates are published.
+- **Acceptance:** The libsy classifier contract test observes one system
+  instruction and one user task message; Relay's focused contract probe
+  observes the provider-native system field for both supported classifier
+  protocols.
+- **Relay test unblocked:**
+  `classifier_prompt_is_encoded_as_a_system_instruction` (ignored while Relay
+  is pinned to the affected Switchyard revision).
+
 ## Deferred Capabilities
 
 Decision-only execution, observe-only routing, stage routing, ensemble-specific
 concurrent dispatch, structured decision identity, confidence, baselines, and
 optimization contributions are outside this integration. They are not mapped
-around locally and do not block the random-router `run_stream` contract.
+around locally and do not block the random-router or LLM-classifier
+`run_stream` contract.

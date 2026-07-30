@@ -15,6 +15,8 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
+const CLASSIFIER_VERDICT: &str = r#"{"recommended_route":"efficient","p_solve":0.9,"confidence":0.95,"abstain":false,"capability_boundary":"supported","primary_rule":"SUP-1","crux":"bounded task"}"#;
+
 fn gateway_bin() -> &'static str {
     env!("CARGO_BIN_EXE_nemo-relay")
 }
@@ -52,10 +54,15 @@ async fn provide(
             .unwrap();
     }
     if stream {
+        let text = if model == "provider/classifier" {
+            CLASSIFIER_VERDICT
+        } else {
+            "streamed"
+        };
         let first = json!({
             "id": "chat-ci", "object": "chat.completion.chunk", "model": model,
             "system_fingerprint": "fp_process_e2e",
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "streamed"}, "finish_reason": null}]
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": null}]
         });
         let last = json!({
             "id": "chat-ci", "object": "chat.completion.chunk", "model": model,
@@ -69,9 +76,14 @@ async fn provide(
             .body(Body::from(body))
             .unwrap();
     }
+    let text = if model == "provider/classifier" {
+        CLASSIFIER_VERDICT.to_string()
+    } else {
+        format!("served by {model}")
+    };
     let body = json!({
         "id": "chat-ci", "object": "chat.completion", "model": model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": format!("served by {model}")}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
     });
     Response::builder()
@@ -242,6 +254,200 @@ weight = 0
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));
         assert!(!headers.contains_key("authorization"));
     }
+
+    provider_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn switchyard_plugin_runs_classifier_and_routed_calls_without_a_service() {
+    let provider_state = ProviderState::default();
+    let provider_requests = Arc::clone(&provider_state.requests);
+    let (provider_url, provider_task) = start_server(
+        Router::new()
+            .route("/v1/chat/completions", post(provide))
+            .with_state(provider_state),
+    )
+    .await;
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let config_path = temp.path().join("plugins.toml");
+    let config = format!(
+        r#"version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 2
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "{}"
+filename = "events.jsonl"
+mode = "overwrite"
+
+[[components]]
+kind = "switchyard"
+enabled = true
+
+[components.config]
+version = 2
+max_retries = 0
+enabled_inbound_profiles = ["openai_chat"]
+
+[components.config.algorithm]
+kind = "llm_classifier"
+classifier_target = "classifier"
+weak_target = "weak"
+strong_target = "strong"
+base_threshold = 0.5
+min_confidence = 0.5
+
+[components.config.default_targets]
+openai_chat = "strong"
+
+[components.config.targets.classifier]
+model = "provider/classifier"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "{provider_url}"
+
+[components.config.targets.weak]
+model = "provider/weak"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "{provider_url}"
+
+[components.config.targets.strong]
+model = "provider/strong"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "{provider_url}"
+"#,
+        atof_dir.display()
+    );
+    std::fs::write(&config_path, config).unwrap();
+
+    let address = unused_address();
+    let gateway_url = format!("http://{address}");
+    let stderr = std::fs::File::create(temp.path().join("gateway.log")).unwrap();
+    let child = Command::new(gateway_bin())
+        .arg("--plugin-config-path")
+        .arg(&config_path)
+        .arg("--bind")
+        .arg(address.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap();
+    let mut gateway = ChildGuard(child);
+    let client = reqwest::Client::new();
+    wait_for_gateway(&client, &gateway_url, &mut gateway.0).await;
+
+    let buffered = client
+        .post(format!("{gateway_url}/v1/chat/completions"))
+        .header("x-nemo-relay-session-id", "classifier-buffered")
+        .json(&json!({
+            "model": "client/model",
+            "messages": [{"role": "user", "content": "classify buffered"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(buffered.status().is_success());
+    let buffered: Value = buffered.json().await.unwrap();
+    assert_eq!(buffered["model"], "provider/weak");
+
+    let streaming = client
+        .post(format!("{gateway_url}/v1/chat/completions"))
+        .header("x-nemo-relay-session-id", "classifier-streaming")
+        .json(&json!({
+            "model": "client/model",
+            "stream": true,
+            "messages": [{"role": "user", "content": "classify streaming"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(streaming.status().is_success());
+    let streaming = streaming.text().await.unwrap();
+    assert!(streaming.contains("streamed"));
+    assert!(streaming.contains("[DONE]"));
+
+    let providers = provider_requests.lock().unwrap();
+    let models = providers
+        .iter()
+        .map(|(_, body)| body["model"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        models,
+        vec![
+            "provider/classifier",
+            "provider/weak",
+            "provider/classifier",
+            "provider/weak"
+        ]
+    );
+    for (_, body) in providers
+        .iter()
+        .filter(|(_, body)| body["model"] == "provider/classifier")
+    {
+        assert!(body["response_format"].is_object());
+    }
+    drop(providers);
+
+    let events_path = atof_dir.join("events.jsonl");
+    let mut events = String::new();
+    for _ in 0..40 {
+        events = std::fs::read_to_string(&events_path).unwrap_or_default();
+        if events.matches("switchyard.routing.call").count() >= 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let events = events
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| {
+            event["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("switchyard.routing."))
+        })
+        .collect::<Vec<_>>();
+    let calls = events
+        .iter()
+        .filter(|event| event["name"] == "switchyard.routing.call")
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 4, "routing events: {events:?}");
+    assert!(calls.iter().all(|event| {
+        event["data"]["algorithm"] == "llm_task_classifier"
+            && event["data"]["semantic_target"]
+                .as_str()
+                .is_some_and(|target| matches!(target, "classifier" | "weak"))
+    }));
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|event| event["data"]["is_routed_call"] == false)
+            .count(),
+        2
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                event["name"] == "switchyard.routing.decision"
+                    && event["data"]["semantic_target"] == "weak"
+            })
+            .count(),
+        2
+    );
 
     provider_task.abort();
 }
