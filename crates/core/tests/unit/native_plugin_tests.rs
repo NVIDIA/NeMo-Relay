@@ -130,33 +130,38 @@ unsafe extern "C" fn reject_unexpected_typed_llm_result(
     panic!("invalid dispatch unexpectedly invoked its callback");
 }
 
-#[derive(Default)]
-struct TypedLlmStreamCallbackState {
-    events: Mutex<Vec<LlmStreamEventV2>>,
-    terminal: tokio::sync::Notify,
+unsafe extern "C" fn record_typed_llm_stream_open(
+    user_data: *mut c_void,
+    stream: *const NemoRelayNativeLlmStreamV2,
+    error_json: *const NemoRelayNativeString,
+) {
+    let sender = unsafe {
+        Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<Result<usize, LlmCallErrorV2>>)
+    };
+    let result = if error_json.is_null() {
+        Ok(stream as usize)
+    } else {
+        parse_json_arg(error_json, "typed LLM stream open error")
+            .and_then(|value| {
+                serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson)
+            })
+            .map_err(|status| LlmCallErrorV2::Internal {
+                message: format!("invalid typed stream open error: {status:?}"),
+            })
+    };
+    let _ = sender.send(result);
 }
 
-unsafe extern "C" fn record_typed_llm_stream_result(
+unsafe extern "C" fn record_typed_llm_stream_next(
     user_data: *mut c_void,
     event_json: *const NemoRelayNativeString,
-) -> bool {
-    let state = unsafe { &*(user_data as *const TypedLlmStreamCallbackState) };
+) {
+    let sender =
+        unsafe { Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<LlmStreamEventV2>) };
     let event: LlmStreamEventV2 = parse_json_arg(event_json, "typed LLM stream result")
         .and_then(|value| serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson))
         .expect("host emitted a valid typed LLM stream event");
-    let terminal = matches!(
-        event,
-        LlmStreamEventV2::Done | LlmStreamEventV2::Failure { .. }
-    );
-    state
-        .events
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .push(event);
-    if terminal {
-        state.terminal.notify_one();
-    }
-    true
+    let _ = sender.send(event);
 }
 
 #[derive(Default)]
@@ -1763,7 +1768,6 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     });
     let output_stream_ref =
         Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
-    let callback_state = Arc::new(TypedLlmStreamCallbackState::default());
     let dispatch = native_string_from_json(
         &serde_json::to_value(LlmDispatchRequestV2 {
             request: LlmRequest {
@@ -1779,28 +1783,57 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     )
     .unwrap();
 
+    let (open_sender, open_receiver) =
+        tokio::sync::oneshot::channel::<std::result::Result<usize, LlmCallErrorV2>>();
     assert_eq!(
         unsafe {
-            native_async_llm_next_invoke_stream_v2(
+            native_async_llm_next_open_stream_v2(
                 next_ref,
                 dispatch,
                 output_stream_ref,
-                record_typed_llm_stream_result,
-                Arc::as_ptr(&callback_state).cast_mut().cast(),
+                record_typed_llm_stream_open,
+                Box::into_raw(Box::new(open_sender)).cast(),
             )
         },
         NemoRelayStatus::Ok
     );
-    runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(1), callback_state.terminal.notified())
+    let provider_stream = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(1), open_receiver)
             .await
-            .expect("typed LLM stream should emit a terminal event");
-    });
+            .expect("typed LLM stream should open")
+            .expect("open callback should be delivered")
+            .expect("provider stream should open")
+    }) as *const NemoRelayNativeLlmStreamV2;
+    let mut events = Vec::new();
+    loop {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        assert_eq!(
+            unsafe {
+                native_async_llm_stream_next_v2(
+                    provider_stream,
+                    record_typed_llm_stream_next,
+                    Box::into_raw(Box::new(sender)).cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        let event = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(1), receiver)
+                .await
+                .expect("typed LLM stream should produce an event")
+                .expect("next callback should be delivered")
+        });
+        let terminal = matches!(
+            event,
+            LlmStreamEventV2::Done | LlmStreamEventV2::Failure { .. }
+        );
+        events.push(event);
+        if terminal {
+            break;
+        }
+    }
     assert_eq!(
-        *callback_state
-            .events
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()),
+        events,
         vec![
             LlmStreamEventV2::Chunk {
                 chunk: json!({
@@ -1825,6 +1858,7 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
         stream: Arc::clone(&output_stream),
     });
     unsafe {
+        native_async_llm_stream_release_v2(provider_stream);
         native_string_free(dispatch);
         native_async_next_release(next_ref);
         native_async_stream_release(output_stream_ref);

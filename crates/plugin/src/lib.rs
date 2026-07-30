@@ -874,6 +874,18 @@ pub struct NemoRelayNativeAsyncStream {
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
+/// Opaque host-owned provider stream returned by native API v2 dispatch.
+///
+/// The plugin requests one item at a time with the v2 host table, then cancels
+/// or releases the handle exactly once. Relay pumps provider output into a
+/// bounded queue so a plugin that consumes slowly applies backpressure without
+/// blocking a runtime worker.
+#[repr(C)]
+pub struct NemoRelayNativeLlmStreamV2 {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
 /// Receives one downstream stream item. `chunk_json` is non-null for a chunk,
 /// `error` is non-null for failure or consumer cancellation, and `done` marks
 /// clean completion. Unless the callback itself returns `false`, the host
@@ -1056,13 +1068,22 @@ pub enum LlmStreamEventV2 {
 pub type NemoRelayNativeAsyncLlmResultCbV2 =
     unsafe extern "C" fn(user_data: *mut c_void, outcome_json: *const NemoRelayNativeString);
 
-/// Receives one typed streaming LLM continuation event.
+/// Receives the result of opening one typed streaming LLM continuation.
+///
+/// Exactly one of `stream` and `error_json` is non-null. A non-null stream is
+/// an owned plugin reference that must be released exactly once.
+pub type NemoRelayNativeAsyncLlmStreamOpenCbV2 = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    stream: *const NemoRelayNativeLlmStreamV2,
+    error_json: *const NemoRelayNativeString,
+);
+
+/// Receives one item from a native API v2 provider stream.
 ///
 /// `event_json` contains one serialized [`LlmStreamEventV2`] and is borrowed
-/// for the callback. Return `false` to cancel downstream production after the
-/// current callback.
-pub type NemoRelayNativeAsyncLlmStreamCbV2 =
-    unsafe extern "C" fn(user_data: *mut c_void, event_json: *const NemoRelayNativeString) -> bool;
+/// for the callback. Only one `next` operation may be active per stream.
+pub type NemoRelayNativeAsyncLlmStreamNextCbV2 =
+    unsafe extern "C" fn(user_data: *mut c_void, event_json: *const NemoRelayNativeString);
 
 /// Incremental native LLM stream intercept callback.
 ///
@@ -1246,15 +1267,29 @@ pub struct NemoRelayNativeHostApiV4 {
         cb: NemoRelayNativeAsyncLlmResultCbV2,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
-    /// Invokes a streaming LLM continuation with an explicit target and
-    /// structured incremental outcomes.
-    pub async_llm_next_invoke_stream_v2: unsafe extern "C" fn(
+    /// Opens a streaming LLM continuation with an explicit target.
+    ///
+    /// On success the callback receives an owned provider-stream handle whose
+    /// items are read with `async_llm_stream_next_v2`.
+    pub async_llm_next_open_stream_v2: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         dispatch_json: *const NemoRelayNativeString,
-        stream: *const NemoRelayNativeAsyncStream,
-        cb: NemoRelayNativeAsyncLlmStreamCbV2,
+        output_stream: *const NemoRelayNativeAsyncStream,
+        cb: NemoRelayNativeAsyncLlmStreamOpenCbV2,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
+    /// Requests one provider event from a native API v2 stream.
+    pub async_llm_stream_next_v2: unsafe extern "C" fn(
+        stream: *const NemoRelayNativeLlmStreamV2,
+        cb: NemoRelayNativeAsyncLlmStreamNextCbV2,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+    /// Cancels provider production for a native API v2 stream.
+    pub async_llm_stream_cancel_v2:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeLlmStreamV2) -> NemoRelayStatus,
+    /// Releases the plugin-owned provider-stream reference.
+    pub async_llm_stream_release_v2:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeLlmStreamV2),
     /// Registers a native API v2 unary LLM execution callback.
     ///
     /// Relay invokes the callback on its reusable blocking executor with the

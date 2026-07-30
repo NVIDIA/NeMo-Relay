@@ -54,9 +54,9 @@ use nemo_relay_plugin::{
     LlmUpstreamFailureClassV2, NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
     NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmResultCbV2,
-    NemoRelayNativeAsyncLlmStreamCbV2, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
-    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    NemoRelayNativeAsyncLlmStreamNextCbV2, NemoRelayNativeAsyncLlmStreamOpenCbV2,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmCodecKind,
@@ -64,11 +64,12 @@ use nemo_relay_plugin::{
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
     NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
     NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
-    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
-    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativeLlmStreamV2,
+    NemoRelayNativePluginContext, NemoRelayNativePluginEntry, NemoRelayNativePluginV1,
+    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
+    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
+    NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
@@ -917,7 +918,10 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
     NemoRelayNativeHostApiV4 {
         v3,
         async_llm_next_invoke_result_v2: native_async_llm_next_invoke_result_v2,
-        async_llm_next_invoke_stream_v2: native_async_llm_next_invoke_stream_v2,
+        async_llm_next_open_stream_v2: native_async_llm_next_open_stream_v2,
+        async_llm_stream_next_v2: native_async_llm_stream_next_v2,
+        async_llm_stream_cancel_v2: native_async_llm_stream_cancel_v2,
+        async_llm_stream_release_v2: native_async_llm_stream_release_v2,
         plugin_context_register_async_llm_execution_v2:
             native_plugin_context_register_async_llm_execution_v2,
         plugin_context_register_async_llm_stream_execution_v2:
@@ -1528,53 +1532,70 @@ struct NativeAsyncStreamCallbackGuard {
     active: bool,
 }
 
-struct NativeAsyncLlmStreamCallbackGuardV2 {
-    cb: NemoRelayNativeAsyncLlmStreamCbV2,
-    user_data: usize,
-    stream: Arc<NativeAsyncStream>,
+struct NativeLlmProviderStreamV2 {
+    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<LlmStreamEventV2>>,
+    producer_abort: Mutex<Option<tokio::task::AbortHandle>>,
+    runtime: tokio::runtime::Handle,
+    next_in_flight: AtomicBool,
+    cancelled: AtomicBool,
     _library_guard: Option<Arc<NativeCallbackUserData>>,
-    active: bool,
 }
 
-impl NativeAsyncLlmStreamCallbackGuardV2 {
-    fn emit(&self, event: &LlmStreamEventV2) -> bool {
-        let Some(event) = native_string_from_json(
-            &serde_json::to_value(event)
-                .expect("native API v2 stream events contain serializable Relay DTOs"),
-        ) else {
-            return false;
-        };
-        let keep_going = unsafe { (self.cb)(self.user_data as *mut c_void, event) };
-        unsafe { native_string_free(event) };
-        keep_going
-    }
-
-    fn finish(&mut self, event: &LlmStreamEventV2) {
-        if self.active {
-            let _ = self.emit(event);
-            self.active = false;
+impl Drop for NativeLlmProviderStreamV2 {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(abort) = self
+            .producer_abort
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            abort.abort();
         }
     }
 }
 
-impl Drop for NativeAsyncLlmStreamCallbackGuardV2 {
-    fn drop(&mut self) {
+struct NativeLlmStreamOpenCallbackGuardV2 {
+    cb: NemoRelayNativeAsyncLlmStreamOpenCbV2,
+    user_data: usize,
+    active: bool,
+    _library_guard: Option<Arc<NativeCallbackUserData>>,
+}
+
+impl NativeLlmStreamOpenCallbackGuardV2 {
+    fn success(&mut self, stream: Arc<NativeLlmProviderStreamV2>) {
         if !self.active {
             return;
         }
-        let message = if self.stream.cancelled.load(Ordering::Acquire) {
-            "typed native LLM stream continuation was cancelled"
-        } else if self.stream.settled.load(Ordering::Acquire) {
-            "typed native LLM stream output settled"
-        } else {
-            "typed native LLM stream continuation ended without a terminal event"
-        };
-        let event = LlmStreamEventV2::Failure {
-            error: LlmCallErrorV2::Cancelled {
-                message: message.into(),
-            },
-        };
-        let _ = self.emit(&event);
+        let stream = Arc::into_raw(stream) as *const NemoRelayNativeLlmStreamV2;
+        unsafe { (self.cb)(self.user_data as *mut c_void, stream, ptr::null()) };
+        self.active = false;
+    }
+
+    fn failure(&mut self, error: &LlmCallErrorV2) {
+        if !self.active {
+            return;
+        }
+        if let Some(error) = native_string_from_json(
+            &serde_json::to_value(error)
+                .expect("native API v2 LLM failures contain serializable Relay DTOs"),
+        ) {
+            unsafe {
+                (self.cb)(self.user_data as *mut c_void, ptr::null(), error);
+                native_string_free(error);
+            }
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for NativeLlmStreamOpenCallbackGuardV2 {
+    fn drop(&mut self) {
+        if self.active {
+            self.failure(&LlmCallErrorV2::Cancelled {
+                message: "typed native LLM stream setup was cancelled".into(),
+            });
+        }
     }
 }
 
@@ -2561,12 +2582,14 @@ async fn forward_native_async_next_stream_with(
         );
     }
     callback_guard.finish();
-/// Invokes a streaming LLM continuation through native API v2.
-unsafe extern "C" fn native_async_llm_next_invoke_stream_v2(
+}
+
+/// Opens a streaming LLM continuation through native API v2.
+unsafe extern "C" fn native_async_llm_next_open_stream_v2(
     next: *const NemoRelayNativeAsyncNext,
     dispatch_json: *const NemoRelayNativeString,
     output_stream: *const NemoRelayNativeAsyncStream,
-    cb: NemoRelayNativeAsyncLlmStreamCbV2,
+    cb: NemoRelayNativeAsyncLlmStreamOpenCbV2,
     user_data: *mut c_void,
 ) -> NemoRelayStatus {
     let Some(next) = (unsafe { (next as *const NativeAsyncNext).as_ref() }) else {
@@ -2620,13 +2643,14 @@ unsafe extern "C" fn native_async_llm_next_invoke_stream_v2(
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let next_fn = next_fn.clone();
+    let provider_runtime = next.runtime.clone();
+    let provider_library_guard = next._callback_user_data.clone();
     let user_data = user_data as usize;
     let output_stream_for_task = Arc::clone(&output_stream);
     let output_stream_for_cleanup = Arc::clone(&output_stream);
-    let callback_guard = NativeAsyncLlmStreamCallbackGuardV2 {
+    let callback_guard = NativeLlmStreamOpenCallbackGuardV2 {
         cb,
         user_data,
-        stream: output_stream_for_task,
         _library_guard: next._callback_user_data.clone(),
         active: true,
     };
@@ -2640,41 +2664,89 @@ unsafe extern "C" fn native_async_llm_next_invoke_stream_v2(
                 let mut callback_guard = callback_guard;
                 let result = AssertUnwindSafe(async {
                     match next_fn(request).await {
-                        Ok(mut stream) => {
-                            while let Some(item) = stream.next().await {
-                                let event = match item {
-                                    Ok(chunk) => LlmStreamEventV2::Chunk { chunk },
-                                    Err(error) => {
-                                        callback_guard.finish(&LlmStreamEventV2::Failure {
+                        Ok(mut provider_stream) => {
+                            let (sender, receiver) =
+                                tokio::sync::mpsc::channel(NATIVE_API_V2_STREAM_CHANNEL_CAPACITY);
+                            let provider = Arc::new(NativeLlmProviderStreamV2 {
+                                receiver: tokio::sync::Mutex::new(receiver),
+                                producer_abort: Mutex::new(None),
+                                runtime: provider_runtime.clone(),
+                                next_in_flight: AtomicBool::new(false),
+                                cancelled: AtomicBool::new(false),
+                                _library_guard: provider_library_guard.clone(),
+                            });
+                            let output_for_producer = Arc::clone(&output_stream_for_task);
+                            let producer = provider_runtime.spawn(async move {
+                                let mut failed = false;
+                                while let Some(item) = provider_stream.next().await {
+                                    let terminal = item.is_err();
+                                    let event = match item {
+                                        Ok(chunk) => LlmStreamEventV2::Chunk { chunk },
+                                        Err(error) => LlmStreamEventV2::Failure {
                                             error: typed_llm_failure(error),
-                                        });
-                                        return;
+                                        },
+                                    };
+                                    if sender.send(event).await.is_err() || terminal {
+                                        failed = terminal;
+                                        break;
                                     }
-                                };
-                                if !callback_guard.emit(&event) {
-                                    callback_guard.active = false;
+                                }
+                                if !failed
+                                    && !output_for_producer.cancelled.load(Ordering::Acquire)
+                                    && !output_for_producer.settled.load(Ordering::Acquire)
+                                {
+                                    let _ = sender.send(LlmStreamEventV2::Done).await;
+                                }
+                                output_for_producer
+                                    .downstream_aborts
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .remove(&tokio::task::id());
+                            });
+                            let producer_abort = producer.abort_handle();
+                            let producer_id = producer.id();
+                            *provider
+                                .producer_abort
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner()) =
+                                Some(producer_abort.clone());
+                            {
+                                let _settlement = output_stream_for_task
+                                    .settlement
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner());
+                                if output_stream_for_task.cancelled.load(Ordering::Acquire)
+                                    || output_stream_for_task.settled.load(Ordering::Acquire)
+                                {
+                                    producer_abort.abort();
+                                    callback_guard.failure(&LlmCallErrorV2::Cancelled {
+                                        message:
+                                            "typed native LLM stream output settled during setup"
+                                                .into(),
+                                    });
                                     return;
                                 }
+                                output_stream_for_task
+                                    .downstream_aborts
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .insert(producer_id, producer_abort);
                             }
-                            callback_guard.finish(&LlmStreamEventV2::Done);
+                            callback_guard.success(provider);
                         }
                         Err(error) => {
-                            callback_guard.finish(&LlmStreamEventV2::Failure {
-                                error: typed_llm_failure(error),
-                            });
+                            callback_guard.failure(&typed_llm_failure(error));
                         }
                     }
                 })
                 .catch_unwind()
                 .await;
                 if let Err(payload) = result {
-                    callback_guard.finish(&LlmStreamEventV2::Failure {
-                        error: LlmCallErrorV2::Internal {
-                            message: format!(
-                                "typed native LLM stream continuation panicked: {}",
-                                panic_payload_message(payload.as_ref())
-                            ),
-                        },
+                    callback_guard.failure(&LlmCallErrorV2::Internal {
+                        message: format!(
+                            "typed native LLM stream continuation panicked: {}",
+                            panic_payload_message(payload.as_ref())
+                        ),
                     });
                 }
             })
@@ -2690,6 +2762,79 @@ unsafe extern "C" fn native_async_llm_next_invoke_stream_v2(
     drop(settlement);
     let _ = start_tx.send(());
     NemoRelayStatus::Ok
+}
+
+/// Requests one event from a native API v2 provider stream.
+unsafe extern "C" fn native_async_llm_stream_next_v2(
+    stream: *const NemoRelayNativeLlmStreamV2,
+    cb: NemoRelayNativeAsyncLlmStreamNextCbV2,
+    user_data: *mut c_void,
+) -> NemoRelayStatus {
+    let Some(stream) = (unsafe { (stream as *const NativeLlmProviderStreamV2).as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if stream.cancelled.load(Ordering::Acquire) {
+        set_native_last_error("native API v2 provider stream is cancelled");
+        return NemoRelayStatus::InvalidArg;
+    }
+    if stream.next_in_flight.swap(true, Ordering::AcqRel) {
+        set_native_last_error("native API v2 provider stream already has a pending next operation");
+        return NemoRelayStatus::InvalidArg;
+    }
+    unsafe { Arc::increment_strong_count(stream as *const NativeLlmProviderStreamV2) };
+    let stream = unsafe { Arc::from_raw(stream as *const NativeLlmProviderStreamV2) };
+    let runtime = stream.runtime.clone();
+    let user_data = user_data as usize;
+    runtime.spawn(async move {
+        let event = stream
+            .receiver
+            .lock()
+            .await
+            .recv()
+            .await
+            .unwrap_or_else(|| LlmStreamEventV2::Failure {
+                error: LlmCallErrorV2::Cancelled {
+                    message: "native API v2 provider stream closed without a terminal event".into(),
+                },
+            });
+        if let Some(event) = native_string_from_json(
+            &serde_json::to_value(&event)
+                .expect("native API v2 stream events contain serializable Relay DTOs"),
+        ) {
+            unsafe {
+                cb(user_data as *mut c_void, event);
+                native_string_free(event);
+            }
+        }
+        stream.next_in_flight.store(false, Ordering::Release);
+    });
+    NemoRelayStatus::Ok
+}
+
+/// Cancels a native API v2 provider stream.
+unsafe extern "C" fn native_async_llm_stream_cancel_v2(
+    stream: *const NemoRelayNativeLlmStreamV2,
+) -> NemoRelayStatus {
+    let Some(stream) = (unsafe { (stream as *const NativeLlmProviderStreamV2).as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    stream.cancelled.store(true, Ordering::Release);
+    if let Some(abort) = stream
+        .producer_abort
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    {
+        abort.abort();
+    }
+    NemoRelayStatus::Ok
+}
+
+/// Releases a native API v2 provider-stream reference.
+unsafe extern "C" fn native_async_llm_stream_release_v2(stream: *const NemoRelayNativeLlmStreamV2) {
+    if !stream.is_null() {
+        unsafe { drop(Arc::from_raw(stream as *const NativeLlmProviderStreamV2)) };
+    }
 }
 
 fn wrap_native_async_tool_json(

@@ -372,8 +372,11 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 472);
-        assert_eq!(host_api_v4_offsets(), [0, 440, 448, 456, 464]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 496);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 440, 448, 456, 464, 472, 480, 488]
+        );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
         assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
@@ -403,8 +406,11 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 232);
-        assert_eq!(host_api_v4_offsets(), [0, 216, 220, 224, 228]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 244);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 216, 220, 224, 228, 232, 236, 240]
+        );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
         assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
@@ -414,11 +420,14 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_v4_offsets() -> [usize; 5] {
+fn host_api_v4_offsets() -> [usize; 8] {
     [
         offset_of!(NemoRelayNativeHostApiV4, v3),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_next_invoke_result_v2),
-        offset_of!(NemoRelayNativeHostApiV4, async_llm_next_invoke_stream_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_llm_next_open_stream_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_next_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_cancel_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_release_v2),
         offset_of!(
             NemoRelayNativeHostApiV4,
             plugin_context_register_async_llm_execution_v2
