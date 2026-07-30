@@ -6,9 +6,9 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -2295,6 +2295,8 @@ unsafe extern "C" fn native_async_next_invoke_result(
 const NATIVE_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const NATIVE_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const NATIVE_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
+const NATIVE_API_V2_MAX_FAILURE_BODY_BYTES: usize = 16 * 1024;
+const NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES: usize = 1024;
 
 fn prepare_typed_llm_dispatch(
     mut dispatch: LlmDispatchRequestV2,
@@ -2340,8 +2342,8 @@ fn typed_llm_failure(error: FlowError) -> LlmCallErrorV2 {
                 class,
                 retryable: failure.is_retryable(),
                 status: failure.status,
-                body: failure.body,
-                headers: failure.headers,
+                body: bounded_utf8(failure.body, NATIVE_API_V2_MAX_FAILURE_BODY_BYTES),
+                headers: safe_native_api_v2_failure_headers(failure.headers),
             }
         }
         FlowError::GuardrailRejected(message) => LlmCallErrorV2::GuardrailRejected { message },
@@ -2350,6 +2352,47 @@ fn typed_llm_failure(error: FlowError) -> LlmCallErrorV2 {
             message: other.to_string(),
         },
     }
+}
+
+fn safe_native_api_v2_failure_headers(
+    headers: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    headers
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let normalized = name.to_ascii_lowercase();
+            let safe = matches!(
+                normalized.as_str(),
+                "retry-after"
+                    | "request-id"
+                    | "traceparent"
+                    | "x-request-id"
+                    | "x-ratelimit-limit"
+                    | "x-ratelimit-remaining"
+                    | "x-ratelimit-reset"
+                    | "ratelimit-limit"
+                    | "ratelimit-remaining"
+                    | "ratelimit-reset"
+            );
+            safe.then(|| {
+                (
+                    normalized,
+                    bounded_utf8(value, NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES),
+                )
+            })
+        })
+        .collect()
+}
+
+fn bounded_utf8(value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value[..boundary].to_string()
 }
 
 unsafe fn invoke_typed_llm_result_callback(
@@ -2797,6 +2840,10 @@ unsafe extern "C" fn native_async_llm_stream_next_v2(
                     message: "native API v2 provider stream closed without a terminal event".into(),
                 },
             });
+        // The pull operation is complete before callback delivery. Clearing
+        // the guard first lets a callback wake plugin code that immediately
+        // requests the next event without racing this task's epilogue.
+        stream.next_in_flight.store(false, Ordering::Release);
         if let Some(event) = native_string_from_json(
             &serde_json::to_value(&event)
                 .expect("native API v2 stream events contain serializable Relay DTOs"),
@@ -2806,7 +2853,6 @@ unsafe extern "C" fn native_async_llm_stream_next_v2(
                 native_string_free(event);
             }
         }
-        stream.next_in_flight.store(false, Ordering::Release);
     });
     NemoRelayStatus::Ok
 }

@@ -31,7 +31,7 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **Register real runtime behavior**: Use `PluginContext` for subscribers,
   guardrails, and intercepts.
 - **Keep a stable boundary**: Export one versioned native entry point through
-  the `nemo_relay_plugin!` macro.
+  the `nemo_relay_plugin!` or `nemo_relay_plugin_v2!` macro.
 - **Use host runtime helpers**: Emit events and manage scope state through the
   high-level `PluginRuntime` wrapper.
 
@@ -49,6 +49,9 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **Raw async middleware**: Completion-based raw registrations for plugins
   that need asynchronous guardrails, intercepts, or event sanitizers. Typed
   Rust callbacks remain synchronous convenience APIs.
+- **Native API v2 LLM dispatch**: Register v2-only execution callbacks that
+  send an explicit provider target through Relay and receive buffered JSON,
+  structured failures, or a bounded host-owned provider stream.
 
 ## Installation
 
@@ -93,6 +96,32 @@ nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_register_plugin, || ExamplePlug
 Build the `cdylib`, describe its entry symbol and compatibility in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. See the
 complete example for platform-specific artifact and manifest setup.
+
+## Native API v2
+
+Existing plugins continue to use manifest `compat.native_api = "1"` and
+`nemo_relay_plugin!`. A plugin that needs Relay-owned provider dispatch exports
+only native API v2:
+
+```rust
+nemo_relay_plugin::nemo_relay_plugin_v2!(
+    nemo_relay_register_plugin,
+    || ExamplePlugin
+);
+```
+
+Set `compat.native_api = "2"` in `relay-plugin.toml`. During registration,
+`PluginContext::host_api_v4` exposes the C-safe typed LLM dispatch table and
+the raw v2 registration helpers.
+
+The plugin provides JSON plus an absolute target URL and protocol route. Relay
+returns response JSON or a structured provider failure. Streaming dispatch
+returns an opaque host-owned stream; request one JSON event at a time, then
+cancel and release it exactly once. No Rust future, trait object,
+`serde_json::Value`, or allocator-owned Rust string crosses the ABI boundary.
+
+The manifest API number is distinct from the internal host-table ABI number:
+native API v1 negotiates the V3 host table and native API v2 negotiates V4.
 
 ## Documentation
 

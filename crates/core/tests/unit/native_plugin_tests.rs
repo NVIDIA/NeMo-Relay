@@ -1665,6 +1665,37 @@ fn native_api_v2_rejects_non_absolute_dispatch_targets_before_continuation() {
 }
 
 #[test]
+fn native_api_v2_bounds_failure_data_and_removes_sensitive_headers() {
+    let error = typed_llm_failure(FlowError::Upstream(crate::error::UpstreamFailure {
+        status: Some(429),
+        body: "é".repeat(NATIVE_API_V2_MAX_FAILURE_BODY_BYTES),
+        headers: BTreeMap::from([
+            ("Authorization".into(), "Bearer secret".into()),
+            ("Set-Cookie".into(), "session=secret".into()),
+            ("Retry-After".into(), "1".into()),
+            (
+                "X-Request-ID".into(),
+                "x".repeat(NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES + 50),
+            ),
+        ]),
+        class: UpstreamFailureClass::RetryableStatus,
+    }));
+
+    let LlmCallErrorV2::Upstream { body, headers, .. } = error else {
+        panic!("expected an upstream failure");
+    };
+    assert_eq!(body.len(), NATIVE_API_V2_MAX_FAILURE_BODY_BYTES);
+    assert!(body.is_char_boundary(body.len()));
+    assert_eq!(headers.get("retry-after").map(String::as_str), Some("1"));
+    assert_eq!(
+        headers.get("x-request-id").map(String::len),
+        Some(NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES)
+    );
+    assert!(!headers.contains_key("authorization"));
+    assert!(!headers.contains_key("set-cookie"));
+}
+
+#[test]
 fn native_async_next_result_uses_captured_scope_on_an_unbound_plugin_thread() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1859,6 +1890,285 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     });
     unsafe {
         native_async_llm_stream_release_v2(provider_stream);
+        native_string_free(dispatch);
+        native_async_next_release(next_ref);
+        native_async_stream_release(output_stream_ref);
+    }
+}
+
+#[test]
+fn native_api_v2_provider_stream_rejects_overlapping_next_and_releases_in_flight() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (provider_sender, provider_receiver) =
+        tokio::sync::mpsc::channel(NATIVE_API_V2_STREAM_CHANNEL_CAPACITY);
+    let provider = Arc::new(NativeLlmProviderStreamV2 {
+        receiver: tokio::sync::Mutex::new(provider_receiver),
+        producer_abort: Mutex::new(None),
+        runtime: runtime.handle().clone(),
+        next_in_flight: AtomicBool::new(false),
+        cancelled: AtomicBool::new(false),
+        _library_guard: None,
+    });
+    let provider_ref = Arc::into_raw(provider) as *const NemoRelayNativeLlmStreamV2;
+
+    let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_next_v2(
+                provider_ref,
+                record_typed_llm_stream_next,
+                Box::into_raw(Box::new(first_sender)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+
+    let (overlap_sender, _overlap_receiver) = tokio::sync::oneshot::channel::<LlmStreamEventV2>();
+    let overlap_state = Box::into_raw(Box::new(overlap_sender));
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_next_v2(
+                provider_ref,
+                record_typed_llm_stream_next,
+                overlap_state.cast(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_last_error_contains("pending next");
+    unsafe { drop(Box::from_raw(overlap_state)) };
+
+    assert_eq!(
+        unsafe { native_async_llm_stream_cancel_v2(provider_ref) },
+        NemoRelayStatus::Ok
+    );
+    assert_eq!(
+        unsafe { native_async_llm_stream_cancel_v2(provider_ref) },
+        NemoRelayStatus::Ok
+    );
+    drop(provider_sender);
+    // Releasing the plugin's reference while `next` is pending is safe because
+    // the callback task retains its own provider-stream reference.
+    unsafe { native_async_llm_stream_release_v2(provider_ref) };
+
+    let event = runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(1), first_receiver).await })
+        .expect("cancelled provider next should settle")
+        .expect("provider next callback should be delivered");
+    assert!(matches!(
+        event,
+        LlmStreamEventV2::Failure {
+            error: LlmCallErrorV2::Cancelled { .. }
+        }
+    ));
+}
+
+#[test]
+fn native_api_v2_handles_256_concurrent_buffered_dispatches() {
+    const DISPATCH_COUNT: usize = 256;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let next = Arc::new(NativeAsyncNext::new(
+        NativeAsyncNextInner::Llm({
+            let provider_calls = Arc::clone(&provider_calls);
+            Arc::new(move |_| {
+                provider_calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    tokio::task::yield_now().await;
+                    Ok(json!({"ok": true}))
+                })
+            })
+        }),
+        runtime.handle().clone(),
+        None,
+    ));
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let dispatch = native_string_from_json(
+        &serde_json::to_value(LlmDispatchRequestV2 {
+            request: LlmRequest {
+                headers: Map::new(),
+                content: json!({"model": "provider/model"}),
+            },
+            target: nemo_relay_plugin::LlmDispatchTargetV2 {
+                url: "https://provider.example/v1/chat/completions".into(),
+                route: nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+            },
+        })
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut receivers = Vec::with_capacity(DISPATCH_COUNT);
+    for _ in 0..DISPATCH_COUNT {
+        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmCallOutcomeV2>();
+        assert_eq!(
+            unsafe {
+                native_async_llm_next_invoke_result_v2(
+                    next_ref,
+                    dispatch,
+                    complete_typed_llm_result,
+                    Box::into_raw(Box::new(sender)).cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        receivers.push(receiver);
+    }
+
+    let outcomes = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            futures_util::future::join_all(receivers),
+        )
+        .await
+        .expect("buffered dispatch stress test should not deadlock")
+    });
+    assert_eq!(outcomes.len(), DISPATCH_COUNT);
+    assert!(outcomes.into_iter().all(|outcome| {
+        outcome
+            == Ok(LlmCallOutcomeV2::Success {
+                response: json!({"ok": true}),
+            })
+    }));
+    assert_eq!(provider_calls.load(Ordering::SeqCst), DISPATCH_COUNT);
+
+    unsafe {
+        native_string_free(dispatch);
+        native_async_next_release(next_ref);
+    }
+}
+
+#[test]
+fn native_api_v2_handles_64_concurrent_100_event_provider_streams() {
+    const STREAM_COUNT: usize = 64;
+    const EVENT_COUNT: usize = 100;
+    assert_eq!(NATIVE_API_V2_STREAM_CHANNEL_CAPACITY, 32);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+    let next = Arc::new(NativeAsyncNext::new(
+        NativeAsyncNextInner::LlmStream(Arc::new(|_| {
+            Box::pin(async {
+                Ok(LlmJsonStream::new(tokio_stream::iter(
+                    (0..EVENT_COUNT).map(|index| Ok(json!({"index": index}))),
+                )))
+            })
+        })),
+        runtime.handle().clone(),
+        None,
+    ));
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let (output_sender, output_receiver) =
+        tokio::sync::mpsc::channel(NATIVE_API_V2_STREAM_CHANNEL_CAPACITY);
+    let output_stream = Arc::new(NativeAsyncStream {
+        sender: Mutex::new(Some(output_sender)),
+        cancelled: AtomicBool::new(false),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
+        settlement: Mutex::new(()),
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let output_stream_ref =
+        Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
+    let dispatch = native_string_from_json(
+        &serde_json::to_value(LlmDispatchRequestV2 {
+            request: LlmRequest {
+                headers: Map::new(),
+                content: json!({"model": "provider/model", "stream": true}),
+            },
+            target: nemo_relay_plugin::LlmDispatchTargetV2 {
+                url: "https://provider.example/v1/chat/completions".into(),
+                route: nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+            },
+        })
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut open_receivers = Vec::with_capacity(STREAM_COUNT);
+    for _ in 0..STREAM_COUNT {
+        let (sender, receiver) =
+            tokio::sync::oneshot::channel::<std::result::Result<usize, LlmCallErrorV2>>();
+        assert_eq!(
+            unsafe {
+                native_async_llm_next_open_stream_v2(
+                    next_ref,
+                    dispatch,
+                    output_stream_ref,
+                    record_typed_llm_stream_open,
+                    Box::into_raw(Box::new(sender)).cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        open_receivers.push(receiver);
+    }
+
+    let event_counts = runtime.block_on(async {
+        let streams = tokio::time::timeout(
+            Duration::from_secs(5),
+            futures_util::future::join_all(open_receivers),
+        )
+        .await
+        .expect("all provider streams should open")
+        .into_iter()
+        .map(|result| {
+            result
+                .expect("open callback should be delivered")
+                .expect("provider stream should open")
+                as *const NemoRelayNativeLlmStreamV2
+        })
+        .collect::<Vec<_>>();
+        let drains = streams.into_iter().map(|provider_stream| async move {
+            let mut chunks = 0;
+            loop {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                assert_eq!(
+                    unsafe {
+                        native_async_llm_stream_next_v2(
+                            provider_stream,
+                            record_typed_llm_stream_next,
+                            Box::into_raw(Box::new(sender)).cast(),
+                        )
+                    },
+                    NemoRelayStatus::Ok
+                );
+                match receiver.await.expect("next callback should be delivered") {
+                    LlmStreamEventV2::Chunk { .. } => chunks += 1,
+                    LlmStreamEventV2::Done => break,
+                    LlmStreamEventV2::Failure { error } => {
+                        panic!("provider stream failed during stress test: {error:?}")
+                    }
+                }
+            }
+            unsafe { native_async_llm_stream_release_v2(provider_stream) };
+            chunks
+        });
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            futures_util::future::join_all(drains),
+        )
+        .await
+        .expect("provider stream stress test should not deadlock")
+    });
+    assert_eq!(event_counts, vec![EVENT_COUNT; STREAM_COUNT]);
+
+    drop(NativeAsyncStreamReceiver {
+        receiver: output_receiver,
+        stream: Arc::clone(&output_stream),
+    });
+    unsafe {
         native_string_free(dispatch);
         native_async_next_release(next_ref);
         native_async_stream_release(output_stream_ref);

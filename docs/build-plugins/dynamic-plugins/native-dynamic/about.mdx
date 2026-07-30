@@ -1,6 +1,6 @@
 ---
 title: "Native Dynamic Plugins (Rust)"
-description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v3."
+description: "Build in-process Rust shared-library plugins against NeMo Relay native API v1 or v2."
 position: 10
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -116,11 +116,63 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
-## Native ABI v3
+## Select a Native API
+
+`compat.native_api` is the operator-facing native plugin C API version. It is
+separate from the internal host-table `abi_version` field:
+
+| Manifest API | Rust export macro | Host table | Use case |
+|---|---|---|---|
+| `"1"` | `nemo_relay_plugin!` | `NemoRelayNativeHostApiV3` | Existing subscribers, guardrails, scopes, and generic middleware |
+| `"2"` | `nemo_relay_plugin_v2!` | `NemoRelayNativeHostApiV4` | Host-dispatched LLM calls with typed targets, failures, and provider streams |
+
+Relay retains native API v1 unchanged. A v2-only plugin is rejected clearly by
+a v1 host and is not retried against an older table. Validation, inspection,
+and doctor output report the selected manifest API.
+
+Native API v2 is intended for in-process orchestrators that decide which LLM
+call to make while Relay still owns provider transport. The plugin supplies a
+replacement `LlmRequest`, absolute HTTP(S) target URL, and target route
+(`openai_chat`, `openai_responses`, or `anthropic_messages`). Relay returns
+either:
+
+- buffered response JSON;
+- a structured provider failure with stable class, retryability, optional HTTP
+  status, a body bounded to 16 KiB, and a conservative safe-header allowlist; or
+- a host-owned provider stream pulled one JSON event at a time, including typed
+  setup and late failures.
+
+The host converts the public target into its private dispatch metadata. Plugins
+do not construct private Relay headers. Provider stream production and plugin
+output each use bounded 32-event queues. Dropping or cancelling a stream stops
+provider production, and the library stays loaded until all callbacks and
+streams release their handles.
+
+V2 callbacks run on Relay's blocking executor with the active scope stack
+restored. Continuations run on Relay's existing Tokio runtime; Relay does not
+create an OS thread per continuation. Separate callback invocations can run
+concurrently and have no stable OS-thread affinity.
+
+Export a v2-only plugin with:
+
+```rust
+nemo_relay_plugin::nemo_relay_plugin_v2!(
+    nemo_relay_register_plugin,
+    || NativePolicy
+);
+```
+
+Set `compat.native_api = "2"` in its manifest. Use
+`PluginContext::host_api_v4` and the raw v2 LLM registration methods when the
+plugin needs the typed dispatch contract.
+
+## Native C ABI Table Versioning
 
 The entry symbol receives a `*const NemoRelayNativeHostApiV1` pointer. It
-points at the v1 prefix of a v3 `NemoRelayNativeHostApiV3` table; check
-`abi_version` and `struct_size` before casting. The plugin returns a
+points at the frozen v1 prefix of the negotiated host table; check
+`abi_version` and `struct_size` before casting. A manifest native API v1 plugin
+receives `NemoRelayNativeHostApiV3`, while native API v2 receives the V4
+extension. The plugin returns a
 `NemoRelayNativePluginV1` descriptor:
 
 ```rust
@@ -130,7 +182,7 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The v3 host table retains the frozen legacy prefix and appends a
+The V3 host table used by manifest native API v1 retains the frozen legacy prefix and appends a
 completion-based asynchronous middleware extension. An entry that rejects the
 v3 table with `InvalidArg` is retried with the legacy table. Rust plugins using the
 typed `NativePlugin` APIs continue to work unchanged. Raw ABI plugins can use
