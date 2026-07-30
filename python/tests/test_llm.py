@@ -635,16 +635,7 @@ class TestLLMInterceptsAsync:
             with pytest.raises(asyncio.CancelledError):
                 await execution
             await asyncio.wait_for(cancelled.wait(), timeout=1)
-
-            async def wait_for_end_publication():
-                while not any(
-                    isinstance(event, ScopeEvent) and event.name == "cancel_llm" and event.scope_category == "end"
-                    for event in events
-                ):
-                    await subscribers.flush_async()
-                    await asyncio.sleep(0)
-
-            await asyncio.wait_for(wait_for_end_publication(), timeout=1)
+            await subscribers.flush_async()
         finally:
             release.set()
             intercepts.deregister_llm_execution("py_llm_cancel_intercept")
@@ -697,18 +688,7 @@ class TestLLMInterceptsAsync:
             with pytest.raises(asyncio.CancelledError):
                 await execution
             await asyncio.wait_for(cancelled.wait(), timeout=1)
-
-            async def wait_for_end_publication():
-                while not any(
-                    isinstance(event, ScopeEvent)
-                    and event.name == "cancel_stream_llm"
-                    and event.scope_category == "end"
-                    for event in events
-                ):
-                    await subscribers.flush_async()
-                    await asyncio.sleep(0)
-
-            await asyncio.wait_for(wait_for_end_publication(), timeout=1)
+            await subscribers.flush_async()
         finally:
             release.set()
             intercepts.deregister_llm_stream_execution("py_llm_stream_cancel_intercept")

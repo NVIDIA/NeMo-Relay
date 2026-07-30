@@ -22,7 +22,8 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::state::contextualize_stream;
 use crate::api::runtime::subscriber_dispatcher::{
-    dispatch_reserved_sanitized_event, dispatch_sanitized_event, dispatch_transformed_event,
+    PendingPublication, dispatch_reserved_sanitized_event, dispatch_sanitized_event,
+    dispatch_transformed_event, register_pending_publication,
 };
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
@@ -1209,6 +1210,7 @@ struct ManagedLlmCompletion {
     metadata: Option<Json>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
     subscribers: Vec<EventSubscriberFn>,
+    pending_publication: Option<PendingPublication>,
 }
 
 impl ManagedLlmCompletion {
@@ -1223,16 +1225,21 @@ impl ManagedLlmCompletion {
             metadata,
             response_codec,
             subscribers: subscribers.to_vec(),
+            pending_publication: (!subscribers.is_empty())
+                .then(register_pending_publication)
+                .flatten(),
         }
     }
 
     fn disarm(&mut self) {
         self.handle = None;
+        drop(self.pending_publication.take());
     }
 }
 
 impl Drop for ManagedLlmCompletion {
     fn drop(&mut self) {
+        let pending_publication = self.pending_publication.take();
         let Some(handle) = self.handle.take() else {
             return;
         };
@@ -1312,6 +1319,7 @@ impl Drop for ManagedLlmCompletion {
             &subscribers,
             scope_stack,
         );
+        drop(pending_publication);
     }
 }
 

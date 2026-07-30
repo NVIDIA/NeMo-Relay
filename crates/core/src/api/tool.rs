@@ -8,7 +8,8 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher::{
-    dispatch_sanitized_event, dispatch_transformed_event,
+    PendingPublication, dispatch_sanitized_event, dispatch_transformed_event,
+    register_pending_publication,
 };
 use crate::api::runtime::{
     EventSubscriberFn, ScopeStackHandle, ToolExecutionNextFn, with_active_event_uuid,
@@ -595,6 +596,7 @@ struct ManagedToolCompletion {
     metadata: Option<Json>,
     subscribers: Vec<EventSubscriberFn>,
     scope_stack: ScopeStackHandle,
+    pending_publication: Option<PendingPublication>,
 }
 
 impl ManagedToolCompletion {
@@ -609,16 +611,21 @@ impl ManagedToolCompletion {
             metadata,
             subscribers: subscribers.to_vec(),
             scope_stack,
+            pending_publication: (!subscribers.is_empty())
+                .then(register_pending_publication)
+                .flatten(),
         }
     }
 
     fn disarm(&mut self) {
         self.handle = None;
+        drop(self.pending_publication.take());
     }
 }
 
 impl Drop for ManagedToolCompletion {
     fn drop(&mut self) {
+        let pending_publication = self.pending_publication.take();
         let Some(handle) = self.handle.take() else {
             return;
         };
@@ -633,6 +640,7 @@ impl Drop for ManagedToolCompletion {
             &self.subscribers,
             self.scope_stack.clone(),
         );
+        drop(pending_publication);
     }
 }
 

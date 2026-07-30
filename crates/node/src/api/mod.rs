@@ -3319,8 +3319,8 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
     core_subscriber_api::deregister_subscriber(&name).map_err(to_napi_err)
 }
 
-/// Return a Promise that resolves when native subscriber callbacks queued
-/// before this call finish.
+/// Return a Promise that resolves when native subscriber callbacks and managed
+/// terminal publications registered before this call finish.
 ///
 /// Call this function outside subscribers, event sanitizers, conditional
 /// guardrails, and request or execution intercepts. A queued tool or LLM

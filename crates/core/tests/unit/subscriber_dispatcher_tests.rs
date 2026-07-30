@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::native::{
     DispatcherLoopState, DispatcherMessage, PendingFlush, PublicationLineage, PublicationPermit,
-    dispatcher_sender, enqueue_dispatch_message, flush_subscribers, register_async_publication,
-    sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test, spawn_background_publication,
+    dispatcher_sender, enqueue_dispatch_message, flush_queued_subscribers, flush_subscribers,
+    register_async_publication, register_pending_publication, sanitize_event_snapshot,
+    set_sanitizer_runtime_failure_for_test, spawn_background_publication,
 };
 use super::{EventSubscriberFn, publication_context};
 use crate::api::registry::RegistryRecord;
@@ -50,7 +51,10 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
         .unwrap();
     let (flush_tx, flush_rx) = mpsc::channel();
     sender
-        .send(DispatcherMessage::Flush { done: flush_tx })
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
         .unwrap();
     let later = register_async_publication().expect("later publication barrier");
 
@@ -93,6 +97,61 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
 }
 
 #[test]
+fn pending_publication_defers_flush_without_blocking_unrelated_delivery() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    let pending = register_pending_publication().expect("pending publication");
+    let (delivered_tx, delivered_rx) = mpsc::channel();
+    let subscriber: EventSubscriberFn = Arc::new(move |_event| {
+        delivered_tx.send(()).unwrap();
+    });
+    let event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000004",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "unrelated-while-pending"
+    }))
+    .expect("valid event");
+    enqueue_dispatch_message(DispatcherMessage::Deliver {
+        event: Box::new(event),
+        transform: None,
+        sanitizers: Vec::new(),
+        subscribers: vec![subscriber],
+        scope_stack: current_scope_stack(),
+        publication_context: None,
+        lineage: None,
+    });
+    delivered_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("pending publication must not block unrelated delivery");
+    flush_queued_subscribers().expect("queued-only flush must ignore managed work");
+
+    let (flush_tx, flush_rx) = mpsc::channel();
+    dispatcher_sender()
+        .expect("dispatcher sender")
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            flush_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "flush must wait for work registered before it"
+    );
+
+    drop(pending);
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("flush must complete after pending work");
+}
+
+#[test]
 fn flush_does_not_wait_for_later_delivery() {
     let _lock = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
@@ -102,7 +161,10 @@ fn flush_does_not_wait_for_later_delivery() {
     let sender = dispatcher_sender().expect("dispatcher sender");
     let (flush_tx, flush_rx) = mpsc::channel();
     sender
-        .send(DispatcherMessage::Flush { done: flush_tx })
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
         .unwrap();
 
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -621,7 +683,10 @@ fn detached_sanitizer_tasks_cannot_inherit_a_later_publication_context() {
                     .send(publication_context::<String>().map(|value| value.as_str().to_string()))
                     .unwrap();
                 let (done, _ignored) = mpsc::channel();
-                enqueue_dispatch_message(DispatcherMessage::Flush { done });
+                enqueue_dispatch_message(DispatcherMessage::Flush {
+                    done,
+                    include_pending: true,
+                });
             });
             Ok(fields)
         })
