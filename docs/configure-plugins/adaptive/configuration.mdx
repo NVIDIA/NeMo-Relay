@@ -53,6 +53,11 @@ upstreams. Use separate Relay gateway/cache deployments for those trust domains,
 or leave response caching disabled. Validation rejects an empty or whitespace-only
 namespace for both in-memory and Redis backends.
 
+When Switchyard and response caching are enabled together, keep
+`switchyard.priority` lower than `response_cache.priority` (the defaults are
+`0` and `50`). Relay rejects equal or inverted priorities because the selected
+backend must be part of the cache key.
+
 <Note>
 Rust 0.7 adds `response_cache` to the public `AdaptiveConfig` struct. Existing
 exhaustive struct literals must add `response_cache: None`. Prefer setting the

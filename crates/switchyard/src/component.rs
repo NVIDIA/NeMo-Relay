@@ -51,6 +51,7 @@ const SWITCHYARD_HEALTH_PATH: &str = "/health";
 const SWITCHYARD_HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const SWITCHYARD_HEALTH_MAX_ATTEMPTS: usize = 3;
 const SWITCHYARD_HEALTH_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
+const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
@@ -1159,6 +1160,15 @@ impl SwitchyardRuntime {
         if let Some(headers) = self.target_headers.get(&decision.route.backend_id) {
             routed.headers.extend(headers.clone());
         }
+        // The backend ID is Relay-owned cache-partition metadata. Remove source or
+        // target-header case variants before publishing the canonical value.
+        routed
+            .headers
+            .retain(|name, _| !name.eq_ignore_ascii_case(INTERNAL_DISPATCH_BACKEND_HEADER));
+        routed.headers.insert(
+            INTERNAL_DISPATCH_BACKEND_HEADER.into(),
+            Json::String(decision.route.backend_id.clone()),
+        );
         routed.headers.insert(
             INTERNAL_DISPATCH_ROUTE_HEADER.into(),
             Json::String(binding.protocol.label().into()),

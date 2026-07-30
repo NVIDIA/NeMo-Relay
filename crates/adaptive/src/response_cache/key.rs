@@ -12,7 +12,7 @@
 //! the raw body fingerprinted (the fallback). Either way RFC
 //! 8785 canonicalization removes field-order/whitespace noise, an always-on
 //! skip-list drops volatile/identity fields, tool-call IDs are normalized, and
-//! only allowlisted headers fold in.
+//! only allowlisted headers plus Relay-owned routing partitions fold in.
 
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
@@ -28,6 +28,10 @@ use crate::response_cache::store::CACHE_SCHEMA_VERSION;
 /// Top-level request-body keys that never affect the answer and are always
 /// dropped before fingerprinting (IDs, routing, bookkeeping, streaming flag).
 pub const DEFAULT_SKIP_KEYS: &[&str] = &["stream", "user", "metadata", "service_tier", "store"];
+
+/// Relay-owned Switchyard backend partition. It is always keyed and never
+/// depends on the user-configured header allowlist.
+const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
 /// Result of deriving a cache key for a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +103,7 @@ pub fn build_cache_key(
     // Body to fingerprint: the decoded/normalized form when a surface resolves
     // and decode succeeds, otherwise the raw request body.
     let (mut body, effective_codec) = resolved_body(provider, request);
+    let chat_token_cap_spelling = openai_chat_token_cap_spelling(provider, request);
 
     if let Some(object) = body.as_object_mut() {
         // `AnnotatedLlmRequest.extra` is `#[serde(flatten)]`, so provider fields
@@ -109,7 +114,7 @@ pub fn build_cache_key(
         normalize_tool_call_ids(object);
     }
 
-    let headers = allowlisted_headers(&request.headers, &config.header_allowlist);
+    let headers = cache_key_headers(&request.headers, &config.header_allowlist);
 
     let key_doc = json!({
         "v": CACHE_SCHEMA_VERSION,
@@ -117,6 +122,7 @@ pub fn build_cache_key(
         "provider": provider,
         "strategy": config.key_strategy,
         "codec": effective_codec,
+        "openai_chat_token_cap": chat_token_cap_spelling,
         "body": body,
         "headers": headers,
     });
@@ -127,6 +133,28 @@ pub fn build_cache_key(
     match fingerprint(&key_doc) {
         Some(key) => KeyOutcome::Key(key),
         None => KeyOutcome::Bypass("canonicalization_failed"),
+    }
+}
+
+/// Preserves which OpenAI Chat token-cap field the caller sent.
+///
+/// The Chat codec normalizes both spellings into `GenerationParams.max_tokens`,
+/// but providers do not treat them interchangeably. Dual-field requests already
+/// use raw-body fallback, so only a single present spelling needs a discriminator.
+fn openai_chat_token_cap_spelling(provider: &str, request: &LlmRequest) -> Option<&'static str> {
+    if detect_request_surface_with_hint(&request.content, Some(provider))
+        != Some(ProviderSurface::OpenAIChat)
+    {
+        return None;
+    }
+    let object = request.content.as_object()?;
+    match (
+        object.contains_key("max_tokens"),
+        object.contains_key("max_completion_tokens"),
+    ) {
+        (true, false) => Some("max_tokens"),
+        (false, true) => Some("max_completion_tokens"),
+        _ => None,
     }
 }
 
@@ -369,6 +397,18 @@ fn allowlisted_headers(headers: &Map<String, Json>, allowlist: &[String]) -> Map
             if header_name.eq_ignore_ascii_case(name) {
                 kept.insert(header_name.to_ascii_lowercase(), value.clone());
             }
+        }
+    }
+    kept
+}
+
+/// Builds the key's header partition from configured headers plus the
+/// Relay-owned Switchyard backend ID.
+fn cache_key_headers(headers: &Map<String, Json>, allowlist: &[String]) -> Map<String, Json> {
+    let mut kept = allowlisted_headers(headers, allowlist);
+    for (header_name, value) in headers {
+        if header_name.eq_ignore_ascii_case(INTERNAL_DISPATCH_BACKEND_HEADER) {
+            kept.insert(INTERNAL_DISPATCH_BACKEND_HEADER.to_string(), value.clone());
         }
     }
     kept

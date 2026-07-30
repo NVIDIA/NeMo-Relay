@@ -238,13 +238,14 @@ async fn run_cache_stream(
     // request is not misread as OpenAI Chat (an ambiguity core documents); the
     // inference is guarded against a mistake at store time (see
     // `tee_and_aggregate`).
-    let codec = match detect_request_surface_with_hint(&request.content, Some(&provider)) {
-        Some(surface) => streaming_codec(surface),
+    let surface = match detect_request_surface_with_hint(&request.content, Some(&provider)) {
+        Some(surface) => surface,
         None => {
             emit_cache_mark(CacheMark::new("bypass", backend).reason("stream_no_codec"));
             return next(request).await;
         }
     };
+    let codec = streaming_codec(surface);
 
     // As in `run_cache`, the decision mark is emitted before `next()`.
     let key = match build_cache_key(&provider, &request, &config) {
@@ -355,7 +356,10 @@ fn tee_and_aggregate(
             match &item {
                 Ok(chunk) => {
                     // In-band provider errors never surface as stream-level Err.
-                    if chunk_is_inband_error(chunk) || collect(chunk.clone()).is_err() {
+                    if chunk_is_inband_error(chunk)
+                        || chunk_has_uncollected_response_fields(chunk)
+                        || collect(chunk.clone()).is_err()
+                    {
                         collector_failed = true;
                     }
                     completion.observe(chunk);
@@ -400,6 +404,108 @@ fn tee_and_aggregate(
         cancel: cancel_tx,
         closed: closed_rx,
         finished: false,
+    })
+}
+
+/// Fields carried by a Chat stream that its collector cannot preserve.
+///
+/// Null metadata is harmless, but any non-null field outside the collector's
+/// closed shape—or a supported field with a shape the collector ignores—would
+/// make a stored aggregate differ from the live response.
+fn chunk_has_uncollected_response_fields(chunk: &Json) -> bool {
+    let Some(chunk) = chunk.as_object() else {
+        return true;
+    };
+    // Only Chat chunks carry `choices`; leave other provider surfaces to their
+    // existing aggregate fidelity checks.
+    let Some(choices) = chunk.get("choices") else {
+        return false;
+    };
+    if chunk.iter().any(|(field, value)| {
+        if value.is_null() {
+            return false;
+        }
+        match field.as_str() {
+            "id" | "object" | "model" => !value.is_string(),
+            "created" => value.as_u64().is_none(),
+            // Usage is copied wholesale into the aggregate.
+            "usage" | "choices" => false,
+            _ => true,
+        }
+    }) {
+        return true;
+    }
+    if choices.is_null() {
+        return false;
+    }
+    let Some(choices) = choices.as_array() else {
+        return true;
+    };
+    choices.iter().any(chat_choice_is_uncollected)
+}
+
+fn chat_choice_is_uncollected(choice: &Json) -> bool {
+    let Some(choice) = choice.as_object() else {
+        return true;
+    };
+    choice.iter().any(|(field, value)| {
+        if value.is_null() {
+            return false;
+        }
+        match field.as_str() {
+            "index" => value.as_u64().is_none(),
+            "finish_reason" => !value.is_string(),
+            "delta" => value
+                .as_object()
+                .is_none_or(chat_delta_has_uncollected_fields),
+            // The collector does not aggregate log probabilities.
+            "logprobs" => true,
+            _ => true,
+        }
+    })
+}
+
+fn chat_delta_has_uncollected_fields(delta: &serde_json::Map<String, Json>) -> bool {
+    delta.iter().any(|(field, value)| {
+        if value.is_null() {
+            return false;
+        }
+        match field.as_str() {
+            "role" | "content" => !value.is_string(),
+            "tool_calls" => value
+                .as_array()
+                .is_none_or(|calls| calls.iter().any(chat_tool_call_is_uncollected)),
+            _ => true,
+        }
+    })
+}
+
+fn chat_tool_call_is_uncollected(tool_call: &Json) -> bool {
+    let Some(tool_call) = tool_call.as_object() else {
+        return true;
+    };
+    tool_call.iter().any(|(field, value)| {
+        if value.is_null() {
+            return false;
+        }
+        match field.as_str() {
+            "index" => value.as_u64().is_none(),
+            "id" | "type" => !value.is_string(),
+            "function" => value
+                .as_object()
+                .is_none_or(chat_tool_function_has_uncollected_fields),
+            _ => true,
+        }
+    })
+}
+
+fn chat_tool_function_has_uncollected_fields(function: &serde_json::Map<String, Json>) -> bool {
+    function.iter().any(|(field, value)| {
+        !value.is_null()
+            && match field.as_str() {
+                "name" | "arguments" => !value.is_string(),
+                _ => true,
+            }
     })
 }
 

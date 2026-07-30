@@ -39,6 +39,7 @@ mod response_cache_common;
 use response_cache_common::{activate_cache, call, chat_request};
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
+const SWITCHYARD_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
 fn reset_global() {
     let _ = clear_plugin_configuration();
@@ -52,6 +53,24 @@ fn scoped_cache_config() -> ResponseCacheConfig {
         namespace: "response-cache-integration-test".to_string(),
         ..ResponseCacheConfig::default()
     }
+}
+
+fn chat_request_with_token_cap(prompt: &str, token_cap: &str) -> LlmRequest {
+    let mut request = chat_request(prompt);
+    request
+        .content
+        .as_object_mut()
+        .expect("chat request body must be an object")
+        .insert(token_cap.to_string(), json!(64));
+    request
+}
+
+fn chat_request_for_backend(prompt: &str, backend: &str) -> LlmRequest {
+    let mut request = chat_request(prompt);
+    request
+        .headers
+        .insert(SWITCHYARD_BACKEND_HEADER.to_string(), json!(backend));
+    request
 }
 
 /// A provider stub that counts how many times it actually runs and returns a
@@ -236,6 +255,90 @@ async fn a_different_request_is_a_miss() {
         calls.load(Ordering::SeqCst),
         2,
         "distinct requests must each hit the provider"
+    );
+}
+
+#[tokio::test]
+async fn switchyard_backends_use_independent_buffered_entries() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    let a_calls = Arc::new(AtomicUsize::new(0));
+    let a_provider = counting_provider(Arc::clone(&a_calls), json!({"source": "backend-a"}));
+    let b_calls = Arc::new(AtomicUsize::new(0));
+    let b_provider = counting_provider(Arc::clone(&b_calls), json!({"source": "backend-b"}));
+
+    let a = call(
+        &a_provider,
+        chat_request_for_backend("same routed prompt", "backend-a"),
+    )
+    .await;
+    let b = call(
+        &b_provider,
+        chat_request_for_backend("same routed prompt", "backend-b"),
+    )
+    .await;
+    let a_repeat = call(
+        &a_provider,
+        chat_request_for_backend("same routed prompt", "backend-a"),
+    )
+    .await;
+
+    assert_eq!(a, json!({"source": "backend-a"}));
+    assert_eq!(b, json!({"source": "backend-b"}));
+    assert_eq!(a_repeat, a);
+    assert_eq!(a_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        b_calls.load(Ordering::SeqCst),
+        1,
+        "a different selected backend must miss even with an identical body"
+    );
+}
+
+#[tokio::test]
+async fn buffered_openai_token_cap_spellings_do_not_share_entries() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    let legacy_calls = Arc::new(AtomicUsize::new(0));
+    let legacy_provider =
+        counting_provider(Arc::clone(&legacy_calls), json!({"source": "max_tokens"}));
+    let current_calls = Arc::new(AtomicUsize::new(0));
+    let current_provider = counting_provider(
+        Arc::clone(&current_calls),
+        json!({"source": "max_completion_tokens"}),
+    );
+
+    let legacy = call(
+        &legacy_provider,
+        chat_request_with_token_cap("same prompt", "max_tokens"),
+    )
+    .await;
+    let legacy_repeat = call(
+        &legacy_provider,
+        chat_request_with_token_cap("same prompt", "max_tokens"),
+    )
+    .await;
+    let current = call(
+        &current_provider,
+        chat_request_with_token_cap("same prompt", "max_completion_tokens"),
+    )
+    .await;
+
+    assert_eq!(legacy, json!({"source": "max_tokens"}));
+    assert_eq!(legacy_repeat, legacy);
+    assert_eq!(current, json!({"source": "max_completion_tokens"}));
+    assert_eq!(
+        legacy_calls.load(Ordering::SeqCst),
+        1,
+        "the same spelling must remain cacheable"
+    );
+    assert_eq!(
+        current_calls.load(Ordering::SeqCst),
+        1,
+        "the current spelling must miss rather than reuse the legacy request"
     );
 }
 
@@ -683,6 +786,49 @@ fn openai_chat_stream_chunks() -> Vec<Json> {
     ]
 }
 
+fn openai_chat_stream_chunks_for_backend(backend: &str) -> Vec<Json> {
+    let mut chunks = openai_chat_stream_chunks();
+    chunks[1]["choices"][0]["delta"]["content"] = json!(format!("served by {backend} "));
+    chunks
+}
+
+fn openai_chat_stream_chunks_with_choice(choice: Json) -> Vec<Json> {
+    vec![
+        json!({"id": "chatcmpl-lossy", "object": "chat.completion.chunk",
+            "created": 1_700_000_000, "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {"role": "assistant"},
+                "finish_reason": null}]}),
+        json!({"id": "chatcmpl-lossy", "object": "chat.completion.chunk",
+            "choices": [choice]}),
+        json!({"id": "chatcmpl-lossy", "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+    ]
+}
+
+fn uncollected_openai_chat_choices() -> [(&'static str, Json); 3] {
+    [
+        (
+            "choice.logprobs",
+            json!({"index": 0, "delta": {"content": "answer"},
+                "logprobs": {"content": [{"token": "answer", "logprob": -0.1}]},
+                "finish_reason": null}),
+        ),
+        (
+            "delta.refusal",
+            json!({"index": 0,
+                "delta": {"content": "fallback", "refusal": "I cannot help."},
+                "finish_reason": null}),
+        ),
+        (
+            "delta.function_call",
+            json!({"index": 0,
+                "delta": {"content": "fallback",
+                    "function_call": {"name": "lookup", "arguments": "{}"}},
+                "finish_reason": null}),
+        ),
+    ]
+}
+
 #[tokio::test]
 async fn streaming_repeat_is_a_hit_that_skips_the_provider_and_replays_the_aggregate() {
     let _guard = TEST_MUTEX.lock().await;
@@ -720,6 +866,174 @@ async fn streaming_repeat_is_a_hit_that_skips_the_provider_and_replays_the_aggre
         .find(|chunk| chunk.get("usage").is_some())
         .expect("the replay must carry a usage chunk");
     assert_eq!(usage_chunk["usage"]["total_tokens"], json!(14));
+}
+
+#[tokio::test]
+async fn switchyard_backends_use_independent_streaming_entries() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    let a_calls = Arc::new(AtomicUsize::new(0));
+    let a_chunks = openai_chat_stream_chunks_for_backend("backend-a");
+    let a_provider = counting_stream_provider(Arc::clone(&a_calls), a_chunks.clone());
+    let b_calls = Arc::new(AtomicUsize::new(0));
+    let b_chunks = openai_chat_stream_chunks_for_backend("backend-b");
+    let b_provider = counting_stream_provider(Arc::clone(&b_calls), b_chunks.clone());
+
+    let a = stream_call(
+        &a_provider,
+        chat_request_for_backend("same streamed route", "backend-a"),
+    )
+    .await;
+    let b = stream_call(
+        &b_provider,
+        chat_request_for_backend("same streamed route", "backend-b"),
+    )
+    .await;
+    let a_repeat = stream_call(
+        &a_provider,
+        chat_request_for_backend("same streamed route", "backend-a"),
+    )
+    .await;
+
+    assert_eq!(a, a_chunks);
+    assert_eq!(b, b_chunks);
+    assert_eq!(replayed_text(&a_repeat), "served by backend-a is 42.");
+    assert_eq!(a_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        b_calls.load(Ordering::SeqCst),
+        1,
+        "a different selected backend must stream live instead of replaying another route"
+    );
+}
+
+#[tokio::test]
+async fn streaming_openai_token_cap_spellings_do_not_share_entries() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    let legacy_calls = Arc::new(AtomicUsize::new(0));
+    let legacy_chunks = openai_chat_stream_chunks();
+    let legacy_provider =
+        counting_stream_provider(Arc::clone(&legacy_calls), legacy_chunks.clone());
+    let current_calls = Arc::new(AtomicUsize::new(0));
+    let mut current_chunks = openai_chat_stream_chunks();
+    current_chunks[1]["choices"][0]["delta"]["content"] = json!("A different ");
+    let current_provider =
+        counting_stream_provider(Arc::clone(&current_calls), current_chunks.clone());
+
+    let legacy = stream_call(
+        &legacy_provider,
+        chat_request_with_token_cap("same streamed prompt", "max_tokens"),
+    )
+    .await;
+    let legacy_repeat = stream_call(
+        &legacy_provider,
+        chat_request_with_token_cap("same streamed prompt", "max_tokens"),
+    )
+    .await;
+    let current = stream_call(
+        &current_provider,
+        chat_request_with_token_cap("same streamed prompt", "max_completion_tokens"),
+    )
+    .await;
+
+    assert_eq!(legacy, legacy_chunks);
+    assert_eq!(replayed_text(&legacy_repeat), "The answer is 42.");
+    assert_eq!(current, current_chunks);
+    assert_eq!(
+        legacy_calls.load(Ordering::SeqCst),
+        1,
+        "the same spelling must remain cacheable"
+    );
+    assert_eq!(
+        current_calls.load(Ordering::SeqCst),
+        1,
+        "the current spelling must stream live instead of replaying the legacy entry"
+    );
+}
+
+#[tokio::test]
+async fn uncollected_openai_chat_fields_are_not_cached_for_streaming_callers() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    for (field, choice) in uncollected_openai_chat_choices() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let chunks = openai_chat_stream_chunks_with_choice(choice);
+        let provider = counting_stream_provider(Arc::clone(&calls), chunks.clone());
+        let prompt = format!("unsafe stream-to-stream: {field}");
+
+        let first = stream_call(&provider, chat_request(&prompt)).await;
+        let second = stream_call(&provider, chat_request(&prompt)).await;
+
+        assert_eq!(first, chunks, "{field} must pass through unchanged");
+        assert_eq!(second, chunks, "{field} must pass through unchanged");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "{field} is erased by aggregation, so a streaming repeat must run live"
+        );
+    }
+}
+
+#[tokio::test]
+async fn uncollected_openai_chat_fields_are_not_cached_for_buffered_callers() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    for (field, choice) in uncollected_openai_chat_choices() {
+        let stream_calls = Arc::new(AtomicUsize::new(0));
+        let chunks = openai_chat_stream_chunks_with_choice(choice);
+        let stream_provider = counting_stream_provider(Arc::clone(&stream_calls), chunks.clone());
+        let prompt = format!("unsafe stream-to-buffered: {field}");
+        let streamed = stream_call(&stream_provider, chat_request(&prompt)).await;
+
+        let buffered_calls = Arc::new(AtomicUsize::new(0));
+        let buffered_provider =
+            counting_provider(Arc::clone(&buffered_calls), json!({"source": field}));
+        let response = call(&buffered_provider, chat_request(&prompt)).await;
+
+        assert_eq!(streamed, chunks, "{field} must pass through unchanged");
+        assert_eq!(stream_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            buffered_calls.load(Ordering::SeqCst),
+            1,
+            "{field} is erased by aggregation, so a buffered repeat must run live"
+        );
+        assert_eq!(response, json!({"source": field}));
+    }
+}
+
+#[tokio::test]
+async fn null_openai_chat_metadata_remains_cacheable() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    let chunks = openai_chat_stream_chunks_with_choice(json!({
+        "index": 0,
+        "delta": {"content": "answer", "refusal": null},
+        "logprobs": null,
+        "finish_reason": null
+    }));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_stream_provider(Arc::clone(&calls), chunks.clone());
+
+    let first = stream_call(&provider, chat_request("null response metadata")).await;
+    let second = stream_call(&provider, chat_request("null response metadata")).await;
+
+    assert_eq!(first, chunks);
+    assert_eq!(replayed_text(&second), "answer");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "null logprobs and refusal metadata must not disable caching"
+    );
 }
 
 #[tokio::test]

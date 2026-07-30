@@ -216,6 +216,26 @@ fn namespace_and_provider_separate_keys() {
 }
 
 #[test]
+fn switchyard_backend_partition_is_keyed_without_allowlisting() {
+    let config = cache_all_config();
+    assert!(config.header_allowlist.is_empty());
+    let make = |backend: &str| {
+        let mut request =
+            request(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}));
+        request
+            .headers
+            .insert(INTERNAL_DISPATCH_BACKEND_HEADER.to_string(), json!(backend));
+        request
+    };
+
+    assert_ne!(
+        key_of("openai", &make("backend-a"), &config),
+        key_of("openai", &make("backend-b"), &config),
+        "Relay-selected backends must partition otherwise identical requests"
+    );
+}
+
+#[test]
 fn random_tool_call_ids_are_normalized_to_one_key() {
     let config = cache_all_config();
     let make = |call_id: &str| {
@@ -560,6 +580,31 @@ fn dual_token_caps_do_not_collide() {
         key_of("openai", &low, &config),
         key_of("openai", &high, &config),
         "requests carrying both token caps must key on both"
+    );
+}
+
+#[test]
+fn single_openai_chat_token_cap_spellings_do_not_collide() {
+    // Chat request normalization stores both provider spellings in the shared
+    // generation-params field. The raw spelling is still provider-significant,
+    // so equal values written under different names must remain distinct.
+    let config = cache_all_config();
+    let legacy = request(json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "write a story"}],
+        "max_tokens": 100
+    }));
+    let current = request(json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "write a story"}],
+        "max_completion_tokens": 100
+    }));
+    assert_eq!(resolved_body("openai", &legacy).1, Some("openai_chat"));
+    assert_eq!(resolved_body("openai", &current).1, Some("openai_chat"));
+    assert_ne!(
+        key_of("openai", &legacy, &config),
+        key_of("openai", &current, &config),
+        "provider-significant token-cap spellings must separate keys"
     );
 }
 

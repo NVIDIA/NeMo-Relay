@@ -50,6 +50,7 @@ mod tests;
 
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
+const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
 
@@ -869,13 +870,17 @@ fn json_header_string(value: &Value) -> Option<String> {
 fn strip_internal_dispatch_headers(headers: &mut HeaderMap) {
     headers.remove(INTERNAL_DISPATCH_URL_HEADER);
     headers.remove(INTERNAL_DISPATCH_ROUTE_HEADER);
+    headers.remove(INTERNAL_DISPATCH_BACKEND_HEADER);
     headers.remove(INTERNAL_RETRY_AWARE_HEADER);
 }
 
 fn is_internal_dispatch_header(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
-        INTERNAL_DISPATCH_URL_HEADER | INTERNAL_DISPATCH_ROUTE_HEADER | INTERNAL_RETRY_AWARE_HEADER
+        INTERNAL_DISPATCH_URL_HEADER
+            | INTERNAL_DISPATCH_ROUTE_HEADER
+            | INTERNAL_DISPATCH_BACKEND_HEADER
+            | INTERNAL_RETRY_AWARE_HEADER
     )
 }
 

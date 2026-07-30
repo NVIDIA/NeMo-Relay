@@ -646,6 +646,10 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
         INTERNAL_RETRY_AWARE_HEADER,
         HeaderValue::from_static("true"),
     );
+    original_headers.insert(
+        INTERNAL_DISPATCH_BACKEND_HEADER,
+        HeaderValue::from_static("attacker-backend"),
+    );
     let request = LlmRequest {
         headers: Map::from_iter([
             (
@@ -655,6 +659,10 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
             (
                 INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
                 json!("openai_responses"),
+            ),
+            (
+                INTERNAL_DISPATCH_BACKEND_HEADER.to_string(),
+                json!("selected-backend"),
             ),
             (INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true")),
             ("x-backend".to_string(), json!("selected")),
@@ -682,6 +690,12 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
         effective
             .headers
             .get(INTERNAL_DISPATCH_ROUTE_HEADER)
+            .is_none()
+    );
+    assert!(
+        effective
+            .headers
+            .get(INTERNAL_DISPATCH_BACKEND_HEADER)
             .is_none()
     );
     assert!(effective.headers.get(INTERNAL_RETRY_AWARE_HEADER).is_none());
