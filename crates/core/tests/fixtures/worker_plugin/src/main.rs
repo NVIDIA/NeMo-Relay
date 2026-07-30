@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use nemo_relay_worker::{
-    JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolNext, WorkerPlugin,
-    ToolExecutionInterceptOutcome, WorkerSdkError, serve_plugin,
+    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest, PendingMarkSpec,
 };
 use nemo_relay_worker::{
-    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest, PendingMarkSpec,
+    JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolExecutionInterceptOutcome,
+    ToolNext, WorkerPlugin, WorkerSdkError, serve_plugin,
 };
 use serde_json::json;
 
@@ -61,22 +61,44 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         let runtime = ctx
             .runtime()
             .ok_or_else(|| WorkerSdkError::Callback("runtime handle missing".into()))?;
-        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| {
-            mark_event_fields(fields, "worker_plugin_mark")
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| async move {
+            Ok(mark_event_fields(fields, "worker_plugin_mark"))
         });
-        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize_data", 1, |_, mut fields| {
-            fields.data = Some(json!({"worker_plugin_mark_data": true}));
-            fields
-        });
+        ctx.register_mark_sanitize_guardrail(
+            "fixture_mark_sanitize_data",
+            1,
+            |_, mut fields| async move {
+                fields.data = Some(json!({"worker_plugin_mark_data": true}));
+                Ok(fields)
+            },
+        );
+        let nested_publication_runtime = runtime.clone();
+        ctx.register_mark_sanitize_guardrail(
+            "fixture_nested_publication_order",
+            2,
+            move |event, fields| {
+                let runtime = nested_publication_runtime.clone();
+                let emit_nested = event.name() == "worker-nested-order-outer";
+                async move {
+                    if emit_nested {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        runtime
+                            .emit_mark("worker-nested-order-inner", None, None)
+                            .await?;
+                    }
+                    Ok(fields)
+                }
+            },
+        );
         ctx.register_scope_sanitize_start_guardrail(
             "fixture_scope_start_sanitize",
             0,
-            |_, fields| mark_event_fields(fields, "worker_plugin_scope_start"),
+            |_, fields| async move { Ok(mark_event_fields(fields, "worker_plugin_scope_start")) },
         );
         ctx.register_scope_sanitize_end_guardrail(
             "fixture_scope_end_sanitize",
             0,
-            |_, fields| mark_event_fields(fields, "worker_plugin_scope_end"),
+            |_, fields| async move { Ok(mark_event_fields(fields, "worker_plugin_scope_end")) },
         );
         register_fixture_subscriber(ctx, runtime.clone());
         register_fixture_tool_hooks(
@@ -135,17 +157,19 @@ fn register_fixture_tool_hooks(
     ctx.register_tool_sanitize_request_guardrail(
         "fixture_tool_sanitize_request",
         0,
-        |_name, args| mark_json(args, "worker_plugin_tool_sanitize_request"),
+        |_name, args| async move { Ok(mark_json(args, "worker_plugin_tool_sanitize_request")) },
     );
     ctx.register_tool_sanitize_response_guardrail(
         "fixture_tool_sanitize_response",
         0,
-        |_name, result| mark_json(result, "worker_plugin_tool_sanitize_response"),
+        |_name, result| async move {
+            Ok(mark_json(result, "worker_plugin_tool_sanitize_response"))
+        },
     );
     ctx.register_tool_conditional_execution_guardrail(
         "fixture_tool_conditional",
         0,
-        move |_name, _args| {
+        move |_name, _args| async move {
             if block_tool {
                 Ok(Some("fixture tool blocked".into()))
             } else {
@@ -154,19 +178,19 @@ fn register_fixture_tool_hooks(
         },
     );
     ctx.register_tool_request_intercept("fixture_rewrite_args", 0, false, move |_name, args| {
-        if exit_in_tool_request {
-            std::process::exit(44);
-        }
-        if tool_request_error {
-            return Err(WorkerSdkError::Callback(
-                "fixture tool request error requested".into(),
-            ));
-        }
         let runtime = runtime.clone();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(emit_runtime_events(runtime))
-        })?;
-        Ok(mark_json(args, "worker_plugin"))
+        async move {
+            if exit_in_tool_request {
+                std::process::exit(44);
+            }
+            if tool_request_error {
+                return Err(WorkerSdkError::Callback(
+                    "fixture tool request error requested".into(),
+                ));
+            }
+            emit_runtime_events(runtime).await?;
+            Ok(mark_json(args, "worker_plugin"))
+        }
     });
     ctx.register_tool_execution_intercept(
         "fixture_tool_execution",
@@ -175,17 +199,15 @@ fn register_fixture_tool_hooks(
             let result = next
                 .call(mark_json(args, "worker_plugin_tool_execution_request"))
                 .await?;
-            Ok(
-                ToolExecutionInterceptOutcome::new(mark_json(
-                    result,
-                    "worker_plugin_tool_execution",
-                ))
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("fixture.worker.tool_execution.mark")
-                        .build(),
-                ),
-            )
+            Ok(ToolExecutionInterceptOutcome::new(mark_json(
+                result,
+                "worker_plugin_tool_execution",
+            ))
+            .with_pending_mark(
+                PendingMarkSpec::builder()
+                    .name("fixture.worker.tool_execution.mark")
+                    .build(),
+            ))
         },
     );
 }
@@ -198,23 +220,33 @@ fn register_fixture_llm_hooks(
     ctx.register_llm_sanitize_request_guardrail(
         "fixture_llm_sanitize_request",
         0,
-        |request| mark_llm_request(request, "worker_plugin_llm_sanitize_request"),
+        |request, _context| async move {
+            Ok(Some(mark_llm_request(
+                request,
+                "worker_plugin_llm_sanitize_request",
+            )))
+        },
     );
     ctx.register_llm_sanitize_response_guardrail(
         "fixture_llm_sanitize_response",
         0,
-        |response| mark_json(response, "worker_plugin_llm_sanitize_response"),
+        |response, _context| async move {
+            Ok(Some(mark_json(
+                response,
+                "worker_plugin_llm_sanitize_response",
+            )))
+        },
     );
     ctx.register_llm_conditional_execution_guardrail(
         "fixture_llm_conditional",
         0,
-        |_request| Ok(None),
+        |_request| async { Ok(None) },
     );
     ctx.register_llm_request_intercept(
         "fixture_llm_request_intercept",
         0,
         false,
-        move |_name, request, annotated| {
+        move |_name, request, annotated| async move {
             if llm_request_error {
                 return Err(WorkerSdkError::Callback(
                     "fixture LLM request error requested".into(),
@@ -232,14 +264,16 @@ fn register_fixture_llm_hooks(
                     None,
                 ),
             };
-            Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(request, annotated)
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("fixture.worker.llm_request.mark")
-                        .data(json!({ "source": "worker_request_intercept" }))
-                        .metadata(json!({ "fixture": true }))
-                        .build(),
-                ))
+            Ok(
+                nemo_relay_worker::LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("fixture.worker.llm_request.mark")
+                            .data(json!({ "source": "worker_request_intercept" }))
+                            .metadata(json!({ "fixture": true }))
+                            .build(),
+                    ),
+            )
         },
     );
     ctx.register_llm_execution_intercept(
@@ -278,7 +312,9 @@ fn register_fixture_llm_hooks(
     );
 }
 
-async fn emit_runtime_events(runtime: nemo_relay_worker::PluginRuntime) -> nemo_relay_worker::Result<()> {
+async fn emit_runtime_events(
+    runtime: nemo_relay_worker::PluginRuntime,
+) -> nemo_relay_worker::Result<()> {
     runtime
         .emit_mark("fixture.worker.mark", Some(json!("current")), None)
         .await?;
@@ -311,7 +347,11 @@ async fn emit_runtime_events(runtime: nemo_relay_worker::PluginRuntime) -> nemo_
     runtime
         .with_scope_stack(&isolated, || async move {
             isolated_runtime
-                .emit_mark("fixture.worker.isolated.mark", Some(json!("isolated")), None)
+                .emit_mark(
+                    "fixture.worker.isolated.mark",
+                    Some(json!("isolated")),
+                    None,
+                )
                 .await
         })
         .await?;

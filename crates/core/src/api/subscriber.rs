@@ -70,11 +70,13 @@ pub fn deregister_subscriber(name: &str) -> Result<bool> {
     Ok(state.event_subscribers.remove(name).is_some())
 }
 
-/// Wait for all subscriber callbacks queued before this call to finish.
+/// Wait for all subscriber callbacks queued before this call to finish,
+/// including publications emitted transitively by those callbacks.
 ///
-/// Call this helper outside native subscriber callbacks. A re-entrant call returns without
-/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
-/// still run.
+/// A direct re-entrant call from queued publication middleware returns without
+/// waiting. Publication middleware must not move such a flush into
+/// `tokio::spawn`, `tokio::task::spawn_blocking`, or another unmarked task or
+/// thread because the publication cannot complete while awaiting that flush.
 ///
 /// Native targets deliver subscriber callbacks on a background dispatcher so
 /// event-producing APIs do not wait for observer work. Call this helper from

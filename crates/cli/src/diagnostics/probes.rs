@@ -72,3 +72,60 @@ pub(super) async fn probe_http_named(name: &'static str, url: &str) -> Check {
         },
     }
 }
+
+pub(super) async fn probe_tcp_named(name: &'static str, endpoint: &str) -> Check {
+    let parsed = match reqwest::Url::parse(endpoint) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Check {
+                name,
+                status: Status::Fail,
+                details: format!("{endpoint}: invalid gRPC endpoint: {error}"),
+            };
+        }
+    };
+    let Some(host) = parsed.host_str() else {
+        return Check {
+            name,
+            status: Status::Fail,
+            details: format!("{endpoint}: gRPC endpoint has no host"),
+        };
+    };
+    let port = grpc_endpoint_port(&parsed);
+    match tokio::time::timeout(
+        NETWORK_TIMEOUT,
+        tokio::net::TcpStream::connect((host, port)),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Check {
+            name,
+            status: Status::Pass,
+            details: format!("{endpoint} (gRPC TCP connection succeeded)"),
+        },
+        Ok(Err(error)) => Check {
+            name,
+            status: Status::Fail,
+            details: format!("{endpoint}: gRPC TCP connection failed: {error}"),
+        },
+        Err(_) => Check {
+            name,
+            status: Status::Fail,
+            details: format!("{endpoint}: gRPC TCP connection timed out"),
+        },
+    }
+}
+
+fn grpc_endpoint_port(endpoint: &reqwest::Url) -> u16 {
+    endpoint.port().unwrap_or_else(|| {
+        if endpoint.scheme() == "https" {
+            443
+        } else {
+            4317
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/probes_tests.rs"]
+mod tcp_tests;

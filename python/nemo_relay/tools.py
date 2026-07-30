@@ -121,11 +121,15 @@ def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | 
             end event. When omitted, the runtime default end timestamp is used.
 
     Returns:
-        None: This function returns after the end event has been recorded.
+        None: This function returns after an immutable end-event snapshot and
+        its middleware/subscriber chains have been queued for publication.
 
     Notes:
-        ``call_end()`` applies sanitize-response guardrails to the emitted
-        end-event payload but does not alter the caller-owned ``result`` object.
+        ``call_end()`` remains synchronous. Sanitize-response guardrails,
+        event sanitizers, and subscriber delivery run later on Relay's serial
+        publication path. Callback failures are logged and fail open; they
+        cannot be raised by this call. The caller-owned ``result`` is not
+        altered.
         ``timestamp`` must be a timezone-aware ``datetime``; strings and naive
         datetimes are rejected.
     """
@@ -184,7 +188,13 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
     """
     ensure_scope_stack()
     return _native_tool_call_execute(
-        name, args, func, handle=handle, attributes=attributes, data=data, metadata=metadata
+        name,
+        args,
+        func,
+        handle=handle,
+        attributes=attributes,
+        data=data,
+        metadata=metadata,
     )
 
 
@@ -196,7 +206,9 @@ def request_intercepts(name, args):
         args: JSON-compatible tool arguments to pass through the intercepts.
 
     Returns:
-        Json: The arguments produced by the final request intercept.
+        Json | Awaitable[Json]: The arguments produced by the final request
+        intercept. Outside a running event loop this is returned directly.
+        Inside an event loop, await the returned value.
 
     Notes:
         This runs only the request-intercept chain. It does not execute
@@ -214,12 +226,16 @@ def conditional_execution(name, args):
         args: JSON-compatible tool arguments to validate.
 
     Returns:
-        str | None: A rejection message if execution should be blocked,
-        otherwise ``None``.
+        None | Awaitable[None]: ``None`` when execution is allowed, returned
+        directly outside an event loop or through an awaitable inside one.
 
     Notes:
         This helper evaluates only the conditional-execution guardrail chain
         and does not invoke request intercepts or tool execution.
+
+    Raises:
+        RuntimeError: If a guardrail rejects the call or an asynchronous
+        guardrail is registered when called outside an event loop.
     """
     ensure_scope_stack()
     return _native_tool_conditional_execution(name, args)

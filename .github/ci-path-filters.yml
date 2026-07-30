@@ -59,7 +59,10 @@ rust_package:
   - 'crates/ffi/nemo_relay.h'
   - 'crates/ffi/src/**'
   - 'justfile'
+  - 'packages/cli-bin/**'
+  - 'python/cli-bin/**'
   - 'rust-toolchain.toml'
+  - 'scripts/package-cli-bin.py'
 
 node_package:
   - 'Cargo.lock'
@@ -79,8 +82,11 @@ node_package:
   - 'justfile'
   - 'package.json'
   - 'package-lock.json'
+  - 'packages/cli-bin/**'
   - 'pyproject.toml'
   - 'rust-toolchain.toml'
+  - 'scripts/package-cli-bin.py'
+  - 'scripts/package-node-bin.py'
   - 'uv.lock'
 
 python_package:
@@ -96,8 +102,10 @@ python_package:
   - 'crates/python/src/**'
   - 'justfile'
   - 'pyproject.toml'
+  - 'python/cli-bin/**'
   - 'python/nemo_relay/**'
   - 'rust-toolchain.toml'
+  - 'scripts/package-cli-bin.py'
   - 'uv.lock'
 
 python_integration_langchain:
@@ -124,7 +132,9 @@ dependencies:
   - 'integrations/**/package.json'
   - 'package.json'
   - 'package-lock.json'
+  - 'packages/cli-bin/**'
   - 'pyproject.toml'
+  - 'python/cli-bin/**'
   - 'scripts/licensing/**'
   - 'uv.lock'
 

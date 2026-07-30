@@ -4,7 +4,16 @@
 use std::sync::{Arc, Mutex};
 
 use crate::api::event::{BaseEvent, MarkEvent};
-use crate::api::runtime::NemoRelayContextState;
+use crate::api::optimization::{
+    LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
+};
+use crate::api::runtime::{
+    BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
+    MiddlewareContinuationLease, NemoRelayContextState,
+};
+use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::optimization::LlmOptimizationContribution;
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay_worker_proto::json_envelope;
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -12,10 +21,10 @@ use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
     EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, JsonEnvelope, JsonResult, LlmNextRequest, LlmRequestInterceptResult,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, Registration, ScopeContext,
-    ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck,
+    HealthResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest, LlmCodecDecodeResponse,
+    LlmCodecEncodeRequest, LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, Registration, ScopeContext, ScopeType as ProtoScopeType,
+    ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
 };
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -31,6 +40,32 @@ const AUTH_TOKEN: &str = "auth-test";
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
+}
+
+#[tokio::test]
+async fn continuation_context_preserves_optimization_recorder_across_tasks() {
+    for producer in ["worker-unary-next", "worker-stream-next"] {
+        let recorder = LlmOptimizationRecorder::default();
+        let context = scope_llm_optimization_recorder(recorder.clone(), async {
+            MiddlewareContinuationContext::capture()
+        })
+        .await;
+        tokio::spawn(async move {
+            context
+                .run(async move {
+                    tokio::task::yield_now().await;
+                    assert!(record_llm_optimization_contribution(
+                        LlmOptimizationContribution::new(producer, "worker_next")
+                    ));
+                })
+                .await;
+        })
+        .await
+        .unwrap();
+        let contributions = recorder.unemitted();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].producer, producer);
+    }
 }
 
 #[test]
@@ -456,6 +491,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             RegistrationSurface::MarkSanitizeGuardrail,
             &event,
         )
+        .await
         .expect_err("invalid event sanitizer fields should fail");
     assert!(
         error
@@ -464,14 +500,12 @@ async fn callback_helpers_cover_worker_response_edges() {
     );
 
     let error = callback
-        .invoke_llm_request_json(
+        .invoke_llm_sanitize_request(
             "llm_json_invalid",
-            RegistrationSurface::LlmSanitizeRequestGuardrail,
-            "model",
             valid_llm_request(),
-            None,
-            None,
+            LlmSanitizeRequestContext::default(),
         )
+        .await
         .expect_err("invalid LLM JSON result should fail");
     assert!(error.to_string().contains("invalid type"));
 
@@ -482,6 +516,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("invalid LLM intercept request should fail");
     assert!(
         error
@@ -496,6 +531,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("legacy outcome schema should fail");
     assert!(
         error
@@ -510,6 +546,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("invalid annotated request should fail");
     assert!(
         error
@@ -519,6 +556,7 @@ async fn callback_helpers_cover_worker_response_edges() {
 
     let error = callback
         .invoke_llm_request_intercept("llm_intercept_error", "model", valid_llm_request(), None)
+        .await
         .expect_err("LLM intercept worker error should surface");
     assert!(error.to_string().contains("worker.failed: boom"));
 
@@ -529,12 +567,364 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
+        .await
         .expect_err("unexpected LLM intercept result should fail");
     assert!(
         error
             .to_string()
             .contains("LLM request intercept returned unexpected")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
+    enable_operational_logs();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (callback, _shutdown) = fake_callback_service({
+        let seen = seen.clone();
+        move |request| {
+            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+                request.payload
+            else {
+                panic!("LLM sanitizer must receive an LLM invocation");
+            };
+            let codec = match invocation.sanitize_context.as_ref() {
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
+                None => None,
+            };
+            seen.lock().unwrap().push((
+                request.registration_name,
+                codec
+                    .map(|codec| codec.kind)
+                    .unwrap_or(LlmCodecKind::Unspecified as i32),
+                codec.and_then(|codec| codec.id.clone()),
+                invocation.request.is_some(),
+                invocation.response.is_some(),
+            ));
+            InvokeResponse {
+                result: Some(InvokeResult::Empty(EmptyResult {})),
+            }
+        }
+    })
+    .await;
+
+    let identities = [
+        LlmCodecIdentity::None,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
+        LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
+        LlmCodecIdentity::Opaque,
+    ];
+    for identity in identities {
+        assert!(
+            callback
+                .invoke_llm_sanitize_request(
+                    "request",
+                    valid_llm_request(),
+                    LlmSanitizeRequestContext::with_identity(identity.clone()),
+                )
+                .await
+                .expect("empty worker result must represent request omission")
+                .is_none()
+        );
+        assert!(
+            callback
+                .invoke_llm_sanitize_response(
+                    "response",
+                    json!({"secret": "value"}),
+                    LlmSanitizeResponseContext::with_identity(identity),
+                )
+                .await
+                .expect("empty worker result must represent response omission")
+                .is_none()
+        );
+    }
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        [
+            (
+                "request".into(),
+                LlmCodecKind::Unspecified as i32,
+                None,
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Unspecified as i32,
+                None,
+                false,
+                true,
+            ),
+            (
+                "request".into(),
+                LlmCodecKind::Builtin as i32,
+                Some("openai_responses".into()),
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Builtin as i32,
+                Some("openai_responses".into()),
+                false,
+                true,
+            ),
+            (
+                "request".into(),
+                LlmCodecKind::Runtime as i32,
+                Some("com.example.chat.v1".into()),
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Runtime as i32,
+                Some("com.example.chat.v1".into()),
+                false,
+                true,
+            ),
+            (
+                "request".into(),
+                LlmCodecKind::Opaque as i32,
+                None,
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Opaque as i32,
+                None,
+                false,
+                true,
+            ),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocation() {
+    enable_operational_logs();
+    type SeenCapability = (String, String, String);
+
+    let host_state = Arc::new(Mutex::new(None::<Arc<WorkerHostRuntimeState>>));
+    let seen = Arc::new(Mutex::new(Vec::<SeenCapability>::new()));
+    let (callback, _shutdown) = fake_callback_service({
+        let host_state = host_state.clone();
+        let seen = seen.clone();
+        move |request| {
+            let invocation_id = request.invocation_id.clone();
+            let registration_name = request.registration_name.clone();
+            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+                request.payload
+            else {
+                panic!("LLM sanitizer must receive an LLM invocation");
+            };
+            let state = host_state
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("host state must be installed before invoking the worker");
+            let capability_id = match invocation
+                .sanitize_context
+                .as_ref()
+                .expect("codec context must be forwarded")
+            {
+                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
+                    context,
+                ) => {
+                    let id = context
+                        .codec_capability_id
+                        .as_deref()
+                        .expect("active request codec must receive a capability");
+                    let codec = state
+                        .request_codec(id, &invocation_id)
+                        .expect("request capability must resolve during invocation");
+                    let request: LlmRequest = decode_json_envelope(
+                        invocation.request.as_ref().expect("request payload"),
+                    )
+                    .expect("request payload must decode");
+                    let annotated = codec
+                        .decode(&request)
+                        .expect("resolved request codec must be usable");
+                    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+                    id.to_owned()
+                }
+                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
+                    context,
+                ) => {
+                    let id = context
+                        .codec_capability_id
+                        .as_deref()
+                        .expect("active response codec must receive a capability");
+                    let codec = state
+                        .response_codec(id, &invocation_id)
+                        .expect("response capability must resolve during invocation");
+                    let response: Json = decode_json_envelope(
+                        invocation.response.as_ref().expect("response payload"),
+                    )
+                    .expect("response payload must decode");
+                    let annotated = codec
+                        .decode_response(&response)
+                        .expect("resolved response codec must be usable");
+                    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+                    id.to_owned()
+                }
+            };
+            seen.lock().unwrap().push((
+                registration_name.clone(),
+                capability_id,
+                invocation_id,
+            ));
+            if registration_name == "response-error" {
+                InvokeResponse {
+                    result: Some(InvokeResult::Error(
+                        nemo_relay_worker_proto::v1::WorkerError {
+                            code: "worker.failed".into(),
+                            message: "boom".into(),
+                            retryable: false,
+                        },
+                    )),
+                }
+            } else {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            }
+        }
+    })
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+
+    let codec = Arc::new(OpenAIChatCodec);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}]
+        }),
+    };
+    assert!(
+        callback
+            .invoke_llm_sanitize_request(
+                "request-success",
+                request,
+                LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+            )
+            .await
+            .expect("request sanitizer must succeed")
+            .is_none()
+    );
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let error = callback
+        .invoke_llm_sanitize_response(
+            "response-error",
+            response,
+            LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+        )
+        .await
+        .expect_err("worker sanitizer error must surface");
+    assert!(error.to_string().contains("worker.failed: boom"));
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    let (_, request_capability, request_invocation) = &seen[0];
+    assert_eq!(
+        callback
+            .host_state
+            .request_codec(request_capability, request_invocation)
+            .err()
+            .expect("successful invocation must expire its request capability")
+            .code(),
+        tonic::Code::NotFound
+    );
+    let (_, response_capability, response_invocation) = &seen[1];
+    assert_eq!(
+        callback
+            .host_state
+            .response_codec(response_capability, response_invocation)
+            .err()
+            .expect("failed invocation must expire its response capability")
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_worker_sanitizer_expires_codec_capability() {
+    enable_operational_logs();
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, _cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = Arc::clone(&started_tx);
+            move |request| {
+                let started_tx = Arc::clone(&started_tx);
+                Box::pin(async move {
+                    let invocation_id = request.invocation_id;
+                    let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload
+                    else {
+                        panic!("LLM sanitizer must receive an LLM invocation");
+                    };
+                    let Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) =
+                        invocation.sanitize_context
+                    else {
+                        panic!("request sanitizer context must be present");
+                    };
+                    let capability_id = context
+                        .codec_capability_id
+                        .expect("request codec capability must be present");
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send((capability_id, invocation_id));
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move {
+        callback_task
+            .invoke_llm_sanitize_request(
+                "cancel-codec",
+                valid_llm_request(),
+                LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIChatCodec))),
+            )
+            .await
+    });
+    let (capability_id, invocation_id) =
+        tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+            .await
+            .expect("worker sanitizer should start")
+            .expect("worker sanitizer should publish its capability");
+    callback
+        .host_state
+        .request_codec(&capability_id, &invocation_id)
+        .expect("capability must be active while the sanitizer is pending");
+
+    task.abort();
+    let _ = task.await;
+    let error = match callback
+        .host_state
+        .request_codec(&capability_id, &invocation_id)
+    {
+        Ok(_) => panic!("cancelled sanitizer must expire its codec capability"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), tonic::Code::NotFound);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -703,7 +1093,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
     .await;
     let continuation_id = callback
         .host_state
-        .insert_continuation(Continuation::Tool(Arc::new(|value| {
+        .insert_continuation(Continuation::tool(Arc::new(|value| {
             Box::pin(async move { Ok(value) })
         })))
         .expect("continuation should insert");
@@ -762,7 +1152,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
     );
     let overlapping_scope_stack_id = callback
         .host_state
-        .insert_invocation_scope_stack(invocation_stack.clone());
+        .insert_invocation_scope_stack(invocation_stack.clone(), None);
     let invocation_id = request.invocation_id.clone();
     let callback_task = callback.clone();
     let task = tokio::spawn(async move { callback_task.invoke_async(request).await });
@@ -865,7 +1255,7 @@ fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
     ));
     let stack = crate::api::runtime::create_scope_stack();
     let baseline_depth = stack.read().expect("scope stack lock").scopes().len();
-    let scope_stack_id = state.insert_invocation_scope_stack(stack.clone());
+    let scope_stack_id = state.insert_invocation_scope_stack(stack.clone(), None);
     with_scope_stack(stack.clone(), || {
         push_scope(
             PushScopeParams::builder()
@@ -980,7 +1370,11 @@ async fn dropping_host_stream_sends_explicit_worker_cancellation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // The process-wide test mutex serializes global registrations.
 async fn install_registrations_covers_registry_error_edges() {
+    let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     enable_operational_logs();
     for surface in [
         RegistrationSurface::Subscriber,
@@ -996,15 +1390,17 @@ async fn install_registrations_covers_registry_error_edges() {
         RegistrationSurface::LlmExecutionIntercept,
         RegistrationSurface::LlmStreamExecutionIntercept,
     ] {
+        let duplicate_name = format!("duplicate_worker_{surface:?}");
         let (instance, _shutdown) = fake_worker_instance(vec![
-            registration(surface, "duplicate"),
-            registration(surface, "duplicate"),
+            registration(surface, &duplicate_name),
+            registration(surface, &duplicate_name),
         ])
         .await;
         let mut ctx = PluginRegistrationContext::new();
-        let error = instance
-            .install_registrations(&mut ctx)
-            .expect_err("duplicate worker registration should fail");
+        let error = match instance.install_registrations(&mut ctx) {
+            Err(error) => error,
+            Ok(()) => panic!("{surface:?}: duplicate worker registration should fail"),
+        };
         assert!(
             error.to_string().contains("duplicate")
                 || error.to_string().contains("already registered"),
@@ -1041,6 +1437,7 @@ async fn install_registrations_covers_registry_error_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // The process-wide test mutex intentionally serializes runtime state.
 async fn installed_callbacks_apply_surface_specific_fallbacks() {
     struct RuntimeCleanup {
         registrations: Option<PluginRegistrationContext>,
@@ -1128,58 +1525,79 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
     let llm_request = valid_llm_request();
     let llm_response = json!({"response": "preserved"});
 
-    {
+    let (
+        subscribers,
+        mark_entries,
+        scope_start_entries,
+        scope_end_entries,
+        tool_request_entries,
+        tool_response_entries,
+        llm_request_entries,
+        llm_response_entries,
+    ) = {
         let state = context.read().unwrap();
-        let subscribers = state.collect_event_subscribers(&[]);
-        NemoRelayContextState::emit_event(&event, &subscribers);
+        (
+            state.collect_event_subscribers(&[]),
+            NemoRelayContextState::event_sanitize_entries(&state.mark_sanitize_guardrails, &[]),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.scope_sanitize_start_guardrails,
+                &[],
+            ),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.scope_sanitize_end_guardrails,
+                &[],
+            ),
+            state.tool_sanitize_request_entries(&[]),
+            state.tool_sanitize_response_entries(&[]),
+            state.llm_sanitize_request_entries(&[]),
+            state.llm_sanitize_response_entries(&[]),
+        )
+    };
+    NemoRelayContextState::emit_event(&event, &subscribers);
 
-        for registry in [
-            &state.mark_sanitize_guardrails,
-            &state.scope_sanitize_start_guardrails,
-            &state.scope_sanitize_end_guardrails,
-        ] {
-            let entries = NemoRelayContextState::event_sanitize_entries(registry, &[]);
-            let sanitized =
-                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries);
-            assert_eq!(sanitized.data(), None);
-            assert_eq!(sanitized.metadata(), None);
-        }
-
-        let entries = state.tool_sanitize_request_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::tool_sanitize_request_snapshot_chain(
-                "tool",
-                tool_request.clone(),
-                &entries,
-            ),
-            tool_request
-        );
-        let entries = state.tool_sanitize_response_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::tool_sanitize_response_snapshot_chain(
-                "tool",
-                tool_response.clone(),
-                &entries,
-            ),
-            tool_response
-        );
-        let entries = state.llm_sanitize_request_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::llm_sanitize_request_snapshot_chain(
-                llm_request.clone(),
-                &entries,
-            ),
-            llm_request
-        );
-        let entries = state.llm_sanitize_response_entries(&[]);
-        assert_eq!(
-            NemoRelayContextState::llm_sanitize_response_snapshot_chain(
-                llm_response.clone(),
-                &entries,
-            ),
-            llm_response
-        );
+    for entries in [mark_entries, scope_start_entries, scope_end_entries] {
+        let sanitized =
+            NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries).await;
+        assert_eq!(sanitized.data(), event.data());
+        assert_eq!(sanitized.metadata(), event.metadata());
     }
+
+    assert_eq!(
+        NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+            "tool",
+            tool_request.clone(),
+            &tool_request_entries,
+        )
+        .await,
+        tool_request
+    );
+    assert_eq!(
+        NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+            "tool",
+            tool_response.clone(),
+            &tool_response_entries,
+        )
+        .await,
+        tool_response
+    );
+    assert_eq!(
+        NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+            llm_request.clone(),
+            crate::api::runtime::LlmSanitizeRequestContext::default(),
+            &llm_request_entries,
+        )
+        .await,
+        Some(llm_request),
+    );
+    assert_eq!(
+        NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+            llm_response.clone(),
+            crate::api::runtime::LlmSanitizeResponseContext::default(),
+            &llm_response_entries,
+        )
+        .await,
+        Some(llm_response),
+    );
     crate::api::subscriber::flush_subscribers().expect("subscriber callback should flush");
 }
 
@@ -1347,6 +1765,152 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 }
 
 #[tokio::test]
+async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemeral() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let codec = Arc::new(OpenAIChatCodec);
+    let request_codec: Arc<dyn LlmCodec> = codec.clone();
+    let response_codec: Arc<dyn LlmResponseCodec> = codec.clone();
+    let invocation_id = "sanitize-invocation";
+    let request_capability = state.insert_request_codec(invocation_id, request_codec);
+    let response_capability = state.insert_response_codec(invocation_id, response_codec);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}],
+            "preserve": true
+        }),
+    };
+
+    let unauthorized = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: "wrong".into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("wrong activation credentials must be rejected");
+    assert_eq!(unauthorized.code(), tonic::Code::PermissionDenied);
+
+    let forged = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: "codec-forged".into(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("forged capability must be rejected");
+    assert_eq!(forged.code(), tonic::Code::NotFound);
+
+    let wrong_direction = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: response_capability.clone(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("response capability cannot decode requests");
+    assert_eq!(wrong_direction.code(), tonic::Code::InvalidArgument);
+
+    let wrong_invocation = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: "another-invocation".into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("a capability cannot be reused by another invocation");
+    assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
+    let decoded = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect("active request capability decodes")
+        .into_inner();
+    assert!(decoded.error.is_none());
+    let decoded = decoded.value.expect("decoded request value");
+    assert_eq!(decoded.schema, "nemo.relay.AnnotatedLlmRequest@2");
+    let annotated: AnnotatedLlmRequest = decode_json_envelope(&decoded).unwrap();
+    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+
+    let encoded = service
+        .encode_llm_codec_request(Request::new(LlmCodecEncodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
+            annotated_request: Some(
+                json_envelope("nemo.relay.AnnotatedLlmRequest@2", &annotated).unwrap(),
+            ),
+            original_request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect("active request capability encodes")
+        .into_inner();
+    assert!(encoded.error.is_none());
+    let encoded = encoded.value.expect("encoded request value");
+    assert_eq!(encoded.schema, "nemo.relay.LlmRequest@1");
+    let encoded: LlmRequest = decode_json_envelope(&encoded).unwrap();
+    assert_eq!(encoded.content["preserve"], json!(true));
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let decoded = service
+        .decode_llm_codec_response(Request::new(LlmCodecDecodeResponse {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: response_capability.clone(),
+            invocation_id: invocation_id.into(),
+            response: Some(json_envelope(JSON_SCHEMA, &response).unwrap()),
+        }))
+        .await
+        .expect("active response capability decodes")
+        .into_inner();
+    assert!(decoded.error.is_none());
+
+    state.remove_codec(&request_capability);
+    state.remove_codec(&response_capability);
+    let expired = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability,
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("removed capability must expire");
+    assert_eq!(expired.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
 async fn host_runtime_service_reports_poisoned_internal_locks() {
     enable_operational_logs();
     let state = Arc::new(WorkerHostRuntimeState::new(
@@ -1440,7 +2004,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     };
 
     let llm_continuation = state
-        .insert_continuation(Continuation::Llm(Arc::new(|request| {
+        .insert_continuation(Continuation::llm(Arc::new(|request| {
             Box::pin(async move { Ok(request.content) })
         })))
         .expect("llm continuation should insert");
@@ -1450,13 +2014,14 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
             auth_token: AUTH_TOKEN.into(),
             continuation_id: llm_continuation,
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
         }))
         .await
         .expect_err("wrong continuation type should fail");
     assert_eq!(wrong_type.code(), tonic::Code::InvalidArgument);
 
     let tool_continuation = state
-        .insert_continuation(Continuation::Tool(Arc::new(|value| {
+        .insert_continuation(Continuation::tool(Arc::new(|value| {
             Box::pin(async move { Ok(value) })
         })))
         .expect("tool continuation should insert");
@@ -1469,13 +2034,38 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 schema: JSON_SCHEMA.into(),
                 json: b"not-json".to_vec(),
             }),
+            scope: None,
         }))
         .await
         .expect_err("invalid tool next JSON should fail");
     assert_eq!(invalid_tool_json.code(), tonic::Code::InvalidArgument);
 
+    let tool_continuation = state
+        .insert_continuation(Continuation::tool(Arc::new(|_value| {
+            Box::pin(async move {
+                panic!("worker tool next panic");
+            })
+        })))
+        .expect("panicking tool continuation should insert");
+    let result = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: tool_continuation,
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect("tool panic should become a structured result")
+        .into_inner();
+    assert!(
+        result
+            .error
+            .is_some_and(|error| error.message.contains("worker tool next panic"))
+    );
+
     let llm_continuation = state
-        .insert_continuation(Continuation::Llm(Arc::new(|request| {
+        .insert_continuation(Continuation::llm(Arc::new(|request| {
             Box::pin(async move { Ok(request.content) })
         })))
         .expect("llm continuation should insert");
@@ -1488,13 +2078,41 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 schema: LLM_REQUEST_SCHEMA.into(),
                 json: b"not-json".to_vec(),
             }),
+            scope: None,
         }))
         .await
         .expect_err("invalid LLM next request should fail");
     assert_eq!(invalid_llm_json.code(), tonic::Code::InvalidArgument);
 
+    let llm_continuation = state
+        .insert_continuation(Continuation::llm(Arc::new(|_request| {
+            Box::pin(async move {
+                panic!("worker LLM next panic");
+            })
+        })))
+        .expect("panicking LLM continuation should insert");
+    let result = service
+        .llm_next(Request::new(LlmNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: llm_continuation,
+            request: Some(
+                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
+                    .expect("llm request envelope"),
+            ),
+            scope: None,
+        }))
+        .await
+        .expect("LLM panic should become a structured result")
+        .into_inner();
+    assert!(
+        result
+            .error
+            .is_some_and(|error| error.message.contains("worker LLM next panic"))
+    );
+
     let stream_continuation = state
-        .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
                     FlowError::Internal("stream item failed".into()),
@@ -1517,6 +2135,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 )
                 .expect("llm request envelope"),
             ),
+            scope: None,
         }))
         .await
         .expect("stream next should return stream");
@@ -1534,7 +2153,44 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     }
 
     let stream_continuation = state
-        .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::new(futures_util::stream::once(async move {
+                    panic!("worker stream next panic");
+                    #[allow(unreachable_code)]
+                    Ok(json!({}))
+                })))
+            })
+        })))
+        .expect("panicking stream continuation should insert");
+    let stream_response = service
+        .llm_stream_next(Request::new(LlmStreamNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: stream_continuation,
+            request: Some(
+                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
+                    .expect("llm request envelope"),
+            ),
+            scope: None,
+        }))
+        .await
+        .expect("stream next should return a stream before polling");
+    let mut stream = stream_response.into_inner();
+    let chunk = stream
+        .next()
+        .await
+        .expect("panicking stream should yield one error")
+        .expect("panic should be translated into a stream item");
+    match chunk.item {
+        Some(StreamItem::Error(error)) => {
+            assert!(error.message.contains("worker stream next panic"));
+        }
+        other => panic!("expected worker panic error, got {other:?}"),
+    }
+
+    let stream_continuation = state
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
             Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::empty())) })
         })))
         .expect("stream continuation should insert");
@@ -1547,6 +2203,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 schema: LLM_REQUEST_SCHEMA.into(),
                 json: b"not-json".to_vec(),
             }),
+            scope: None,
         }))
         .await
     {
@@ -1554,6 +2211,144 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         Err(error) => error,
     };
     assert_eq!(invalid_stream_request.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn worker_continuations_reject_calls_after_the_interceptor_settles() {
+    enable_operational_logs();
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let provider_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (lease, guard) = MiddlewareContinuationLease::capture();
+    let continuation_id = state
+        .insert_continuation(Continuation::tool(Arc::new({
+            let provider_calls = provider_calls.clone();
+            move |value| {
+                let provider_calls = provider_calls.clone();
+                let invocation = lease.begin();
+                Box::pin(async move {
+                    invocation?
+                        .invoke(|| async move {
+                            provider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Ok(value)
+                        })
+                        .await
+                })
+            }
+        })))
+        .expect("tool continuation should insert");
+
+    drop(guard);
+    let result = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: continuation_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect("late worker next should return a structured callback error")
+        .into_inner();
+    assert!(
+        result.error.is_some_and(|error| {
+            error
+                .message
+                .contains("execution continuation is no longer active")
+        }),
+        "late worker next should expose the shared continuation error"
+    );
+    assert_eq!(provider_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    state.remove_continuation(&continuation_id);
+    let error = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id,
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect_err("cleaned-up worker continuation should no longer be addressable");
+    assert_eq!(error.code(), tonic::Code::NotFound);
+    assert_eq!(provider_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let mut expected = Vec::new();
+    for stack_id in ["worker-next-first", "worker-next-second"] {
+        let stack = crate::api::runtime::create_scope_stack();
+        let scope = crate::api::runtime::with_scope_stack(stack.clone(), || {
+            crate::api::scope::push_scope(
+                crate::api::scope::PushScopeParams::builder()
+                    .name(stack_id)
+                    .scope_type(crate::api::scope::ScopeType::Agent)
+                    .build(),
+            )
+        })
+        .unwrap();
+        expected.push(scope.uuid.to_string());
+        state.scope_stacks.lock().unwrap().insert(
+            stack_id.into(),
+            StoredScopeStack {
+                handle: stack,
+                publication_buffer: None,
+                invocation_base_depth: None,
+            },
+        );
+    }
+    let continuation_id = state
+        .insert_continuation(Continuation::tool(Arc::new(|_| {
+            Box::pin(async {
+                Ok(json!(
+                    crate::api::runtime::task_scope_top().uuid.to_string()
+                ))
+            })
+        })))
+        .expect("tool continuation should insert");
+    let request = |stack_id: &str| {
+        Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: continuation_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: Some(ScopeContext {
+                scope_stack_id: stack_id.into(),
+                parent_scope_id: String::new(),
+            }),
+        })
+    };
+
+    let (first, second) = tokio::join!(
+        service.tool_next(request("worker-next-first")),
+        service.tool_next(request("worker-next-second"))
+    );
+    let decode = |response: tonic::Response<JsonResult>| {
+        decode_json_envelope::<Json>(
+            &response
+                .into_inner()
+                .value
+                .expect("tool next should return a value"),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(decode(first.unwrap()), json!(expected[0]));
+    assert_eq!(decode(second.unwrap()), json!(expected[1]));
 }
 
 fn valid_llm_request() -> LlmRequest {

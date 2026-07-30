@@ -6,16 +6,19 @@ use std::sync::Arc;
 use regex::Regex;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value as Json;
+use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
 use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn,
+    BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, ToolSanitizeFn,
 };
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
-    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
+    ProviderSurface, detect_response_surface, request_codec as build_request_codec,
+    response_codec as build_response_codec,
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
@@ -29,9 +32,7 @@ use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer};
 pub(super) struct CompiledBuiltinBackend {
     action: BuiltinAction,
     target_paths: Arc<Vec<String>>,
-    request_codec: Option<Arc<dyn LlmCodec>>,
-    response_codec: Option<Arc<dyn LlmResponseCodec>>,
-    codec_name: Option<BuiltinCodecName>,
+    legacy_surface: Option<ProviderSurface>,
     trajectory: Option<TrajectorySanitizer>,
 }
 
@@ -73,6 +74,13 @@ impl CompiledBuiltinBackend {
         config: BuiltinBackendConfig,
         codec_name: Option<String>,
     ) -> PluginResult<Self> {
+        for (index, target_path) in config.target_paths.iter().enumerate() {
+            if !is_valid_json_pointer(target_path) {
+                return Err(PluginError::InvalidConfig(format!(
+                    "builtin.target_paths[{index}] must be a valid RFC 6901 JSON pointer"
+                )));
+            }
+        }
         let trajectory = match config.preset.as_deref() {
             Some("trajectory_context") => {
                 if config.detector.is_some()
@@ -168,9 +176,7 @@ impl CompiledBuiltinBackend {
         Ok(Self {
             action,
             target_paths: Arc::new(config.target_paths),
-            request_codec: surface.map(build_request_codec),
-            response_codec: surface.map(build_response_codec),
-            codec_name: surface.map(BuiltinCodecName::from_provider_surface),
+            legacy_surface: surface,
             trajectory,
         })
     }
@@ -286,29 +292,185 @@ impl CompiledBuiltinBackend {
         }
     }
 
-    fn sanitize_request_with_codec(&self, request: &LlmRequest) -> Option<LlmRequest> {
-        let codec = self.request_codec.as_ref()?;
-        let annotated = codec.decode(request).ok()?;
-        let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
-        codec.encode(&sanitized_annotated, request).ok()
+    fn selected_surface(&self, codec: &LlmCodecIdentity) -> Option<ProviderSurface> {
+        match codec {
+            LlmCodecIdentity::None => self.legacy_surface,
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat) => {
+                Some(ProviderSurface::OpenAIChat)
+            }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses) => {
+                Some(ProviderSurface::OpenAIResponses)
+            }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages) => {
+                Some(ProviderSurface::AnthropicMessages)
+            }
+            LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => None,
+        }
     }
 
-    fn sanitize_response_with_codec(&self, payload: Json) -> Option<Json> {
-        let codec = self.response_codec.as_ref()?;
-        let codec_name = self.codec_name?;
-        let annotated = codec.decode_response(&payload).ok()?;
+    fn uses_compatible_legacy_response_codec(&self, payload: &Json) -> bool {
+        self.legacy_surface
+            .is_some_and(|surface| detect_response_surface(payload) == Some(surface))
+    }
+
+    fn sanitize_request_with_codec(
+        &self,
+        codec: &dyn LlmCodec,
+        request: &LlmRequest,
+    ) -> Option<LlmRequest> {
+        let annotated = codec.decode(request).ok()?;
         let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
-        Some(codec_name.overlay_response_payload(payload, &sanitized_annotated))
+        codec
+            .encode(&sanitized_annotated, request)
+            .ok()
+            .or_else(|| {
+                self.sanitize_request_target_paths_incrementally(
+                    codec,
+                    request,
+                    sanitized_annotated,
+                )
+            })
+    }
+
+    fn sanitize_request_target_paths_incrementally(
+        &self,
+        codec: &dyn LlmCodec,
+        request: &LlmRequest,
+        sanitized_annotated: AnnotatedLlmRequest,
+    ) -> Option<LlmRequest> {
+        let sanitized = serde_json::to_value(sanitized_annotated).ok()?;
+        let mut sanitized_request = request.clone();
+
+        for target_path in self.target_paths.iter() {
+            let target_segments = json_pointer_segments(target_path)?;
+            let current_annotated = codec.decode(&sanitized_request).ok()?;
+            let mut current = serde_json::to_value(&current_annotated).ok()?;
+            match (
+                sanitized_json_pointer_value(&sanitized, &target_segments),
+                sanitized_json_pointer_value(&current, &target_segments),
+            ) {
+                (None, None) => continue,
+                (Some(target_value), Some(current_value)) if current_value == target_value => {
+                    continue;
+                }
+                (Some(target_value), Some(_)) => {
+                    replace_sanitized_json_pointer_value(
+                        &mut current,
+                        &target_segments,
+                        target_value.clone(),
+                    )?;
+                }
+                (None, Some(_)) if matches!(self.action, BuiltinAction::Remove) => {
+                    remove_sanitized_json_pointer_value(&mut current, &target_segments)?;
+                }
+                _ => return None,
+            }
+            let updated = serde_json::from_value(current).ok()?;
+            sanitized_request = codec.encode(&updated, &sanitized_request).ok()?;
+        }
+
+        Some(sanitized_request)
+    }
+
+    fn sanitize_request_headers(&self, headers: Map<String, Json>) -> Map<String, Json> {
+        let sanitized = self.sanitize_json_preorder_dfs(Json::Object(
+            [("headers".to_string(), Json::Object(headers))]
+                .into_iter()
+                .collect(),
+        ));
+        sanitized
+            .get("headers")
+            .and_then(Json::as_object)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn sanitize_response_with_codec(
+        &self,
+        codec: &dyn LlmResponseCodec,
+        surface: ProviderSurface,
+        payload: Json,
+    ) -> Option<Json> {
+        if surface == ProviderSurface::OpenAIChat
+            && payload
+                .get("choices")
+                .and_then(Json::as_array)
+                .is_some_and(|choices| choices.len() > 1)
+            && self.targets_normalized_openai_chat_choice()
+        {
+            return None;
+        }
+        let codec_name = BuiltinCodecName::from_provider_surface(surface);
+        let annotated = codec.decode_response(&payload).ok()?;
+        let annotated_json = serde_json::to_value(&annotated).ok()?;
+        let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
+        let sanitized_json = serde_json::to_value(&sanitized_annotated).ok()?;
+        let payload = codec_name.overlay_response_payload(payload, &sanitized_annotated);
+        let payload = self.sanitize_json_preorder_dfs(payload);
+        let target_segments = self
+            .target_paths
+            .iter()
+            .map(|target_path| json_pointer_segments(target_path))
+            .collect::<Option<Vec<_>>>()?;
+        let has_normalized_target = target_segments.iter().any(|target_segments| {
+            sanitized_json_pointer_value(&annotated_json, target_segments).is_some()
+                || sanitized_json_pointer_value(&sanitized_json, target_segments).is_some()
+        });
+        if !has_normalized_target {
+            return Some(payload);
+        }
+        let projected = codec.decode_response(&payload).ok()?;
+        let projected = serde_json::to_value(projected).ok()?;
+        Self::normalized_response_targets_match(
+            &target_segments,
+            &annotated_json,
+            &sanitized_json,
+            &projected,
+        )
+        .then_some(payload)
+    }
+
+    fn normalized_response_targets_match(
+        target_paths: &[Vec<String>],
+        annotated: &Json,
+        sanitized: &Json,
+        projected: &Json,
+    ) -> bool {
+        target_paths.iter().all(|target_segments| {
+            let original = sanitized_json_pointer_value(annotated, target_segments);
+            let expected = sanitized_json_pointer_value(sanitized, target_segments);
+            if original.is_none() && expected.is_none() {
+                return true;
+            }
+            sanitized_json_pointer_value(projected, target_segments) == expected
+        })
+    }
+
+    fn targets_normalized_openai_chat_choice(&self) -> bool {
+        self.target_paths.iter().any(|path| {
+            json_pointer_segments(path)
+                .and_then(|segments| segments.into_iter().next())
+                .is_some_and(|segment| {
+                    matches!(
+                        segment.as_str(),
+                        "message" | "tool_calls" | "finish_reason" | "api_specific"
+                    )
+                })
+        })
     }
 }
 
 pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSanitizeFn {
-    Arc::new(
-        move |_name: &str, payload: Json| match backend.trajectory.as_ref() {
-            Some(trajectory) => trajectory.sanitize_tool_payload(payload),
-            None => backend.sanitize_json_preorder_dfs(payload),
-        },
-    )
+    let backend = Arc::new(backend);
+    Arc::new(move |_name: String, payload: Json| {
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            Ok(match backend.trajectory.as_ref() {
+                Some(trajectory) => trajectory.sanitize_tool_payload(payload),
+                None => backend.sanitize_json_preorder_dfs(payload),
+            })
+        })
+    })
 }
 
 pub(super) fn event_sanitize_callback(backend: CompiledBuiltinBackend) -> EventSanitizeFn {
@@ -327,76 +489,251 @@ fn event_sanitize_callback_with_scope_categories(
     backend: CompiledBuiltinBackend,
     scope_categories: Option<(bool, bool)>,
 ) -> EventSanitizeFn {
+    let backend = Arc::new(backend);
     Arc::new(move |event, mut fields| {
-        if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
-            matches!(event, Event::Scope(_))
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
+                matches!(event.as_ref(), Event::Scope(_))
+                    && event
+                        .category()
+                        .is_some_and(|category| match category.as_str() {
+                            "llm" => !sanitize_llm,
+                            "tool" => !sanitize_tool,
+                            _ => false,
+                        })
+            }) {
+                return Ok(fields);
+            }
+
+            if let Some(trajectory) = backend.trajectory.as_ref() {
+                return Ok(trajectory.sanitize_event_fields(&event, fields));
+            }
+            let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
                 && event
                     .category()
-                    .is_some_and(|category| match category.as_str() {
-                        "llm" => !sanitize_llm,
-                        "tool" => !sanitize_tool,
-                        _ => false,
-                    })
-        }) {
-            return fields;
-        }
+                    .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
 
-        if let Some(trajectory) = backend.trajectory.as_ref() {
-            return trajectory.sanitize_event_fields(event, fields);
-        }
-        let specialized_scope = matches!(event, Event::Scope(_))
-            && event
-                .category()
-                .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
+            if !specialized_scope {
+                fields.data = fields
+                    .data
+                    .map(|data| backend.sanitize_json_preorder_dfs(data));
+                fields.category_profile = fields.category_profile.and_then(|profile| {
+                    sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
+                });
+            }
 
-        if !specialized_scope {
-            fields.data = fields
-                .data
-                .map(|data| backend.sanitize_json_preorder_dfs(data));
-            fields.category_profile = fields.category_profile.and_then(|profile| {
-                sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
-            });
-        }
-
-        fields.metadata = fields
-            .metadata
-            .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
-        fields
+            fields.metadata = fields
+                .metadata
+                .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
+            Ok(fields)
+        })
     })
 }
 
 pub(super) fn llm_sanitize_request_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeRequestFn {
-    Arc::new(move |mut request: LlmRequest| {
-        if let Some(trajectory) = backend.trajectory.as_ref() {
-            request.content = trajectory.sanitize_provider_payload(request.content);
-            return request;
-        }
-        if let Some(encoded) = backend.sanitize_request_with_codec(&request) {
-            return encoded;
-        }
-        request.content = backend.sanitize_json_preorder_dfs(request.content);
-        request
+    let backend = Arc::new(backend);
+    Arc::new(move |mut request: LlmRequest, context| {
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            if let Some(trajectory) = backend.trajectory.as_ref() {
+                request.headers = trajectory
+                    .sanitize_tool_payload(Json::Object(request.headers))
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                request.content = trajectory.sanitize_provider_payload(request.content);
+                return Ok(Some(request));
+            }
+            request.headers = backend.sanitize_request_headers(request.headers);
+            if backend.target_paths.is_empty() {
+                request.content = backend.sanitize_json_preorder_dfs(request.content);
+                return Ok(Some(request));
+            }
+            let resolved = context.resolve_codec();
+            let fallback = if resolved.is_none() {
+                backend
+                    .selected_surface(context.codec())
+                    .map(build_request_codec)
+            } else {
+                None
+            };
+            let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+                log_llm_payload_omitted("request", context.codec(), "no usable request codec");
+                return Ok(None);
+            };
+            let sanitized = backend.sanitize_request_with_codec(codec, &request);
+            if sanitized.is_none() {
+                log_llm_payload_omitted(
+                    "request",
+                    context.codec(),
+                    "codec decode, sanitize, or encode failure",
+                );
+            }
+            Ok(sanitized)
+        })
     })
 }
 
 pub(super) fn llm_sanitize_response_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeResponseFn {
-    Arc::new(move |payload: Json| {
-        if let Some(trajectory) = backend.trajectory.as_ref() {
-            return trajectory.sanitize_provider_payload(payload);
-        }
-        if backend.target_paths.is_empty() {
-            return backend.sanitize_json_preorder_dfs(payload);
-        }
-
-        let payload = backend
-            .sanitize_response_with_codec(payload.clone())
-            .unwrap_or(payload);
-        backend.sanitize_json_preorder_dfs(payload)
+    let backend = Arc::new(backend);
+    Arc::new(move |payload: Json, context| {
+        let backend = Arc::clone(&backend);
+        Box::pin(async move {
+            if let Some(trajectory) = backend.trajectory.as_ref() {
+                return Ok(Some(trajectory.sanitize_provider_payload(payload)));
+            }
+            if backend.target_paths.is_empty() {
+                return Ok(Some(backend.sanitize_json_preorder_dfs(payload)));
+            }
+            if matches!(context.codec(), LlmCodecIdentity::None)
+                && !backend.uses_compatible_legacy_response_codec(&payload)
+            {
+                log_llm_payload_omitted(
+                    "response",
+                    context.codec(),
+                    "no active response codec or compatible legacy codec",
+                );
+                return Ok(None);
+            }
+            let Some(surface) = backend.selected_surface(context.codec()) else {
+                log_llm_payload_omitted(
+                    "response",
+                    context.codec(),
+                    "no recognized response codec surface",
+                );
+                return Ok(None);
+            };
+            let resolved = context.resolve_codec();
+            let fallback = if resolved.is_none() {
+                Some(build_response_codec(surface))
+            } else {
+                None
+            };
+            let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+                log_llm_payload_omitted("response", context.codec(), "no usable response codec");
+                return Ok(None);
+            };
+            let sanitized = backend.sanitize_response_with_codec(codec, surface, payload);
+            if sanitized.is_none() {
+                log_llm_payload_omitted(
+                    "response",
+                    context.codec(),
+                    "codec decode, sanitize, or encode failure",
+                );
+            }
+            Ok(sanitized)
+        })
     })
+}
+
+pub(super) fn is_valid_json_pointer(pointer: &str) -> bool {
+    if pointer.is_empty() {
+        return true;
+    }
+    pointer.strip_prefix('/').is_some_and(|path| {
+        path.split('/').all(|segment| {
+            let mut characters = segment.chars();
+            while let Some(character) = characters.next() {
+                if character == '~' && !matches!(characters.next(), Some('0' | '1')) {
+                    return false;
+                }
+            }
+            true
+        })
+    })
+}
+
+fn log_llm_payload_omitted(direction: &str, codec: &LlmCodecIdentity, reason: &str) {
+    let codec_kind = match codec {
+        LlmCodecIdentity::None => "none",
+        LlmCodecIdentity::BuiltIn(_) => "builtin",
+        LlmCodecIdentity::Runtime(_) => "runtime",
+        LlmCodecIdentity::Opaque => "opaque",
+    };
+    log::warn!(
+        target: "nemo_relay.plugin",
+        event = "pii_llm_payload_omitted",
+        codec_kind,
+        reason;
+        "PII redaction omitted an LLM {direction} payload"
+    );
+}
+
+fn json_pointer_segments(pointer: &str) -> Option<Vec<String>> {
+    pointer
+        .strip_prefix('/')
+        .map(|path| path.split('/').map(unescape_json_pointer_segment).collect())
+}
+
+fn unescape_json_pointer_segment(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
+}
+
+fn sanitized_json_pointer_value<'a>(value: &'a Json, segments: &[String]) -> Option<&'a Json> {
+    segments
+        .iter()
+        .try_fold(value, |value, segment| match value {
+            Json::Object(values) => values.get(segment),
+            Json::Array(values) => segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| values.get(index)),
+            _ => None,
+        })
+}
+
+fn replace_sanitized_json_pointer_value(
+    value: &mut Json,
+    segments: &[String],
+    replacement: Json,
+) -> Option<()> {
+    let (last, parents) = segments.split_last()?;
+    let parent = parents
+        .iter()
+        .try_fold(value, |value, segment| match value {
+            Json::Object(values) => values.get_mut(segment),
+            Json::Array(values) => segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| values.get_mut(index)),
+            _ => None,
+        })?;
+    match parent {
+        Json::Object(values) => {
+            values.insert(last.clone(), replacement);
+            Some(())
+        }
+        Json::Array(values) => {
+            let index = last.parse::<usize>().ok()?;
+            let value = values.get_mut(index)?;
+            *value = replacement;
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+fn remove_sanitized_json_pointer_value(value: &mut Json, segments: &[String]) -> Option<()> {
+    let (last, parents) = segments.split_last()?;
+    let parent = parents
+        .iter()
+        .try_fold(value, |value, segment| match value {
+            Json::Object(values) => values.get_mut(segment),
+            Json::Array(values) => segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| values.get_mut(index)),
+            _ => None,
+        })?;
+    match parent {
+        Json::Object(values) => values.remove(last).map(|_| ()),
+        Json::Array(_) | Json::Null | Json::Bool(_) | Json::Number(_) | Json::String(_) => None,
+    }
 }
 
 fn render_json_pointer_path(path_segments: &[String]) -> String {

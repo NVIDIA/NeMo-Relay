@@ -33,6 +33,24 @@ coding-agent hook and LLM gateway observability.
 Install the latest stable release:
 
 <Tabs>
+<Tab title="Python">
+```bash
+pip install nemo-relay-cli-bin
+```
+
+To install the Python API and matching CLI together:
+
+```bash
+pip install "nemo-relay[cli]"
+```
+</Tab>
+
+<Tab title="npm">
+```bash
+npm install --global nemo-relay-cli-bin
+```
+</Tab>
+
 <Tab title="Unix shell">
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
@@ -47,9 +65,10 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 
 </Tabs>
 
-These commands intentionally download the installer from `main` and install the
-latest stable CLI release. The version of this documentation page does not
-select the CLI version; set `NEMO_RELAY_VERSION` to install a specific release.
+The shell installer commands intentionally download the installer from `main`
+and install the latest stable CLI release. The version of this documentation
+page does not select the CLI version; set `NEMO_RELAY_VERSION` to install a
+specific release.
 
 The Unix installer downloads the matching GitHub Release binary to
 `$HOME/.local/bin`. The PowerShell installer downloads `nemo-relay.exe` to
@@ -158,9 +177,9 @@ new download before replacing the binary in the selected installation directory.
 
 ### Alternative Installation Methods
 
-Use the installers on a supported platform when you want a prebuilt release
-asset. Use Cargo on unsupported platforms or when you prefer to build from
-source:
+The PyPI, npm, and installer methods all install the same release binary on
+supported platforms. Use Cargo on unsupported platforms or when you prefer to
+build from source:
 
 ```bash
 cargo install nemo-relay-cli

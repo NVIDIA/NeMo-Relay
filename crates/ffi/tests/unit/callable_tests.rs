@@ -11,6 +11,8 @@ use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
+use super::test_support::resolve;
+
 extern "C" fn free_arc_counter(user_data: *mut libc::c_void) {
     let counter = unsafe { Box::from_raw(user_data as *mut Arc<AtomicUsize>) };
     counter.fetch_add(1, Ordering::SeqCst);
@@ -152,8 +154,17 @@ unsafe extern "C" fn llm_request_intercept_cb(
 unsafe extern "C" fn llm_request_null_cb(
     _user_data: *mut libc::c_void,
     _request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeRequestContext,
 ) -> *mut FfiLLMRequest {
     std::ptr::null_mut()
+}
+
+unsafe extern "C" fn llm_request_alias_cb(
+    _user_data: *mut libc::c_void,
+    request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeRequestContext,
+) -> *mut FfiLLMRequest {
+    request.cast_mut()
 }
 
 unsafe extern "C" fn llm_conditional_cb(
@@ -167,11 +178,39 @@ unsafe extern "C" fn llm_conditional_cb(
     }
 }
 
-unsafe extern "C" fn json_cb(_user_data: *mut libc::c_void, json: *const c_char) -> *mut c_char {
+unsafe extern "C" fn json_cb(
+    _user_data: *mut libc::c_void,
+    json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
     let mut value: Json =
         serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().unwrap()).unwrap();
     value["wrapped"] = json!(true);
     CString::new(value.to_string()).unwrap().into_raw()
+}
+
+unsafe extern "C" fn json_alias_cb(
+    _user_data: *mut libc::c_void,
+    json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
+    json.cast_mut()
+}
+
+unsafe extern "C" fn invalid_json_cb(
+    _user_data: *mut libc::c_void,
+    _json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
+    CString::new("not-json").unwrap().into_raw()
+}
+
+unsafe extern "C" fn invalid_utf8_cb(
+    _user_data: *mut libc::c_void,
+    _json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
+) -> *mut c_char {
+    CString::new([0xff]).unwrap().into_raw()
 }
 
 unsafe extern "C" fn llm_exec_cb(
@@ -291,7 +330,7 @@ fn make_request() -> LlmRequest {
 fn test_wrap_tool_request_and_conditional_callbacks() {
     let (user_data, called) = user_data_counter();
     let wrapped = wrap_tool_sanitize_fn(tool_sanitize_cb, user_data, Some(free_arc_counter));
-    let result = wrapped("tool-name", json!({"value": 1}));
+    let result = resolve(wrapped("tool-name".into(), json!({"value": 1}))).unwrap();
     assert_eq!(result["value"], json!(1));
     assert_eq!(result["name"], json!("tool-name"));
     assert_eq!(called.load(Ordering::SeqCst), 1);
@@ -301,11 +340,11 @@ fn test_wrap_tool_request_and_conditional_callbacks() {
     let wrapped_conditional =
         wrap_tool_conditional_fn(tool_conditional_cb, std::ptr::null_mut(), None);
     assert_eq!(
-        wrapped_conditional("tool", &json!({"block": true})).unwrap(),
+        resolve(wrapped_conditional("tool".into(), json!({"block": true}))).unwrap(),
         Some("blocked".into())
     );
     assert_eq!(
-        wrapped_conditional("tool", &json!({"block": false})).unwrap(),
+        resolve(wrapped_conditional("tool".into(), json!({"block": false}))).unwrap(),
         None
     );
 }
@@ -374,33 +413,119 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
 fn test_wrap_llm_request_response_and_conditional_callbacks() {
     let request_intercept =
         wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
-    let outcome = request_intercept("llm", make_request(), None).unwrap();
+    let outcome = resolve(request_intercept("llm".into(), make_request(), None)).unwrap();
     assert_eq!(outcome.request.content["intercepted"], json!(true));
 
     let sanitize_request =
         wrap_llm_sanitize_request_fn(llm_request_null_cb, std::ptr::null_mut(), None);
-    let sanitized = sanitize_request(make_request());
-    assert_eq!(sanitized.headers.len(), 0);
-    assert_eq!(sanitized.content, Json::Null);
+    assert_eq!(
+        resolve(sanitize_request(
+            make_request(),
+            nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+        ))
+        .unwrap(),
+        None
+    );
+
+    let alias_request =
+        wrap_llm_sanitize_request_fn(llm_request_alias_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        resolve(alias_request(
+            make_request(),
+            nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+        ))
+        .unwrap(),
+        Some(make_request())
+    );
 
     let conditional = wrap_llm_conditional_fn(llm_conditional_cb, std::ptr::null_mut(), None);
     assert_eq!(
-        conditional(&LlmRequest {
+        resolve(conditional(LlmRequest {
             headers: serde_json::Map::new(),
             content: json!({"block": true}),
-        })
+        }))
         .unwrap(),
         Some("blocked llm".into())
     );
-    assert_eq!(conditional(&make_request()).unwrap(), None);
+    assert_eq!(resolve(conditional(make_request())).unwrap(), None);
 
-    let wrapped_json = wrap_json_fn(json_cb, std::ptr::null_mut(), None);
-    assert_eq!(wrapped_json(json!({"value": 1}))["wrapped"], json!(true));
-
-    let wrapped_response = wrap_llm_response_fn(json_cb, std::ptr::null_mut(), None);
+    let wrapped_response = wrap_llm_sanitize_response_fn(json_cb, std::ptr::null_mut(), None);
     assert_eq!(
-        wrapped_response(json!({"value": 2}))["wrapped"],
+        resolve(wrapped_response(
+            json!({"value": 2}),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+        ))
+        .unwrap()
+        .unwrap()["wrapped"],
         json!(true)
+    );
+
+    let alias_response = wrap_llm_sanitize_response_fn(json_alias_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        resolve(alias_response(
+            json!({"value": 2}),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+        ))
+        .unwrap(),
+        Some(json!({"value": 2}))
+    );
+
+    for callback in [invalid_json_cb, invalid_utf8_cb] {
+        let malformed_response =
+            wrap_llm_sanitize_response_fn(callback, std::ptr::null_mut(), None);
+        let error = resolve(malformed_response(
+            json!({"secret": "must be preserved"}),
+            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+        ))
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid"),
+            "unexpected sanitizer error: {error}"
+        );
+    }
+}
+
+#[test]
+fn test_llm_sanitizers_report_runtime_codec_ids_with_embedded_nul() {
+    let runtime_identity =
+        nemo_relay::api::runtime::LlmCodecIdentity::Runtime("runtime\0codec".to_string());
+
+    let request_sanitizer =
+        wrap_llm_sanitize_request_fn(llm_request_alias_cb, std::ptr::null_mut(), None);
+    let request_error = resolve(request_sanitizer(
+        make_request(),
+        nemo_relay::api::runtime::LlmSanitizeRequestContext::with_identity(
+            runtime_identity.clone(),
+        ),
+    ))
+    .unwrap_err();
+    assert!(
+        request_error
+            .to_string()
+            .contains("runtime codec ID contains an embedded NUL")
+    );
+    assert!(
+        last_error_message()
+            .unwrap()
+            .contains("runtime codec ID contains an embedded NUL")
+    );
+
+    let response_sanitizer =
+        wrap_llm_sanitize_response_fn(json_alias_cb, std::ptr::null_mut(), None);
+    let response_error = resolve(response_sanitizer(
+        json!({"secret": "must be preserved"}),
+        nemo_relay::api::runtime::LlmSanitizeResponseContext::with_identity(runtime_identity),
+    ))
+    .unwrap_err();
+    assert!(
+        response_error
+            .to_string()
+            .contains("runtime codec ID contains an embedded NUL")
+    );
+    assert!(
+        last_error_message()
+            .unwrap()
+            .contains("runtime codec ID contains an embedded NUL")
     );
 }
 
@@ -431,7 +556,12 @@ fn test_wrap_llm_request_intercept_with_annotated_input() {
         stream: None,
         extra: serde_json::Map::from_iter([("annotated".into(), json!(true))]),
     };
-    let outcome = request_intercept("llm", make_request(), Some(annotated)).unwrap();
+    let outcome = resolve(request_intercept(
+        "llm".into(),
+        make_request(),
+        Some(annotated),
+    ))
+    .unwrap();
     assert_eq!(outcome.request.content["intercepted"], json!(true));
     let annotated_out = outcome
         .annotated_request
@@ -540,7 +670,7 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         .build();
     let (user_data, sanitize_calls) = user_data_counter();
     let sanitizer = wrap_event_sanitize_fn(event_sanitize_cb, user_data, Some(free_arc_counter));
-    let sanitized = sanitizer(&event, original_fields.clone());
+    let sanitized = resolve(sanitizer(Arc::new(event.clone()), original_fields.clone())).unwrap();
     assert_eq!(sanitized.data, Some(json!({"safe": true})));
     assert_eq!(
         sanitized
@@ -555,14 +685,18 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
     assert_eq!(sanitize_calls.load(Ordering::SeqCst), 2);
 
     let invalid = wrap_event_sanitize_fn(invalid_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(
-        invalid(&event, original_fields.clone()),
-        EventSanitizeFields::default()
+    assert!(
+        resolve(invalid(Arc::new(event.clone()), original_fields.clone()))
+            .unwrap_err()
+            .to_string()
+            .contains("invalid event sanitizer result")
     );
     let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(
-        null(&event, original_fields.clone()),
-        EventSanitizeFields::default()
+    assert!(
+        resolve(null(Arc::new(event), original_fields.clone()))
+            .unwrap_err()
+            .to_string()
+            .contains("invalid event sanitizer result")
     );
 
     let handle = LlmHandle::builder()

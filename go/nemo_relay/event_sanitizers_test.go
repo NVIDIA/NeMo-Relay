@@ -25,7 +25,7 @@ func TestEventSanitizerRegistries(t *testing.T) {
 	runTestWithScopeStack(t, testEventSanitizerRegistries)
 }
 
-func TestEventSanitizerMarshalFailureClearsObservabilityFields(t *testing.T) {
+func TestEventSanitizerMarshalFailurePreservesObservabilityFields(t *testing.T) {
 	runTestWithScopeStack(t, func(t *testing.T) {
 		var mu sync.Mutex
 		var events []Event
@@ -50,8 +50,10 @@ func TestEventSanitizerMarshalFailureClearsObservabilityFields(t *testing.T) {
 		if len(events) != 1 {
 			t.Fatalf("expected one event, got %d", len(events))
 		}
-		if len(events[0].Data()) != 0 || len(events[0].CategoryProfile()) != 0 || len(events[0].Metadata()) != 0 {
-			t.Fatalf("expected cleared observability fields, got data=%s category_profile=%s metadata=%s", events[0].Data(), events[0].CategoryProfile(), events[0].Metadata())
+		if string(events[0].Data()) != `{"secret":true}` ||
+			len(events[0].CategoryProfile()) != 0 ||
+			string(events[0].Metadata()) != `{"secret":true}` {
+			t.Fatalf("expected the last valid observability fields, got data=%s category_profile=%s metadata=%s", events[0].Data(), events[0].CategoryProfile(), events[0].Metadata())
 		}
 	})
 }

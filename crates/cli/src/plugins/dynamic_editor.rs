@@ -62,6 +62,14 @@ impl DynamicPluginEditorState {
         Ok(())
     }
 
+    pub(super) fn has_persisted_secrets(&self) -> bool {
+        self.config.as_ref().is_some_and(|config| {
+            self.schema
+                .as_ref()
+                .is_some_and(|schema| schema.has_persisted_secrets(&Value::Object(config.clone())))
+        })
+    }
+
     pub(super) fn apply_to_document(
         &self,
         document: &mut PluginConfigDocument,

@@ -5,14 +5,99 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 
+use super::codecs::{PyLlmSanitizeRequestCodec, PyLlmSanitizeResponseCodec};
 use super::{
-    AnnotatedLLMRequest, Bound, CoreScopeType, FlowResult, LlmAttributes, LlmHandle, LlmRequest,
-    PyAnnotatedLLMRequest, PyAny, PyErr, PyRef, PyResult, Python, ScopeAttributes, ScopeHandle,
-    ScopeStackHandle, ToolAttributes, ToolHandle, json_to_py, opt_json_to_py, py_to_json,
+    AnnotatedLLMRequest, Bound, CoreScopeType, FlowResult, LlmAttributes, LlmCodecIdentity,
+    LlmHandle, LlmRequest, PyAnnotatedLLMRequest, PyAny, PyErr, PyRef, PyResult, Python,
+    ScopeAttributes, ScopeHandle, ScopeStackHandle, ToolAttributes, ToolHandle, json_to_py,
+    opt_json_to_py, py_to_json,
 };
 use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
+use nemo_relay::api::runtime::{
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
+    ThreadScopeStackBinding,
+};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+
+/// Structured identity of the codec active during LLM sanitization.
+#[pyclass(name = "LlmCodecIdentity", frozen)]
+pub struct PyLlmCodecIdentity {
+    pub(crate) inner: LlmCodecIdentity,
+}
+
+#[pymethods]
+impl PyLlmCodecIdentity {
+    /// Identity variant: ``none``, ``builtin``, ``runtime``, or ``opaque``.
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match self.inner {
+            LlmCodecIdentity::None => "none",
+            LlmCodecIdentity::BuiltIn(_) => "builtin",
+            LlmCodecIdentity::Runtime(_) => "runtime",
+            LlmCodecIdentity::Opaque => "opaque",
+        }
+    }
+
+    /// Stable built-in or runtime codec ID, when this identity has one.
+    #[getter]
+    fn id(&self) -> Option<String> {
+        match &self.inner {
+            LlmCodecIdentity::BuiltIn(codec) => Some(codec.id().to_owned()),
+            LlmCodecIdentity::Runtime(id) => Some(id.clone()),
+            LlmCodecIdentity::None | LlmCodecIdentity::Opaque => None,
+        }
+    }
+}
+
+/// Structured per-call context delivered to LLM request sanitizer callbacks.
+#[pyclass(name = "LlmSanitizeRequestContext", frozen)]
+pub struct PyLlmSanitizeRequestContext {
+    pub(crate) inner: LlmSanitizeRequestContext,
+}
+
+#[pymethods]
+impl PyLlmSanitizeRequestContext {
+    /// The active codec identity for this request or response payload.
+    #[getter]
+    fn codec(&self) -> PyLlmCodecIdentity {
+        PyLlmCodecIdentity {
+            inner: self.inner.codec().clone(),
+        }
+    }
+
+    /// Resolve the active request codec.
+    fn resolve_codec(&self) -> Option<PyLlmSanitizeRequestCodec> {
+        self.inner
+            .resolve_codec()
+            .map(|inner| PyLlmSanitizeRequestCodec { inner })
+    }
+}
+
+/// Structured per-call context delivered to LLM response sanitizer callbacks.
+#[pyclass(name = "LlmSanitizeResponseContext", frozen)]
+pub struct PyLlmSanitizeResponseContext {
+    pub(crate) inner: LlmSanitizeResponseContext,
+}
+
+#[pymethods]
+impl PyLlmSanitizeResponseContext {
+    /// The active codec identity for this request or response payload.
+    #[getter]
+    fn codec(&self) -> PyLlmCodecIdentity {
+        PyLlmCodecIdentity {
+            inner: self.inner.codec().clone(),
+        }
+    }
+
+    /// Resolve the active response codec.
+    fn resolve_codec(&self) -> Option<PyLlmSanitizeResponseCodec> {
+        self.inner
+            .resolve_codec()
+            .map(|inner| PyLlmSanitizeResponseCodec { inner })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LlmStream (async iterator)
@@ -98,12 +183,87 @@ impl Drop for PyLlmStream {
 /// Each ``ScopeStack`` wraps an independent scope stack with its own root
 /// scope. Use ``create_scope_stack()`` to obtain one.
 #[pyclass(name = "ScopeStack")]
-pub struct PyScopeStack(pub ScopeStackHandle);
+pub struct PyScopeStack {
+    pub(crate) inner: ScopeStackHandle,
+    pub(crate) publication_buffer: Option<PublicationBuffer>,
+}
 
 #[pymethods]
 impl PyScopeStack {
     pub(crate) fn __repr__(&self) -> String {
         "<ScopeStack>".to_string()
+    }
+}
+
+/// Opaque captured native thread binding used to restore a Python scope context.
+#[pyclass(name = "_ThreadScopeStackBinding")]
+pub struct PyThreadScopeStackBinding {
+    pub(crate) inner: ThreadScopeStackBinding,
+    pub(crate) publication_buffer: Option<PublicationBuffer>,
+}
+
+#[pymethods]
+impl PyThreadScopeStackBinding {
+    pub(crate) fn __repr__(&self) -> String {
+        "<_ThreadScopeStackBinding>".to_string()
+    }
+}
+
+/// Transport-neutral causal context used to continue Relay work remotely.
+#[pyclass(name = "PropagationContext", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyPropagationContext {
+    pub(crate) inner: PropagationContext,
+}
+
+#[pymethods]
+impl PyPropagationContext {
+    #[new]
+    #[pyo3(signature = (parent_uuid, root_uuid=None, version=1))]
+    fn new(parent_uuid: &str, root_uuid: Option<&str>, version: u16) -> PyResult<Self> {
+        let context = PropagationContext {
+            version,
+            root_uuid: root_uuid
+                .map(uuid::Uuid::parse_str)
+                .transpose()
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+            parent_uuid: uuid::Uuid::parse_str(parent_uuid)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+        };
+        context
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(Self { inner: context })
+    }
+
+    #[getter]
+    fn version(&self) -> u16 {
+        self.inner.version
+    }
+
+    #[getter]
+    fn root_uuid(&self) -> Option<String> {
+        self.inner.root_uuid.map(|uuid| uuid.to_string())
+    }
+
+    #[getter]
+    fn parent_uuid(&self) -> String {
+        self.inner.parent_uuid.to_string()
+    }
+
+    /// Serialize this context to the Relay JSON wire format.
+    fn to_json(&self) -> PyResult<String> {
+        self.inner
+            .to_json()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    }
+
+    /// Deserialize and validate a context from the Relay JSON wire format.
+    #[staticmethod]
+    fn from_json(value: &str) -> PyResult<Self> {
+        PropagationContext::from_json(value)
+            .map(|inner| Self { inner })
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
     }
 }
 

@@ -65,7 +65,7 @@ impl WorkerPlugin for ExampleWorker {
     }
 
     fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        ctx.register_tool_request_intercept("tag-request", 0, false, |_name, mut args| {
+        ctx.register_tool_request_intercept("tag-request", 0, false, |_name, mut args| async move {
             if let Some(object) = args.as_object_mut() {
                 object.insert("checked".into(), true.into());
             }

@@ -72,7 +72,7 @@ impl PluginsSubcommand {
         .multiple(false)
 ))]
 pub(crate) struct PluginsScopeArgs {
-    /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
+    /// Edit the selected low layer: an explicit plugin target, or the XDG user config.
     #[arg(long)]
     pub(crate) user: bool,
     /// Edit the nearest project config at `.nemo-relay/plugins.toml`.
@@ -164,9 +164,20 @@ impl From<PluginsScopeArgs> for crate::plugins::ConfigurationScope {
 }
 
 impl PluginsEditCommand {
-    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsEditRequest {
+    pub(crate) fn into_runtime(
+        self,
+        explicit_path: Option<PathBuf>,
+    ) -> crate::plugins::PluginsEditRequest {
+        let scope = self.scope.into();
+        let explicit_path = matches!(
+            scope,
+            crate::plugins::ConfigurationScope::Default | crate::plugins::ConfigurationScope::User
+        )
+        .then_some(explicit_path)
+        .flatten();
         crate::plugins::PluginsEditRequest {
-            scope: self.scope.into(),
+            explicit_path,
+            scope,
         }
     }
 }

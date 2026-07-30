@@ -100,11 +100,25 @@ path = ".nemo-relay/logs/relay.log.jsonl"
 format = "jsonl"
 level = "debug"
 queue_capacity = 1024
+max_file_size_bytes = 10485760
+retained_files = 5
 ```
 
 File sink paths are resolved relative to the process working directory. File
 sinks use asynchronous queues, and `queue_capacity` cannot exceed 8,192 entries
-per sink.
+per sink. Size-based rotation is optional; when enabled,
+`max_file_size_bytes` and `retained_files` must be configured together.
+`retained_files` counts backup files in addition to the active file and cannot
+exceed 9. A record larger than `max_file_size_bytes` remains intact rather
+than being split. File sinks remain append-only when rotation settings are
+omitted.
+
+When Relay layers `config.toml` files, the resolved destination `path` is the
+file sink identity. Distinct paths are emitted in highest-to-lowest precedence
+order: system, project, then explicit-or-user. For matching paths, higher-layer
+fields recursively overlay lower-layer fields, producing one effective sink.
+Path aliases such as `relay.log` and `./relay.log` resolve to one sink, using
+the higher-layer spelling and settings.
 
 ## Rust Library API
 

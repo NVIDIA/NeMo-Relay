@@ -127,7 +127,7 @@ describe('nemo-relay OpenClaw plugin shell', () => {
     );
     assert.throws(
       () => parseConfig({ telemetry: { otel: { enabled: true } } }),
-      /telemetry was removed; configure plugins\.components\[\]\.config\.opentelemetry or openinference/,
+      /telemetry was removed; configure plugins\.components\[\]\.config\.opentelemetry\.endpoints/,
     );
     assert.throws(
       () => parseConfig({ nemoRelay: { pluginConfig: { version: 1, components: [] } } }),
@@ -298,10 +298,15 @@ describe('nemo-relay OpenClaw plugin shell', () => {
           kind: 'observability',
           enabled: true,
           config: {
-            version: 1,
+            version: 3,
             atif: { enabled: true, agent_name: 'openclaw' },
-            opentelemetry: { enabled: true, endpoint: 'http://otel.example' },
-            openinference: { enabled: true, endpoint: 'http://phoenix.example' },
+            opentelemetry: {
+              enabled: true,
+              endpoints: [
+                { type: 'full', endpoint: 'http://otel.example' },
+                { type: 'openinference', endpoint: 'http://phoenix.example' },
+              ],
+            },
           },
         },
         {

@@ -1,7 +1,7 @@
 {
   "id": "nemo-relay",
   "name": "NeMo Relay Observability",
-  "description": "ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Relay.",
+  "description": "ATIF and typed OpenTelemetry telemetry through NeMo Relay.",
   "activation": {
     "onStartup": true
   },
@@ -25,7 +25,7 @@
       },
       "plugins": {
         "$ref": "#/$defs/nemoRelayPluginConfig",
-        "description": "Generic NeMo Relay plugin configuration document. Use the observability component to configure ATIF, OpenTelemetry, and OpenInference exporters."
+        "description": "Generic NeMo Relay plugin configuration document. Use the observability component to configure ATIF and typed OpenTelemetry exporters."
       },
       "capture": {
         "type": "object",

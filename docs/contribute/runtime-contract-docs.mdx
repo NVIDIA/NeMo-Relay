@@ -64,7 +64,7 @@ says otherwise.
 
 ### ATOF Versus Projections
 
-ATOF is the canonical event stream. ATIF, OpenTelemetry, and OpenInference are
+ATOF is the canonical event stream. ATIF and typed OpenTelemetry output are
 downstream projections over those events. Projection docs should not redefine
 scope ownership, middleware ordering, provider payload decoding, replay policy,
 or cost policy.
@@ -114,8 +114,8 @@ Before landing a change that touches shared runtime wording, check:
 - Sanitize guardrails are described as emitted-payload changes, not real
   callback argument or return-value changes.
 - Subscriber and exporter work remains downstream from event construction.
-- ATOF remains the raw canonical event format, while ATIF, OpenTelemetry, and
-  OpenInference remain projections.
+- ATOF remains the raw canonical event format, while ATIF and typed
+  OpenTelemetry output remain projections.
 - Examples consume shared terminology instead of defining new support or
   contract language locally.
 - The [Support Matrix](/reference/support-matrix) is the canonical source for

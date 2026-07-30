@@ -178,7 +178,7 @@ function rejectRemovedFields(raw: Record<string, unknown>): void {
   }
   if (raw.telemetry !== undefined) {
     throw new Error(
-      'telemetry was removed; configure plugins.components[].config.opentelemetry or openinference on the observability component',
+      'telemetry was removed; configure plugins.components[].config.opentelemetry.endpoints on the observability component',
     );
   }
 }

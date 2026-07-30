@@ -173,11 +173,24 @@ fn target_scope_defaults_to_user_and_rejects_conflicts() {
 }
 
 #[test]
+fn editor_uses_explicit_plugin_target_without_default_discovery() {
+    let path = PathBuf::from("/managed/plugins.toml");
+    let (scope, target) = resolve_edit_target(PluginsEditRequest {
+        scope: ConfigurationScope::User,
+        explicit_path: Some(path.clone()),
+    })
+    .unwrap();
+
+    assert_eq!(scope, TargetScope::User);
+    assert_eq!(target, path);
+}
+
+#[test]
 fn typed_editor_model_contains_observability_sections() {
     let schema = ObservabilityConfig::editor_schema();
     let atof = schema.field("atof").unwrap().schema().unwrap();
     let atif = schema.field("atif").unwrap().schema().unwrap();
-    let openinference = schema.field("openinference").unwrap().schema().unwrap();
+    let opentelemetry = schema.field("opentelemetry").unwrap().schema().unwrap();
     let sinks = atof.field("sinks").expect("ATOF sinks field");
     assert_eq!(sinks.kind, EditorFieldKind::List);
     assert_eq!(
@@ -192,19 +205,29 @@ fn typed_editor_model_contains_observability_sections() {
             .iter()
             .any(|field| field.name == "filename_template")
     );
+    let otel_endpoints = opentelemetry.field("endpoints").unwrap();
+    assert_eq!(otel_endpoints.kind, EditorFieldKind::List);
+    let endpoint = otel_endpoints.list_item.unwrap();
+    assert_eq!(endpoint.kind, EditorFieldKind::Section);
+    let endpoint_schema = endpoint.schema.unwrap()();
     assert!(
-        openinference
+        endpoint_schema
+            .fields
+            .iter()
+            .any(|field| field.name == "type")
+    );
+    assert!(
+        endpoint_schema
             .fields
             .iter()
             .any(|field| field.name == "endpoint")
     );
-    let attribute_mappings = openinference.field("attribute_mappings").unwrap();
-    assert_eq!(attribute_mappings.kind, EditorFieldKind::List);
-    let mapping = attribute_mappings.list_item.unwrap();
-    assert_eq!(mapping.kind, EditorFieldKind::Section);
-    let mapping_schema = mapping.schema.unwrap()();
-    assert_eq!(mapping_schema.fields[0].name, "key");
-    assert_eq!(mapping_schema.fields[1].name, "alias");
+    assert!(
+        endpoint_schema
+            .fields
+            .iter()
+            .any(|field| field.name == "header_env")
+    );
 }
 
 #[test]
@@ -834,7 +857,7 @@ fn editor_save_preserves_unknown_observability_fields() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 2,
+                "version": 3,
                 "future_top_level": "preserve",
                 "atof": {
                     "enabled": true,
@@ -1661,6 +1684,51 @@ value = "preserve-host-section"
     assert!(dynamic[1].get("config").is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn global_plugin_document_is_system_readable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    let document = PluginConfigDocument::read(&path).unwrap();
+    document.write_for_scope(TargetScope::Global).unwrap();
+
+    assert_eq!(
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+}
+
+#[test]
+fn global_plugin_editor_rejects_persisted_schema_secrets() {
+    let temp = tempfile::tempdir().unwrap();
+    write_editor_dynamic_manifest(
+        &temp.path().join("plugin"),
+        "acme.secret",
+        None,
+        Some(&json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"password": {"type": "string", "writeOnly": true}}
+        })),
+    );
+    let path = temp.path().join("plugins.toml");
+    let original = "[[plugins.dynamic]]\nmanifest = \"./plugin/relay-plugin.toml\"\nconfig = { password = \"secret\" }\n";
+    std::fs::write(&path, original).unwrap();
+
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    let states = load_dynamic_plugin_states(&document).unwrap();
+    let error = save_document(&mut document, &[], &states, TargetScope::Global)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("global plugin configuration cannot contain schema-declared secret values")
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+}
+
 #[test]
 fn dynamic_config_array_resize_preserves_toml_native_values() {
     let temp = tempfile::tempdir().unwrap();
@@ -2037,7 +2105,7 @@ fn validate_config_reports_plugin_diagnostics() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 2,
+                "version": 3,
                 "atof": {
                     "enabled": true,
                     "sinks": [{

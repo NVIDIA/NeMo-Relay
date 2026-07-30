@@ -436,6 +436,7 @@ def _render_rust_crate_attribution(
     repo = str(crate.get("repository") or "").strip()
     if not repo:
         repo = f"https://crates.io/crates/{name}"
+    license_text = "\n".join(line.rstrip() for line in license_text.splitlines())
 
     rendered = "".join(
         [

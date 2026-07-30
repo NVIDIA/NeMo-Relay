@@ -53,10 +53,18 @@ The Go package provides the following capabilities:
   event sanitizers at global, scope-local, and plugin-context levels.
 - **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
+- **Typed OpenTelemetry export**: `NewOpenTelemetryConfig` and
+  `NewOpenTelemetrySubscriber` construct one independently managed `full`,
+  `gen_ai`, or `openinference` endpoint exporter.
 - **Convenience subpackages**: Short imports for scopes, tools, LLM calls,
   guardrails, intercepts, subscribers, plugins, and adaptive helpers.
 - **Local source-first workflow**: Build the FFI library locally, then test or
   consume the Go module from the checkout.
+
+Go middleware callbacks are synchronous. Relay waits for each callback on a
+native thread, so blocking I/O and other long-running callback work occupy that
+thread and can reduce middleware throughput. The Go binding does not provide
+completion-based middleware registration.
 
 ## Installation
 

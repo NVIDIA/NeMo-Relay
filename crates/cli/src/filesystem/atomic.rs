@@ -46,6 +46,26 @@ pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), Stri
     }
 }
 
+/// Atomically replace a system configuration file with owner-writable, world-readable access.
+pub(crate) fn atomic_write_system_readable(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        atomic_write_impl(
+            path,
+            bytes,
+            Some(&Permissions::from_mode(0o644)),
+            AtomicWritePrivacy::Standard,
+            None,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        atomic_write(path, bytes)
+    }
+}
+
 /// Atomically replace `path` while applying `permissions` before the new bytes become visible.
 pub(crate) fn atomic_write_with_permissions(
     path: &Path,

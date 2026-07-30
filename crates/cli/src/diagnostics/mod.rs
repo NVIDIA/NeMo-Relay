@@ -22,7 +22,7 @@ use render::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use futures_util::SinkExt;
+use futures_util::{SinkExt, future::join_all};
 use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
 use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::agents::CodingAgent;
 use crate::configuration::{
     AgentConfigs, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
-    default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
+    diagnostic_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
 };
 use crate::error::CliError;
 use crate::server::{GatewayOverrides, register_and_validate_plugin_components};
@@ -54,8 +54,9 @@ struct PluginConfigurationDiagnostics {
 /// the first missing directory.
 pub(crate) async fn collect_report(
     target_agent: Option<CodingAgent>,
+    gateway_overrides: &GatewayOverrides,
 ) -> Result<DoctorReport, CliError> {
-    let (resolved, resolution) = match resolve_server_config(&GatewayOverrides::default()) {
+    let (resolved, resolution) = match resolve_server_config(gateway_overrides) {
         Ok(resolved) => (
             resolved,
             Check {
@@ -77,7 +78,9 @@ pub(crate) async fn collect_report(
                 Check {
                     name: "Resolution",
                     status: Status::Fail,
-                    details: format!("could not resolve merged config: {err}"),
+                    details: format!(
+                        "could not resolve merged config: {err}; repair or recreate the named configuration file, or rerun the setup or installer that manages it"
+                    ),
                 },
             )
         }
@@ -85,7 +88,10 @@ pub(crate) async fn collect_report(
     let cwd = std::env::current_dir().ok();
     let home = home_dir();
     let configured_agents = configured_agent_names(&resolved.agents);
-    let (plugin_sources, plugin_error) = match effective_plugin_toml_sources() {
+    let (plugin_sources, plugin_error) = match effective_plugin_toml_sources(
+        gateway_overrides.config.as_ref(),
+        gateway_overrides.plugin_config_path.as_ref(),
+    ) {
         Ok(sources) => (sources, None),
         Err(error) => {
             log::warn!(
@@ -114,6 +120,7 @@ pub(crate) async fn collect_report(
         configuration: collect_configuration(
             cwd.as_deref(),
             home.as_deref(),
+            gateway_overrides,
             resolution,
             configured_agents,
             &resolved.dynamic_plugins,
@@ -129,13 +136,16 @@ pub(crate) async fn collect_report(
 fn collect_configuration(
     cwd: Option<&Path>,
     home: Option<&Path>,
+    gateway_overrides: &GatewayOverrides,
     resolution: Check,
     configured_agents: Vec<String>,
     dynamic_plugins: &[crate::configuration::ResolvedDynamicPluginConfig],
     plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
+    let explicit_config = gateway_overrides.config.is_some();
     let workspace_path = cwd
-        .map(|p| p.join(".nemo-relay").join("config.toml"))
+        .and_then(crate::configuration::find_project_config)
+        .or_else(|| cwd.map(|p| p.join(".nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
     // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
     // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.
@@ -144,21 +154,33 @@ fn collect_configuration(
         .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
     let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
+    let explicit = gateway_overrides.config.as_deref().map(layer_status);
+    let workspace = layer_status(&workspace_path);
+    let global = if explicit_config {
+        replaced_user_layer_status(&global_path)
+    } else {
+        layer_status(&global_path)
+    };
+    let system = layer_status(&system_path);
 
     ConfigurationInfo {
-        workspace: layer_status(&workspace_path),
-        global: layer_status(&global_path),
-        system: layer_status(&system_path),
-        plugin_configs: default_plugin_config_paths()
-            .iter()
-            .map(|path| {
-                plugin_layer_status(
-                    path,
-                    &plugin_diagnostics.sources,
-                    plugin_diagnostics.error.as_deref(),
-                )
-            })
-            .collect(),
+        explicit,
+        workspace,
+        global,
+        system,
+        plugin_configs: diagnostic_plugin_config_paths(
+            gateway_overrides.config.as_ref(),
+            gateway_overrides.plugin_config_path.as_ref(),
+        )
+        .iter()
+        .map(|path| {
+            plugin_layer_status(
+                path,
+                &plugin_diagnostics.sources,
+                plugin_diagnostics.error.as_deref(),
+            )
+        })
+        .collect(),
         plugin_resolution: plugin_diagnostics.resolution.clone(),
         resolution,
         // `default_agent` is reserved in the design for Phase 2 dispatch; not currently parsed
@@ -282,6 +304,15 @@ fn layer_status(path: &Path) -> ConfigLayer {
             active: false,
             details: format!("unreadable: {err}"),
         },
+    }
+}
+
+fn replaced_user_layer_status(path: &Path) -> ConfigLayer {
+    ConfigLayer {
+        path: path.to_path_buf(),
+        status: Status::Info,
+        active: false,
+        details: "replaced by explicit --config".into(),
     }
 }
 
@@ -566,11 +597,7 @@ async fn collect_observability_component_checks(checks: &mut Vec<Check>, config:
     if let Some(check) = observability_file_exporter_check(config, "atif") {
         checks.push(check);
     }
-    for section in ["opentelemetry", "openinference"] {
-        if let Some(check) = observability_http_exporter_check(config, section).await {
-            checks.push(check);
-        }
-    }
+    checks.extend(observability_http_exporter_checks(config).await);
     if section_enabled(config, "atof") && !atof_stream_sinks(config).is_empty() {
         if atof_streaming_supported() {
             checks.extend(observability_atof_stream_checks(config).await);
@@ -642,23 +669,53 @@ fn observability_file_exporter_check(config: &Value, section: &str) -> Option<Ch
     })
 }
 
-async fn observability_http_exporter_check(config: &Value, section: &str) -> Option<Check> {
-    if !section_enabled(config, section) {
-        return None;
+async fn observability_http_exporter_checks(config: &Value) -> Vec<Check> {
+    if !section_enabled(config, "opentelemetry") {
+        return Vec::new();
     }
-    let label = if section == "opentelemetry" {
-        "OpenTelemetry endpoint"
-    } else {
-        "OpenInference endpoint"
+    let Some(endpoints) = config
+        .get("opentelemetry")
+        .and_then(|section| section.get("endpoints"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
     };
-    Some(match section_endpoint(config, section) {
-        Some(endpoint) => probe_http_named(label, &endpoint).await,
-        None => Check {
-            name: label,
-            status: Status::Info,
-            details: "enabled; using exporter default endpoint".into(),
-        },
-    })
+    join_all(
+        endpoints
+            .iter()
+            .enumerate()
+            .map(|(index, endpoint)| async move {
+                let endpoint_type = endpoint
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let label = "OpenTelemetry endpoint";
+                let transport = endpoint
+                    .get("transport")
+                    .and_then(Value::as_str)
+                    .unwrap_or("http_binary");
+                match endpoint.get("endpoint").and_then(Value::as_str) {
+                    Some(url) => {
+                        let mut check = if transport == "grpc" {
+                            probe_tcp_named(label, url).await
+                        } else {
+                            probe_http_named(label, url).await
+                        };
+                        check.details =
+                            format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
+                        check
+                    }
+                    None => Check {
+                        name: label,
+                        status: Status::Fail,
+                        details: format!(
+                            "endpoints[{index}] ({endpoint_type}): endpoint is required"
+                        ),
+                    },
+                }
+            }),
+    )
+    .await
 }
 
 fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
@@ -773,14 +830,6 @@ fn section_output_directory(config: &Value, section: &str) -> Option<PathBuf> {
         .and_then(|section| section.get("output_directory"))
         .and_then(Value::as_str)
         .map(PathBuf::from)
-}
-
-fn section_endpoint(config: &Value, section: &str) -> Option<String> {
-    config
-        .get(section)
-        .and_then(|section| section.get("endpoint"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
 }
 
 fn atof_stream_sinks(config: &Value) -> Vec<(usize, &Value)> {
@@ -1183,8 +1232,9 @@ pub(crate) fn format_agents_json(agents: &[AgentInfo]) -> Result<String, CliErro
 pub(crate) async fn run_doctor(
     target_agent: Option<CodingAgent>,
     json: bool,
+    gateway_overrides: &GatewayOverrides,
 ) -> Result<std::process::ExitCode, CliError> {
-    let report = collect_report(target_agent).await?;
+    let report = collect_report(target_agent, gateway_overrides).await?;
     log::info!(
         target: "nemo_relay.diagnostics",
         event = "diagnostics_completed",

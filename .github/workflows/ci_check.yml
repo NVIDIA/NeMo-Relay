@@ -220,3 +220,10 @@ jobs:
             fi
             pre-commit run --from-ref "$base_ref" --to-ref HEAD --show-diff-on-failure
           fi
+
+      - name: Test binary package assembly
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: >-
+          uv run --no-project python -m unittest
+          scripts.tests.test_package_cli_bin
+          scripts.tests.test_package_node_bin

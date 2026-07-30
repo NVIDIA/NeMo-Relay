@@ -136,6 +136,9 @@ def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept
     Notes:
         Execution intercepts wrap the downstream tool callback. They are the
         right place for timing, retries, short-circuiting, or result shaping.
+        ``next_call`` may be awaited repeatedly or concurrently while ``fn``
+        is running. Each call gets an isolated scope-stack branch. Unfinished
+        or new calls are rejected after ``fn`` returns or raises.
     """
     return _native_register_tool_execution(name, priority, fn)
 
@@ -238,6 +241,9 @@ def register_llm_execution(name: str, priority: int, fn: LlmExecutionIntercept) 
     Notes:
         Execution intercepts wrap only non-streaming LLM execution. Use
         ``register_llm_stream_execution()`` for streaming callbacks.
+        ``next_call`` may be awaited repeatedly or concurrently while ``fn``
+        is running. Each call gets an isolated scope-stack branch. Unfinished
+        or new calls are rejected after ``fn`` returns or raises.
     """
     return _native_register_llm_execution(name, priority, fn)
 
@@ -279,6 +285,12 @@ def register_llm_stream_execution(
     Notes:
         Streaming execution intercepts wrap chunk production only. They do not
         replace the separate collector or finalizer callbacks.
+        ``next_call`` may be awaited repeatedly or concurrently while ``fn``
+        is running. Each call gets an isolated scope-stack branch. Unfinished
+        or new calls are rejected after the intercept's returned stream closes
+        or ``fn`` raises. A returned interceptor stream extends the active
+        lifetime so it can call ``next_call`` lazily while being consumed; a
+        stream returned successfully by ``next_call`` keeps its normal lifetime.
     """
     return _native_register_llm_stream_execution(name, priority, fn)
 

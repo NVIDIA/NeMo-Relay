@@ -1399,6 +1399,9 @@ name = "nemo-relay"
 source = { editable = "." }
 
 [package.optional-dependencies]
+cli = [
+    { name = "nemo-relay-cli-bin" },
+]
 deepagents = [
     { name = "deepagents" },
     { name = "langchain" },
@@ -1469,8 +1472,9 @@ requires-dist = [
     { name = "nemo-relay", extras = ["langchain"], marker = "extra == 'langchain-nvidia'" },
     { name = "nemo-relay", extras = ["langchain"], marker = "extra == 'langgraph'" },
     { name = "nemo-relay", extras = ["langgraph"], marker = "extra == 'deepagents'" },
+    { name = "nemo-relay-cli-bin", marker = "extra == 'cli'", directory = "python/cli-bin" },
 ]
-provides-extras = ["deepagents", "langchain", "langchain-nvidia", "langgraph"]
+provides-extras = ["cli", "deepagents", "langchain", "langchain-nvidia", "langgraph"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1493,6 +1497,11 @@ test = [
     { name = "pytest-asyncio", specifier = ">=0.26" },
     { name = "pytest-cov", specifier = "~=7.0" },
 ]
+
+[[package]]
+name = "nemo-relay-cli-bin"
+version = "0.7.0"
+source = { directory = "python/cli-bin" }
 
 [[package]]
 name = "nemo-relay-plugin"

@@ -68,6 +68,36 @@ fn plugin_context_helpers_and_error_conversion_work() {
 }
 
 #[test]
+fn plugin_context_rejects_legacy_and_uninspectable_llm_sanitizers() {
+    let _python = crate::test_support::init_python_test();
+    let context = PyPluginContext {
+        registrations: Arc::new(Mutex::new(vec![])),
+        namespace_prefix: "invalid.".to_string(),
+    };
+
+    Python::attach(|py| {
+        let helpers = load_module(
+            py,
+            r#"
+def one_argument(payload):
+    return payload
+"#,
+        );
+        for callback in [helpers.getattr("one_argument").unwrap().unbind(), py.None()] {
+            let request_error = context
+                .register_llm_sanitize_request_guardrail("request", 1, callback.clone_ref(py))
+                .unwrap_err();
+            assert!(request_error.to_string().contains("payload, context"));
+
+            let response_error = context
+                .register_llm_sanitize_response_guardrail("response", 1, callback)
+                .unwrap_err();
+            assert!(response_error.to_string().contains("payload, context"));
+        }
+    });
+}
+
+#[test]
 fn register_adds_plugin_management_bindings() {
     let _python = crate::test_support::init_python_test();
     let _plugin_test_state = lock_plugin_test_state_for_tests();
@@ -148,10 +178,10 @@ def tool_fn(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):
@@ -628,10 +658,10 @@ def tool_fn(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):
@@ -912,10 +942,10 @@ def tool_fn(name, value):
 def tool_conditional(name, value):
     return None
 
-def llm_sanitize_request(request):
+def llm_sanitize_request(request, context):
     return request
 
-def llm_sanitize_response(response):
+def llm_sanitize_response(response, context):
     return response
 
 def llm_conditional(request):

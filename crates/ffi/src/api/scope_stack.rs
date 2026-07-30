@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    FfiScopeStack, FfiThreadScopeStackBinding, NemoRelayStatus, capture_thread_scope_stack,
-    clear_last_error, create_scope_stack, restore_thread_scope_stack, scope_stack_active,
-    set_last_error, set_thread_scope_stack,
+    FfiScopeStack, FfiThreadScopeStackBinding, NemoRelayStatus, c_char, c_str_to_string,
+    capture_thread_scope_stack, clear_last_error, create_scope_stack, json_to_c_string,
+    restore_thread_scope_stack, scope_stack_active, set_last_error, set_thread_scope_stack,
 };
+use nemo_relay::api::runtime::{
+    PropagationContext, capture_propagation_context, capture_propagation_context_with_root,
+    create_scope_stack_from_propagation,
+};
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Scope stack isolation
@@ -40,6 +45,118 @@ pub unsafe extern "C" fn nemo_relay_scope_stack_create(
     let handle = create_scope_stack();
     unsafe { *out = Box::into_raw(Box::new(FfiScopeStack(handle))) };
     NemoRelayStatus::Ok
+}
+
+/// Serialize the current causal parent as a versioned propagation context.
+///
+/// The returned JSON must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `out` must be a valid, writable pointer to a C-string output slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_capture_propagation_context_json(
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    match capture_propagation_context().and_then(|context| {
+        serde_json::to_value(context)
+            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+    }) {
+        Ok(context) => {
+            unsafe { *out = json_to_c_string(&context) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
+}
+
+/// Serialize the current causal parent with an application-supplied root UUID.
+///
+/// Pass null for `root_uuid` to omit the root. The returned JSON must be freed
+/// with `nemo_relay_string_free`.
+///
+/// # Safety
+/// When non-null, `root_uuid` must point to a valid NUL-terminated C string;
+/// `out` must be a valid, writable pointer to a C-string output slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_capture_propagation_context_with_root_json(
+    root_uuid: *const c_char,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let root_uuid = if root_uuid.is_null() {
+        Ok(None)
+    } else {
+        c_str_to_string(root_uuid)
+            .map_err(|_| ())
+            .and_then(|value| Uuid::parse_str(&value).map_err(|_| ()))
+            .map(Some)
+    };
+    let Ok(root_uuid) = root_uuid else {
+        set_last_error("root_uuid must be a valid UUID");
+        return NemoRelayStatus::InvalidArg;
+    };
+    match capture_propagation_context_with_root(root_uuid).and_then(|context| {
+        serde_json::to_value(context)
+            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+    }) {
+        Ok(context) => {
+            unsafe { *out = json_to_c_string(&context) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
+}
+
+/// Create an isolated scope stack from propagation-context JSON.
+///
+/// # Safety
+/// `context_json` must point to a valid NUL-terminated C string and `out` must
+/// be a valid, writable pointer to a scope-stack output slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_scope_stack_create_from_propagation_json(
+    context_json: *const c_char,
+    out: *mut *mut FfiScopeStack,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let context = match c_str_to_string(context_json) {
+        Ok(value) => match serde_json::from_str::<PropagationContext>(&value) {
+            Ok(context) => context,
+            Err(error) => {
+                set_last_error(&format!("invalid propagation context JSON: {error}"));
+                return NemoRelayStatus::InvalidJson;
+            }
+        },
+        Err(status) => return status,
+    };
+    match create_scope_stack_from_propagation(&context) {
+        Ok(stack) => {
+            unsafe { *out = Box::into_raw(Box::new(FfiScopeStack(stack))) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
 }
 
 /// Bind an isolated scope stack to the current OS thread.

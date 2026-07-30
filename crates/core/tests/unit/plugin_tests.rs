@@ -115,8 +115,10 @@ impl Plugin for TestPlugin {
                 1,
                 false,
                 Arc::new(|_name, mut request, annotated| {
-                    request.headers.insert("x-plugin".into(), json!(true));
-                    Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                    Box::pin(async move {
+                        request.headers.insert("x-plugin".into(), json!(true));
+                        Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                    })
                 }),
             )
         })
@@ -494,8 +496,9 @@ fn reset_global() {
 #[test]
 fn test_layer_config_overlay_wins() {
     // The overlay is the higher-precedence layer: it overrides shared component fields, deep-merges
-    // nested config objects, replaces arrays, appends overlay-only kinds, preserves base-only kinds,
-    // replaces top-level scalars, and recursively merges top-level objects (policy).
+    // nested config objects, concatenates config lists, appends overlay-only kinds, preserves
+    // base-only kinds, replaces top-level scalars, and recursively merges top-level objects
+    // (policy).
     let base = json!({
         "version": 1,
         "components": [
@@ -552,8 +555,8 @@ fn test_layer_config_overlay_wins() {
     );
     assert_eq!(
         alpha["config"]["list"],
-        json!([9]),
-        "arrays are replaced, not merged"
+        json!([9, 1, 2, 3]),
+        "config lists concatenate with higher-precedence entries first"
     );
 
     // Base-only component is preserved.
@@ -567,6 +570,115 @@ fn test_layer_config_overlay_wins() {
         json!("warn"),
         "base-only policy field preserved"
     );
+}
+
+#[test]
+fn test_layer_config_concatenates_nested_observability_lists() {
+    let base = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {
+                    "sinks": [{"type": "file", "output_directory": "/system"}]
+                },
+                "opentelemetry": {
+                    "endpoints": [{"type": "full", "endpoint": "http://system:4318/v1/traces"}]
+                },
+                "atif": {
+                    "storage": [{"type": "http", "endpoint": "http://system/trajectory"}]
+                },
+                "implementation": {
+                    "nested": [1, 2]
+                }
+            }
+        }]
+    });
+    let overlay = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {
+                    "sinks": [{"type": "file", "output_directory": "/user"}]
+                },
+                "opentelemetry": {
+                    "endpoints": [
+                        {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
+                        {"type": "openinference", "endpoint": "http://user:4319/v1/traces"}
+                    ]
+                },
+                "atif": {
+                    "storage": [{"type": "http", "endpoint": "http://user/trajectory"}]
+                },
+                "implementation": {
+                    "nested": [9]
+                }
+            }
+        }]
+    });
+
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
+    let config = &merged["components"][0]["config"];
+
+    assert_eq!(
+        config["atof"]["sinks"],
+        json!([
+            {"type": "file", "output_directory": "/user"},
+            {"type": "file", "output_directory": "/system"}
+        ])
+    );
+    assert_eq!(
+        config["opentelemetry"]["endpoints"],
+        json!([
+            {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
+            {"type": "openinference", "endpoint": "http://user:4319/v1/traces"},
+            {"type": "full", "endpoint": "http://system:4318/v1/traces"}
+        ])
+    );
+    assert_eq!(
+        config["atif"]["storage"],
+        json!([
+            {"type": "http", "endpoint": "http://user/trajectory"},
+            {"type": "http", "endpoint": "http://system/trajectory"}
+        ])
+    );
+    assert_eq!(
+        config["implementation"]["nested"],
+        json!([9]),
+        "deeper implementation-specific lists retain replacement semantics"
+    );
+}
+
+#[test]
+fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
+    let mut merged = json!({
+        "components": [{
+            "kind": "third.party",
+            "config": {
+                "atof": {"sinks": ["base"]},
+                "opentelemetry": {"endpoints": ["base"]},
+                "atif": {"storage": ["base"]}
+            }
+        }]
+    });
+    layer_config(
+        &mut merged,
+        json!({
+            "components": [{
+                "kind": "third.party",
+                "config": {
+                    "atof": {"sinks": ["overlay"]},
+                    "opentelemetry": {"endpoints": ["overlay"]},
+                    "atif": {"storage": ["overlay"]}
+                }
+            }]
+        }),
+    );
+
+    let config = &merged["components"][0]["config"];
+    assert_eq!(config["atof"]["sinks"], json!(["overlay"]));
+    assert_eq!(config["opentelemetry"]["endpoints"], json!(["overlay"]));
+    assert_eq!(config["atif"]["storage"], json!(["overlay"]));
 }
 
 #[test]
@@ -644,27 +756,29 @@ fn test_plugin_registration_context_registers_and_rolls_back() {
         .block_on(TestPlugin.register(&Map::new(), &mut ctx))
         .unwrap();
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
@@ -688,25 +802,27 @@ fn test_initialize_plugins_registers_and_clears_components() {
     assert!(!report.has_errors());
     assert!(active_plugin_report().is_some());
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     clear_plugin_configuration().unwrap();
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
@@ -960,8 +1076,13 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     let mut ctx = PluginRegistrationContext::with_namespace("demo::");
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
         .unwrap();
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
@@ -973,7 +1094,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
@@ -1476,69 +1597,78 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("plugin::");
-    ctx.register_mark_sanitize_guardrail("mark_sanitize", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark_sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     ctx.register_scope_sanitize_start_guardrail(
         "scope_sanitize_start",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_scope_sanitize_end_guardrail(
         "scope_sanitize_end",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_request_guardrail(
         "tool_sanitize_request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_response_guardrail(
         "tool_sanitize_response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     ctx.register_tool_conditional_execution_guardrail(
         "tool_conditional",
         1,
-        Arc::new(|name, _args| Ok((name == "blocked-tool").then(|| "blocked tool".to_string()))),
+        Arc::new(|name, _args| {
+            Box::pin(
+                async move { Ok((name == "blocked-tool").then(|| "blocked tool".to_string())) },
+            )
+        }),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
         "llm_sanitize_request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm_sanitize_response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
     ctx.register_llm_conditional_execution_guardrail(
         "llm_conditional",
         1,
         Arc::new(|request| {
-            Ok((request.headers.get("blocked") == Some(&json!(true)))
-                .then(|| "blocked llm".to_string()))
+            let blocked = request.headers.get("blocked") == Some(&json!(true));
+            Box::pin(async move { Ok(blocked.then(|| "blocked llm".to_string())) })
         }),
     )
     .unwrap();
 
-    match tool_conditional_execution("blocked-tool", &json!({})) {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    match runtime.block_on(tool_conditional_execution("blocked-tool", &json!({}))) {
         Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked tool"),
         other => panic!("expected tool guardrail rejection, got {other:?}"),
     }
 
-    match llm_conditional_execution(&LlmRequest {
+    match runtime.block_on(llm_conditional_execution(&LlmRequest {
         headers: Map::from_iter([(String::from("blocked"), json!(true))]),
         content: json!({"messages": []}),
-    }) {
+    })) {
         Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked llm"),
         other => panic!("expected llm guardrail rejection, got {other:?}"),
     }
@@ -1546,13 +1676,18 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 
-    assert!(tool_conditional_execution("blocked-tool", &json!({})).is_ok());
     assert!(
-        llm_conditional_execution(&LlmRequest {
-            headers: Map::from_iter([(String::from("blocked"), json!(true))]),
-            content: json!({"messages": []}),
-        })
-        .is_ok()
+        runtime
+            .block_on(tool_conditional_execution("blocked-tool", &json!({})))
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .block_on(llm_conditional_execution(&LlmRequest {
+                headers: Map::from_iter([(String::from("blocked"), json!(true))]),
+                content: json!({"messages": []}),
+            }))
+            .is_ok()
     );
 
     reset_global();
@@ -1564,22 +1699,46 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("duplicate::");
-    ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields)),
+        ctx.register_mark_sanitize_guardrail(
+            "mark",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "mark sanitizer:",
     );
-    ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope-start",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields)),
+        ctx.register_scope_sanitize_start_guardrail(
+            "scope-start",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "scope-start sanitizer:",
     );
-    ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope-end",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields)),
+        ctx.register_scope_sanitize_end_guardrail(
+            "scope-end",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "scope-end sanitizer:",
     );
     ctx.register_llm_request_intercept(
@@ -1587,7 +1746,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
@@ -1597,7 +1756,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
             1,
             false,
             Arc::new(|_name, request, annotated| {
-                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
             }),
         ),
         "llm request intercept:",
@@ -1606,14 +1765,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_sanitize_request_guardrail(
             "tool-sanitize-request",
             1,
-            Arc::new(|_, args| args),
+            Arc::new(|_, args| Box::pin(async move { Ok(args) })),
         ),
         "tool sanitize request guardrail:",
     );
@@ -1621,14 +1780,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_sanitize_response_guardrail(
             "tool-sanitize-response",
             1,
-            Arc::new(|_, response| response),
+            Arc::new(|_, response| Box::pin(async move { Ok(response) })),
         ),
         "tool sanitize response guardrail:",
     );
@@ -1636,14 +1795,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Arc::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_conditional_execution_guardrail(
             "tool-conditional",
             1,
-            Arc::new(|_, _| Ok(None)),
+            Arc::new(|_, _| Box::pin(async { Ok(None) })),
         ),
         "tool conditional execution guardrail:",
     );
@@ -1651,14 +1810,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_request_guardrail(
             "llm-sanitize-request",
             1,
-            Arc::new(|request| request),
+            Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
         ),
         "llm sanitize request guardrail:",
     );
@@ -1666,25 +1825,29 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_response_guardrail(
             "llm-sanitize-response",
             1,
-            Arc::new(|response| response),
+            Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
         ),
         "llm sanitize response guardrail:",
     );
 
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
-        .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
     expect_registration_failed(
         ctx.register_llm_conditional_execution_guardrail(
             "llm-conditional",
             1,
-            Arc::new(|_| Ok(None)),
+            Arc::new(|_| Box::pin(async { Ok(None) })),
         ),
         "llm conditional execution guardrail:",
     );
@@ -1731,14 +1894,19 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         "llm stream execution intercept:",
     );
 
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     expect_registration_failed(
         ctx.register_tool_request_intercept(
             "tool-request",
             1,
             false,
-            Arc::new(|_name, args| Ok(args)),
+            Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
         ),
         "tool request intercept:",
     );
@@ -1769,18 +1937,22 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("teardown::");
-    ctx.register_mark_sanitize_guardrail("mark-sanitize", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark-sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     ctx.register_scope_sanitize_start_guardrail(
         "scope-sanitize-start",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_scope_sanitize_end_guardrail(
         "scope-sanitize-end",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
@@ -1790,42 +1962,46 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
     ctx.register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Arc::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
-        .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
@@ -1844,8 +2020,13 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         }),
     )
     .unwrap();
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
@@ -1967,33 +2148,49 @@ fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_ca
 fn test_load_plugin_config_files_merges_files_by_precedence() {
     let dir = tempfile::tempdir().unwrap();
     let lower = dir.path().join("lower.toml");
-    let higher = dir.path().join("higher.toml");
+    let project = dir.path().join("project.toml");
+    let system = dir.path().join("system.toml");
     std::fs::write(
         &lower,
         "version = 1\n\
          [[components]]\n\
          kind = \"observability\"\n\
-         enabled = false\n\
+         enabled = true\n\
          [components.config]\n\
          output_directory = \"/var/log\"\n\
-         mode = \"append\"\n",
+         mode = \"append\"\n\
+         values = [\"lower\"]\n",
     )
     .unwrap();
     std::fs::write(
-        &higher,
+        &project,
         "[[components]]\n\
          kind = \"observability\"\n\
          [components.config]\n\
-         mode = \"overwrite\"\n\
+         mode = \"project\"\n\
+         values = [\"project\"]\n\
          [[components]]\n\
          kind = \"adaptive\"\n",
     )
     .unwrap();
+    std::fs::write(
+        &system,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n\
+         [components.config]\n\
+         mode = \"system\"\n\
+         values = [\"system\"]\n\
+         [[components]]\n\
+         kind = \"system_only\"\n",
+    )
+    .unwrap();
 
-    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
-        .unwrap()
-        .expect("a file exists");
-    assert_eq!(sources, vec![lower, higher]);
+    let (merged, sources) =
+        load_plugin_config_files([lower.clone(), project.clone(), system.clone()])
+            .unwrap()
+            .expect("a file exists");
+    assert_eq!(sources, vec![lower, project, system]);
 
     let components = merged["components"].as_array().unwrap();
     let observability = &components[0];
@@ -2001,7 +2198,7 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     assert_eq!(
         observability["enabled"],
         json!(false),
-        "lower-file enabled is inherited (higher omits it)"
+        "the system layer wins shared scalar fields"
     );
     assert_eq!(
         observability["config"]["output_directory"],
@@ -2010,13 +2207,79 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     );
     assert_eq!(
         observability["config"]["mode"],
-        json!("overwrite"),
-        "higher file overrides the shared config key"
+        json!("system"),
+        "the system layer wins recursively merged config fields"
+    );
+    assert_eq!(
+        observability["config"]["values"],
+        json!(["system", "project", "lower"]),
+        "list entries aggregate from highest to lowest precedence"
     );
     assert_eq!(
         components[1]["kind"],
         json!("adaptive"),
-        "higher-only component kind is appended"
+        "a project-only component kind is preserved"
+    );
+    assert_eq!(
+        components[2]["kind"],
+        json!("system_only"),
+        "a system-only component kind is appended"
+    );
+}
+
+#[test]
+fn test_default_plugin_config_paths_order_user_project_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let child = project.join("nested");
+    let user = dir.path().join("user");
+    let project_plugins = project.join(".nemo-relay/plugins.toml");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
+    std::fs::write(&project_plugins, "version = 1\n").unwrap();
+
+    assert_eq!(
+        default_plugin_config_paths(Some(&child), Some(user.clone())),
+        vec![
+            user.join("plugins.toml"),
+            project_plugins,
+            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_load_plugin_config_files_deduplicates_aliases_at_highest_precedence() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let physical = dir.path().join("system.toml");
+    let alias = dir.path().join("explicit.toml");
+    std::fs::write(
+        &physical,
+        "version = 1\n\
+         [[components]]\n\
+         kind = \"pricing\"\n\
+         [[components.config.sources]]\n\
+         type = \"file\"\n\
+         path = \"/etc/nemo-relay/pricing.json\"\n",
+    )
+    .unwrap();
+    symlink(&physical, &alias).unwrap();
+
+    let (merged, sources) = load_plugin_config_files([alias, physical.clone()])
+        .unwrap()
+        .expect("the physical file exists");
+
+    assert_eq!(sources, vec![physical]);
+    assert_eq!(
+        merged["components"][0]["config"]["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "the aliased file must not duplicate list entries"
     );
 }
 

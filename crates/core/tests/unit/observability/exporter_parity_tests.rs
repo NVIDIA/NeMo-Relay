@@ -26,11 +26,11 @@ use crate::codec::response::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::json::Json;
+use crate::observability::OpenTelemetryType;
 use crate::observability::atif::{
     AtifAgentInfo, AtifExporter, AtifStep, AtifStepExtra, AtifTrajectory,
 };
-use crate::observability::openinference::OpenInferenceSubscriber;
-use crate::observability::otel::OpenTelemetrySubscriber;
+use crate::observability::otel::{OpenTelemetrySubscriber, RelayIdGenerator};
 
 // -------------------------------------------------------------------
 // Helpers
@@ -87,6 +87,7 @@ fn make_provider() -> (
 ) {
     let exporter = InMemorySpanExporterBuilder::new().build();
     let provider = SdkTracerProvider::builder()
+        .with_id_generator(RelayIdGenerator)
         .with_simple_exporter(exporter.clone())
         .build();
     (provider, exporter)
@@ -238,9 +239,10 @@ fn export_through_all_exporters(events: &[Event]) -> ParityExports {
     let otel_record = otel.subscriber();
 
     let (openinference_provider, openinference_exporter) = make_provider();
-    let openinference = OpenInferenceSubscriber::from_tracer_provider(
+    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
         openinference_provider,
         "parity-openinference",
+        OpenTelemetryType::OpenInference,
     );
     let openinference_record = openinference.subscriber();
 
@@ -524,6 +526,109 @@ fn test_exporters_agree_on_model_name() {
             .openinference_attrs("model-call")
             .get("llm.model_name"),
         Some(&"parity-name-model".to_string())
+    );
+}
+
+#[test]
+fn test_exporters_prefer_response_model_name_over_requested_model() {
+    let exports = run_llm_scenario(
+        chat_request_content("requested-model"),
+        chat_response_output("response-model"),
+    );
+
+    assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("response-model")
+    );
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"response-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"response-model".to_string())
+    );
+}
+
+#[test]
+fn test_exporters_fall_back_to_requested_model_when_response_model_is_missing() {
+    let exports = run_llm_scenario(
+        chat_request_content("requested-model"),
+        json!({
+            "id": "chatcmpl-no-model",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop"
+            }]
+        }),
+    );
+
+    assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("requested-model")
+    );
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"requested-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"requested-model".to_string())
+    );
+}
+
+#[test]
+fn test_exporters_prefer_manual_response_model_name_over_requested_model() {
+    let uuid = Uuid::now_v7();
+    let start = llm_event_with_model(
+        ScopeCategory::Start,
+        uuid,
+        "model-call",
+        json!({"prompt": "manual prompt"}),
+        "requested-model",
+    );
+    let end = llm_event_with_model(
+        ScopeCategory::End,
+        uuid,
+        "model-call",
+        json!({
+            "content": "manual answer",
+            "model": "response-model"
+        }),
+        "requested-model",
+    );
+    assert!(
+        end.normalized_llm_response().is_none(),
+        "payload must exercise the manual response-model fallback, not a codec",
+    );
+
+    let exports = export_through_all_exporters(&[start, end]);
+
+    assert_eq!(
+        exports.agent_step().model_name.as_deref(),
+        Some("response-model")
+    );
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.model_name"),
+        Some(&"response-model".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("llm.model_name"),
+        Some(&"response-model".to_string())
     );
 }
 

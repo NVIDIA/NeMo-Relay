@@ -64,14 +64,14 @@ Start with [Agent Trajectory Observability Format (ATOF) JSONL](/configure-plugi
 the raw canonical event stream. It shows the lifecycle events Relay actually
 captured before anything is translated into
 [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif),
-OpenTelemetry, or OpenInference output.
+or a typed OpenTelemetry projection.
 
 A good first integration process workflow is as follows:
 
 1. Create or identify one scope boundary.
 2. Capture one LLM, tool, session, or turn boundary.
 3. Export ATOF JSONL and inspect the raw event stream.
-4. Add ATIF, OpenTelemetry, or OpenInference when the raw events are trustworthy.
+4. Add ATIF or a typed OpenTelemetry projection when the raw events are trustworthy.
 5. Add middleware only when Relay must block, sanitize, rewrite, route, or
    replace real execution.
 
@@ -87,8 +87,8 @@ NeMo Relay offers the following features when you use it with your agent stacks:
   route, retry, or replace execution.
 - **Plugins** so reusable observability, guardrail, adaptive, and exporter
   behavior can be turned on from configuration.
-- **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
-  OpenInference output all come from the same runtime stream.
+- **Events and subscribers** so raw ATOF, normalized ATIF, and typed
+  OpenTelemetry output all come from the same runtime stream.
 
 Use [Concepts](/about-nemo-relay/concepts) when you want the deeper model for
 scopes, events, middleware, subscribers, and plugins.

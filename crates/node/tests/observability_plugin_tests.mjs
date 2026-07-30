@@ -19,7 +19,7 @@ function tempDir(prefix) {
 
 describe('observability plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {
-    assert.deepEqual(observability.defaultConfig(), { version: 2 });
+    assert.deepEqual(observability.defaultConfig(), { version: 3 });
     assert.deepEqual(observability.atofConfig(), { enabled: false });
     assert.deepEqual(observability.atifConfig(), {
       enabled: false,
@@ -27,31 +27,50 @@ describe('observability plugin helpers', () => {
       model_name: 'unknown',
       filename_template: 'nemo-relay-atif-{session_id}.json',
     });
-    assert.deepEqual(observability.otlpConfig(), {
+    assert.deepEqual(observability.openTelemetryConfig(), {
       enabled: false,
-      mark_projection: 'inherit',
-      mark_exclude_names: ['llm.chunk'],
-      attribute_mappings: [],
-      transport: 'http_binary',
-      headers: {},
-      resource_attributes: {},
-      service_name: 'nemo-relay',
-      timeout_millis: 3000,
+      endpoints: [],
     });
-    assert.equal(observability.otlpConfig({ mark_projection: 'tool' }).mark_projection, 'tool');
+    assert.deepEqual(
+      observability.openTelemetryEndpoint({
+        type: 'gen_ai',
+        endpoint: 'http://localhost:4318/v1/traces',
+        header_env: { authorization: 'OTEL_AUTHORIZATION' },
+      }),
+      {
+        type: 'gen_ai',
+        endpoint: 'http://localhost:4318/v1/traces',
+        transport: 'http_binary',
+        headers: {},
+        header_env: { authorization: 'OTEL_AUTHORIZATION' },
+        resource_attributes: {},
+        service_name: 'unknown_service',
+        instrumentation_scope: 'opentelemetry',
+        timeout_millis: 3000,
+      },
+    );
 
-    const component = observability.ComponentSpec({ version: 2, atof: observability.atofConfig() });
+    const component = observability.ComponentSpec({ version: 3, atof: observability.atofConfig() });
     assert.equal(component.kind, observability.OBSERVABILITY_PLUGIN_KIND);
     assert.equal(component.enabled, true);
   });
 
   it('lists builtin observability kind and validates bad values', () => {
+    assert.throws(() => observability.openTelemetryEndpoint(), /config is required/);
+    assert.throws(
+      () => observability.openTelemetryEndpoint({ type: 'invalid', endpoint: 'http://localhost' }),
+      /type must be/,
+    );
+    assert.throws(
+      () => observability.openTelemetryEndpoint({ type: 'full', endpoint: ' ' }),
+      /nonblank/,
+    );
     assert.equal(plugin.listKinds().includes(observability.OBSERVABILITY_PLUGIN_KIND), true);
     const report = plugin.validate({
       version: 1,
       components: [
         observability.ComponentSpec({
-          version: 2,
+          version: 3,
           atof: observability.atofConfig({ sinks: [{ type: 'file', mode: 'bad' }] }),
           atif: observability.atifConfig({ filename_template: 'missing-placeholder.json' }),
         }),
@@ -114,7 +133,7 @@ describe('observability plugin helpers', () => {
   it('activates ATOF and ATIF file sinks', async () => {
     const outputDirectory = tempDir('node-observability-plugin');
     const config = {
-      version: 2,
+      version: 3,
       atof: observability.atofConfig({
         enabled: true,
         sinks: [{ type: 'file', output_directory: outputDirectory, filename: 'events.jsonl', mode: 'overwrite' }],
@@ -166,7 +185,7 @@ describe('observability plugin helpers', () => {
   it('splits ATIF files for multiple top-level agent scopes', async () => {
     const outputDirectory = tempDir('node-observability-plugin-multi-agent');
     const config = {
-      version: 2,
+      version: 3,
       atif: observability.atifConfig({
         enabled: true,
         output_directory: outputDirectory,

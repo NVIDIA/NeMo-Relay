@@ -56,6 +56,7 @@ impl RelayTlsIdentity {
     }
 
     pub(crate) fn server_config(&self) -> Result<Arc<rustls::ServerConfig>, String> {
+        ensure_crypto_provider();
         let certificate = CertificateDer::from(self.record.certificate_der.clone());
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
             self.record.private_key_der.clone(),
@@ -68,6 +69,7 @@ impl RelayTlsIdentity {
     }
 
     pub(crate) fn client_config(&self) -> Result<Arc<rustls::ClientConfig>, String> {
+        ensure_crypto_provider();
         let mut roots = rustls::RootCertStore::empty();
         roots
             .add(CertificateDer::from(self.record.certificate_der.clone()))
@@ -78,6 +80,10 @@ impl RelayTlsIdentity {
                 .with_no_client_auth(),
         ))
     }
+}
+
+fn ensure_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 fn identity_path() -> Result<std::path::PathBuf, String> {

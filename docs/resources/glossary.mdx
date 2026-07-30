@@ -83,7 +83,7 @@ the rest of the documentation can use them consistently.
 : Agent Trajectory Observability Format (ATOF) is the canonical event format
   NeMo Relay emits for scope lifecycle events and mark events. Subscribers and
   exporters consume ATOF events before translating compatible scope data into
-  ATIF trajectories and trace data into OpenTelemetry or OpenInference.
+  ATIF trajectories and trace data into typed OpenTelemetry projections.
 
 **Annotated Request And Response Data**
 : Annotated request and response data is normalized provider information
@@ -341,9 +341,9 @@ the rest of the documentation can use them consistently.
 
 **OpenInference**
 : OpenInference is an AI-observability semantic convention layered on trace
-  spans. NeMo Relay's OpenInference subscriber maps lifecycle payloads to
-  OpenInference-oriented attributes such as model inputs, outputs, and token
-  usage.
+  spans. NeMo Relay's `openinference` OpenTelemetry projection maps lifecycle
+  payloads to OpenInference-oriented attributes such as model inputs, outputs,
+  and token usage.
 
 **OpenTelemetry**
 : OpenTelemetry is a vendor-neutral observability ecosystem. NeMo Relay can
@@ -351,8 +351,8 @@ the rest of the documentation can use them consistently.
 
 **OpenTelemetry Protocol (OTLP)**
 : OpenTelemetry Protocol (OTLP) is the transport protocol used by the
-  OpenTelemetry and OpenInference subscribers to send trace data to a collector
-  or backend.
+  OpenTelemetry subscriber to send typed trace projections to a collector or
+  backend.
 
 ## P
 
@@ -404,9 +404,10 @@ the rest of the documentation can use them consistently.
 
 **Projection**
 : A projection translates canonical NeMo Relay events into a downstream format
-  such as ATIF, OpenTelemetry, or OpenInference. A projection should preserve
-  the meaning of the runtime event stream without redefining ownership,
-  middleware ordering, or provider-specific codec policy.
+  such as ATIF or one of the `full`, `gen_ai`, and `openinference`
+  OpenTelemetry formats. A projection should preserve the meaning of the
+  runtime event stream without redefining ownership, middleware ordering, or
+  provider-specific codec policy.
 
 **Prompt IR**
 : Prompt IR is the internal representation ACG uses to model an LLM request as
@@ -507,8 +508,8 @@ the rest of the documentation can use them consistently.
 : A subscriber is a consumer of emitted events. Subscribers receive the runtime
   event stream and can use it for in-process analytics, forwarding, or export.
 
-  Examples include custom event consumers, ATIF export, OpenTelemetry export,
-  and OpenInference export.
+  Examples include custom event consumers, ATIF export, and typed
+  OpenTelemetry export.
 
 ## T
 
@@ -526,7 +527,8 @@ the rest of the documentation can use them consistently.
 **Trace Span**
 : A trace span is a timed observability record in a tracing backend. Exported
   NeMo Relay scopes, tool calls, LLM calls, and marks appear as spans when using
-  OpenTelemetry or OpenInference export.
+  a compatible OpenTelemetry projection. The `gen_ai` projection omits marks
+  and unsupported scope types.
 
 **Trajectory**
 : A trajectory is an ordered record of an agent run. In ATIF export, LLM events

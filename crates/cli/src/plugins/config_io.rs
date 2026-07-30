@@ -170,11 +170,20 @@ impl PluginConfigDocument {
 
     pub(crate) fn write(&self) -> Result<(), CliError> {
         let rendered = self.render()?;
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+        crate::filesystem::atomic_write(&self.path, rendered.as_bytes()).map_err(CliError::Config)
+    }
+
+    pub(crate) fn write_for_scope(&self, scope: TargetScope) -> Result<(), CliError> {
+        let rendered = self.render()?;
+        match scope {
+            TargetScope::Global => {
+                crate::filesystem::atomic_write_system_readable(&self.path, rendered.as_bytes())
+            }
+            TargetScope::User | TargetScope::Project => {
+                crate::filesystem::atomic_write(&self.path, rendered.as_bytes())
+            }
         }
-        std::fs::write(&self.path, rendered)?;
-        Ok(())
+        .map_err(CliError::Config)
     }
 
     fn dynamic_entry_mut(

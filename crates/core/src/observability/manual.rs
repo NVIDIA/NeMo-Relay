@@ -12,9 +12,7 @@ use crate::json::Json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManualCostPolicy {
-    #[cfg(feature = "otel")]
     AnyCurrency,
-    #[cfg(feature = "openinference")]
     UsdOnly,
     AtifUsdOnly,
 }
@@ -155,9 +153,7 @@ fn cost_from_manual_usage(
 impl ManualCostPolicy {
     fn accepts_currency(self, currency: Option<&str>, cost: &Map<String, Json>) -> bool {
         match self {
-            #[cfg(feature = "otel")]
             Self::AnyCurrency => true,
-            #[cfg(feature = "openinference")]
             Self::UsdOnly => currency
                 .map(|currency| currency.eq_ignore_ascii_case("USD"))
                 .unwrap_or(true),

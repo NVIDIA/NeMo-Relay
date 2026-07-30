@@ -8,26 +8,37 @@ import "encoding/json"
 // ObservabilityPluginKind is the top-level plugin kind used by the core observability component.
 const ObservabilityPluginKind = "observability"
 
-// ObservabilityMarkProjection controls how point-in-time marks are exported.
-type ObservabilityMarkProjection string
-
-const (
-	// ObservabilityMarkProjectionInherit preserves exporter-native mark handling.
-	ObservabilityMarkProjectionInherit ObservabilityMarkProjection = "inherit"
-	// ObservabilityMarkProjectionEvent preserves marks as events.
-	ObservabilityMarkProjectionEvent ObservabilityMarkProjection = "event"
-	// ObservabilityMarkProjectionTool emits visible tool projections.
-	ObservabilityMarkProjectionTool ObservabilityMarkProjection = "tool"
-)
-
 // ObservabilityConfig is the canonical Go shape for the observability plugin config document.
 type ObservabilityConfig struct {
-	Version       uint32                   `json:"version,omitempty"`
-	Atof          *ObservabilityAtofConfig `json:"atof,omitempty"`
-	Atif          *ObservabilityAtifConfig `json:"atif,omitempty"`
-	OpenTelemetry *ObservabilityOtlpConfig `json:"opentelemetry,omitempty"`
-	OpenInference *ObservabilityOtlpConfig `json:"openinference,omitempty"`
-	Policy        *ConfigPolicy            `json:"policy,omitempty"`
+	Version       uint32                            `json:"version,omitempty"`
+	Atof          *ObservabilityAtofConfig          `json:"atof,omitempty"`
+	Atif          *ObservabilityAtifConfig          `json:"atif,omitempty"`
+	OpenTelemetry *ObservabilityOpenTelemetryConfig `json:"opentelemetry,omitempty"`
+	Policy        *ConfigPolicy                     `json:"policy,omitempty"`
+}
+
+// ObservabilityOpenTelemetryConfig configures multiple typed OTLP endpoints.
+type ObservabilityOpenTelemetryConfig struct {
+	Enabled   bool                                       `json:"enabled,omitempty"`
+	Endpoints []ObservabilityOpenTelemetryEndpointConfig `json:"endpoints,omitempty"`
+}
+
+// ObservabilityOpenTelemetryEndpointConfig configures one typed OTLP destination.
+type ObservabilityOpenTelemetryEndpointConfig struct {
+	Type                 OpenTelemetryType      `json:"type"`
+	Endpoint             string                 `json:"endpoint"`
+	MarkProjection       string                 `json:"mark_projection,omitempty"`
+	MarkExcludeNames     []string               `json:"mark_exclude_names,omitempty"`
+	AttributeMappings    []OtlpAttributeMapping `json:"attribute_mappings,omitempty"`
+	Transport            string                 `json:"transport,omitempty"`
+	Headers              map[string]string      `json:"headers,omitempty"`
+	HeaderEnv            map[string]string      `json:"header_env,omitempty"`
+	ResourceAttributes   map[string]string      `json:"resource_attributes,omitempty"`
+	ServiceName          string                 `json:"service_name,omitempty"`
+	ServiceNamespace     string                 `json:"service_namespace,omitempty"`
+	ServiceVersion       string                 `json:"service_version,omitempty"`
+	InstrumentationScope string                 `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis        uint64                 `json:"timeout_millis,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
@@ -179,56 +190,15 @@ func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// ObservabilityOtlpConfig configures OpenTelemetry or OpenInference OTLP export.
-type ObservabilityOtlpConfig struct {
-	Enabled              bool                        `json:"enabled,omitempty"`
-	MarkProjection       ObservabilityMarkProjection `json:"mark_projection,omitempty"`
-	MarkExcludeNames     []string                    `json:"mark_exclude_names,omitempty"`
-	AttributeMappings    []OtlpAttributeMapping      `json:"attribute_mappings,omitempty"`
-	Transport            string                      `json:"transport,omitempty"`
-	Endpoint             string                      `json:"endpoint,omitempty"`
-	Headers              map[string]string           `json:"headers,omitempty"`
-	ResourceAttributes   map[string]string           `json:"resource_attributes,omitempty"`
-	ServiceName          string                      `json:"service_name,omitempty"`
-	ServiceNamespace     string                      `json:"service_namespace,omitempty"`
-	ServiceVersion       string                      `json:"service_version,omitempty"`
-	InstrumentationScope string                      `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis        uint64                      `json:"timeout_millis,omitempty"`
-}
-
-// MarshalJSON preserves the distinction between a nil exclusion list, which
-// inherits the core default, and an explicitly empty list, which disables all
-// default exclusions.
-func (config ObservabilityOtlpConfig) MarshalJSON() ([]byte, error) {
-	type alias ObservabilityOtlpConfig
-	payload, err := json.Marshal(alias(config))
-	if err != nil {
-		return nil, err
-	}
-
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &object); err != nil {
-		return nil, err
-	}
-	if config.MarkExcludeNames != nil {
-		exclusions, err := json.Marshal(config.MarkExcludeNames)
-		if err != nil {
-			return nil, err
-		}
-		object["mark_exclude_names"] = exclusions
-	}
-	return json.Marshal(object)
-}
-
 // ObservabilityComponentSpec wraps one observability config as a top-level plugin component.
 type ObservabilityComponentSpec struct {
 	Enabled bool                `json:"enabled,omitempty"`
 	Config  ObservabilityConfig `json:"config"`
 }
 
-// NewObservabilityConfig returns a default observability config with version 2.
+// NewObservabilityConfig returns a default observability config with version 3.
 func NewObservabilityConfig() ObservabilityConfig {
-	return ObservabilityConfig{Version: 2}
+	return ObservabilityConfig{Version: 3}
 }
 
 // NewObservabilityAtofConfig returns disabled ATOF JSONL settings with native defaults.
@@ -265,16 +235,25 @@ func NewObservabilityHttpStorageConfig(endpoint string) ObservabilityHttpStorage
 	return ObservabilityHttpStorageConfig{Endpoint: endpoint}
 }
 
-// NewObservabilityOtlpConfig returns disabled OTLP settings with core defaults.
-func NewObservabilityOtlpConfig() ObservabilityOtlpConfig {
-	return ObservabilityOtlpConfig{
-		Transport:          "http_binary",
-		MarkProjection:     ObservabilityMarkProjectionInherit,
-		MarkExcludeNames:   []string{"llm.chunk"},
-		Headers:            map[string]string{},
-		ResourceAttributes: map[string]string{},
-		ServiceName:        "nemo-relay",
-		TimeoutMillis:      3000,
+// NewObservabilityOpenTelemetryConfig returns disabled multi-endpoint settings.
+func NewObservabilityOpenTelemetryConfig() ObservabilityOpenTelemetryConfig {
+	return ObservabilityOpenTelemetryConfig{}
+}
+
+// NewObservabilityOpenTelemetryEndpointConfig returns one typed endpoint with defaults.
+func NewObservabilityOpenTelemetryEndpointConfig(otelType OpenTelemetryType, endpoint string) ObservabilityOpenTelemetryEndpointConfig {
+	return ObservabilityOpenTelemetryEndpointConfig{
+		Type:                 otelType,
+		Endpoint:             endpoint,
+		Transport:            "http_binary",
+		MarkProjection:       "inherit",
+		MarkExcludeNames:     []string{"llm.chunk"},
+		Headers:              map[string]string{},
+		HeaderEnv:            map[string]string{},
+		ResourceAttributes:   map[string]string{},
+		ServiceName:          "unknown_service",
+		InstrumentationScope: "opentelemetry",
+		TimeoutMillis:        3000,
 	}
 }
 

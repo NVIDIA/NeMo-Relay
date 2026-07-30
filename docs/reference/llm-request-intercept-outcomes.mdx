@@ -91,12 +91,11 @@ or object shape:
 
 - Python callbacks return `LLMRequestInterceptOutcome`.
 - Rust callbacks return `LlmRequestInterceptOutcome`.
-- Go callbacks return `LLMRequestInterceptOutcome`.
 - Node.js callbacks return `{ request, annotated?, pendingMarks? }`.
   JavaScript pending-mark DTOs use `categoryProfile`; canonical JSON retains
   `pending_marks` and `category_profile`.
 - Public C callbacks return one owned canonical outcome JSON string, and native
-  ABI v1 callbacks return one host-owned outcome JSON string.
+  ABI v2 callbacks return one host-owned outcome JSON string.
 - Rust and Python `grpc-v1` worker SDKs return their canonical outcome in a
   `JsonEnvelope` with schema `nemo.relay.LlmRequestInterceptOutcome@2`.
 
@@ -121,10 +120,10 @@ codec input, sanitizer input, or start payload.
 
 ## Migration
 
-This finalizes unpublished native ABI v1 and `grpc-v1` contracts. Rebuild all
+This finalizes unpublished native ABI v2 and `grpc-v1` contracts. Rebuild all
 development native plugins and workers against the same NeMo Relay release that
-hosts them. Replace tuple results, split C/Go
-outputs, metadata envelopes, and parallel mark-aware registrations with the
+hosts them. Replace tuple results, split outputs, metadata envelopes, and
+parallel mark-aware registrations with the
 canonical outcome and the existing `register_llm_request_intercept`
 registration name.
 

@@ -1320,12 +1320,14 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
     unsafe {
         let invalid_utf8 = [0xffu8, 0];
         let invalid_name = invalid_utf8.as_ptr() as *const c_char;
+        let endpoint = c"http://localhost:4318/v1/traces";
 
         let mut otel_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1372,11 +1374,12 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
         );
         nemo_relay_otel_subscriber_free(otel_subscriber);
 
-        let mut oi_subscriber: *mut FfiOpenInferenceSubscriber = ptr::null_mut();
+        let mut oi_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1390,38 +1393,38 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
         );
         let oi_name = cstring(&unique_name("ffi_oi_defaults"));
         assert_eq!(
-            nemo_relay_openinference_subscriber_register(oi_subscriber, invalid_name),
+            nemo_relay_otel_subscriber_register(oi_subscriber, invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_register(oi_subscriber, oi_name.as_ptr()),
+            nemo_relay_otel_subscriber_register(oi_subscriber, oi_name.as_ptr()),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_register(oi_subscriber, oi_name.as_ptr()),
+            nemo_relay_otel_subscriber_register(oi_subscriber, oi_name.as_ptr()),
             NemoRelayStatus::Internal
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_deregister(ptr::null()),
+            nemo_relay_otel_subscriber_deregister(ptr::null()),
             NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_deregister(invalid_name),
+            nemo_relay_otel_subscriber_deregister(invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_deregister(oi_name.as_ptr()),
+            nemo_relay_otel_subscriber_deregister(oi_name.as_ptr()),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_force_flush(oi_subscriber),
+            nemo_relay_otel_subscriber_force_flush(oi_subscriber),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_shutdown(oi_subscriber),
+            nemo_relay_otel_subscriber_shutdown(oi_subscriber),
             NemoRelayStatus::Ok
         );
-        nemo_relay_openinference_subscriber_free(oi_subscriber);
+        nemo_relay_otel_subscriber_free(oi_subscriber);
 
         let session = cstring("specialized-session");
         let agent = cstring("specialized-agent");
@@ -1467,19 +1470,20 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
 }
 
 #[test]
-fn test_ffi_typed_attribute_mapping_constructors_validate_and_accept_mappings() {
-    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
     reset_globals();
 
     unsafe {
-        let valid = cstring(r#"[{"key":"nemo_relay.start.data.tenant","alias":"tenant.id"}]"#);
-        let invalid = cstring(r#"[{"key":"","alias":"tenant.id"}]"#);
-
-        let mut otel = ptr::null_mut();
+        let endpoint = c"http://localhost:4318/v1/traces";
+        let exclusions = c"[\"custom.mark\"]";
+        let mappings = c"[{\"key\":\"nemo_relay.model_name\",\"alias\":\"model.alias\"}]";
+        let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_eq!(
-            nemo_relay_otel_subscriber_create_with_attribute_mappings(
+            nemo_relay_otel_subscriber_create_with_projection_options(
+                c"full".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1487,16 +1491,22 @@ fn test_ffi_typed_attribute_mapping_constructors_validate_and_accept_mappings() 
                 ptr::null(),
                 ptr::null(),
                 0,
-                valid.as_ptr(),
-                &mut otel,
+                c"tool".as_ptr(),
+                exclusions.as_ptr(),
+                mappings.as_ptr(),
+                &mut subscriber,
             ),
             NemoRelayStatus::Ok
         );
-        nemo_relay_otel_subscriber_free(otel);
+        nemo_relay_otel_subscriber_free(subscriber);
+
+        let invalid_mappings = c"[{\"key\":\"\",\"alias\":\"model.alias\"}]";
+        let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_eq!(
-            nemo_relay_otel_subscriber_create_with_attribute_mappings(
+            nemo_relay_otel_subscriber_create_with_projection_options(
+                c"full".as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                endpoint.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1504,82 +1514,14 @@ fn test_ffi_typed_attribute_mapping_constructors_validate_and_accept_mappings() 
                 ptr::null(),
                 ptr::null(),
                 0,
-                invalid.as_ptr(),
-                &mut otel,
+                c"inherit".as_ptr(),
+                ptr::null(),
+                invalid_mappings.as_ptr(),
+                &mut invalid_subscriber,
             ),
             NemoRelayStatus::InvalidArg
         );
-
-        let mut openinference = ptr::null_mut();
-        assert_eq!(
-            nemo_relay_openinference_subscriber_create_with_attribute_mappings(
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                0,
-                valid.as_ptr(),
-                &mut openinference,
-            ),
-            NemoRelayStatus::Ok
-        );
-        nemo_relay_openinference_subscriber_free(openinference);
-        assert_eq!(
-            nemo_relay_openinference_subscriber_create_with_attribute_mappings(
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                0,
-                invalid.as_ptr(),
-                &mut openinference,
-            ),
-            NemoRelayStatus::InvalidArg
-        );
-
-        for invalid_shape in ["{}", "null", r#"[{"key":1,"alias":"tenant.id"}]"#] {
-            let invalid_shape = cstring(invalid_shape);
-            assert_eq!(
-                nemo_relay_otel_subscriber_create_with_attribute_mappings(
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    0,
-                    invalid_shape.as_ptr(),
-                    &mut otel,
-                ),
-                NemoRelayStatus::InvalidArg
-            );
-            assert_eq!(
-                nemo_relay_openinference_subscriber_create_with_attribute_mappings(
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    ptr::null(),
-                    0,
-                    invalid_shape.as_ptr(),
-                    &mut openinference,
-                ),
-                NemoRelayStatus::InvalidArg
-            );
-        }
+        assert!(invalid_subscriber.is_null());
     }
 }
 
@@ -1604,6 +1546,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
         let mut otel = ptr::null_mut();
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 malformed_json.as_ptr(),
@@ -1619,6 +1562,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
         );
         assert_eq!(
             nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 valid_headers.as_ptr(),
@@ -1684,6 +1628,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
         ] {
             assert_eq!(
                 nemo_relay_otel_subscriber_create(
+                    c"full".as_ptr(),
                     transport,
                     endpoint_ptr,
                     valid_headers.as_ptr(),
@@ -1701,7 +1646,8 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
 
         let mut openinference = ptr::null_mut();
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 malformed_json.as_ptr(),
@@ -1716,7 +1662,8 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
             NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_relay_openinference_subscriber_create(
+            nemo_relay_otel_subscriber_create(
+                c"openinference".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
                 valid_headers.as_ptr(),
@@ -1781,7 +1728,8 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
             ),
         ] {
             assert_eq!(
-                nemo_relay_openinference_subscriber_create(
+                nemo_relay_otel_subscriber_create(
+                    c"openinference".as_ptr(),
                     transport,
                     endpoint_ptr,
                     valid_headers.as_ptr(),

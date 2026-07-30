@@ -66,14 +66,15 @@ export interface AtifConfig {
   storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
 }
 
-export interface OtlpConfig {
-  enabled?: boolean;
+export interface OpenTelemetryEndpointConfig {
+  type: 'full' | 'gen_ai' | 'openinference';
+  endpoint: string;
   mark_projection?: 'inherit' | 'event' | 'tool';
   mark_exclude_names?: string[];
-  attribute_mappings?: OtlpAttributeMapping[];
-  transport?: 'http_binary' | 'grpc' | string;
-  endpoint?: string;
+  attribute_mappings?: Array<{ key: string; alias: string }>;
+  transport?: 'http_binary' | 'grpc';
   headers?: Record<string, string>;
+  header_env?: Record<string, string>;
   resource_attributes?: Record<string, string>;
   service_name?: string;
   service_namespace?: string;
@@ -82,18 +83,16 @@ export interface OtlpConfig {
   timeout_millis?: number;
 }
 
-/** Copy a projected OTLP attribute to an additional attribute name. */
-export interface OtlpAttributeMapping {
-  key: string;
-  alias: string;
+export interface OpenTelemetrySectionConfig {
+  enabled?: boolean;
+  endpoints?: OpenTelemetryEndpointConfig[];
 }
 
 export interface Config {
   version?: number;
   atof?: AtofConfig;
   atif?: AtifConfig;
-  opentelemetry?: OtlpConfig;
-  openinference?: OtlpConfig;
+  opentelemetry?: OpenTelemetrySectionConfig;
   policy?: ConfigPolicy;
 }
 
@@ -111,8 +110,12 @@ export declare function defaultConfig(): Config;
 export declare function atofConfig(config?: AtofConfig): AtofConfig;
 /** Create per-agent Agent Trajectory Interchange Format (ATIF) trajectory settings with defaults applied. */
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
-/** Create OTLP exporter settings for OpenTelemetry or OpenInference. */
-export declare function otlpConfig(config?: OtlpConfig): OtlpConfig;
+/** Create one typed OpenTelemetry endpoint. */
+export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfig): OpenTelemetryEndpointConfig;
+/** Create multi-endpoint OpenTelemetry settings. */
+export declare function openTelemetryConfig(
+  config?: OpenTelemetrySectionConfig,
+): OpenTelemetrySectionConfig;
 /** Wrap observability config as a top-level plugin component. */
 export declare function ComponentSpec(
   config: Config,

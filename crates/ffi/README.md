@@ -44,6 +44,10 @@ binding consumes it through CGo.
 - **Exported `nemo_relay_*` symbols**: APIs for scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, observability exporters, and scope stack
   isolation.
+- **Typed OpenTelemetry export**:
+  `nemo_relay_otel_subscriber_create` constructs one `full`, `gen_ai`, or
+  `openinference` endpoint subscriber. The endpoint and projection type are
+  required.
 - **Generated header**: A committed `nemo_relay.h` file for C-compatible
   consumers.
 - **Native library outputs**: Shared and static libraries for platform
@@ -52,6 +56,12 @@ binding consumes it through CGo.
   event data carried as JSON.
 - **Go binding foundation**: The repository-maintained Go binding consumes
   this ABI through CGo.
+
+Middleware callbacks in the raw C ABI are synchronous. Relay invokes a
+callback on a native thread and waits for it to return. Blocking I/O and other
+long-running callback work therefore occupy that thread and can reduce
+middleware throughput. The FFI does not expose completion-based middleware
+registration.
 
 ## Installation
 

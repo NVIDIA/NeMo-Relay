@@ -1171,10 +1171,13 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
 
 /// Layers `right` (higher precedence) onto `left` in place.
 ///
-/// Objects merge recursively and arrays/scalars are replaced by `right`, except the
-/// top-level `components` array, whose entries pair by `kind` in order of appearance so
-/// multi-instance kinds are not collapsed. Internal helper shared by plugin
-/// initialization and `plugins.toml` discovery.
+/// Objects merge recursively and arrays/scalars are replaced by `right`, except:
+///
+/// - the top-level `components` array pairs entries by `kind` in order of appearance so
+///   multi-instance kinds are not collapsed;
+/// - lists inside a component's `config` concatenate with higher-precedence entries first.
+///
+/// Internal helper shared by plugin initialization and `plugins.toml` discovery.
 fn layer_config(left: &mut Json, right: Json) {
     match (left, right) {
         (Json::Object(left), Json::Object(right)) => {
@@ -1221,13 +1224,85 @@ fn merge_plugin_components(left: &mut Json, right: Json) {
             .copied();
         *nth += 1;
         match slot {
-            Some(index) if kind == "pricing" => {
-                merge_pricing_component(&mut left_components[index], component)
-            }
-            Some(index) => merge_json_value(&mut left_components[index], component),
+            Some(index) => merge_plugin_component(&mut left_components[index], component),
             None => left_components.push(component),
         }
     }
+}
+
+/// Merges one higher-precedence component into its lower-precedence match.
+///
+/// Direct list fields in a component's `config` object concatenate with
+/// higher-precedence entries first. Declared observability collections do the
+/// same; deeper implementation-specific lists retain replacement semantics.
+fn merge_plugin_component(existing: &mut Json, higher_priority: Json) {
+    let is_observability = component_kind(&higher_priority).or_else(|| component_kind(existing))
+        == Some("observability");
+    match (existing, higher_priority) {
+        (Json::Object(existing), Json::Object(higher_priority)) => {
+            for (key, value) in higher_priority {
+                match (key.as_str(), existing.get_mut(&key)) {
+                    ("config", Some(existing_config)) => {
+                        merge_plugin_config_value(
+                            existing_config,
+                            value,
+                            &mut Vec::new(),
+                            is_observability,
+                        );
+                    }
+                    (_, Some(existing_value)) => merge_json_value(existing_value, value),
+                    (_, None) => {
+                        existing.insert(key, value);
+                    }
+                }
+            }
+        }
+        (existing, higher_priority) => *existing = higher_priority,
+    }
+}
+
+/// Recursively merges plugin component config with scoped list concatenation.
+fn merge_plugin_config_value(
+    lower_priority: &mut Json,
+    higher_priority: Json,
+    path: &mut Vec<String>,
+    is_observability: bool,
+) {
+    match (lower_priority, higher_priority) {
+        (Json::Object(lower_priority), Json::Object(higher_priority)) => {
+            for (key, value) in higher_priority {
+                path.push(key.clone());
+                match lower_priority.get_mut(&key) {
+                    Some(existing) => {
+                        merge_plugin_config_value(existing, value, path, is_observability)
+                    }
+                    None => {
+                        lower_priority.insert(key, value);
+                    }
+                }
+                path.pop();
+            }
+        }
+        (Json::Array(lower_priority), Json::Array(mut higher_priority))
+            if plugin_config_list_concatenates(path, is_observability) =>
+        {
+            higher_priority.append(lower_priority);
+            *lower_priority = higher_priority;
+        }
+        (lower_priority, higher_priority) => *lower_priority = higher_priority,
+    }
+}
+
+fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> bool {
+    path.len() == 1
+        || (is_observability
+            && matches!(
+                path,
+                [section, field]
+                    if (section == "atof" && field == "sinks")
+                        || (section == "opentelemetry" && field == "endpoints")
+                        || (section == "atif" && field == "storage")
+            ))
 }
 
 /// Recursively merges `right` into a `left` JSON object; arrays and scalars are replaced.
@@ -1249,35 +1324,6 @@ fn merge_json_value(left: &mut Json, right: Json) {
 
 fn component_kind(component: &Json) -> Option<&str> {
     component.get("kind").and_then(Json::as_str)
-}
-
-/// Like `merge_json_value`, but concatenates a `pricing` component's `config.sources`
-/// (higher-precedence first) instead of replacing them, so lower-precedence fallback sources survive.
-fn merge_pricing_component(existing: &mut Json, higher_priority: Json) {
-    let lower_priority_sources = pricing_component_sources(existing).cloned();
-    let higher_priority_sources = pricing_component_sources(&higher_priority).cloned();
-    merge_json_value(existing, higher_priority);
-
-    let Some(mut sources) = higher_priority_sources else {
-        return;
-    };
-    if let Some(lower_priority_sources) = lower_priority_sources {
-        sources.extend(lower_priority_sources);
-    }
-    set_pricing_component_sources(existing, sources);
-}
-
-fn pricing_component_sources(component: &Json) -> Option<&Vec<Json>> {
-    component
-        .get("config")
-        .and_then(|config| config.get("sources"))
-        .and_then(Json::as_array)
-}
-
-fn set_pricing_component_sources(component: &mut Json, sources: Vec<Json>) {
-    if let Some(config) = component.get_mut("config").and_then(Json::as_object_mut) {
-        config.insert("sources".into(), Json::Array(sources));
-    }
 }
 
 /// Returns the JSON Schema for the canonical plugin configuration document.
@@ -1590,7 +1636,7 @@ where
     I: IntoIterator<Item = PathBuf>,
 {
     let mut documents = Vec::new();
-    for path in paths {
+    for path in deduplicate_plugin_config_paths(paths) {
         if !path.exists() {
             continue;
         }
@@ -1603,6 +1649,26 @@ where
         documents.push((path, serde_json::to_value(parsed)?));
     }
     merge_plugin_config_documents(documents)
+}
+
+/// Removes physical duplicates while preserving the highest-precedence path.
+/// Internal: `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn deduplicate_plugin_config_paths<I>(paths: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let paths = paths.into_iter().collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(paths.len());
+    for path in paths.into_iter().rev() {
+        let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if seen.insert(identity) {
+            unique.push(path);
+        }
+    }
+    unique.reverse();
+    unique
 }
 
 /// Merges pre-parsed `plugins.toml` JSON documents (lowest precedence first) using the canonical
@@ -1649,20 +1715,21 @@ fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
     )))
 }
 
-/// Default `plugins.toml` search path (lowest precedence first): system, nearest
-/// project file, then user file — mirroring the gateway's discovery. `pub` only
+/// Default `plugins.toml` search path (lowest precedence first): user, nearest
+/// project file, then system file — mirroring the gateway's discovery. `pub` only
 /// for cross-crate reuse by the gateway.
 #[doc(hidden)]
 pub fn default_plugin_config_paths(cwd: Option<&Path>, user_dir: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("/etc/nemo-relay/plugins.toml")];
+    let mut paths = Vec::new();
+    if let Some(dir) = user_dir {
+        paths.push(dir.join("plugins.toml"));
+    }
     if let Some(cwd) = cwd
         && let Some(project) = nearest_project_plugin_config(cwd)
     {
         paths.push(project);
     }
-    if let Some(dir) = user_dir {
-        paths.push(dir.join("plugins.toml"));
-    }
+    paths.push(PathBuf::from("/etc/nemo-relay/plugins.toml"));
     paths
 }
 

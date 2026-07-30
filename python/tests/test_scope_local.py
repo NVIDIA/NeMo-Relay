@@ -72,7 +72,7 @@ class TestScopeLocalGuardrail:
             scope_local.register_tool_sanitize_request(handle, "sl_sanitizer", 1, sanitizer)
             scope_local.register_subscriber(handle, "sl_sanitizer_sub", lambda e: events.append(e))
             result = await tools.execute("sanitized_tool", {"input": "data"}, my_tool)
-        subscribers.flush()
+        await subscribers.flush_async()
 
         # Sanitize guardrails are observability-only: they do NOT modify args
         # flowing through the execution pipeline.
@@ -98,7 +98,7 @@ class TestScopeLocalGuardrail:
             scope_local.register_tool_sanitize_response(handle, "sl_resp_sanitizer", 1, response_sanitizer)
             scope_local.register_subscriber(handle, "sl_resp_sub", lambda e: events.append(e))
             result = await tools.execute("resp_tool", {}, my_tool)
-        subscribers.flush()
+        await subscribers.flush_async()
 
         # Sanitize guardrails are observability-only: they do NOT modify the
         # result flowing through the execution pipeline.
@@ -132,7 +132,7 @@ class TestScopeLocalAutoCleanup:
             scope_local.register_tool_sanitize_request(handle, "sl_cleanup_guard", 1, sanitizer)
             scope_local.register_subscriber(handle, "sl_cleanup_sub", lambda e: events_inside.append(e))
             await tools.execute("tool_inside", {"x": 1}, my_tool)
-        subscribers.flush()
+        await subscribers.flush_async()
 
         # Verify the sanitizer ran inside the scope (visible in event input).
         start_inside = _scope_event(events_inside, "tool_inside", "tool", "start")
@@ -144,7 +144,7 @@ class TestScopeLocalAutoCleanup:
         subscribers.register("sl_cleanup_outer_sub", lambda e: events_outside.append(e))
         await tools.execute("tool_outside", {"x": 2}, my_tool)
         try:
-            subscribers.flush()
+            await subscribers.flush_async()
         finally:
             subscribers.deregister("sl_cleanup_outer_sub")
 
@@ -185,7 +185,7 @@ class TestScopeLocalAutoCleanup:
         subscribers.register("sl_after_sub", lambda e: global_events.append(e))
         outer_handle = tools.call("outer_tool", {})
         tools.call_end(outer_handle, {})
-        subscribers.flush()
+        await subscribers.flush_async()
         subscribers.deregister("sl_after_sub")
 
         assert len(events_inside) >= 1
@@ -275,7 +275,7 @@ class TestScopeLocalSubscriber:
             scope_local.register_subscriber(handle, "sl_sub", lambda e: events.append(e))
             tool_handle = tools.call("sub_test_tool", {"arg": "value"})
             tools.call_end(tool_handle, {"result": "ok"})
-        subscribers.flush()
+        await subscribers.flush_async()
 
         # Should have received at least tool start and end events
         assert len(events) >= 2
@@ -290,7 +290,7 @@ class TestScopeLocalSubscriber:
         with scope.scope("mark_sub_scope", ScopeType.Agent) as handle:
             scope_local.register_subscriber(handle, "sl_mark_sub", lambda e: events.append(e))
             scope.event("test_mark", data={"info": "hello"})
-        subscribers.flush()
+        await subscribers.flush_async()
 
         mark_events = [e for e in events if isinstance(e, MarkEvent)]
         assert len(mark_events) >= 1
@@ -436,13 +436,13 @@ class TestScopeLocalIsolation:
             scope_local.register_tool_request(handle_a, "sl_iso_int", 1, False, intercept_fn)
             scope_local.register_subscriber(handle_a, "sl_iso_sub_a", lambda e: events_a.append(e))
             result_a = await tools.execute("iso_tool_a", {"val": 1}, my_tool)
-        subscribers.flush()
+        await subscribers.flush_async()
 
         # Scope B: only a subscriber, no intercept
         with scope.scope("iso_scope_b", ScopeType.Agent) as handle_b:
             scope_local.register_subscriber(handle_b, "sl_iso_sub_b", lambda e: events_b.append(e))
             result_b = await tools.execute("iso_tool_b", {"val": 2}, my_tool)
-        subscribers.flush()
+        await subscribers.flush_async()
 
         # Scope A should have had the intercept applied
         assert result_a["intercepted"] is True
@@ -550,7 +550,7 @@ class TestScopeLocalDeregistration:
             scope_local.register_tool_sanitize_request(handle, "sl_dereg_guard", 1, sanitizer)
             scope_local.register_subscriber(handle, "sl_dereg_sub", lambda e: events.append(e))
             await tools.execute("dereg_tool_1", {"a": 1}, my_tool)
-            subscribers.flush()
+            await subscribers.flush_async()
 
             # Verify the sanitizer ran (visible in event input).
             start_before = _scope_event(events, "dereg_tool_1", "tool", "start")
@@ -562,7 +562,7 @@ class TestScopeLocalDeregistration:
 
             events.clear()
             await tools.execute("dereg_tool_2", {"a": 2}, my_tool)
-        subscribers.flush()
+        await subscribers.flush_async()
 
         # After deregistration, the sanitizer should no longer appear in events.
         start_after = _scope_event(events, "dereg_tool_2", "tool", "start")
@@ -576,6 +576,20 @@ class TestScopeLocalDeregistration:
 
 
 class TestScopeLocalLlmWrappers:
+    @pytest.mark.parametrize(
+        ("register", "callback"),
+        [
+            (scope_local.register_llm_sanitize_request, lambda request: request),
+            (scope_local.register_llm_sanitize_response, lambda response: response),
+            (scope_local.register_llm_sanitize_request, object()),
+            (scope_local.register_llm_sanitize_response, object()),
+        ],
+    )
+    def test_sanitizer_registration_rejects_legacy_or_uninspectable_callbacks(self, register, callback):
+        with scope.scope("invalid_scope_local_sanitizer", ScopeType.Agent) as handle:
+            with pytest.raises(TypeError, match="payload, context"):
+                register(handle, "invalid_scope_local_sanitizer", 1, callback)
+
     def test_register_and_deregister_scope_local_wrappers(self):
         """Scope-local wrapper functions round-trip through the native API for both tool and LLM middleware."""
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
@@ -602,10 +616,20 @@ class TestScopeLocalLlmWrappers:
             )
             assert scope_local.deregister_tool_execution(handle, "sl_tool_exec_cov") is True
 
-            scope_local.register_llm_sanitize_request(handle, "sl_llm_req_cov", 1, lambda req: req)
+            scope_local.register_llm_sanitize_request(
+                handle,
+                "sl_llm_req_cov",
+                1,
+                lambda req, _context: req,
+            )
             assert scope_local.deregister_llm_sanitize_request(handle, "sl_llm_req_cov") is True
 
-            scope_local.register_llm_sanitize_response(handle, "sl_llm_resp_cov", 1, lambda response: response)
+            scope_local.register_llm_sanitize_response(
+                handle,
+                "sl_llm_resp_cov",
+                1,
+                lambda response, _context: response,
+            )
             assert scope_local.deregister_llm_sanitize_response(handle, "sl_llm_resp_cov") is True
 
             scope_local.register_llm_conditional_execution(handle, "sl_llm_cond_cov", 1, lambda req: None)
@@ -635,14 +659,15 @@ class TestScopeLocalLlmBehavior:
         events = []
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        def sanitize_request(req):
+        def sanitize_request(req, context):
+            del context
             return LLMRequest({"X-Scope-Local": "yes"}, req.content)
 
         with scope.scope("sl_llm_sanitize_scope", ScopeType.Agent) as handle:
             scope_local.register_subscriber(handle, "sl_llm_sanitize_sub", lambda event: events.append(event))
             scope_local.register_llm_sanitize_request(handle, "sl_llm_sanitize", 1, sanitize_request)
             result = await llm.execute("sl_llm_sanitize_call", request, lambda req: {"model": req.content["model"]})
-        subscribers.flush()
+        await subscribers.flush_async()
 
         assert result == {"model": "scope-local"}
         start = _scope_event(events, "sl_llm_sanitize_call", "llm", "start")

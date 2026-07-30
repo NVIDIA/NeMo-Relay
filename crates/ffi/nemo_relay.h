@@ -59,6 +59,29 @@ enum NemoRelayStatus {
 typedef int32_t NemoRelayStatus;
 
 /**
+ * Codec identity kind supplied to an LLM sanitizer.
+ */
+enum NemoRelayLlmSanitizeCodecKind {
+  /**
+   * No codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_NONE = 0,
+  /**
+   * A Relay built-in codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_BUILT_IN = 1,
+  /**
+   * A runtime-registered codec was active.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_RUNTIME = 2,
+  /**
+   * A codec was active but has no registered identity.
+   */
+  NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_OPAQUE = 3,
+};
+typedef uint32_t NemoRelayLlmSanitizeCodecKind;
+
+/**
  * The type of scope in the agent execution hierarchy.
  */
 enum NemoRelayScopeType {
@@ -150,9 +173,14 @@ typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 
 /**
- * Opaque OpenInference subscriber handle.
+ * Borrowed, callback-scoped request codec capability supplied to an LLM sanitizer.
  */
-typedef struct FfiOpenInferenceSubscriber FfiOpenInferenceSubscriber;
+typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
+
+/**
+ * Borrowed, callback-scoped response codec capability supplied to an LLM sanitizer.
+ */
+typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
 
 /**
  * Opaque OpenTelemetry subscriber handle.
@@ -224,6 +252,10 @@ typedef char *(*NemoRelayEventSanitizeCb)(void *user_data,
 /**
  * Optional destructor for user data passed to callbacks.
  * Called when the runtime no longer needs the associated callback.
+ *
+ * Middleware callbacks may run concurrently on Relay runtime or publication
+ * threads. Callers must keep `user_data` valid and thread-safe until this
+ * destructor runs.
  */
 typedef void (*NemoRelayFreeFn)(void *user_data);
 
@@ -248,17 +280,61 @@ typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
                                         const struct FfiLLMRequest *original_request);
 
 /**
- * Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
- * a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
+ * Codec identity supplied to an LLM sanitizer. `codec_id` is null for
+ * `None` and `Opaque`, and is valid only for the duration of the callback.
  */
-typedef struct FfiLLMRequest *(*NemoRelayLlmRequestCb)(void *user_data,
-                                                       const struct FfiLLMRequest *request);
+typedef struct NemoRelayLlmSanitizeRequestContext {
+  /**
+   * Kind of active codec identity.
+   */
+  NemoRelayLlmSanitizeCodecKind codec_kind;
+  /**
+   * Built-in or runtime codec ID, when applicable.
+   */
+  const char *codec_id;
+  /**
+   * Borrowed request codec capability, or null when no codec is active.
+   */
+  const struct FfiLlmSanitizeRequestCodec *codec;
+} NemoRelayLlmSanitizeRequestContext;
 
 /**
- * Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
- * The returned string must be allocated with `malloc` or equivalent.
+ * LLM request sanitizer. It receives the request first and its codec context
+ * second. Return null to omit the observability payload. The request is
+ * borrowed, but returning that same pointer is supported as a pass-through.
+ * Any other non-null result transfers ownership to Relay.
  */
-typedef char *(*NemoRelayJsonCb)(void *user_data, const char *json);
+typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
+                                                               const struct FfiLLMRequest *request,
+                                                               struct NemoRelayLlmSanitizeRequestContext context);
+
+/**
+ * Directional codec context supplied to an LLM response sanitizer.
+ */
+typedef struct NemoRelayLlmSanitizeResponseContext {
+  /**
+   * Kind of active codec identity.
+   */
+  NemoRelayLlmSanitizeCodecKind codec_kind;
+  /**
+   * Built-in or runtime codec ID, when applicable.
+   */
+  const char *codec_id;
+  /**
+   * Borrowed response codec capability, or null when no codec is active.
+   */
+  const struct FfiLlmSanitizeResponseCodec *codec;
+} NemoRelayLlmSanitizeResponseContext;
+
+/**
+ * LLM response sanitizer. It receives response JSON first and its codec
+ * context second. Return null to omit the observability payload. The response
+ * is borrowed, but returning that same pointer is supported as a pass-through.
+ * Any other non-null result transfers ownership to Relay.
+ */
+typedef char *(*NemoRelayLlmSanitizeResponseCb)(void *user_data,
+                                                const char *response_json,
+                                                struct NemoRelayLlmSanitizeResponseContext context);
 
 /**
  * Callback for LLM conditional execution guardrails.
@@ -289,6 +365,10 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
 /**
  * Runtime-provided "next" callback for LLM execution middleware chain.
  * Takes a native JSON C string, returns a response JSON C string.
+ * `next_ctx` is borrowed and valid only until the intercept callback returns;
+ * callers must not retain it or invoke `next_fn` asynchronously. The returned
+ * string belongs to the caller and must be released with
+ * `nemo_relay_string_free`.
  */
 typedef char *(*NemoRelayLlmExecNextFn)(const char *native_json, void *next_ctx);
 
@@ -333,7 +413,10 @@ typedef char *(*NemoRelayToolConditionalCb)(void *user_data, const char *name, c
 /**
  * Runtime-provided "next" callback for tool execution middleware chain.
  * Call this from an intercept to invoke the next layer (or original function).
- * `next_ctx` is an opaque pointer managed by the runtime.
+ * `next_ctx` is borrowed and valid only until the intercept callback returns;
+ * callers must not retain it or invoke `next_fn` asynchronously. The returned
+ * string belongs to the caller and must be released with
+ * `nemo_relay_string_free`.
  */
 typedef char *(*NemoRelayToolExecNextFn)(const char *args_json, void *next_ctx);
 
@@ -368,6 +451,9 @@ typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
  * This helper applies only the request-intercept middleware and does not emit
  * lifecycle events or execute the tool callback.
  *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
+ *
  * # Parameters
  * - `name`: Tool name (null-terminated C string).
  * - `args_json`: Tool arguments as a JSON C string.
@@ -387,6 +473,9 @@ NemoRelayStatus nemo_relay_tool_request_intercepts(const char *name,
 
 /**
  * Run the registered tool conditional execution guardrail chain.
+ *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
  *
  * Returns `NemoRelayStatus::Ok` if all guardrails pass, or
  * `NemoRelayStatus::GuardrailRejected` if blocked.
@@ -409,6 +498,9 @@ NemoRelayStatus nemo_relay_tool_conditional_execution(const char *name, const ch
  *
  * This helper applies only the request-intercept middleware and does not emit
  * lifecycle events or execute the provider callback.
+ *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
  *
  * # Parameters
  * - `name`: Optional provider name as a null-terminated C string. Pass null to
@@ -481,6 +573,9 @@ NemoRelayStatus nemo_relay_llm_request_intercept_outcome_json_new_v2(const struc
 
 /**
  * Run the registered LLM conditional execution guardrail chain.
+ *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
  *
  * Returns `NemoRelayStatus::Ok` if all guardrails pass, or
  * `NemoRelayStatus::GuardrailRejected` if blocked.
@@ -702,6 +797,41 @@ NemoRelayStatus nemo_relay_scope_register_scope_sanitize_end_guardrail(const cha
  */
 NemoRelayStatus nemo_relay_scope_deregister_scope_sanitize_end_guardrail(const char *scope_uuid,
                                                                          const char *name);
+
+/**
+ * Decode a request through a callback-scoped sanitizer codec capability.
+ *
+ * The returned JSON string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * Both pointers must be non-null and valid only during the sanitizer callback.
+ */
+char *nemo_relay_llm_sanitize_request_codec_decode(const struct FfiLlmSanitizeRequestCodec *codec,
+                                                   const struct FfiLLMRequest *request);
+
+/**
+ * Encode normalized request changes through a callback-scoped codec capability.
+ *
+ * The returned request is owned by the caller and must be freed with
+ * `nemo_relay_llm_request_free`. Returns null on failure.
+ *
+ * # Safety
+ * All pointers must be non-null and valid only during the sanitizer callback.
+ */
+struct FfiLLMRequest *nemo_relay_llm_sanitize_request_codec_encode(const struct FfiLlmSanitizeRequestCodec *codec,
+                                                                   const char *annotated_json,
+                                                                   const struct FfiLLMRequest *original);
+
+/**
+ * Decode a response through a callback-scoped sanitizer codec capability.
+ *
+ * The returned JSON string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * All pointers must be non-null and valid only during the sanitizer callback.
+ */
+char *nemo_relay_llm_sanitize_response_codec_decode(const struct FfiLlmSanitizeResponseCodec *codec,
+                                                    const char *response_json);
 
 /**
  * Begin a manual LLM call lifecycle span.
@@ -942,8 +1072,8 @@ int32_t nemo_relay_stream_next(struct FfiStream *stream, char **out_chunk);
 void nemo_relay_stream_free(struct FfiStream *stream);
 
 /**
- * Register an LLM request sanitization guardrail. The callback can modify or
- * replace the LLM request before it is sent.
+ * Register an LLM request sanitizer. The callback receives the emitted
+ * request first and per-call codec context second; null omits observability.
  *
  * # Parameters
  * - `name`: Unique guardrail name.
@@ -957,7 +1087,7 @@ void nemo_relay_stream_free(struct FfiStream *stream);
  */
 NemoRelayStatus nemo_relay_register_llm_sanitize_request_guardrail(const char *name,
                                                                    int32_t priority,
-                                                                   NemoRelayLlmRequestCb cb,
+                                                                   NemoRelayLlmSanitizeRequestCb cb,
                                                                    void *user_data,
                                                                    NemoRelayFreeFn free_fn);
 
@@ -985,7 +1115,7 @@ NemoRelayStatus nemo_relay_deregister_llm_sanitize_request_guardrail(const char 
  */
 NemoRelayStatus nemo_relay_register_llm_sanitize_response_guardrail(const char *name,
                                                                     int32_t priority,
-                                                                    NemoRelayJsonCb cb,
+                                                                    NemoRelayLlmSanitizeResponseCb cb,
                                                                     void *user_data,
                                                                     NemoRelayFreeFn free_fn);
 
@@ -1149,7 +1279,8 @@ NemoRelayStatus nemo_relay_register_subscriber(const char *name,
 NemoRelayStatus nemo_relay_deregister_subscriber(const char *name);
 
 /**
- * Wait for subscriber callbacks queued before this call to finish.
+ * Wait for subscriber callbacks queued before this call and events emitted
+ * transitively by those callbacks to finish.
  *
  * Call this function outside native subscriber callbacks. A re-entrant call returns without
  * waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
@@ -1333,16 +1464,15 @@ NemoRelayStatus nemo_relay_atof_exporter_shutdown(const struct FfiAtofExporter *
 NemoRelayStatus nemo_relay_atof_exporter_path(const struct FfiAtofExporter *exporter, char **out);
 
 /**
- * Creates a new OpenTelemetry subscriber.
+ * Creates one typed OpenTelemetry exporter subscriber.
  *
- * Nullable strings use crate defaults when omitted. `headers_json` and
- * `resource_attributes_json` must be JSON objects of string values when
- * provided.
+ * `otel_type` must be `full`, `gen_ai`, or `openinference`. `endpoint` is required.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
  */
-NemoRelayStatus nemo_relay_otel_subscriber_create(const char *transport,
+NemoRelayStatus nemo_relay_otel_subscriber_create(const char *otel_type,
+                                                  const char *transport,
                                                   const char *endpoint,
                                                   const char *headers_json,
                                                   const char *resource_attributes_json,
@@ -1354,14 +1484,17 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *transport,
                                                   struct FfiOpenTelemetrySubscriber **out);
 
 /**
- * Creates a new OpenTelemetry subscriber with typed attribute mappings.
+ * Creates one typed OpenTelemetry exporter subscriber with projection controls.
  *
- * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+ * The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
+ * `attribute_mappings: [{"key":"…","alias":"…"}]` shapes. Pass null for either
+ * array to use its default. `mark_projection` is `inherit`, `event`, or `tool`.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
  */
-NemoRelayStatus nemo_relay_otel_subscriber_create_with_attribute_mappings(const char *transport,
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const char *otel_type,
+                                                                          const char *transport,
                                                                           const char *endpoint,
                                                                           const char *headers_json,
                                                                           const char *resource_attributes_json,
@@ -1370,6 +1503,8 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_attribute_mappings(const 
                                                                           const char *service_version,
                                                                           const char *instrumentation_scope,
                                                                           uint64_t timeout_millis,
+                                                                          const char *mark_projection,
+                                                                          const char *mark_exclude_names_json,
                                                                           const char *attribute_mappings_json,
                                                                           struct FfiOpenTelemetrySubscriber **out);
 
@@ -1405,80 +1540,6 @@ NemoRelayStatus nemo_relay_otel_subscriber_force_flush(const struct FfiOpenTelem
  * `subscriber` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_otel_subscriber_shutdown(const struct FfiOpenTelemetrySubscriber *subscriber);
-
-/**
- * Creates a new OpenInference subscriber.
- *
- * Nullable strings use crate defaults when omitted. `headers_json` and
- * `resource_attributes_json` must be JSON objects of string values when
- * provided.
- *
- * # Safety
- * Any non-null C strings must be valid and `out` must be non-null.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_create(const char *transport,
-                                                           const char *endpoint,
-                                                           const char *headers_json,
-                                                           const char *resource_attributes_json,
-                                                           const char *service_name,
-                                                           const char *service_namespace,
-                                                           const char *service_version,
-                                                           const char *instrumentation_scope,
-                                                           uint64_t timeout_millis,
-                                                           struct FfiOpenInferenceSubscriber **out);
-
-/**
- * Creates a new OpenInference subscriber with typed attribute mappings.
- *
- * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
- *
- * # Safety
- * Any non-null C strings must be valid and `out` must be non-null.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_create_with_attribute_mappings(const char *transport,
-                                                                                   const char *endpoint,
-                                                                                   const char *headers_json,
-                                                                                   const char *resource_attributes_json,
-                                                                                   const char *service_name,
-                                                                                   const char *service_namespace,
-                                                                                   const char *service_version,
-                                                                                   const char *instrumentation_scope,
-                                                                                   uint64_t timeout_millis,
-                                                                                   const char *attribute_mappings_json,
-                                                                                   struct FfiOpenInferenceSubscriber **out);
-
-/**
- * Registers the OpenInference subscriber as an event subscriber.
- *
- * # Safety
- * `subscriber` and `name` must be valid, non-null pointers.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_register(const struct FfiOpenInferenceSubscriber *subscriber,
-                                                             const char *name);
-
-/**
- * Deregisters the OpenInference subscriber by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_deregister(const char *name);
-
-/**
- * Forces a flush of finished spans through the exporter.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_force_flush(const struct FfiOpenInferenceSubscriber *subscriber);
-
-/**
- * Shuts down the underlying tracer provider.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpenInferenceSubscriber *subscriber);
 
 /**
  * Load and activate dynamic plugins as one owned transaction.
@@ -1704,7 +1765,7 @@ NemoRelayStatus nemo_relay_plugin_context_register_tool_conditional_execution_gu
 NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(struct FfiPluginContext *ctx,
                                                                                   const char *name,
                                                                                   int32_t priority,
-                                                                                  NemoRelayLlmRequestCb cb,
+                                                                                  NemoRelayLlmSanitizeRequestCb cb,
                                                                                   void *user_data,
                                                                                   NemoRelayFreeFn free_fn);
 
@@ -1718,7 +1779,7 @@ NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_request_guardrai
 NemoRelayStatus nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(struct FfiPluginContext *ctx,
                                                                                    const char *name,
                                                                                    int32_t priority,
-                                                                                   NemoRelayJsonCb cb,
+                                                                                   NemoRelayLlmSanitizeResponseCb cb,
                                                                                    void *user_data,
                                                                                    NemoRelayFreeFn free_fn);
 
@@ -2007,7 +2068,7 @@ NemoRelayStatus nemo_relay_scope_deregister_tool_execution_intercept(const char 
 NemoRelayStatus nemo_relay_scope_register_llm_sanitize_request_guardrail(const char *scope_uuid,
                                                                          const char *name,
                                                                          int32_t priority,
-                                                                         NemoRelayLlmRequestCb cb,
+                                                                         NemoRelayLlmSanitizeRequestCb cb,
                                                                          void *user_data,
                                                                          NemoRelayFreeFn free_fn);
 
@@ -2037,7 +2098,7 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_sanitize_request_guardrail(const
 NemoRelayStatus nemo_relay_scope_register_llm_sanitize_response_guardrail(const char *scope_uuid,
                                                                           const char *name,
                                                                           int32_t priority,
-                                                                          NemoRelayJsonCb cb,
+                                                                          NemoRelayLlmSanitizeResponseCb cb,
                                                                           void *user_data,
                                                                           NemoRelayFreeFn free_fn);
 
@@ -2228,6 +2289,39 @@ NemoRelayStatus nemo_relay_scope_deregister_subscriber(const char *scope_uuid, c
  * `out` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_scope_stack_create(struct FfiScopeStack **out);
+
+/**
+ * Serialize the current causal parent as a versioned propagation context.
+ *
+ * The returned JSON must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_json(char **out);
+
+/**
+ * Serialize the current causal parent with an application-supplied root UUID.
+ *
+ * Pass null for `root_uuid` to omit the root. The returned JSON must be freed
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * When non-null, `root_uuid` must point to a valid NUL-terminated C string;
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_propagation_context_with_root_json(const char *root_uuid,
+                                                                      char **out);
+
+/**
+ * Create an isolated scope stack from propagation-context JSON.
+ *
+ * # Safety
+ * `context_json` must point to a valid NUL-terminated C string and `out` must
+ * be a valid, writable pointer to a scope-stack output slot.
+ */
+NemoRelayStatus nemo_relay_scope_stack_create_from_propagation_json(const char *context_json,
+                                                                    struct FfiScopeStack **out);
 
 /**
  * Bind an isolated scope stack to the current OS thread.
@@ -2569,16 +2663,6 @@ void nemo_relay_atof_exporter_free(struct FfiAtofExporter *ptr);
  * `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
  */
 void nemo_relay_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
-
-/**
- * Free an OpenInference subscriber handle previously returned by
- * `nemo_relay_openinference_subscriber_create`.
- *
- * # Safety
- * `ptr` must be a valid pointer returned by
- * `nemo_relay_openinference_subscriber_create`, or null.
- */
-void nemo_relay_openinference_subscriber_free(struct FfiOpenInferenceSubscriber *ptr);
 
 /**
  * Free an adaptive runtime handle previously returned by

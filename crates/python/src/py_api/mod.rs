@@ -8,18 +8,29 @@
 //! The Python wrapper modules (`nemo_relay.scope`, `nemo_relay.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
+use std::future::Future;
+use std::panic::resume_unwind;
 use std::sync::Arc;
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::runtime::subscriber_dispatcher::{
+    capture_nested_publication_buffer, sync_thread_publication_buffer, with_publication_context,
+    with_task_nested_publication_buffer, with_task_publication_context,
+};
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
-    TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
-    current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
-    set_thread_scope_stack as bind_thread_scope_stack,
+    TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
+    capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    capture_thread_scope_stack as capture_thread_scope_stack_handle,
+    create_scope_stack as create_scope_stack_handle,
+    create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
+    current_scope_stack as current_scope_stack_handle,
+    restore_thread_scope_stack as restore_thread_scope_stack_handle,
+    scope_stack_active as scope_stack_is_active, set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
 use nemo_relay::api::scope as core_scope_api;
@@ -38,8 +49,9 @@ use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json
 use crate::py_callable;
 use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest,
-    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyScopeAttributes, PyScopeHandle,
-    PyScopeStack, PyScopeType, PyToolAttributes, PyToolHandle,
+    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
+    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
+    PyToolAttributes, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -47,6 +59,75 @@ pub(crate) type RustJsonStream = LlmJsonStream;
 /// Convert an [`FlowError`] into a Python `RuntimeError`.
 fn to_py_err(e: FlowError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+}
+
+fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
+    match py.import("asyncio")?.call_method0("get_running_loop") {
+        Ok(_) => Ok(true),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn with_python_publication_context<T>(f: impl FnOnce() -> T) -> T {
+    with_publication_context(py_callable::capture_python_publication_context(), f)
+}
+
+fn block_on_sync_middleware<F, T>(future: F) -> FlowResult<T>
+where
+    F: Future<Output = FlowResult<T>> + Send,
+    T: Send,
+{
+    let runtime = pyo3_async_runtimes::tokio::get_runtime();
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(move || runtime.block_on(future))
+                .join()
+                .unwrap_or_else(|panic| resume_unwind(panic))
+        })
+    } else {
+        runtime.block_on(future)
+    }
+}
+
+fn run_standalone_middleware<'py, F, T, C>(
+    py: Python<'py>,
+    future: F,
+    convert: C,
+) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = FlowResult<T>> + Send + 'static,
+    T: Send + 'static,
+    C: Fn(Python<'_>, T) -> PyResult<Py<PyAny>> + Send + 'static,
+{
+    let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
+    let publication_buffer = capture_nested_publication_buffer();
+    if !python_event_loop_running(py)? {
+        let result = py
+            .detach(|| {
+                let future = py_callable::PY_AWAITABLES_ALLOWED
+                    .scope(false, TASK_SCOPE_STACK.scope(scope_stack, future));
+                let future = with_task_publication_context(publication_context, future);
+                let future = with_task_nested_publication_buffer(publication_buffer, future);
+                block_on_sync_middleware(future)
+            })
+            .map_err(to_py_err)?;
+        return convert(py, result).map(|value| value.into_bound(py));
+    }
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let result = with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, future),
+            ),
+        )
+        .await
+        .map_err(to_py_err)?;
+        Python::attach(|py| convert(py, result))
+    })
 }
 
 fn py_llm_response_codec(
@@ -69,6 +150,26 @@ fn py_llm_response_codec(
         // Fall back to wrapping the Python object as a custom response codec
         Some(Arc::new(py_callable::PyLlmResponseCodecWrapper {
             py_codec: c.clone().unbind(),
+        }))
+    })
+}
+
+fn py_llm_codec(codec: Option<&Bound<'_, PyAny>>) -> Option<Arc<dyn LlmCodec>> {
+    codec.and_then(|codec| -> Option<Arc<dyn LlmCodec>> {
+        if codec.is_none() {
+            return None;
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        Some(Arc::new(py_callable::PyLlmCodecWrapper {
+            py_codec: codec.clone().unbind(),
         }))
     })
 }
@@ -139,7 +240,45 @@ pub(crate) async fn forward_stream_to_channel(
 ///     A ``ScopeStack`` that can be used for per-request or per-task isolation.
 #[pyfunction]
 pub fn create_scope_stack() -> PyScopeStack {
-    PyScopeStack(create_scope_stack_handle())
+    PyScopeStack {
+        inner: create_scope_stack_handle(),
+        publication_buffer: None,
+    }
+}
+
+/// Capture a transport-neutral context from the current Relay scope stack.
+#[pyfunction]
+pub fn capture_propagation_context() -> PyResult<PyPropagationContext> {
+    capture_propagation_context_handle()
+        .map(|inner| PyPropagationContext { inner })
+        .map_err(to_py_err)
+}
+
+/// Capture a context with an application-supplied stable session root UUID.
+#[pyfunction]
+pub fn capture_propagation_context_with_root(
+    root_uuid: Option<&str>,
+) -> PyResult<PyPropagationContext> {
+    let root_uuid = root_uuid
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
+    capture_propagation_context_with_root_handle(root_uuid)
+        .map(|inner| PyPropagationContext { inner })
+        .map_err(to_py_err)
+}
+
+/// Create an isolated scope stack seeded from a received propagation context.
+#[pyfunction]
+pub fn create_scope_stack_from_propagation(
+    context: &PyPropagationContext,
+) -> PyResult<PyScopeStack> {
+    create_scope_stack_from_propagation_handle(&context.inner)
+        .map(|inner| PyScopeStack {
+            inner,
+            publication_buffer: None,
+        })
+        .map_err(to_py_err)
 }
 
 /// Bind a ``ScopeStack`` to the current thread's thread-local storage.
@@ -152,7 +291,30 @@ pub fn create_scope_stack() -> PyScopeStack {
 ///     stack: The ``ScopeStack`` to bind to the current thread.
 #[pyfunction]
 pub fn set_thread_scope_stack(stack: &PyScopeStack) {
-    bind_thread_scope_stack(stack.0.clone());
+    bind_thread_scope_stack(stack.inner.clone());
+    sync_thread_publication_buffer(
+        stack
+            .publication_buffer
+            .clone()
+            .or_else(capture_nested_publication_buffer),
+    );
+}
+
+/// Capture the scope stack currently installed in native thread-local storage.
+#[pyfunction]
+pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
+    PyThreadScopeStackBinding {
+        inner: capture_thread_scope_stack_handle(),
+        publication_buffer: capture_nested_publication_buffer(),
+    }
+}
+
+/// Restore a complete native thread binding captured by
+/// [`capture_thread_scope_stack`].
+#[pyfunction]
+pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
+    restore_thread_scope_stack_handle(binding.inner.clone());
+    sync_thread_publication_buffer(binding.publication_buffer.clone());
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
@@ -163,7 +325,13 @@ pub fn set_thread_scope_stack(stack: &PyScopeStack) {
 /// affecting ``scope_stack_active()``.
 #[pyfunction]
 pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
-    sync_bound_thread_scope_stack(stack.0.clone());
+    sync_bound_thread_scope_stack(stack.inner.clone());
+    sync_thread_publication_buffer(
+        stack
+            .publication_buffer
+            .clone()
+            .or_else(capture_nested_publication_buffer),
+    );
 }
 
 /// Return whether the current execution context has an explicitly-initialized
@@ -236,6 +404,7 @@ fn get_handle() -> PyResult<PyScopeHandle> {
 	    timestamp: "datetime.datetime | None"=None
 ) -> "ScopeHandle", text_signature = "(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: object | None = None, metadata: object | None = None, input: object | None = None, timestamp: datetime.datetime | None = None) -> ScopeHandle")]
 fn push_scope(
+    _py: Python<'_>,
     name: &str,
     scope_type: PyScopeType,
     handle: Option<PyScopeHandle>,
@@ -252,18 +421,20 @@ fn push_scope(
     let meta = opt_py_to_json(metadata)?;
     let input = opt_py_to_json(input)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_scope_api::push_scope(
-        core_scope_api::PushScopeParams::builder()
-            .name(name)
-            .scope_type(scope_type.into())
-            .parent_opt(handle.as_ref().map(|h| &h.inner))
-            .attributes(attrs)
-            .data_opt(d)
-            .metadata_opt(meta)
-            .input_opt(input)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_scope_api::push_scope(
+            core_scope_api::PushScopeParams::builder()
+                .name(name)
+                .scope_type(scope_type.into())
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .attributes(attrs)
+                .data_opt(d)
+                .metadata_opt(meta)
+                .input_opt(input)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map(PyScopeHandle::from)
     .map_err(to_py_err)
 }
@@ -286,6 +457,7 @@ fn push_scope(
 #[pyfunction]
 #[pyo3(signature = (handle: "ScopeHandle", output: "object | None"=None, metadata: "object | None"=None, timestamp: "datetime.datetime | None"=None) -> "None", text_signature = "(handle: ScopeHandle, output: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn pop_scope(
+    _py: Python<'_>,
     handle: &PyScopeHandle,
     output: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
@@ -294,14 +466,16 @@ fn pop_scope(
     let output = opt_py_to_json(output)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_scope_api::pop_scope(
-        core_scope_api::PopScopeParams::builder()
-            .handle_uuid(&handle.inner.uuid)
-            .output_opt(output)
-            .metadata_opt(metadata)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_scope_api::pop_scope(
+            core_scope_api::PopScopeParams::builder()
+                .handle_uuid(&handle.inner.uuid)
+                .output_opt(output)
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -319,6 +493,7 @@ fn pop_scope(
 ///     TypeError: If ``timestamp`` is not a ``datetime.datetime``.
 ///     ValueError: If ``timestamp`` is a naive datetime.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     name: "str",
     *,
@@ -328,6 +503,7 @@ fn pop_scope(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn event(
+    _py: Python<'_>,
     name: &str,
     handle: Option<PyScopeHandle>,
     data: Option<&Bound<'_, PyAny>>,
@@ -337,15 +513,17 @@ fn event(
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_scope_api::event(
-        core_scope_api::EmitMarkEventParams::builder()
-            .name(name)
-            .parent_opt(handle.as_ref().map(|h| &h.inner))
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_scope_api::event(
+            core_scope_api::EmitMarkEventParams::builder()
+                .name(name)
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -393,6 +571,7 @@ fn event(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "ToolHandle", text_signature = "(name: str, args: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None, timestamp: datetime.datetime | None = None) -> ToolHandle")]
 fn tool_call(
+    _py: Python<'_>,
     name: &str,
     args: &Bound<'_, PyAny>,
     handle: Option<PyScopeHandle>,
@@ -409,18 +588,20 @@ fn tool_call(
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_tool_api::tool_call(
-        core_tool_api::ToolCallParams::builder()
-            .name(name)
-            .args(args_json)
-            .parent_opt(handle.as_ref().map(|h| &h.inner))
-            .attributes(attrs)
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .tool_call_id_opt(tool_call_id)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_tool_api::tool_call(
+            core_tool_api::ToolCallParams::builder()
+                .name(name)
+                .args(args_json)
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .attributes(attrs)
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .tool_call_id_opt(tool_call_id)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map(PyToolHandle::from)
     .map_err(to_py_err)
 }
@@ -452,6 +633,7 @@ fn tool_call(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "None", text_signature = "(handle: ToolHandle, result: object, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn tool_call_end(
+    _py: Python<'_>,
     handle: &PyToolHandle,
     result: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -462,15 +644,17 @@ fn tool_call_end(
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_tool_api::tool_call_end(
-        core_tool_api::ToolCallEndParams::builder()
-            .handle(&handle.inner)
-            .result(result_json)
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_tool_api::tool_call_end(
+            core_tool_api::ToolCallEndParams::builder()
+                .handle(&handle.inner)
+                .result(result_json)
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -530,25 +714,32 @@ fn tool_call_execute<'py>(
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
 
     let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
+    let publication_buffer = capture_nested_publication_buffer();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
-                let result = core_tool_api::tool_call_execute(
-                    core_tool_api::ToolCallExecuteParams::builder()
-                        .name(name)
-                        .args(args_json)
-                        .func(default_fn)
-                        .parent(parent_handle)
-                        .attributes(attrs)
-                        .data_opt(data_json)
-                        .metadata_opt(metadata_json)
-                        .build(),
-                )
-                .await
-                .map_err(to_py_err)?;
-                Python::attach(|py| json_to_py(py, &result))
-            })
-            .await
+        with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, async move {
+                    let result = core_tool_api::tool_call_execute(
+                        core_tool_api::ToolCallExecuteParams::builder()
+                            .name(name)
+                            .args(args_json)
+                            .func(default_fn)
+                            .parent(parent_handle)
+                            .attributes(attrs)
+                            .data_opt(data_json)
+                            .metadata_opt(metadata_json)
+                            .build(),
+                    )
+                    .await
+                    .map_err(to_py_err)?;
+                    Python::attach(|py| json_to_py(py, &result))
+                }),
+            ),
+        )
+        .await
     })
 }
 
@@ -595,6 +786,7 @@ fn tool_call_execute<'py>(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "LlmHandle", text_signature = "(name: str, request: LlmRequest, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, timestamp: datetime.datetime | None = None) -> LlmHandle")]
 fn llm_call(
+    _py: Python<'_>,
     name: &str,
     request: PyLLMRequest,
     handle: Option<PyScopeHandle>,
@@ -620,7 +812,7 @@ fn llm_call(
         .model_name_opt(model_name)
         .timestamp_opt(timestamp)
         .build();
-    core_llm_api::llm_call(params)
+    with_python_publication_context(|| core_llm_api::llm_call(params))
         .map(PyLLMHandle::from)
         .map_err(to_py_err)
 }
@@ -647,6 +839,7 @@ fn llm_call(
 ///     TypeError: If ``timestamp`` is not a ``datetime.datetime``.
 ///     ValueError: If ``timestamp`` is a naive datetime.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     handle: "LlmHandle",
     response: "object",
@@ -658,6 +851,7 @@ fn llm_call(
 	    timestamp: "datetime.datetime | None"=None
 ) -> "None", text_signature = "(handle: LlmHandle, response: object, *, data: object | None = None, metadata: object | None = None, annotated_response: AnnotatedLLMResponse | object | None = None, response_codec: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn llm_call_end(
+    _py: Python<'_>,
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -672,17 +866,19 @@ fn llm_call_end(
     let response_codec = py_llm_response_codec(response_codec);
     let annotated_response = py_annotated_llm_response(annotated_response)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
-    core_llm_api::llm_call_end(
-        core_llm_api::LlmCallEndParams::builder()
-            .handle(&handle.inner)
-            .response(response_json)
-            .data_opt(data)
-            .metadata_opt(metadata)
-            .annotated_response_opt(annotated_response)
-            .response_codec_opt(response_codec)
-            .timestamp_opt(timestamp)
-            .build(),
-    )
+    with_python_publication_context(|| {
+        core_llm_api::llm_call_end(
+            core_llm_api::LlmCallEndParams::builder()
+                .handle(&handle.inner)
+                .response(response_json)
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .annotated_response_opt(annotated_response)
+                .response_codec_opt(response_codec)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
     .map_err(to_py_err)
 }
 
@@ -750,35 +946,38 @@ fn llm_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
     let default_fn: LlmExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
-    let codec_arc: Option<Arc<dyn LlmCodec>> = codec.map(|c| {
-        Arc::new(py_callable::PyLlmCodecWrapper {
-            py_codec: c.clone().unbind(),
-        }) as Arc<dyn LlmCodec>
-    });
+    let codec_arc = py_llm_codec(codec);
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
+    let publication_buffer = capture_nested_publication_buffer();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
-                let params = core_llm_api::LlmCallExecuteParams::builder()
-                    .name(name)
-                    .request(request.inner)
-                    .func(default_fn)
-                    .parent(parent_handle)
-                    .attributes(attrs)
-                    .data_opt(data_json)
-                    .metadata_opt(metadata_json)
-                    .model_name_opt(model_name)
-                    .codec_opt(codec_arc)
-                    .response_codec_opt(response_codec_arc)
-                    .build();
-                let result = core_llm_api::llm_call_execute(params)
-                    .await
-                    .map_err(to_py_err)?;
-                Python::attach(|py| json_to_py(py, &result))
-            })
-            .await
+        with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, async move {
+                    let params = core_llm_api::LlmCallExecuteParams::builder()
+                        .name(name)
+                        .request(request.inner)
+                        .func(default_fn)
+                        .parent(parent_handle)
+                        .attributes(attrs)
+                        .data_opt(data_json)
+                        .metadata_opt(metadata_json)
+                        .model_name_opt(model_name)
+                        .codec_opt(codec_arc)
+                        .response_codec_opt(response_codec_arc)
+                        .build();
+                    let result = core_llm_api::llm_call_execute(params)
+                        .await
+                        .map_err(to_py_err)?;
+                    Python::attach(|py| json_to_py(py, &result))
+                }),
+            ),
+        )
+        .await
     })
 }
 
@@ -855,53 +1054,59 @@ fn llm_stream_call_execute<'py>(
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
-    let codec_arc: Option<Arc<dyn LlmCodec>> = codec.map(|c| {
-        Arc::new(py_callable::PyLlmCodecWrapper {
-            py_codec: c.clone().unbind(),
-        }) as Arc<dyn LlmCodec>
-    });
+    let codec_arc = py_llm_codec(codec);
     let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
+    let publication_context = py_callable::capture_python_publication_context();
+    let stream_publication_context = publication_context.clone();
+    let publication_buffer = capture_nested_publication_buffer();
+    let stream_publication_buffer = publication_buffer.clone();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        TASK_SCOPE_STACK
-            .scope(scope_stack, async move {
-                let params = core_llm_api::LlmStreamCallExecuteParams::builder()
-                    .name(name)
-                    .request(request.inner)
-                    .func(default_fn)
-                    .collector(collector_fn)
-                    .finalizer(finalizer_fn)
-                    .parent(parent_handle)
-                    .attributes(attrs)
-                    .data_opt(data_json)
-                    .metadata_opt(metadata_json)
-                    .model_name_opt(model_name)
-                    .codec_opt(codec_arc)
-                    .response_codec_opt(response_codec_arc)
-                    .build();
-                let rust_stream = core_llm_api::llm_stream_call_execute(params)
-                    .await
-                    .map_err(to_py_err)?;
+        with_task_nested_publication_buffer(
+            publication_buffer,
+            with_task_publication_context(
+                publication_context,
+                TASK_SCOPE_STACK.scope(scope_stack, async move {
+                    let params = core_llm_api::LlmStreamCallExecuteParams::builder()
+                        .name(name)
+                        .request(request.inner)
+                        .func(default_fn)
+                        .collector(collector_fn)
+                        .finalizer(finalizer_fn)
+                        .parent(parent_handle)
+                        .attributes(attrs)
+                        .data_opt(data_json)
+                        .metadata_opt(metadata_json)
+                        .model_name_opt(model_name)
+                        .codec_opt(codec_arc)
+                        .response_codec_opt(response_codec_arc)
+                        .build();
+                    let rust_stream = core_llm_api::llm_stream_call_execute(params)
+                        .await
+                        .map_err(to_py_err)?;
 
-                // Spawn a tokio task that drains the Rust stream into an mpsc channel
-                let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
-                let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-                let (closed, closed_rx) = tokio::sync::watch::channel(None);
-                tokio::spawn(forward_stream_to_channel(
-                    rust_stream,
-                    tx,
-                    cancel_rx,
-                    closed,
-                ));
+                    // Spawn a tokio task that drains the Rust stream into an mpsc channel
+                    let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
+                    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                    let (closed, closed_rx) = tokio::sync::watch::channel(None);
+                    tokio::spawn(with_task_nested_publication_buffer(
+                        stream_publication_buffer,
+                        with_task_publication_context(
+                            stream_publication_context,
+                            forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
+                        ),
+                    ));
 
-                Ok(PyLlmStream {
-                    receiver: Arc::new(tokio::sync::Mutex::new(rx)),
-                    cancel,
-                    closed: closed_rx,
-                })
-            })
-            .await
+                    Ok(PyLlmStream {
+                        receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+                        cancel,
+                        closed: closed_rx,
+                    })
+                }),
+            ),
+        )
+        .await
     })
 }
 
@@ -1081,7 +1286,8 @@ fn deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM sanitize-request guardrail.
 ///
-/// Callback: ``(request: LlmRequest) -> LlmRequest`` — returns a sanitized request.
+/// Callback: ``(request: LlmRequest, context: LlmSanitizeRequestContext) ->
+/// Optional[LlmRequest]``. Return ``None`` to omit the observability payload and annotation.
 #[pyfunction]
 fn register_llm_sanitize_request_guardrail(
     name: &str,
@@ -1091,7 +1297,7 @@ fn register_llm_sanitize_request_guardrail(
     core_registry_api::register_llm_sanitize_request_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1104,7 +1310,8 @@ fn deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
 
 /// Register an LLM sanitize-response guardrail.
 ///
-/// Callback: ``(response: dict) -> dict`` — returns a sanitized response.
+/// Callback: ``(response: Json, context: LlmSanitizeResponseContext) -> Optional[Json]``.
+/// Return ``None`` to omit the observability payload and annotation.
 #[pyfunction]
 fn register_llm_sanitize_response_guardrail(
     name: &str,
@@ -1114,7 +1321,7 @@ fn register_llm_sanitize_response_guardrail(
     core_registry_api::register_llm_sanitize_response_guardrail(
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1248,12 +1455,15 @@ fn deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
 #[pyfunction]
 fn tool_request_intercepts<'py>(
     py: Python<'py>,
-    name: &str,
+    name: String,
     args: &Bound<'py, PyAny>,
-) -> PyResult<Py<PyAny>> {
+) -> PyResult<Bound<'py, PyAny>> {
     let args_json = py_to_json(args)?;
-    let result = core_tool_api::tool_request_intercepts(name, args_json).map_err(to_py_err)?;
-    json_to_py(py, &result)
+    run_standalone_middleware(
+        py,
+        async move { core_tool_api::tool_request_intercepts(&name, args_json).await },
+        |py, result| json_to_py(py, &result),
+    )
 }
 
 /// Run the registered tool conditional execution guardrail chain.
@@ -1264,9 +1474,17 @@ fn tool_request_intercepts<'py>(
 ///     name: Tool name.
 ///     args: Tool arguments (any JSON-serializable object).
 #[pyfunction]
-fn tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> PyResult<()> {
+fn tool_conditional_execution<'py>(
+    py: Python<'py>,
+    name: String,
+    args: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
     let args_json = py_to_json(args)?;
-    core_tool_api::tool_conditional_execution(name, &args_json).map_err(to_py_err)
+    run_standalone_middleware(
+        py,
+        async move { core_tool_api::tool_conditional_execution(&name, &args_json).await },
+        |py, ()| Ok(py.None()),
+    )
 }
 
 /// Run the registered LLM request intercept chain on the given request.
@@ -1279,12 +1497,22 @@ fn tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> PyResult<(
 /// Returns:
 ///     The (possibly transformed) ``LlmRequest``.
 #[pyfunction]
-fn llm_request_intercepts(
-    name: &str,
+fn llm_request_intercepts<'py>(
+    py: Python<'py>,
+    name: String,
     request: PyLLMRequest,
-) -> PyResult<crate::py_types::PyLLMRequestInterceptOutcome> {
-    let result = core_llm_api::llm_request_intercepts(name, request.inner).map_err(to_py_err)?;
-    Ok(crate::py_types::PyLLMRequestInterceptOutcome { inner: result })
+) -> PyResult<Bound<'py, PyAny>> {
+    run_standalone_middleware(
+        py,
+        async move { core_llm_api::llm_request_intercepts(&name, request.inner).await },
+        |py, result| {
+            Py::new(
+                py,
+                crate::py_types::PyLLMRequestInterceptOutcome { inner: result },
+            )
+            .map(Py::into_any)
+        },
+    )
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
@@ -1294,8 +1522,15 @@ fn llm_request_intercepts(
 /// Args:
 ///     request: An ``LlmRequest`` object.
 #[pyfunction]
-fn llm_conditional_execution(request: PyLLMRequest) -> PyResult<()> {
-    core_llm_api::llm_conditional_execution(&request.inner).map_err(to_py_err)
+fn llm_conditional_execution<'py>(
+    py: Python<'py>,
+    request: PyLLMRequest,
+) -> PyResult<Bound<'py, PyAny>> {
+    run_standalone_middleware(
+        py,
+        async move { core_llm_api::llm_conditional_execution(&request.inner).await },
+        |py, ()| Ok(py.None()),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,15 +1562,34 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
     core_subscriber_api::deregister_subscriber(name).map_err(to_py_err)
 }
 
-/// Wait for subscriber callbacks queued before this call to finish.
+/// Wait for queued subscriber callbacks and their transitive native publications.
 ///
-/// Call this function outside native subscriber callbacks. A re-entrant call returns without
-/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
-/// still run.
+/// Call this function outside subscribers, event sanitizers, conditional
+/// guardrails, and request or execution intercepts. The public Python wrapper
+/// lets queued tool and LLM observability sanitizers return without waiting on
+/// their own publication.
 #[pyfunction]
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
     py.detach(core_subscriber_api::flush_subscribers)
         .map_err(to_py_err)
+}
+
+/// Lock dispatcher resources before a process forks.
+#[pyfunction]
+fn subscriber_dispatcher_before_fork() {
+    nemo_relay::api::runtime::subscriber_dispatcher::prepare_for_fork();
+}
+
+/// Unlock dispatcher resources in the parent after a process forks.
+#[pyfunction]
+fn subscriber_dispatcher_after_fork_parent() {
+    nemo_relay::api::runtime::subscriber_dispatcher::resume_after_fork_parent();
+}
+
+/// Reset inherited dispatcher resources in the child after a process forks.
+#[pyfunction]
+fn subscriber_dispatcher_after_fork_child() {
+    nemo_relay::api::runtime::subscriber_dispatcher::reset_after_fork_child();
 }
 
 // ---------------------------------------------------------------------------
@@ -1542,7 +1796,7 @@ fn scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1568,7 +1822,7 @@ fn scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
-        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
     .map_err(to_py_err)
 }
@@ -1726,7 +1980,12 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_propagation_context_with_root, m)?)?;
+    m.add_function(wrap_pyfunction!(create_scope_stack_from_propagation, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(restore_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(sync_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(py_scope_stack_active, m)?)?;
 
@@ -1840,6 +2099,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(register_subscriber, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_subscriber, m)?)?;
     m.add_function(wrap_pyfunction!(flush_subscribers, m)?)?;
+    m.add_function(wrap_pyfunction!(subscriber_dispatcher_before_fork, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        subscriber_dispatcher_after_fork_parent,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(subscriber_dispatcher_after_fork_child, m)?)?;
 
     // Scope-local tool guardrails
     m.add_function(wrap_pyfunction!(

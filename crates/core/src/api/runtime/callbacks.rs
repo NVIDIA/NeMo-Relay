@@ -19,6 +19,7 @@ use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
 use crate::json::Json;
 
@@ -26,8 +27,14 @@ use crate::json::Json;
 ///
 /// The callback receives the current event as immutable context and the fields
 /// it may replace. Later callbacks observe fields returned by earlier entries.
-pub type EventSanitizeFn =
-    Arc<dyn Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync>;
+pub type EventSanitizeFn = Arc<
+    dyn Fn(
+            Arc<Event>,
+            EventSanitizeFields,
+        ) -> Pin<Box<dyn Future<Output = Result<EventSanitizeFields>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Sanitize a tool request payload before the runtime records it.
 ///
@@ -41,7 +48,8 @@ pub type EventSanitizeFn =
 ///
 /// # Returns
 /// Sanitized JSON payload for the emitted event.
-pub type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
+pub type ToolSanitizeFn =
+    Arc<dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Decide whether a tool call is allowed to continue.
 ///
 /// The callback receives the tool name and the current argument payload. It can
@@ -63,7 +71,11 @@ pub type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// guardrail evaluation.
-pub type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
+pub type ToolConditionalFn = Arc<
+    dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Rewrite tool arguments before execution.
 ///
 /// Tool request intercepts run in priority order and can transform the JSON
@@ -79,7 +91,8 @@ pub type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> +
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
-pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
+pub type ToolInterceptFn =
+    Arc<dyn Fn(String, Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Continuation type invoked by tool execution intercepts.
 ///
 /// Execution intercepts receive this callable as their `next` continuation and
@@ -96,6 +109,12 @@ pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
 pub type ToolExecutionNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Wrap or replace tool execution.
@@ -132,6 +151,165 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
         + Sync,
 >;
 
+/// Relay's built-in LLM codec identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinLlmCodec {
+    /// OpenAI Chat Completions request and response payloads.
+    OpenAiChat,
+    /// OpenAI Responses request and response payloads.
+    OpenAiResponses,
+    /// Anthropic Messages request and response payloads.
+    AnthropicMessages,
+}
+
+impl BuiltinLlmCodec {
+    /// Stable identifier used in configuration and language bindings.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::OpenAiChat => "openai_chat",
+            Self::OpenAiResponses => "openai_responses",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+}
+
+/// Per-call LLM codec identity supplied to sanitize guardrails.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LlmCodecIdentity {
+    /// No codec was active for this payload direction.
+    #[default]
+    None,
+    /// A Relay built-in codec was active.
+    BuiltIn(BuiltinLlmCodec),
+    /// A runtime-registered codec was active, identified by its stable ID.
+    Runtime(String),
+    /// A codec was active but does not expose a registered identity.
+    Opaque,
+}
+
+/// Per-call codec context for LLM request sanitize guardrails.
+///
+/// The context distinguishes no codec, Relay built-ins, runtime-registered
+/// codecs, and active codecs with no stable identity.
+#[derive(Clone, Default)]
+pub struct LlmSanitizeRequestContext {
+    /// Identity of the codec active for this payload direction.
+    codec: LlmCodecIdentity,
+    request_codec: Option<Arc<dyn LlmCodec>>,
+}
+
+impl std::fmt::Debug for LlmSanitizeRequestContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LlmSanitizeRequestContext")
+            .field("codec", &self.codec)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LlmSanitizeRequestContext {
+    /// Construct a context that carries only a codec identity.
+    ///
+    /// Identity-only contexts do not carry a codec handle, so
+    /// [`Self::resolve_codec`] returns `None` even when the identity describes
+    /// an active codec.
+    #[must_use]
+    pub fn with_identity(codec: LlmCodecIdentity) -> Self {
+        Self {
+            codec,
+            ..Self::default()
+        }
+    }
+
+    /// Construct request-sanitizer context from the active request codec.
+    #[must_use]
+    pub fn for_request_codec(codec: Option<Arc<dyn LlmCodec>>) -> Self {
+        let identity = codec
+            .as_deref()
+            .map_or(LlmCodecIdentity::None, LlmCodec::codec_identity);
+        Self {
+            codec: identity,
+            request_codec: codec,
+        }
+    }
+
+    /// Return the identity of the codec active for this payload direction.
+    #[must_use]
+    pub fn codec(&self) -> &LlmCodecIdentity {
+        &self.codec
+    }
+
+    /// Resolve the active request codec.
+    ///
+    /// Returns `None` for contexts constructed with [`Self::with_identity`].
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<Arc<dyn LlmCodec>> {
+        self.request_codec.clone()
+    }
+}
+
+/// Per-call codec context for LLM response sanitize guardrails.
+///
+/// The context distinguishes no codec, Relay built-ins, runtime-registered
+/// codecs, and active codecs with no stable identity.
+#[derive(Clone, Default)]
+pub struct LlmSanitizeResponseContext {
+    /// Identity of the codec active for this payload direction.
+    codec: LlmCodecIdentity,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
+}
+
+impl std::fmt::Debug for LlmSanitizeResponseContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LlmSanitizeResponseContext")
+            .field("codec", &self.codec)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LlmSanitizeResponseContext {
+    /// Construct a context that carries only a codec identity.
+    ///
+    /// Identity-only contexts do not carry a codec handle, so
+    /// [`Self::resolve_codec`] returns `None` even when the identity describes
+    /// an active codec.
+    #[must_use]
+    pub fn with_identity(codec: LlmCodecIdentity) -> Self {
+        Self {
+            codec,
+            ..Self::default()
+        }
+    }
+
+    /// Construct response-sanitizer context from the active response codec.
+    #[must_use]
+    pub fn for_response_codec(codec: Option<Arc<dyn LlmResponseCodec>>) -> Self {
+        let identity = codec
+            .as_deref()
+            .map_or(LlmCodecIdentity::None, LlmResponseCodec::codec_identity);
+        Self {
+            codec: identity,
+            response_codec: codec,
+        }
+    }
+
+    /// Return the identity of the codec active for this payload direction.
+    #[must_use]
+    pub fn codec(&self) -> &LlmCodecIdentity {
+        &self.codec
+    }
+
+    /// Resolve the active response codec.
+    ///
+    /// Returns `None` for contexts constructed with [`Self::with_identity`].
+    #[must_use]
+    pub fn resolve_codec(&self) -> Option<Arc<dyn LlmResponseCodec>> {
+        self.response_codec.clone()
+    }
+}
+
 /// Sanitize an LLM request before the runtime records it.
 ///
 /// LLM request sanitizers affect the serialized request payload emitted on
@@ -140,10 +318,22 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
 ///
 /// # Parameters
 /// - First argument: LLM request payload to sanitize for observability.
+/// - Second argument: Per-call request codec identity and capability.
 ///
 /// # Returns
-/// Sanitized [`LlmRequest`] for the emitted event.
-pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
+/// `Some` contains the sanitized request for the emitted event. `None` omits
+/// both the raw request payload and its annotation from that event.
+///
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
+pub type LlmSanitizeRequestFn = Arc<
+    dyn Fn(
+            LlmRequest,
+            LlmSanitizeRequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<LlmRequest>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Sanitize an LLM response before the runtime records it.
 ///
 /// These callbacks rewrite the JSON response payload captured on LLM-end
@@ -151,10 +341,22 @@ pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sy
 ///
 /// # Parameters
 /// - First argument: JSON response payload to sanitize for observability.
+/// - Second argument: Per-call response codec identity and capability.
 ///
 /// # Returns
-/// Sanitized JSON response payload for the emitted event.
-pub type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
+/// `Some` contains the sanitized response for the emitted event. `None` omits
+/// both the raw response payload and its annotation from that event.
+///
+/// The context is always supplied and distinguishes no codec, built-in codecs,
+/// runtime-registered codecs, and opaque active codecs.
+pub type LlmSanitizeResponseFn = Arc<
+    dyn Fn(
+            Json,
+            LlmSanitizeResponseContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Json>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,
@@ -174,7 +376,11 @@ pub type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// guardrail evaluation.
-pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
+pub type LlmConditionalFn = Arc<
+    dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Rewrite or annotate an LLM request before execution.
 ///
 /// Request intercepts can transform the wire request, attach or replace a
@@ -196,7 +402,11 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
 pub type LlmRequestInterceptFn = Arc<
-    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
+    dyn Fn(
+            String,
+            LlmRequest,
+            Option<AnnotatedLlmRequest>,
+        ) -> Pin<Box<dyn Future<Output = Result<LlmRequestInterceptOutcome>> + Send>>
         + Send
         + Sync,
 >;
@@ -213,6 +423,12 @@ pub type LlmRequestInterceptFn = Arc<
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
 pub type LlmExecutionNextFn =
     Arc<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Wrap or replace non-streaming LLM execution.
@@ -276,6 +492,10 @@ impl LlmJsonStream {
     pub async fn close(&mut self) -> Result<()> {
         self.inner.as_mut().close().await
     }
+
+    pub(crate) fn terminalize(&mut self) {
+        self.inner.as_mut().terminalize();
+    }
 }
 
 impl Stream for LlmJsonStream {
@@ -288,6 +508,10 @@ impl Stream for LlmJsonStream {
 
 /// Internal close-aware stream implementation.
 pub trait LlmStreamInner: Stream<Item = Result<Json>> + Send {
+    /// Release lifecycle guards once the consumer-visible stream has ended
+    /// while retaining the producer for a later explicit close.
+    fn terminalize(self: Pin<&mut Self>) {}
+
     /// Stop the producer and wait for cleanup. Implementations must be idempotent.
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
@@ -368,6 +592,16 @@ pub(crate) type LlmStreamExecutionRegistryRefs<'a> = &'a [LlmStreamExecutionRegi
 /// # Errors
 /// The future resolves to an error when the remaining streaming execution
 /// chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
+/// Returning an interceptor stream extends that active lifetime until the
+/// stream closes, which permits lazy stream adapters to call `next` while they
+/// are being consumed. A stream successfully returned by `next` keeps its
+/// ordinary stream lifetime.
 pub type LlmStreamExecutionNextFn = Arc<
     dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>> + Send + Sync,
 >;

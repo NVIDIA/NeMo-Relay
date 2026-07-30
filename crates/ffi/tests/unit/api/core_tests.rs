@@ -201,7 +201,7 @@ fn test_ffi_observability_plugin_file_sinks() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 2,
+                        "version": 3,
                         "atof": {
                             "enabled": true,
                             "sinks": [{
@@ -238,7 +238,7 @@ fn test_ffi_observability_plugin_file_sinks() {
             nemo_relay_observability_default_config_json(&mut default_config_json),
             NemoRelayStatus::Ok
         );
-        assert_eq!(returned_json(default_config_json)["version"], json!(2));
+        assert_eq!(returned_json(default_config_json)["version"], json!(3));
         let mut component_json = ptr::null_mut();
         assert_eq!(
             nemo_relay_observability_component_spec_json(ptr::null(), true, &mut component_json),
@@ -329,7 +329,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 2,
+                        "version": 3,
                         "atif": {
                             "enabled": true,
                             "output_directory": dir_text,
@@ -908,6 +908,56 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
             NemoRelayStatus::Ok
         );
         nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn synchronous_ffi_middleware_helper_works_inside_tokio_with_scope_local_visibility() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let mut scope = ptr::null_mut();
+        assert_eq!(api::nemo_relay_get_handle(&mut scope), NemoRelayStatus::Ok);
+        let scope_uuid = cstring(
+            &take_string(nemo_relay_scope_handle_uuid(scope))
+                .expect("current scope should have a UUID"),
+        );
+        let intercept_name = cstring(&unique_name("ffi_tokio_scope_intercept"));
+        assert_eq!(
+            nemo_relay_scope_register_tool_request_intercept(
+                scope_uuid.as_ptr(),
+                intercept_name.as_ptr(),
+                1,
+                false,
+                tool_request_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let tool_name = cstring("ffi_tokio_tool");
+        let args = cstring(r#"{"value":1}"#);
+        let mut output = ptr::null_mut();
+        let status = runtime.block_on(async {
+            nemo_relay_tool_request_intercepts(tool_name.as_ptr(), args.as_ptr(), &mut output)
+        });
+        assert_eq!(status, NemoRelayStatus::Ok);
+        assert_eq!(returned_json(output)["intercepted"], json!(true));
+
+        assert_eq!(
+            nemo_relay_scope_deregister_tool_request_intercept(
+                scope_uuid.as_ptr(),
+                intercept_name.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
     }
 }
 

@@ -163,6 +163,120 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: uv cache prune --ci
 
+  Package-musllinux:
+    name: Package (musllinux-${{ matrix.architecture }})
+    needs: [Test]
+    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            runner: ubuntu-latest
+            image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
+          - architecture: aarch64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Derive packaging tool versions
+        run: |
+          set -euo pipefail
+          maturin_version="$(awk '
+            $0 == "name = \"maturin\"" { found = 1; next }
+            found && /^version = / {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' uv.lock)"
+          if [[ -z "$maturin_version" ]]; then
+            echo "Error: failed to read maturin version from uv.lock" >&2
+            exit 1
+          fi
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [[ -z "$version" ]]; then
+            echo "Error: failed to read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "${{ inputs.ref_type }}" == "tag" ]]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${GITHUB_SHA::8}"
+          fi
+          {
+            printf 'NEMO_RELAY_MATURIN_VERSION=%s\n' "$maturin_version"
+            printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version"
+          } >> "$GITHUB_ENV"
+
+      - name: Create packaging output directory
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"
+
+      - name: Build and smoke test musllinux wheel
+        env:
+          MUSLLINUX_IMAGE: ${{ matrix.image }}
+          MUSLLINUX_INTERPRETER: /opt/python/cp311-cp311/bin/python
+          MUSLLINUX_WHEEL_DIRECTORY: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
+          NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env MUSLLINUX_INTERPRETER \
+            --env MUSLLINUX_WHEEL_DIRECTORY \
+            --env NEMO_RELAY_MATURIN_VERSION \
+            --env NEMO_RELAY_PACKAGE_VERSION \
+            --env NEMO_RELAY_RUST_VERSION \
+            "$MUSLLINUX_IMAGE" \
+            /bin/sh -ec '
+              apk add --no-cache curl
+              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
+                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
+              export PATH="$HOME/.cargo/bin:$PATH"
+              "$MUSLLINUX_INTERPRETER" -m pip install --no-cache-dir "maturin==$NEMO_RELAY_MATURIN_VERSION"
+              export PATH="$(dirname "$MUSLLINUX_INTERPRETER"):$PATH"
+              "$MUSLLINUX_INTERPRETER" scripts/package_python_musllinux.py \
+                --version "$NEMO_RELAY_PACKAGE_VERSION" \
+                --out "$MUSLLINUX_WHEEL_DIRECTORY" \
+                --interpreter "$MUSLLINUX_INTERPRETER"
+              wheel="$(find "$MUSLLINUX_WHEEL_DIRECTORY" -maxdepth 1 -name "*.whl" -print -quit)"
+              test -n "$wheel"
+              "$MUSLLINUX_INTERPRETER" -m venv /tmp/nemo-relay-musllinux-venv
+              /tmp/nemo-relay-musllinux-venv/bin/python -m pip install --no-deps "$wheel"
+              /tmp/nemo-relay-musllinux-venv/bin/python -c "import nemo_relay"
+            '
+
+      - name: Verify wheel platform tag
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wheels=("${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"/*-cp311-abi3-musllinux_1_2_${{ matrix.architecture }}.whl)
+          if [[ "${#wheels[@]}" -ne 1 ]]; then
+            echo "Error: expected one cp311-abi3 musllinux wheel for ${{ matrix.architecture }}, found ${#wheels[@]}" >&2
+            exit 1
+          fi
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wheel-musllinux-${{ matrix.architecture }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels/*.whl
+          if-no-files-found: error
+
   Package:
     name: Package (${{ matrix.platform }})
     needs: [Test]

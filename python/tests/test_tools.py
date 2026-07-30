@@ -3,6 +3,10 @@
 
 """Tests for NeMo Relay tool lifecycle, guardrails, and intercepts."""
 
+import asyncio
+import contextvars
+import gc
+import warnings
 from collections import UserDict, UserList
 from dataclasses import dataclass
 from typing import cast
@@ -18,11 +22,13 @@ from nemo_relay import (
     ToolAttributes,
     ToolExecutionInterceptOutcome,
     ToolHandle,
+    create_scope_stack,
     guardrails,
     intercepts,
     scope,
     subscribers,
     tools,
+    use_scope_stack,
 )
 
 
@@ -208,7 +214,7 @@ class TestToolsAsync:
             await tools.execute("failing_tool", {"x": 1}, failing)
 
         try:
-            subscribers.flush()
+            await subscribers.flush_async()
         finally:
             subscribers.deregister("py_tool_exec_failure_sub")
 
@@ -315,6 +321,64 @@ class TestToolGuardrails:
 
 
 class TestToolGuardrailsAsync:
+    async def test_async_conditional_runs_on_originating_loop(self):
+        originating_loop = asyncio.get_running_loop()
+
+        async def allow(_name, _args):
+            await asyncio.sleep(0)
+            assert asyncio.get_running_loop() is originating_loop
+            return None
+
+        guardrails.register_tool_conditional_execution("py_async_conditional_loop", 1, allow)
+        try:
+            result = await tools.execute("allowed_tool", {}, lambda args: args)
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_async_conditional_loop")
+
+        assert result == {}
+
+    async def test_manual_async_sanitizers_publish_transformed_payloads_and_can_flush(self):
+        events = []
+        request_flushed = False
+        response_flushed = False
+
+        async def sanitize_request(name, args):
+            nonlocal request_flushed
+            await asyncio.sleep(0)
+            subscribers.flush()
+            request_flushed = True
+            return {**args, "request_sanitized": True}
+
+        async def sanitize_response(name, response):
+            nonlocal response_flushed
+            await asyncio.sleep(0)
+            subscribers.flush()
+            response_flushed = True
+            return {**response, "response_sanitized": True}
+
+        subscribers.register("py_manual_tool_flush_subscriber", events.append)
+        guardrails.register_tool_sanitize_request("py_manual_tool_flush_request", 1, sanitize_request)
+        guardrails.register_tool_sanitize_response("py_manual_tool_flush_response", 1, sanitize_response)
+        try:
+            handle = tools.call("py_manual_tool_flush", {"original": True})
+            tools.call_end(handle, {"ok": True})
+            await asyncio.wait_for(subscribers.flush_async(), timeout=2)
+        finally:
+            guardrails.deregister_tool_sanitize_request("py_manual_tool_flush_request")
+            guardrails.deregister_tool_sanitize_response("py_manual_tool_flush_response")
+            subscribers.deregister("py_manual_tool_flush_subscriber")
+
+        assert request_flushed
+        assert response_flushed
+        assert _tool_event(events, "py_manual_tool_flush", "start").data == {
+            "original": True,
+            "request_sanitized": True,
+        }
+        assert _tool_event(events, "py_manual_tool_flush", "end").data == {
+            "ok": True,
+            "response_sanitized": True,
+        }
+
     async def test_conditional_blocks_execution(self):
         guardrails.register_tool_conditional_execution("py_async_blocker", 1, lambda name, args: "blocked by policy")
 
@@ -361,7 +425,7 @@ class TestToolIntercepts:
     def test_request_intercept_raises_on_exception(self):
         intercepts.register_tool_request("py_req_raise", 1, False, lambda n, a: raise_runtime_error("boom"))
         try:
-            with pytest.raises(RuntimeError, match="callable failed"):
+            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
                 tools.request_intercepts("raise_tool", {"value": 1})
         finally:
             intercepts.deregister_tool_request("py_req_raise")
@@ -374,13 +438,197 @@ class TestToolIntercepts:
             cast(intercepts.ToolRequestIntercept, lambda n, a: object()),
         )
         try:
-            with pytest.raises(RuntimeError, match="py_to_json failed"):
+            with pytest.raises(RuntimeError, match="unsupported type object"):
                 tools.request_intercepts("bad_return_tool", {"value": 1})
         finally:
             intercepts.deregister_tool_request("py_req_bad_return")
 
 
 class TestToolInterceptsAsync:
+    def test_loop_shutdown_cancels_pending_middleware_without_unraisable_errors(self, capsys):
+        async def request_intercept(_name, args):
+            await asyncio.Event().wait()
+            return args
+
+        async def scenario():
+            execution = asyncio.ensure_future(tools.execute("shutdown_tool", {}, lambda args: args))
+            await asyncio.sleep(0.01)
+            assert not execution.done()
+
+        intercepts.register_tool_request("py_tool_shutdown_request", 1, False, request_intercept)
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                asyncio.run(scenario())
+                gc.collect()
+        finally:
+            intercepts.deregister_tool_request("py_tool_shutdown_request")
+
+        diagnostics = capsys.readouterr().err + "\n".join(str(item.message) for item in caught)
+        assert "Event loop is closed" not in diagnostics
+        assert "Task was destroyed but it is pending" not in diagnostics
+        assert "was never awaited" not in diagnostics
+
+    async def test_cancelling_conditional_guardrail_closes_guardrail_scope(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+        events: list[Event] = []
+
+        async def conditional(_name, _args):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        guardrails.register_tool_conditional_execution("py_tool_cancel_conditional", 1, conditional)
+        subscribers.register("py_tool_cancel_conditional_events", events.append)
+        try:
+            execution = asyncio.ensure_future(tools.execute("cancel_conditional_tool", {}, lambda x: x))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+            await subscribers.flush_async()
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_tool_cancel_conditional")
+            subscribers.deregister("py_tool_cancel_conditional_events")
+
+        guardrail_lifecycle = [
+            event.scope_category
+            for event in events
+            if isinstance(event, ScopeEvent) and event.name == "py_tool_cancel_conditional"
+        ]
+        assert guardrail_lifecycle == ["start", "end"]
+
+    async def test_cancelling_execute_cancels_pending_request_intercept(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+        provider_calls: list[dict] = []
+
+        async def request_intercept(_name, args):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return args
+
+        def provider(args):
+            provider_calls.append(args)
+            return args
+
+        intercepts.register_tool_request("py_tool_cancel_request", 1, False, request_intercept)
+        try:
+            execution = asyncio.ensure_future(tools.execute("cancel_request_tool", {}, provider))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+        finally:
+            intercepts.deregister_tool_request("py_tool_cancel_request")
+
+        assert provider_calls == []
+
+    async def test_cancelling_execute_cancels_pending_execution_intercept(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        cancelled = asyncio.Event()
+        provider_calls: list[dict] = []
+        events: list[Event] = []
+
+        async def middleware(_name, args, next):
+            started.set()
+            try:
+                await release.wait()
+                return ToolExecutionInterceptOutcome(await next(args))
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        def provider(args):
+            provider_calls.append(args)
+            return args
+
+        intercepts.register_tool_execution("py_tool_cancel_intercept", 1, middleware)
+        subscribers.register("py_tool_cancel_events", events.append)
+        try:
+            execution = asyncio.ensure_future(tools.execute("cancel_tool", {"ok": True}, provider))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+            await subscribers.flush_async()
+        finally:
+            release.set()
+            intercepts.deregister_tool_execution("py_tool_cancel_intercept")
+            subscribers.deregister("py_tool_cancel_events")
+
+        assert provider_calls == []
+        lifecycle = [
+            event.scope_category for event in events if isinstance(event, ScopeEvent) and event.name == "cancel_tool"
+        ]
+        assert lifecycle == ["start", "end"]
+
+    async def test_sync_middleware_preserves_async_caller_context(self):
+        request_id = contextvars.ContextVar("tool_middleware_request_id", default="registration")
+        observed: list[tuple[str, str]] = []
+
+        def conditional(_name, _args):
+            observed.append(("conditional", request_id.get()))
+            return None
+
+        def request_intercept(_name, args):
+            observed.append(("request", request_id.get()))
+            return args
+
+        def execution_intercept(_name, args, _next):
+            observed.append(("execution", request_id.get()))
+            return ToolExecutionInterceptOutcome(args)
+
+        guardrails.register_tool_conditional_execution("py_tool_context_conditional", 1, conditional)
+        intercepts.register_tool_request("py_tool_context_request", 1, False, request_intercept)
+        intercepts.register_tool_execution("py_tool_context_execution", 1, execution_intercept)
+        token = request_id.set("emitter")
+        try:
+            assert await tools.execute("context_tool", {"ok": True}, lambda args: args) == {"ok": True}
+            await tools.conditional_execution("context_tool_standalone", {})
+            assert await tools.request_intercepts("context_tool_standalone", {"ok": True}) == {"ok": True}
+        finally:
+            request_id.reset(token)
+            intercepts.deregister_tool_execution("py_tool_context_execution")
+            intercepts.deregister_tool_request("py_tool_context_request")
+            guardrails.deregister_tool_conditional_execution("py_tool_context_conditional")
+
+        assert observed == [
+            ("conditional", "emitter"),
+            ("request", "emitter"),
+            ("execution", "emitter"),
+            ("conditional", "emitter"),
+            ("request", "emitter"),
+        ]
+
+    async def test_async_request_intercept_runs_on_originating_loop(self):
+        originating_loop = asyncio.get_running_loop()
+
+        async def intercept_fn(_name, args):
+            await asyncio.sleep(0)
+            assert asyncio.get_running_loop() is originating_loop
+            return {**args, "intercepted": True}
+
+        intercepts.register_tool_request("py_async_request_loop", 1, False, intercept_fn)
+        try:
+            result = await tools.execute("intercepted_tool", {}, lambda args: args)
+        finally:
+            intercepts.deregister_tool_request("py_async_request_loop")
+
+        assert result == {"intercepted": True}
+
     async def test_request_intercept_modifies_args(self):
         def intercept_fn(name, args):
             args["intercepted"] = True
@@ -430,7 +678,7 @@ class TestToolInterceptsAsync:
         try:
             result = await tools.execute("next_tool", {"value": 2}, original)
             assert result == {"value": 6, "from_intercept": True}
-            subscribers.flush()
+            await subscribers.flush_async()
             start = _tool_event(events, "next_tool", "start")
             end = _tool_event(events, "next_tool", "end")
             mark = next(
@@ -441,6 +689,155 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_next")
             subscribers.deregister("py_exec_mark_sub")
+
+    async def test_execution_intercept_rejects_detached_next_after_settlement(self):
+        release_late_next = asyncio.Event()
+        late_task: asyncio.Task[dict] | None = None
+        provider_calls: list[dict] = []
+
+        async def middleware(_name, args, next):
+            nonlocal late_task
+
+            async def invoke_late():
+                await release_late_next.wait()
+                return await next(args)
+
+            late_task = asyncio.create_task(invoke_late())
+            return ToolExecutionInterceptOutcome({"source": "intercept"})
+
+        def provider(args):
+            provider_calls.append(args)
+            return args
+
+        intercepts.register_tool_execution("py_exec_late_next", 1, middleware)
+        try:
+            result = await tools.execute("late_next_tool", {"value": 1}, provider)
+            assert result == {"source": "intercept"}
+            assert late_task is not None
+            release_late_next.set()
+            with pytest.raises(RuntimeError, match="execution continuation is no longer active"):
+                await late_task
+        finally:
+            release_late_next.set()
+            if late_task is not None and not late_task.done():
+                late_task.cancel()
+            intercepts.deregister_tool_execution("py_exec_late_next")
+
+        assert provider_calls == []
+
+    async def test_execution_intercept_isolates_concurrent_next_scope_branches(self):
+        both_pushed = asyncio.Event()
+        pushed = 0
+
+        async def middleware(_name, _args, next):
+            first, second = await asyncio.gather(
+                next({"branch": "first"}),
+                next({"branch": "second"}),
+            )
+            return ToolExecutionInterceptOutcome([first, second])
+
+        async def provider(args):
+            nonlocal pushed
+            handle = scope.push(f"python-next-{args['branch']}", ScopeType.Custom)
+            try:
+                pushed += 1
+                if pushed == 2:
+                    both_pushed.set()
+                await both_pushed.wait()
+                if args["branch"] == "first":
+                    await asyncio.sleep(0)
+                assert scope.get_handle().uuid == handle.uuid
+                return args
+            finally:
+                scope.pop(handle)
+
+        intercepts.register_tool_execution("py_exec_concurrent_next_scopes", 1, middleware)
+        try:
+            result = await tools.execute("concurrent_next_tool", {}, provider)
+            assert result == [{"branch": "first"}, {"branch": "second"}]
+        finally:
+            intercepts.deregister_tool_execution("py_exec_concurrent_next_scopes")
+
+    async def test_execution_next_honors_concurrent_scope_stack_replacements(self):
+        first_stack = create_scope_stack()
+        second_stack = create_scope_stack()
+        both_entered = asyncio.Event()
+        entered = 0
+        with use_scope_stack(first_stack):
+            first_scope = scope.get_handle().uuid
+        with use_scope_stack(second_stack):
+            second_scope = scope.get_handle().uuid
+
+        async def middleware(_name, _args, next):
+            async def invoke(stack, branch):
+                nonlocal entered
+                with use_scope_stack(stack):
+                    entered += 1
+                    if entered == 2:
+                        both_entered.set()
+                    await both_entered.wait()
+                    await asyncio.sleep(0)
+                    return await next({"branch": branch})
+
+            first, second = await asyncio.gather(
+                invoke(first_stack, "first"),
+                invoke(second_stack, "second"),
+            )
+            return ToolExecutionInterceptOutcome([first, second])
+
+        async def provider(args):
+            await asyncio.sleep(0)
+            return {"branch": args["branch"], "scope": scope.get_handle().uuid}
+
+        intercepts.register_tool_execution("py_exec_replaced_next_scopes", 1, middleware)
+        try:
+            result = await tools.execute("replaced_next_scopes", {}, provider)
+            assert result == [
+                {"branch": "first", "scope": first_scope},
+                {"branch": "second", "scope": second_scope},
+            ]
+        finally:
+            intercepts.deregister_tool_execution("py_exec_replaced_next_scopes")
+
+    async def test_plain_next_uses_each_concurrent_middleware_invocation_scope(self):
+        first_stack = create_scope_stack()
+        second_stack = create_scope_stack()
+        both_entered = asyncio.Event()
+        entered = 0
+
+        async def middleware(_name, args, next):
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await both_entered.wait()
+            await asyncio.sleep(0)
+            return ToolExecutionInterceptOutcome(await next(args))
+
+        async def provider(args):
+            await asyncio.sleep(0)
+            return {"branch": args["branch"], "scope": scope.get_handle().uuid}
+
+        async def invoke(stack, branch):
+            with use_scope_stack(stack):
+                expected_scope = scope.get_handle().uuid
+                result = await tools.execute(
+                    f"plain_next_{branch}",
+                    {"branch": branch},
+                    provider,
+                )
+                return result, expected_scope
+
+        intercepts.register_tool_execution("py_exec_plain_next_scopes", 1, middleware)
+        try:
+            (first, first_scope), (second, second_scope) = await asyncio.gather(
+                invoke(first_stack, "first"),
+                invoke(second_stack, "second"),
+            )
+            assert first == {"branch": "first", "scope": first_scope}
+            assert second == {"branch": "second", "scope": second_scope}
+        finally:
+            intercepts.deregister_tool_execution("py_exec_plain_next_scopes")
 
     async def test_execution_intercept_rejects_legacy_raw_result(self):
         intercepts.register_tool_execution(
@@ -485,7 +882,7 @@ class TestToolGuardrailsEdgeCases:
             cast(guardrails.ToolConditionalExecutionGuardrail, lambda name, args: 123),
         )
         try:
-            with pytest.raises(RuntimeError, match="expected str or None"):
+            with pytest.raises(RuntimeError, match="unexpected type"):
                 tools.conditional_execution("bad_type_tool", {})
         finally:
             guardrails.deregister_tool_conditional_execution("py_cond_bad_type")
@@ -497,7 +894,7 @@ class TestToolGuardrailsEdgeCases:
             lambda name, args: raise_runtime_error("boom"),
         )
         try:
-            with pytest.raises(RuntimeError, match="callable failed"):
+            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
                 tools.conditional_execution("error_tool", {})
         finally:
             guardrails.deregister_tool_conditional_execution("py_cond_error")

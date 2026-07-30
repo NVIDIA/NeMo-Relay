@@ -111,7 +111,7 @@ macro_rules! global_guardrail_registry_api {
             state
                 .$field
                 .register(
-                    Guardrail::new(name, priority, guardrail),
+                    Guardrail::new(name, priority, guardrail.into()),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -298,7 +298,7 @@ macro_rules! scope_guardrail_registry_api {
             registries
                 .$field
                 .register(
-                    Guardrail::new(name, priority, guardrail),
+                    Guardrail::new(name, priority, guardrail.into()),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -475,6 +475,7 @@ global_guardrail_registry_api!(
     mark_sanitize_guardrails,
     EventSanitizeFn
 );
+
 global_guardrail_registry_api!(
     /// Register a global scope-start event sanitizer.
     register_scope_sanitize_start_guardrail,

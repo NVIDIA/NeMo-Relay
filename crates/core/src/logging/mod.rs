@@ -8,6 +8,7 @@
 
 mod config;
 mod format;
+mod rotation;
 mod sink;
 
 use std::io::{self, Write};
@@ -21,8 +22,9 @@ use uuid::Uuid;
 use crate::error::{FlowError, Result};
 
 pub use config::{
-    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogSinkConfig,
-    LogFormat, LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES,
+    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogRotationConfig,
+    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
+    MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES,
 };
 pub(crate) use sink::build_logger;
 use sink::log_level_filter;

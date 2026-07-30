@@ -29,11 +29,20 @@ pub(crate) struct AgentsCommand {
     pub(crate) json: bool,
 }
 
-pub(super) async fn execute(command: DoctorCommand) -> Result<ExitCode, CliError> {
+pub(super) async fn execute(
+    command: DoctorCommand,
+    server: &super::serve::ServerArgs,
+) -> Result<ExitCode, CliError> {
     if let Some(plugin) = command.plugin {
         return execute_plugin_doctor(plugin, command.install_dir, command.json);
     }
-    crate::diagnostics::run_doctor(command.agent.map(Into::into), command.json).await
+    let gateway_overrides = server.to_runtime();
+    crate::diagnostics::run_doctor(
+        command.agent.map(Into::into),
+        command.json,
+        &gateway_overrides,
+    )
+    .await
 }
 
 fn execute_plugin_doctor(

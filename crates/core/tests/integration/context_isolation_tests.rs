@@ -6,9 +6,10 @@
 use std::sync::Arc;
 
 use nemo_relay::api::runtime::{
-    ScopeStack, TASK_SCOPE_STACK, create_scope_stack, current_scope_stack,
+    PropagationContext, ScopeStack, TASK_SCOPE_STACK, create_scope_stack,
+    create_scope_stack_from_propagation, current_scope_stack, fork_scope_stack,
     propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
-    task_scope_push, task_scope_remove, task_scope_top,
+    task_scope_push, task_scope_remove, task_scope_top, with_scope_stack,
 };
 use nemo_relay::api::scope::{
     PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
@@ -53,6 +54,95 @@ fn test_two_scope_stacks_are_independent() {
     let root_b_uuid = stack_b.read().unwrap().top().uuid;
     // They each have their own root
     assert_ne!(root_a_uuid, root_b_uuid); // scope_a != scope_b
+}
+
+#[test]
+fn test_propagation_context_seeds_a_synthetic_root_and_parent() {
+    let root_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid,
+    })
+    .unwrap();
+    let stack = stack.read().unwrap();
+    assert_eq!(stack.root_uuid(), root_uuid);
+    assert_eq!(stack.top().uuid, parent_uuid);
+    assert_eq!(stack.scopes().len(), 2);
+}
+
+#[test]
+fn test_rootless_propagation_context_uses_the_parent_as_root() {
+    let parent_uuid = Uuid::now_v7();
+    let stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: None,
+        parent_uuid,
+    })
+    .unwrap();
+    let stack = stack.read().unwrap();
+    assert_eq!(stack.root_uuid(), parent_uuid);
+    assert_eq!(stack.top().uuid, parent_uuid);
+    assert_eq!(stack.scopes().len(), 1);
+}
+
+#[test]
+fn test_propagation_context_with_root_as_parent_uses_one_synthetic_root() {
+    let root_uuid = Uuid::now_v7();
+    let stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid: root_uuid,
+    })
+    .unwrap();
+    let stack = stack.read().unwrap();
+    assert_eq!(stack.root_uuid(), root_uuid);
+    assert_eq!(stack.top().uuid, root_uuid);
+    assert_eq!(stack.scopes().len(), 1);
+    assert!(stack.is_propagated_parent(root_uuid));
+}
+
+#[test]
+fn test_propagation_context_rejects_invalid_wire_values() {
+    for context in [
+        PropagationContext {
+            version: PropagationContext::VERSION + 1,
+            root_uuid: None,
+            parent_uuid: Uuid::now_v7(),
+        },
+        PropagationContext {
+            version: PropagationContext::VERSION,
+            root_uuid: None,
+            parent_uuid: Uuid::nil(),
+        },
+        PropagationContext {
+            version: PropagationContext::VERSION,
+            root_uuid: Some(Uuid::from_u128(1_u128 << 64)),
+            parent_uuid: Uuid::now_v7(),
+        },
+    ] {
+        assert!(create_scope_stack_from_propagation(&context).is_err());
+    }
+}
+
+#[test]
+fn test_propagation_context_json_round_trips_and_validates_input() {
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(Uuid::now_v7()),
+        parent_uuid: Uuid::now_v7(),
+    };
+
+    let json = context.to_json().unwrap();
+    assert_eq!(PropagationContext::from_json(&json).unwrap(), context);
+    assert!(PropagationContext::from_json("not JSON").is_err());
+    assert!(
+        PropagationContext::from_json(
+            r#"{"version":2,"parent_uuid":"018f13f0-7c1a-7a80-8000-000000000002"}"#,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -130,6 +220,75 @@ async fn test_tokio_tasks_isolated() {
     let (result_a, result_b) = tokio::join!(handle_a, handle_b);
     assert_eq!(result_a.unwrap(), "task_a_scope");
     assert_eq!(result_b.unwrap(), "task_b_scope");
+}
+
+#[tokio::test]
+async fn test_fork_scope_stack_isolates_child_tasks_and_preserves_parentage() {
+    let parent_stack = create_scope_stack();
+    TASK_SCOPE_STACK
+        .scope(parent_stack, async {
+            let parent = ScopeHandle::builder()
+                .name("fork-parent")
+                .scope_type(ScopeType::Agent)
+                .build();
+            task_scope_push(parent.clone());
+
+            let first_stack = fork_scope_stack().unwrap();
+            let second_stack = fork_scope_stack().unwrap();
+            assert!(!Arc::ptr_eq(&first_stack, &second_stack));
+            assert_eq!(first_stack.read().unwrap().top().uuid, parent.uuid);
+            assert_eq!(second_stack.read().unwrap().top().uuid, parent.uuid);
+            let parent_uuid = parent.uuid;
+            let (second_pushed_tx, second_pushed_rx) = tokio::sync::oneshot::channel();
+            let (first_popped_tx, first_popped_rx) = tokio::sync::oneshot::channel();
+
+            let first = tokio::spawn(TASK_SCOPE_STACK.scope(first_stack, async move {
+                let child = ScopeHandle::builder()
+                    .name("first-child")
+                    .scope_type(ScopeType::Function)
+                    .parent_uuid(parent_uuid)
+                    .build();
+                task_scope_push(child.clone());
+                second_pushed_rx.await.unwrap();
+                task_scope_remove(&child.uuid).unwrap();
+                first_popped_tx.send(()).unwrap();
+                child
+            }));
+            let second = tokio::spawn(TASK_SCOPE_STACK.scope(second_stack, async move {
+                let child = ScopeHandle::builder()
+                    .name("second-child")
+                    .scope_type(ScopeType::Function)
+                    .parent_uuid(parent_uuid)
+                    .build();
+                task_scope_push(child.clone());
+                second_pushed_tx.send(()).unwrap();
+                first_popped_rx.await.unwrap();
+                task_scope_remove(&child.uuid).unwrap();
+                child
+            }));
+
+            let (first, second) = tokio::join!(first, second);
+            assert_eq!(first.unwrap().parent_uuid, Some(parent_uuid));
+            assert_eq!(second.unwrap().parent_uuid, Some(parent_uuid));
+            assert_eq!(task_scope_top().uuid, parent.uuid);
+        })
+        .await;
+}
+
+#[test]
+fn test_fork_scope_stack_uses_current_thread_parent() {
+    let stack = create_scope_stack();
+    with_scope_stack(stack.clone(), || {
+        let parent = ScopeHandle::builder()
+            .name("thread-parent")
+            .scope_type(ScopeType::Agent)
+            .build();
+        task_scope_push(parent.clone());
+
+        let fork = fork_scope_stack().unwrap();
+        assert_eq!(fork.read().unwrap().top().uuid, parent.uuid);
+        assert!(!Arc::ptr_eq(&fork, &stack));
+    });
 }
 
 /// Thread-local fallback creates independent stacks per thread.

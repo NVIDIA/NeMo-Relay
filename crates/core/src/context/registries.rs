@@ -23,6 +23,7 @@ use crate::registry::SortedRegistry;
 /// subscribers. These registrations are merged with the global runtime
 /// registries when the runtime resolves the effective middleware chain for a
 /// tool or LLM call executed inside that scope.
+#[derive(Clone)]
 pub(crate) struct ScopeLocalRegistries {
     /// Mark event field sanitizers.
     pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,

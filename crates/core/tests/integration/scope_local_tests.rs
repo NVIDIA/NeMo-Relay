@@ -9,6 +9,8 @@
 
 #![allow(clippy::await_holding_lock)]
 
+mod test_support;
+
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +33,7 @@ use nemo_relay::api::subscriber::{
 use nemo_relay::api::tool::{tool_call, tool_call_end, tool_call_execute};
 use nemo_relay::error::FlowError;
 use serde_json::json;
+use test_support::ready;
 
 // All tests share the global context, so we serialize them.
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -84,7 +87,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_sanitized".into(), json!(true));
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -166,13 +169,13 @@ async fn test_auto_cleanup_on_scope_pop() {
             args.as_object_mut()
                 .unwrap()
                 .insert("ephemeral".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
     // Verify it runs before pop.
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -193,7 +196,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     .unwrap();
 
     // Now execute again — the field should NOT appear.
-    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func2: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let result2 = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -234,7 +237,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p10".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -250,7 +253,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p30".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -267,12 +270,12 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p20".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -326,7 +329,7 @@ fn test_name_coexistence_global_and_scope_local() {
         1,
         Arc::new(move |_name, args| {
             c1.fetch_add(1, Ordering::SeqCst);
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -339,7 +342,7 @@ fn test_name_coexistence_global_and_scope_local() {
         2,
         Arc::new(move |_name, args| {
             c2.fetch_add(1, Ordering::SeqCst);
-            args
+            ready(args)
         }),
     )
     .unwrap();
@@ -354,6 +357,7 @@ fn test_name_coexistence_global_and_scope_local() {
     .unwrap();
 
     // Both guardrails with the same name ran.
+    flush_subscribers().unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 2);
 
     // Cleanup
@@ -400,7 +404,7 @@ async fn test_scope_isolation_between_stacks() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("a"));
-                Ok(args)
+                ready(args)
             }),
         )
         .unwrap();
@@ -426,7 +430,7 @@ async fn test_scope_isolation_between_stacks() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("b"));
-                Ok(args)
+                ready(args)
             }),
         )
         .unwrap();
@@ -435,7 +439,7 @@ async fn test_scope_isolation_between_stacks() {
 
     // Execute on stack A — should see agent_a's intercept only
     set_thread_scope_stack(stack_a.clone());
-    let func_a: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func_a: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let result_a = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -449,7 +453,7 @@ async fn test_scope_isolation_between_stacks() {
 
     // Execute on stack B — should see agent_b's intercept only
     set_thread_scope_stack(stack_b.clone());
-    let func_b: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func_b: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let result_b = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -506,7 +510,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("global".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -530,7 +534,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_a".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
@@ -555,13 +559,13 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_b".into(), json!(true));
-            Ok(args)
+            ready(args)
         }),
     )
     .unwrap();
 
     // Execute within scope B — should see global + scope_a + scope_b
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -702,17 +706,19 @@ async fn test_scope_local_conditional_execution_guardrail() {
         "tool_blocker",
         1,
         Arc::new(|name, _args| {
-            if name == "banned_tool" {
-                Ok(Some("banned_tool is not allowed in this scope".to_string()))
-            } else {
-                Ok(None)
-            }
+            Box::pin(async move {
+                if name == "banned_tool" {
+                    Ok(Some("banned_tool is not allowed in this scope".to_string()))
+                } else {
+                    Ok(None)
+                }
+            })
         }),
     )
     .unwrap();
 
     // Call to banned_tool should be rejected
-    let func_banned: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func_banned: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let err = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("banned_tool")
@@ -731,7 +737,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     }
 
     // Call to a different tool should succeed
-    let func_ok: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func_ok: ToolExecutionNextFn = Arc::new(|args| ready(args));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("allowed_tool")

@@ -34,7 +34,7 @@ The CLI is designed for these tasks:
 - **Configure transparent runs interactively**: Use the setup wizard to write
   project or user configuration for supported agents.
 - **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
-  streams, or OpenInference spans from one shared config model.
+  streams, or typed OpenTelemetry spans from one shared config model.
 - **Diagnose setup readiness**: Check config layers, `plugins.toml` discovery,
   agent binaries, persistent coding-agent integrations, hook status,
   observability outputs, and shell completions with `nemo-relay doctor`.
@@ -62,7 +62,25 @@ The CLI provides these capabilities:
 
 ## Installation Options
 
-Cargo:
+Install the prebuilt CLI from PyPI:
+
+```bash
+pip install nemo-relay-cli-bin
+```
+
+Install the prebuilt CLI from npm:
+
+```bash
+npm install --global nemo-relay-cli-bin
+```
+
+Install the Python API and matching CLI with the optional extra:
+
+```bash
+pip install "nemo-relay[cli]"
+```
+
+Build and install the CLI from crates.io with Cargo:
 
 ```bash
 cargo install nemo-relay-cli
@@ -104,6 +122,13 @@ After setup, inspect local readiness:
 nemo-relay doctor
 ```
 
+To troubleshoot a specific configuration file, pass it explicitly. Doctor reports a missing or
+invalid file in its configuration checks instead of stopping before diagnostics:
+
+```bash
+nemo-relay --config /path/to/config.toml doctor
+```
+
 Run a supported agent through the gateway:
 
 ```bash
@@ -127,14 +152,32 @@ nemo-relay run --agent codex --dry-run
 
 Project config lives at `./.nemo-relay/config.toml`; user config lives at
 `~/.config/nemo-relay/config.toml` or `$XDG_CONFIG_HOME/nemo-relay/config.toml`.
-The project layer overrides system config, and the user layer overrides the
-project layer.
+Runtime files layer from lowest to highest precedence as explicit-or-user,
+nearest project, then system. An explicit `--config` replaces the ambient user
+file without suppressing project or system configuration.
 
-General options are configured through the top-level config. Edit the config with:
+Set up agent entries in the top-level config with:
 
 ```bash
 nemo-relay config
 ```
+
+Edit gateway limits, provider upstreams, and operational logging with the
+structured user-config editor:
+
+```bash
+nemo-relay config edit
+```
+
+Use `--project` for the nearest project `config.toml`, or `--global` for
+`/etc/nemo-relay/config.toml`. Global saves are system-readable (`0644` on
+Unix) and reject authorization headers; use the corresponding environment
+variables or a user config for credentials.
+
+When the top-level CLI receives `--config path/to/config.toml`, the config
+editor uses that exact file as its user target, so the default editor and
+`config edit --user` both open it. Use `--project` or `--global` to edit the
+other active layers.
 
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:
@@ -142,6 +185,12 @@ plugin config with:
 ```bash
 nemo-relay plugins edit
 ```
+
+When the top-level CLI receives `--plugin-config-path`, the editor uses that
+exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
+sibling `path/to/plugins.toml`, matching runtime selection. The explicit file
+replaces the user layer, so `--user` keeps that inherited target.
+`--project` and `--global` edit the other active layers.
 
 The top-level editor menu contains one entry per supported built-in, followed by
 the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
@@ -151,7 +200,16 @@ Other dynamic plugins use a raw JSON object editor.
 The canonical plugin file is `plugins.toml`; user config lives at
 `~/.config/nemo-relay/plugins.toml` or
 `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Project config lives at
-`.nemo-relay/plugins.toml`.
+`.nemo-relay/plugins.toml`. Use `nemo-relay plugins edit --global` to edit
+`/etc/nemo-relay/plugins.toml`; it is system-readable (`0644` on Unix), so do
+not store credentials there. The editor rejects schema-declared secret values
+in global plugin configuration.
+
+Runtime plugin files layer from lowest to highest precedence as
+explicit-or-user, nearest project, then system. An explicit
+`--plugin-config-path`, or a `plugins.toml` beside `--config`, replaces the
+ambient XDG user file without suppressing project or system policy. Missing
+files are skipped, and symlink aliases to one physical file are loaded once.
 
 Minimal ATIF example:
 
