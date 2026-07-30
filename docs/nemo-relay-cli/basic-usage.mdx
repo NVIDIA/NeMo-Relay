@@ -263,12 +263,14 @@ export NEMO_RELAY_OPENAI_AUTH_HEADER="Bearer <openai-credential>"
 export NEMO_RELAY_ANTHROPIC_AUTH_HEADER="Basic <anthropic-credential>"
 ```
 
-If you change a base URL with `NEMO_RELAY_OPENAI_BASE_URL`,
-`NEMO_RELAY_ANTHROPIC_BASE_URL`, `--openai-base-url`, or
-`--anthropic-base-url`, set the matching auth-header environment variable when
-the new endpoint needs custom authentication. Relay doesn't carry a custom
-header across a URL change. Repeating the exact same URL preserves the existing
-header.
+Configure a custom base URL and its authorization header in the same layer. For
+environment configuration, set `NEMO_RELAY_OPENAI_BASE_URL` with
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, or set the corresponding Anthropic variables
+together. A CLI `--openai-base-url` or `--anthropic-base-url` override can
+inherit an environment header only when the environment selected the same URL.
+If the CLI flag changes the URL, Relay clears the environment header; use the
+paired environment variables instead when the new endpoint requires custom
+authentication.
 
 The exact configured base URL is the upstream identity during file,
 environment, and command-line layering. A higher layer that keeps the same URL
