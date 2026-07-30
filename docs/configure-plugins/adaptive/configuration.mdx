@@ -53,6 +53,19 @@ upstreams. Use separate Relay gateway/cache deployments for those trust domains,
 or leave response caching disabled. Validation rejects an empty or whitespace-only
 namespace for both in-memory and Redis backends.
 
+<Note>
+Rust 0.7 adds `response_cache` to the public `AdaptiveConfig` struct. Existing
+exhaustive struct literals must add `response_cache: None`. Prefer setting the
+fields you need and ending the literal with `..AdaptiveConfig::default()` so
+future optional fields keep their defaults.
+</Note>
+
+Streaming cache publication is write-behind. Relay reports stream completion
+without waiting for the cache backend to confirm the write, so an identical
+request issued immediately after completion can still run live. A later request
+can reuse the entry after publication finishes. This keeps Redis latency or an
+unavailable cache backend from delaying the streamed response.
+
 ## `plugins.toml` Example
 
 Add the following whole-plugin Adaptive configuration to `plugins.toml`:

@@ -11,7 +11,7 @@ use tokio_stream::StreamExt;
 use super::*;
 
 #[tokio::test]
-async fn cache_commit_does_not_delay_stream_completion() {
+async fn write_behind_returns_eof_before_cache_commit_completes() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let (cancel, _) = watch::channel(false);
     let (_, closed) = watch::channel(None::<FlowResult<()>>);
@@ -32,7 +32,7 @@ async fn cache_commit_does_not_delay_stream_completion() {
     assert!(
         tokio::time::timeout(Duration::from_secs(1), stream.next())
             .await
-            .expect("cache write must not delay stream completion")
+            .expect("write-behind cache publication must not delay stream completion")
             .is_none()
     );
     release

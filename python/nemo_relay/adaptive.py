@@ -310,8 +310,8 @@ class AdaptiveConfig:
         adaptive_hints: Built-in LLM hint-injection settings.
         tool_parallelism: Built-in tool scheduling settings.
         acg: Adaptive Cache Governor settings.
-        response_cache: Opt-in LLM response cache settings.
         policy: Unsupported-config policy applied within the adaptive config.
+        response_cache: Opt-in LLM response cache settings.
 
     Behavior:
         This document configures only the adaptive component. Plugins are
@@ -325,8 +325,8 @@ class AdaptiveConfig:
     adaptive_hints: AdaptiveHintsConfig | None = None
     tool_parallelism: ToolParallelismConfig | None = None
     acg: AcgConfig | None = None
-    response_cache: ResponseCacheConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
+    response_cache: ResponseCacheConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this adaptive config to the canonical JSON object shape."""

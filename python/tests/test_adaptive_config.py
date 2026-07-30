@@ -169,6 +169,13 @@ class TestDynamicConfigContract:
             "backend": {"kind": "in_memory", "config": {}},
         }
 
+    def test_response_cache_default_preserves_positional_policy_argument(self):
+        policy = ConfigPolicy(unknown_field="error")
+        config = AdaptiveConfig(1, None, None, None, None, None, None, policy)
+
+        assert config.policy is policy
+        assert config.response_cache is None
+
     def test_response_cache_rides_the_adaptive_component(self):
         component = ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev"))).to_dict()
         assert component["kind"] == "adaptive"

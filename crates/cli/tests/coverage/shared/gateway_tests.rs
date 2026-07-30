@@ -998,7 +998,7 @@ async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
 }
 
 #[tokio::test]
-async fn retry_aware_buffered_body_read_failure_stays_structured() {
+async fn buffered_body_read_failure_stays_structured() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1029,16 +1029,9 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
             allow_environment_provider_auth: false,
         },
     };
-    let captured_upstream = Arc::new(Mutex::new(None));
-    let upstream_error = Arc::new(Mutex::new(None));
-    let func = build_buffered_func(
-        state,
-        &prepared,
-        captured_upstream.clone(),
-        upstream_error.clone(),
-    );
+    let func = build_buffered_func(state, &prepared);
     let error = func(LlmRequest {
-        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
+        headers: Map::new(),
         content: json!({}),
     })
     .await
@@ -1048,13 +1041,11 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
         panic!("expected structured upstream failure, got {error:?}");
     };
     assert_eq!(failure.class, UpstreamFailureClass::Connection);
-    assert!(captured_upstream.lock().unwrap().is_none());
-    assert!(upstream_error.lock().unwrap().is_none());
     server.await.unwrap();
 }
 
 #[tokio::test]
-async fn retry_aware_buffered_invalid_json_stays_structured() {
+async fn buffered_invalid_json_becomes_safe_upstream_failure() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1084,16 +1075,9 @@ async fn retry_aware_buffered_invalid_json_stays_structured() {
             allow_environment_provider_auth: false,
         },
     };
-    let captured_upstream = Arc::new(Mutex::new(None));
-    let upstream_error = Arc::new(Mutex::new(None));
-    let func = build_buffered_func(
-        state,
-        &prepared,
-        captured_upstream.clone(),
-        upstream_error.clone(),
-    );
+    let func = build_buffered_func(state, &prepared);
     let error = func(LlmRequest {
-        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
+        headers: Map::new(),
         content: json!({}),
     })
     .await
@@ -1102,15 +1086,16 @@ async fn retry_aware_buffered_invalid_json_stays_structured() {
     let FlowError::Upstream(failure) = error else {
         panic!("expected structured upstream failure, got {error:?}");
     };
-    assert_eq!(failure.status, Some(200));
+    assert_eq!(failure.status, None);
     assert_eq!(failure.class, UpstreamFailureClass::Other);
-    assert_eq!(failure.body, "{invalid-provider-json");
+    assert_eq!(
+        failure.body,
+        "upstream returned a non-JSON success response"
+    );
     assert_eq!(
         failure.headers.get("x-request-id"),
         Some(&"provider-request".to_string())
     );
-    assert!(captured_upstream.lock().unwrap().is_none());
-    assert!(upstream_error.lock().unwrap().is_none());
     server.await.unwrap();
 }
 

@@ -18,8 +18,9 @@ use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
-    deregister_tool_conditional_execution_guardrail, register_llm_execution_intercept,
-    register_llm_request_intercept, register_tool_conditional_execution_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_tool_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
@@ -29,7 +30,7 @@ use nemo_relay::plugin::{
 };
 use serde_json::{Map, Value, json};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
@@ -106,6 +107,14 @@ struct LlmExecutionInterceptCleanup(&'static str);
 impl Drop for LlmExecutionInterceptCleanup {
     fn drop(&mut self) {
         let _ = deregister_llm_execution_intercept(self.0);
+    }
+}
+
+struct LlmStreamExecutionInterceptCleanup(&'static str);
+
+impl Drop for LlmStreamExecutionInterceptCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_llm_stream_execution_intercept(self.0);
     }
 }
 
@@ -3631,6 +3640,269 @@ async fn spawn_mock_upstream(
     (format!("http://{address}"), calls)
 }
 
+fn concurrent_selected_chat_response() -> Value {
+    json!({
+        "id": "chatcmpl-selected",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "selected attempt"
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12
+        }
+    })
+}
+
+const CONCURRENT_SELECTED_CHAT_SSE: &str = concat!(
+    "data: {\"id\":\"chatcmpl-selected\",\"object\":\"chat.completion.chunk\",",
+    "\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,",
+    "\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl-selected\",\"object\":\"chat.completion.chunk\",",
+    "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"selected attempt\"},",
+    "\"finish_reason\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl-selected\",\"object\":\"chat.completion.chunk\",",
+    "\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: [DONE]\n\n",
+);
+
+const CONCURRENT_LOSING_CHAT_SSE: &str =
+    "data: {\"losing\":\"attempt metadata must not escape\"}\n\ndata: [DONE]\n\n";
+
+async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> TestServer {
+    async fn provider(State(release_losing): State<Arc<Semaphore>>, body: Bytes) -> Response {
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        let attempt = request["attempt"].as_str().unwrap();
+        let streaming = request["stream"].as_bool().unwrap_or(false);
+        if attempt == "losing" {
+            release_losing.acquire().await.unwrap().forget();
+        }
+
+        let (status, content_type, body) = match (attempt, streaming) {
+            ("selected", false) => (
+                StatusCode::CREATED,
+                "application/vnd.selected+json",
+                serde_json::to_string_pretty(&concurrent_selected_chat_response()).unwrap(),
+            ),
+            ("losing", false) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "application/x-losing-json",
+                format!(" \n{}\n ", concurrent_selected_chat_response()),
+            ),
+            ("selected", true) => (
+                StatusCode::CREATED,
+                "application/vnd.selected.event-stream",
+                CONCURRENT_SELECTED_CHAT_SSE.to_string(),
+            ),
+            ("losing", true) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "application/x-losing-event-stream",
+                CONCURRENT_LOSING_CHAT_SSE.to_string(),
+            ),
+            _ => panic!("unexpected concurrent attempt {attempt:?}"),
+        };
+
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, content_type)
+            .header("x-upstream-attempt", attempt)
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    let app = Router::new()
+        .route("/v1/chat/completions", post(provider))
+        .with_state(release_losing);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    TestServer {
+        url: format!("http://{address}"),
+        handle,
+    }
+}
+
+#[tokio::test]
+async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-next";
+    const MARKER: &str = "select the successful concurrent buffered attempt";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                let mut selected = next(selected_request);
+                let mut losing = next(losing_request);
+                let selected_result = tokio::select! {
+                    biased;
+                    _ = &mut losing => {
+                        panic!("losing attempt completed before release");
+                    }
+                    selected_result = &mut selected => selected_result,
+                };
+
+                release_losing.add_permits(1);
+                let losing_result = losing.await;
+                assert!(
+                    losing_result.is_err(),
+                    "the deliberately failed losing attempt unexpectedly succeeded"
+                );
+                selected_result
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    assert!(
+        response.headers().get("x-upstream-attempt").is_none(),
+        "managed success must not inherit metadata from an arbitrary upstream attempt"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        body.as_ref(),
+        concurrent_selected_chat_response().to_string().as_bytes(),
+        "managed success must serialize the selected final JSON, not losing raw bytes"
+    );
+}
+
+#[tokio::test]
+async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-next";
+    const MARKER: &str = "select the successful concurrent streaming attempt";
+    let _ = deregister_llm_stream_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmStreamExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                let mut selected = next(selected_request);
+                let mut losing = next(losing_request);
+                let selected_result = tokio::select! {
+                    biased;
+                    _ = &mut losing => {
+                        panic!("losing attempt completed before release");
+                    }
+                    selected_result = &mut selected => selected_result,
+                };
+
+                release_losing.add_permits(1);
+                drop(losing.await);
+                selected_result
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}],
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert!(
+        response.headers().get("x-upstream-attempt").is_none(),
+        "managed stream success must not inherit metadata from an arbitrary upstream attempt"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert!(body.contains("selected attempt"), "{body}");
+    assert!(!body.contains("losing attempt"), "{body}");
+}
+
 /// Gateway config wired to `upstream` with the response cache enabled.
 fn cache_gateway_config(upstream: &str) -> GatewayConfig {
     let mut config = test_config();
@@ -3721,7 +3993,7 @@ async fn gateway_serves_cached_hit_with_full_body_and_json_content_type() {
 }
 
 #[tokio::test]
-async fn gateway_relays_non_2xx_upstream_verbatim_and_never_caches_it() {
+async fn gateway_returns_typed_non_2xx_upstream_failure_and_never_caches_it() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
@@ -3757,18 +4029,25 @@ async fn gateway_relays_non_2xx_upstream_verbatim_and_never_caches_it() {
         assert_eq!(
             response.status(),
             StatusCode::SERVICE_UNAVAILABLE,
-            "the upstream failure must be relayed with its real status"
+            "the typed provider failure must preserve the upstream status"
         );
         assert_eq!(
             response
                 .headers()
                 .get("x-upstream-marker")
                 .and_then(|value| value.to_str().ok()),
-            Some("mock"),
-            "upstream headers must be relayed on failures"
+            None,
+            "managed failures must not relay attempt-specific upstream headers"
         );
         let body: Value = response.json().await.unwrap();
-        assert_eq!(body, json!({"message": "service temporarily unavailable"}));
+        assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
+        assert_eq!(
+            body["error"]["message"],
+            json!(
+                "upstream provider returned HTTP 503 (RetryableStatus): \
+                 {\"message\":\"service temporarily unavailable\"}"
+            )
+        );
     }
     assert_eq!(
         upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -3782,13 +4061,16 @@ async fn gateway_relays_non_2xx_upstream_verbatim_and_never_caches_it() {
 }
 
 #[tokio::test]
-async fn gateway_relays_2xx_non_json_upstream_verbatim_and_never_caches_it() {
+async fn gateway_returns_safe_failure_for_2xx_non_json_and_never_caches_it() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
-    const UPSTREAM_BODY: &str = "provider returned malformed JSON";
-    let (upstream, upstream_calls) =
-        spawn_mock_upstream(StatusCode::OK, "text/plain", UPSTREAM_BODY).await;
+    let (upstream, upstream_calls) = spawn_mock_upstream(
+        StatusCode::OK,
+        "text/plain",
+        "provider returned malformed JSON",
+    )
+    .await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -3812,29 +4094,33 @@ async fn gateway_relays_2xx_non_json_upstream_verbatim_and_never_caches_it() {
             .unwrap();
         assert_eq!(
             response.status(),
-            StatusCode::OK,
-            "the upstream success status must be relayed"
+            StatusCode::BAD_GATEWAY,
+            "a malformed managed success must become a gateway failure"
         );
         assert_eq!(
             response
                 .headers()
                 .get(http::header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok()),
-            Some("text/plain"),
-            "the upstream content type must be relayed"
+            Some("application/json"),
+            "managed failures use Relay's JSON error envelope"
         );
         assert_eq!(
             response
                 .headers()
                 .get("x-upstream-marker")
                 .and_then(|value| value.to_str().ok()),
-            Some("mock"),
-            "upstream headers must be relayed"
+            None,
+            "managed failures must not relay attempt-specific upstream headers"
         );
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
         assert_eq!(
-            response.text().await.unwrap(),
-            UPSTREAM_BODY,
-            "the non-JSON upstream body must be relayed verbatim"
+            body["error"]["message"],
+            json!(
+                "upstream provider transport failure (Other): \
+                 upstream returned a non-JSON success response"
+            )
         );
     }
     assert_eq!(

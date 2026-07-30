@@ -14,6 +14,7 @@ fn test_adaptive_config_defaults() {
     assert!(config.telemetry.is_none());
     assert!(config.adaptive_hints.is_none());
     assert!(config.tool_parallelism.is_none());
+    assert!(config.response_cache.is_none());
     assert_eq!(
         config.policy.unknown_component,
         nemo_relay::plugin::UnsupportedBehavior::Warn
@@ -60,6 +61,7 @@ fn test_adaptive_config_deserialization_applies_field_defaults() {
     assert!(config.telemetry.is_none());
     assert!(config.adaptive_hints.is_none());
     assert!(config.tool_parallelism.is_none());
+    assert!(config.response_cache.is_none());
 }
 
 #[test]
