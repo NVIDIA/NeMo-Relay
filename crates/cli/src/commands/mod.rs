@@ -192,8 +192,12 @@ async fn run_default(
     //   `nemo-relay config` remains the reconfiguration path.
     if runtime_args.requested_daemon_mode() {
         let resolved = runtime_configuration::resolve_server_config(&runtime_args)?;
-        let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
+        let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
             runtime_args.config.as_ref(),
+            runtime_args.plugin_config_path.as_ref(),
+        );
+        let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
+            explicit_plugin_config.as_ref(),
             &resolved,
         )?;
         let managed_bootstrap = runtime_configuration::managed_bootstrap_identity(

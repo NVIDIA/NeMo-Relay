@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,9 @@ use nemo_relay::logging::LoggingConfig;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
 };
-use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
+use nemo_relay::plugin::{
+    PluginError, deduplicate_plugin_config_paths, merge_plugin_config_documents,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::{digest, hmac};
 use serde::Deserialize;
@@ -93,7 +95,9 @@ struct FileAgentCommandConfig {
 pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedConfig, CliError> {
     let mut resolved = load_shared_config(args.config.as_ref(), args.plugin_config_path.as_ref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
-    enforce_required_dynamic_plugin_startup(args.config.as_ref(), &resolved)?;
+    let explicit_plugin_config =
+        explicit_plugin_config_path(args.config.as_ref(), args.plugin_config_path.as_ref());
+    enforce_required_dynamic_plugin_startup(explicit_plugin_config.as_ref(), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",
         event = "configuration_resolved",
@@ -116,7 +120,8 @@ pub(crate) fn resolve_logging_config(
     let user_only = user_only || user_config_scope();
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths_scoped(explicit.as_ref(), user_only) {
-        let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
+        let required = explicit.as_ref() == Some(&path);
+        let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
         };
         let parsed = raw
@@ -125,7 +130,7 @@ pub(crate) fn resolve_logging_config(
             .map_err(|error| {
                 CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
             })?;
-        merge_toml(&mut merged, parsed);
+        merge_gateway_config_toml(&mut merged, parsed);
     }
 
     if merged.get("logging").is_none() {
@@ -856,10 +861,18 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
 }
 
 /// Resolves shared config for plugin-facing CLI commands without mutating gateway runtime fields.
+#[cfg(test)]
 pub(crate) fn resolve_plugins_config(
     explicit: Option<&PathBuf>,
 ) -> Result<ResolvedConfig, CliError> {
-    let resolved = load_shared_config(explicit, None)?;
+    resolve_plugins_config_with_path(explicit, None)
+}
+
+pub(crate) fn resolve_plugins_config_with_path(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Result<ResolvedConfig, CliError> {
+    let resolved = load_shared_config(explicit, plugin_config_path)?;
     log::info!(
         target: "nemo_relay.configuration",
         event = "plugin_configuration_resolved",
@@ -895,7 +908,8 @@ pub(crate) fn resolve_run_config(
         .parse()
         .expect("valid transparent bind address");
     if !command.dry_run {
-        enforce_required_dynamic_plugin_startup(config, &resolved)?;
+        let explicit_plugin_config = explicit_plugin_config_path(config, plugin_config_path);
+        enforce_required_dynamic_plugin_startup(explicit_plugin_config.as_ref(), &resolved)?;
     }
     log::info!(
         target: "nemo_relay.configuration",
@@ -919,10 +933,18 @@ fn apply_run_overrides(config: &mut GatewayConfig, command: &RunOverrides) -> Re
 // from JSON options whose errors should include field context.
 fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunOverrides) {
     if let Some(value) = &command.openai_base_url {
-        config.openai_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.openai_base_url,
+            &mut config.openai_auth_header,
+            value.clone(),
+        );
     }
     if let Some(value) = &command.anthropic_base_url {
-        config.anthropic_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.anthropic_base_url,
+            &mut config.anthropic_auth_header,
+            value.clone(),
+        );
     }
 }
 
@@ -948,10 +970,18 @@ fn apply_server_overrides(
         config.bind = value;
     }
     if let Some(value) = &args.openai_base_url {
-        config.openai_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.openai_base_url,
+            &mut config.openai_auth_header,
+            value.clone(),
+        );
     }
     if let Some(value) = &args.anthropic_base_url {
-        config.anthropic_base_url = value.clone();
+        replace_upstream_base_url(
+            &mut config.anthropic_base_url,
+            &mut config.anthropic_auth_header,
+            value.clone(),
+        );
     }
     if let Some(value) = args.max_hook_payload_bytes {
         config.max_hook_payload_bytes = validate_body_limit("max hook payload bytes", value)?;
@@ -983,7 +1013,8 @@ fn load_shared_config_scoped(
 ) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths_scoped(explicit, user_only) {
-        let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
+        let required = explicit == Some(&path);
+        let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
         };
         let parsed = raw
@@ -1051,32 +1082,31 @@ pub(crate) fn any_config_file_exists() -> bool {
     config_paths(None).iter().any(|path| path.exists())
 }
 
-// Returns the config search path. An explicit path disables implicit discovery; otherwise system
-// config is lowest priority, the nearest project config is next, and user config is merged last.
+// Returns the config search path from lowest to highest precedence. An explicit path replaces the
+// ambient user file; project discovery and the system layer still apply.
 fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     config_paths_scoped(explicit, user_config_scope())
 }
 
 fn config_paths_scoped(explicit: Option<&PathBuf>, user_only: bool) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     if let Some(path) = explicit {
-        return vec![path.clone()];
+        paths.push(path.clone());
+    } else if let Some(user) = user_config_path() {
+        paths.push(user);
     }
-    let mut paths = vec![PathBuf::from("/etc/nemo-relay/config.toml")];
     if !user_only
         && let Ok(cwd) = std::env::current_dir()
         && let Some(project) = find_project_config(&cwd)
     {
         paths.push(project);
     }
-    if let Some(user) = user_config_path() {
-        paths.push(user);
-    }
+    paths.push(PathBuf::from("/etc/nemo-relay/config.toml"));
     paths
 }
 
-// Returns the plugin config search path. An explicit gateway config path scopes plugins.toml to the
-// same directory so `--config path/to/config.toml` can be extended by `path/to/plugins.toml` without
-// reading unrelated implicit project/user/global plugin files.
+// Returns the plugin config search path from lowest to highest precedence. An explicit plugin
+// target replaces the ambient user file; project discovery and the system layer still apply.
 fn plugin_config_paths(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1089,21 +1119,24 @@ fn plugin_config_paths_scoped(
     plugin_config_path: Option<&PathBuf>,
     user_only: bool,
 ) -> Vec<PathBuf> {
-    if plugin_config_path.is_some() || explicit.is_some() {
-        return explicit_plugin_config_path(explicit, plugin_config_path)
-            .into_iter()
-            .collect();
+    let cwd = if user_only {
+        None
+    } else {
+        std::env::current_dir().ok()
+    };
+    if let Some(path) = explicit_plugin_config_path(explicit, plugin_config_path) {
+        let mut paths = vec![path];
+        paths.extend(implicit_plugin_config_paths(cwd.as_deref(), None));
+        return paths;
     }
-    if user_only {
-        return implicit_plugin_config_paths(None, user_config_dir());
-    }
-    implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
+    implicit_plugin_config_paths(cwd.as_deref(), user_config_dir())
 }
 
-/// Resolves the single plugin document selected by explicit gateway configuration.
+/// Resolves the low-precedence plugin document selected by explicit gateway configuration.
 ///
-/// An explicit plugin path wins. Otherwise an explicit `config.toml` selects its sibling
-/// `plugins.toml`, matching runtime loading. `None` means normal layered discovery applies.
+/// An explicit plugin path wins over the ambient user file. Otherwise an explicit `config.toml`
+/// selects its sibling `plugins.toml`, matching runtime loading. `None` means normal user-layer
+/// discovery applies.
 pub(crate) fn explicit_plugin_config_path(
     config_path: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1127,7 +1160,7 @@ fn implicit_plugin_config_paths(
 
 // Walks upward from the current directory and returns the nearest project-local gateway config.
 // The first hit wins so nested projects can override parent workspace defaults.
-fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
+pub(crate) fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
         let path = ancestor.join(".nemo-relay/config.toml");
         if path.exists() {
@@ -1273,13 +1306,6 @@ struct FileDynamicPluginConfig {
     config: Option<Map<String, Value>>,
 }
 
-fn load_plugin_toml_config(
-    explicit: Option<&PathBuf>,
-    plugin_config_path: Option<&PathBuf>,
-) -> Result<Option<PluginTomlConfig>, CliError> {
-    load_plugin_toml_config_scoped(explicit, plugin_config_path, user_config_scope())
-}
-
 fn load_plugin_toml_config_scoped(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1294,8 +1320,8 @@ fn load_plugin_toml_config_scoped(
 
 /// Returns the plugin configuration paths selected by the same rules as runtime resolution.
 ///
-/// Diagnostics use this so an explicit gateway configuration reports only its sibling
-/// `plugins.toml`, rather than unrelated discovered plugin configuration.
+/// Diagnostics use this so they report the same explicit-or-user, project, and system layers as
+/// runtime resolution.
 pub(crate) fn diagnostic_plugin_config_paths(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
@@ -1309,7 +1335,14 @@ pub(crate) fn effective_plugin_toml_sources(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Result<Vec<PathBuf>, CliError> {
-    let Some(config) = load_plugin_toml_config(explicit, plugin_config_path)? else {
+    effective_plugin_toml_sources_from_paths(plugin_config_paths(explicit, plugin_config_path))
+}
+
+fn effective_plugin_toml_sources_from_paths<I>(paths: I) -> Result<Vec<PathBuf>, CliError>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let Some(config) = load_plugin_toml_config_from_paths(paths)? else {
         return Ok(Vec::new());
     };
     let mut sources = config.contributing_sources;
@@ -1322,7 +1355,7 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let paths = paths.into_iter().collect::<Vec<_>>();
+    let paths = deduplicate_plugin_config_paths(paths);
     let mut dynamic_plugins = Vec::new();
     let mut dynamic_plugin_policy = DynamicPluginHostPolicy::default();
     let mut seen_plugin_ids = HashSet::new();
@@ -1359,7 +1392,7 @@ where
     }
 
     // Delegate merged runtime plugin config to the shared core primitive after dynamic refs have
-    // been validated independently. File precedence stays unchanged for the generic runtime path.
+    // been validated independently. Documents remain ordered from lowest to highest precedence.
     let resolved = merge_plugin_config_documents(runtime_documents).map_err(|err| match err {
         PluginError::InvalidConfig(message) => CliError::Config(message),
         other => CliError::Config(other.to_string()),
@@ -1529,10 +1562,11 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     }
     let openai_auth_header = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
-        config.openai_base_url = value;
-        if openai_auth_header.is_none() {
-            config.openai_auth_header = None;
-        }
+        replace_upstream_base_url(
+            &mut config.openai_base_url,
+            &mut config.openai_auth_header,
+            value,
+        );
     }
     if let Some(value) = openai_auth_header {
         config.openai_auth_header = Some(validate_auth_header(
@@ -1542,10 +1576,11 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     }
     let anthropic_auth_header = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
-        config.anthropic_base_url = value;
-        if anthropic_auth_header.is_none() {
-            config.anthropic_auth_header = None;
-        }
+        replace_upstream_base_url(
+            &mut config.anthropic_base_url,
+            &mut config.anthropic_auth_header,
+            value,
+        );
     }
     if let Some(value) = anthropic_auth_header {
         config.anthropic_auth_header = Some(validate_auth_header(
@@ -1562,6 +1597,17 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
             parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
     }
     Ok(())
+}
+
+fn replace_upstream_base_url(
+    base_url: &mut String,
+    auth_header: &mut Option<String>,
+    replacement: String,
+) {
+    if *base_url != replacement {
+        *auth_header = None;
+    }
+    *base_url = replacement;
 }
 
 fn validate_auth_header(name: &str, value: String) -> Result<String, CliError> {
@@ -1606,10 +1652,16 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
-// Upstream credentials are bound to their configured endpoint. A higher-priority layer that
-// changes an endpoint without supplying a replacement credential must not inherit the credential
-// for the old endpoint.
-fn merge_gateway_config_toml(left: &mut toml::Value, right: toml::Value) {
+// Upstream credentials are bound to the exact configured base URL, which is the identity of the
+// provider's singleton upstream. A higher-priority layer that changes that identity without
+// supplying a replacement credential must not inherit the credential for the old endpoint.
+fn merge_gateway_config_toml(left: &mut toml::Value, mut right: toml::Value) {
+    clear_credentials_for_replaced_upstreams(left, &right);
+    merge_logging_sinks_by_path(left, &mut right);
+    merge_toml(left, right);
+}
+
+fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml::Value) {
     if let (Some(existing), Some(override_upstream)) = (
         left.get_mut("upstream").and_then(toml::Value::as_table_mut),
         right.get("upstream").and_then(toml::Value::as_table),
@@ -1626,7 +1678,123 @@ fn merge_gateway_config_toml(left: &mut toml::Value, right: toml::Value) {
             }
         }
     }
-    merge_toml(left, right);
+}
+
+fn merge_logging_sinks_by_path(left: &toml::Value, right: &mut toml::Value) {
+    let lower = left
+        .get("logging")
+        .and_then(|logging| logging.get("sinks"))
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(higher_value) = right
+        .get_mut("logging")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|logging| logging.get_mut("sinks"))
+    else {
+        return;
+    };
+    let Some(higher) = higher_value.as_array().cloned() else {
+        return;
+    };
+    *higher_value = toml::Value::Array(merge_logging_sink_lists(lower, higher));
+}
+
+fn merge_logging_sink_lists(lower: Vec<toml::Value>, higher: Vec<toml::Value>) -> Vec<toml::Value> {
+    let lower = coalesce_logging_sinks(lower);
+    let higher = coalesce_logging_sinks(higher);
+    let mut lower_used = vec![false; lower.len()];
+    let mut merged = Vec::with_capacity(lower.len() + higher.len());
+
+    for higher_sink in higher {
+        let identity = logging_sink_identity(&higher_sink);
+        let lower_match = identity.as_ref().and_then(|path| {
+            lower
+                .iter()
+                .position(|sink| logging_sink_identity(sink).as_ref() == Some(path))
+        });
+        if let Some(index) = lower_match {
+            let mut sink = lower[index].clone();
+            merge_toml(&mut sink, higher_sink);
+            lower_used[index] = true;
+            merged.push(sink);
+        } else {
+            merged.push(higher_sink);
+        }
+    }
+
+    merged.extend(
+        lower
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, sink)| (!lower_used[index]).then_some(sink)),
+    );
+    merged
+}
+
+fn coalesce_logging_sinks(sinks: Vec<toml::Value>) -> Vec<toml::Value> {
+    let mut coalesced: Vec<toml::Value> = Vec::with_capacity(sinks.len());
+    for sink in sinks {
+        let identity = logging_sink_identity(&sink);
+        let existing = identity.as_ref().and_then(|path| {
+            coalesced
+                .iter()
+                .position(|candidate| logging_sink_identity(candidate).as_ref() == Some(path))
+        });
+        if let Some(index) = existing {
+            merge_toml(&mut coalesced[index], sink);
+        } else {
+            coalesced.push(sink);
+        }
+    }
+    coalesced
+}
+
+fn logging_sink_path(sink: &toml::Value) -> Option<&str> {
+    sink.as_table()?.get("path")?.as_str()
+}
+
+fn logging_sink_identity(sink: &toml::Value) -> Option<PathBuf> {
+    let path = Path::new(logging_sink_path(sink)?);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    Some(logging_path_identity(&absolute))
+}
+
+// Keep merge-time identity aligned with core logging's runtime duplicate-path detection: prefer
+// canonical paths, canonicalize an existing parent for not-yet-created sinks, then fall back to
+// lexical component normalization.
+fn logging_path_identity(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            let file_name = path.file_name().unwrap_or_default();
+            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+                return canonical_parent.join(file_name);
+            }
+            normalize_path_components(parent).join(file_name)
+        }
+        _ => normalize_path_components(path),
+    }
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {

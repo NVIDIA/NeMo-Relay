@@ -81,7 +81,7 @@ fn resolve_edit_target(
     explicit_path: Option<PathBuf>,
 ) -> Result<(TargetScope, PathBuf), CliError> {
     let scope = TargetScope::from(command);
-    let path = if command.user || command.project || command.global {
+    let path = if command.project || command.global {
         target_path(scope)?
     } else {
         match explicit_path {

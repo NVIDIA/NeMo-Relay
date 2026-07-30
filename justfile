@@ -930,7 +930,9 @@ build-rust:
         prepare_llvm_cov_workspace
         cargo test --workspace --no-run
     else
-        cargo build --workspace
+        # Maturin supplies the platform-specific linker configuration for the
+        # Python extension in build-python.
+        cargo build --workspace --exclude nemo-relay-python
     fi
 
 # --set [ci=true|false]

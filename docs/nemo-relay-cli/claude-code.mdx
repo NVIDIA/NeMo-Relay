@@ -137,7 +137,8 @@ endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
 Run `nemo-relay run --agent claude` to use the configured command and plugin
-config. User config takes priority over project and system config.
+config. Files layer from explicit-or-user to project to system, so system
+configuration has the highest file-level priority.
 
 ## Standalone Gateway
 

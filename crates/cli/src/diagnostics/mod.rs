@@ -144,7 +144,8 @@ fn collect_configuration(
 ) -> ConfigurationInfo {
     let explicit_config = gateway_overrides.config.is_some();
     let workspace_path = cwd
-        .map(|p| p.join(".nemo-relay").join("config.toml"))
+        .and_then(crate::configuration::find_project_config)
+        .or_else(|| cwd.map(|p| p.join(".nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
     // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
     // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.
@@ -153,23 +154,17 @@ fn collect_configuration(
         .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
     let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
-    let workspace = gateway_overrides
-        .config
-        .as_deref()
-        .map_or_else(|| layer_status(&workspace_path), layer_status);
+    let explicit = gateway_overrides.config.as_deref().map(layer_status);
+    let workspace = layer_status(&workspace_path);
     let global = if explicit_config {
-        ignored_layer_status(&global_path)
+        replaced_user_layer_status(&global_path)
     } else {
         layer_status(&global_path)
     };
-    let system = if explicit_config {
-        ignored_layer_status(&system_path)
-    } else {
-        layer_status(&system_path)
-    };
+    let system = layer_status(&system_path);
 
     ConfigurationInfo {
-        explicit_config,
+        explicit,
         workspace,
         global,
         system,
@@ -312,12 +307,12 @@ fn layer_status(path: &Path) -> ConfigLayer {
     }
 }
 
-fn ignored_layer_status(path: &Path) -> ConfigLayer {
+fn replaced_user_layer_status(path: &Path) -> ConfigLayer {
     ConfigLayer {
         path: path.to_path_buf(),
         status: Status::Info,
         active: false,
-        details: "not selected because --config scopes configuration".into(),
+        details: "replaced by explicit --config".into(),
     }
 }
 

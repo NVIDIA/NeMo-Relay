@@ -86,9 +86,9 @@ exporter receives a teardown attempt.
 Top-level component `config` lists concatenate across configuration layers,
 with higher-precedence entries first. The observability destination lists
 `atof.sinks`, `opentelemetry.endpoints`, and `atif.storage` follow the same
-rule, so system, project, user, and programmatic layers can contribute
-destinations. Arbitrary lists nested inside structured values retain
-replacement semantics. List entries are not merged item by item.
+rule, so explicit-or-user, project, system, and programmatic layers can
+contribute destinations. Arbitrary lists nested inside structured values
+retain replacement semantics. List entries are not merged item by item.
 To change or remove an inherited endpoint, edit the layer that declares it.
 For complete layering rules, refer to
 [Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).

@@ -2077,33 +2077,49 @@ fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_ca
 fn test_load_plugin_config_files_merges_files_by_precedence() {
     let dir = tempfile::tempdir().unwrap();
     let lower = dir.path().join("lower.toml");
-    let higher = dir.path().join("higher.toml");
+    let project = dir.path().join("project.toml");
+    let system = dir.path().join("system.toml");
     std::fs::write(
         &lower,
         "version = 1\n\
          [[components]]\n\
          kind = \"observability\"\n\
-         enabled = false\n\
+         enabled = true\n\
          [components.config]\n\
          output_directory = \"/var/log\"\n\
-         mode = \"append\"\n",
+         mode = \"append\"\n\
+         values = [\"lower\"]\n",
     )
     .unwrap();
     std::fs::write(
-        &higher,
+        &project,
         "[[components]]\n\
          kind = \"observability\"\n\
          [components.config]\n\
-         mode = \"overwrite\"\n\
+         mode = \"project\"\n\
+         values = [\"project\"]\n\
          [[components]]\n\
          kind = \"adaptive\"\n",
     )
     .unwrap();
+    std::fs::write(
+        &system,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n\
+         [components.config]\n\
+         mode = \"system\"\n\
+         values = [\"system\"]\n\
+         [[components]]\n\
+         kind = \"system_only\"\n",
+    )
+    .unwrap();
 
-    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
-        .unwrap()
-        .expect("a file exists");
-    assert_eq!(sources, vec![lower, higher]);
+    let (merged, sources) =
+        load_plugin_config_files([lower.clone(), project.clone(), system.clone()])
+            .unwrap()
+            .expect("a file exists");
+    assert_eq!(sources, vec![lower, project, system]);
 
     let components = merged["components"].as_array().unwrap();
     let observability = &components[0];
@@ -2111,7 +2127,7 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     assert_eq!(
         observability["enabled"],
         json!(false),
-        "lower-file enabled is inherited (higher omits it)"
+        "the system layer wins shared scalar fields"
     );
     assert_eq!(
         observability["config"]["output_directory"],
@@ -2120,13 +2136,79 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     );
     assert_eq!(
         observability["config"]["mode"],
-        json!("overwrite"),
-        "higher file overrides the shared config key"
+        json!("system"),
+        "the system layer wins recursively merged config fields"
+    );
+    assert_eq!(
+        observability["config"]["values"],
+        json!(["system", "project", "lower"]),
+        "list entries aggregate from highest to lowest precedence"
     );
     assert_eq!(
         components[1]["kind"],
         json!("adaptive"),
-        "higher-only component kind is appended"
+        "a project-only component kind is preserved"
+    );
+    assert_eq!(
+        components[2]["kind"],
+        json!("system_only"),
+        "a system-only component kind is appended"
+    );
+}
+
+#[test]
+fn test_default_plugin_config_paths_order_user_project_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let child = project.join("nested");
+    let user = dir.path().join("user");
+    let project_plugins = project.join(".nemo-relay/plugins.toml");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
+    std::fs::write(&project_plugins, "version = 1\n").unwrap();
+
+    assert_eq!(
+        default_plugin_config_paths(Some(&child), Some(user.clone())),
+        vec![
+            user.join("plugins.toml"),
+            project_plugins,
+            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_load_plugin_config_files_deduplicates_aliases_at_highest_precedence() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let physical = dir.path().join("system.toml");
+    let alias = dir.path().join("explicit.toml");
+    std::fs::write(
+        &physical,
+        "version = 1\n\
+         [[components]]\n\
+         kind = \"pricing\"\n\
+         [[components.config.sources]]\n\
+         type = \"file\"\n\
+         path = \"/etc/nemo-relay/pricing.json\"\n",
+    )
+    .unwrap();
+    symlink(&physical, &alias).unwrap();
+
+    let (merged, sources) = load_plugin_config_files([alias, physical.clone()])
+        .unwrap()
+        .expect("the physical file exists");
+
+    assert_eq!(sources, vec![physical]);
+    assert_eq!(
+        merged["components"][0]["config"]["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "the aliased file must not duplicate list entries"
     );
 }
 
