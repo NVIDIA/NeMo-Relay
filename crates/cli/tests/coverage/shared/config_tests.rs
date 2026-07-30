@@ -30,6 +30,23 @@ use crate::plugins::policy::{
     evaluate_dynamic_plugin_host_policy,
 };
 
+#[test]
+fn explicit_plugin_config_path_resolves_runtime_target() {
+    let config = PathBuf::from("/managed/config.toml");
+    let sibling = PathBuf::from("/managed/plugins.toml");
+    let override_path = PathBuf::from("/override/plugins.toml");
+
+    assert_eq!(
+        explicit_plugin_config_path(Some(&config), None),
+        Some(sibling)
+    );
+    assert_eq!(
+        explicit_plugin_config_path(Some(&config), Some(&override_path)),
+        Some(override_path)
+    );
+    assert_eq!(explicit_plugin_config_path(None, None), None);
+}
+
 struct PluginConfigDiscoveryScope {
     _cwd_guard: crate::test_support::CwdTestScope,
     _guard: MutexGuard<'static, ()>,
@@ -196,7 +213,7 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
     let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
 
     assert_eq!(
-        effective_plugin_toml_sources().unwrap(),
+        effective_plugin_toml_sources(None, None).unwrap(),
         Vec::<PathBuf>::new()
     );
 
@@ -207,7 +224,7 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
     std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
     std::fs::write(&user_plugins, "version = 1\ncomponents = []\n").unwrap();
 
-    let sources = effective_plugin_toml_sources().unwrap();
+    let sources = effective_plugin_toml_sources(None, None).unwrap();
     assert!(sources.is_sorted());
     assert!(sources.windows(2).all(|paths| paths[0] != paths[1]));
 
@@ -222,6 +239,30 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
         .collect::<Vec<_>>();
     expected.sort();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn effective_plugin_toml_sources_scope_to_an_explicit_config_sibling() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let xdg = temp.path().join("xdg");
+    let explicit_dir = temp.path().join("explicit");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&explicit_dir).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
+
+    let explicit_config = explicit_dir.join("config.toml");
+    let explicit_plugins = explicit_dir.join("plugins.toml");
+    std::fs::write(&explicit_config, "").unwrap();
+    std::fs::write(&explicit_plugins, "version = 1\ncomponents = []\n").unwrap();
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
+    std::fs::write(project.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
+
+    assert_eq!(
+        effective_plugin_toml_sources(Some(&explicit_config), None).unwrap(),
+        vec![explicit_plugins]
+    );
 }
 
 fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
@@ -3269,6 +3310,56 @@ format = "human"
             assert_eq!(sink.queue_capacity, DEFAULT_FILE_SINK_QUEUE_ENTRIES);
         }
     }
+}
+
+#[test]
+fn logging_rotation_cli_config_preserves_pair_and_rejects_incomplete_pair() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    let log_path = temp.path().join("relay.log.jsonl");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[[logging.sinks]]
+path = {}
+max_file_size_bytes = 1024
+retained_files = 2
+"#,
+            toml_basic_string(log_path.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_server_config(&GatewayOverrides {
+        config: Some(config_path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap();
+    let LogSinkConfig::File(sink) = &resolved.logging.sinks[0];
+    let rotation = sink.rotation.expect("complete rotation configuration");
+    assert_eq!(rotation.max_file_size_bytes(), 1024);
+    assert_eq!(rotation.retained_files(), 2);
+
+    let incomplete_path = isolated_config_path(&temp);
+    std::fs::write(
+        &incomplete_path,
+        r#"
+[[logging.sinks]]
+path = "relay.log.jsonl"
+max_file_size_bytes = 1024
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(incomplete_path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(
+        "logging sink max_file_size_bytes and retained_files must be configured together"
+    ));
 }
 
 #[test]

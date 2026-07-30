@@ -1089,14 +1089,10 @@ fn plugin_config_paths_scoped(
     plugin_config_path: Option<&PathBuf>,
     user_only: bool,
 ) -> Vec<PathBuf> {
-    if let Some(path) = plugin_config_path {
-        return vec![path.clone()];
-    }
-    if let Some(path) = explicit {
-        return path
-            .parent()
-            .map(|parent| vec![parent.join(PLUGINS_TOML)])
-            .unwrap_or_default();
+    if plugin_config_path.is_some() || explicit.is_some() {
+        return explicit_plugin_config_path(explicit, plugin_config_path)
+            .into_iter()
+            .collect();
     }
     if user_only {
         return implicit_plugin_config_paths(None, user_config_dir());
@@ -1104,13 +1100,21 @@ fn plugin_config_paths_scoped(
     implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
 }
 
-fn user_config_scope() -> bool {
-    std::env::var("NEMO_RELAY_CONFIG_SCOPE").ok().as_deref() == Some("user")
+/// Resolves the single plugin document selected by explicit gateway configuration.
+///
+/// An explicit plugin path wins. Otherwise an explicit `config.toml` selects its sibling
+/// `plugins.toml`, matching runtime loading. `None` means normal layered discovery applies.
+pub(crate) fn explicit_plugin_config_path(
+    config_path: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Option<PathBuf> {
+    plugin_config_path.cloned().or_else(|| {
+        config_path.and_then(|path| path.parent().map(|parent| parent.join(PLUGINS_TOML)))
+    })
 }
 
-/// Returns the implicit `plugins.toml` discovery paths used by the gateway and doctor.
-pub(crate) fn default_plugin_config_paths() -> Vec<PathBuf> {
-    plugin_config_paths(None, None)
+fn user_config_scope() -> bool {
+    std::env::var("NEMO_RELAY_CONFIG_SCOPE").ok().as_deref() == Some("user")
 }
 
 fn implicit_plugin_config_paths(
@@ -1288,10 +1292,24 @@ fn load_plugin_toml_config_scoped(
     ))
 }
 
+/// Returns the plugin configuration paths selected by the same rules as runtime resolution.
+///
+/// Diagnostics use this so an explicit gateway configuration reports only its sibling
+/// `plugins.toml`, rather than unrelated discovered plugin configuration.
+pub(crate) fn diagnostic_plugin_config_paths(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Vec<PathBuf> {
+    plugin_config_paths(explicit, plugin_config_path)
+}
+
 /// Returns the physical `plugins.toml` files that contribute effective runtime or dynamic
-/// plugin configuration under the default discovery rules.
-pub(crate) fn effective_plugin_toml_sources() -> Result<Vec<PathBuf>, CliError> {
-    let Some(config) = load_plugin_toml_config(None, None)? else {
+/// plugin configuration for the selected gateway configuration scope.
+pub(crate) fn effective_plugin_toml_sources(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Result<Vec<PathBuf>, CliError> {
+    let Some(config) = load_plugin_toml_config(explicit, plugin_config_path)? else {
         return Ok(Vec::new());
     };
     let mut sources = config.contributing_sources;

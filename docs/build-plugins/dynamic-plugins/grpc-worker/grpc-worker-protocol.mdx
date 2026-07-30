@@ -74,6 +74,61 @@ invocation, or LLM invocation. `InvokeResponse` returns an empty result, JSON
 result, guardrail result, LLM request-intercept result, tool-execution result,
 or `WorkerError`. `InvokeStream` emits JSON chunks or `WorkerError` chunks.
 
+Every LLM sanitizer invocation includes a directional context with tagged codec
+identity: `none`, `builtin(id)`, `runtime(id)`, or `opaque`. Worker SDKs expose
+`context.resolve_codec()` for active codecs. The resulting invocation-scoped
+proxy supports request decode/encode or response decode and calls Relay through
+the host runtime; the capability identifier is protocol-internal and expires
+when the callback completes. `resolve_codec()` returns no proxy only when no
+codec is active. Runtime and opaque codecs remain resolvable.
+
+Request and response sanitizer handlers always receive `(payload, context)`.
+Return the sanitized payload to continue the chain, or return no payload to
+omit the observability payload and annotation without changing the
+client-visible value. Rust worker sanitizer callbacks are async for every
+sanitizer surface: mark, scope, tool, and LLM. Python worker sanitizers can
+return either an immediate value or an awaitable.
+
+<Tabs>
+<Tab title="Rust" language="rust">
+
+```rust
+ctx.register_llm_sanitize_request_guardrail(
+    "normalize-request",
+    10,
+    |request, context| async move {
+        let Some(codec) = context.resolve_codec() else {
+            return Ok(Some(request));
+        };
+        let mut annotated = codec.decode(&request).await?;
+        annotated.messages.clear();
+        Ok(Some(codec.encode(&annotated, &request).await?))
+    },
+);
+```
+
+</Tab>
+<Tab title="Python" language="python">
+
+```python
+async def normalize_request(request, context):
+    codec = context.resolve_codec()
+    if codec is None:
+        return request
+    annotated = await codec.decode(request)
+    annotated["messages"] = []
+    return await codec.encode(annotated, request)
+
+ctx.register_llm_sanitize_request_guardrail(
+    "normalize-request",
+    normalize_request,
+    priority=10,
+)
+```
+
+</Tab>
+</Tabs>
+
 ## RelayHostRuntime RPCs
 
 Relay implements these RPCs for worker callbacks:
@@ -83,10 +138,15 @@ Relay implements these RPCs for worker callbacks:
 | Marks and scopes | `EmitMark`, `PushScope`, `PopScope` |
 | Isolated scope stacks | `CreateScopeStack`, `DropScopeStack` |
 | Execution continuations | `ToolNext`, `LlmNext`, `LlmStreamNext` |
+| Codec capabilities | `DecodeLlmCodecRequest`, `EncodeLlmCodecRequest`, `DecodeLlmCodecResponse` |
 
 Every host-runtime request also carries the activation ID and authentication
 token. Scope operations include a `ScopeContext`; continuation calls include
-the continuation ID that Relay supplied for the active intercept.
+the continuation ID that Relay supplied for the active intercept. Codec
+operations additionally require the unforgeable capability ID supplied for the
+current sanitizer invocation. Relay rejects missing, forged, expired,
+wrong-direction, or activation-mismatched capabilities. Codec transformation
+failures are non-retryable worker errors.
 
 ## Authentication and Endpoints
 

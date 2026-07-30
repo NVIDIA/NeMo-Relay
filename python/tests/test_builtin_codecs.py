@@ -394,7 +394,8 @@ class TestResponseCodecObjectParam:
         def capture(event):
             captured_events.append(event)
 
-        def sanitize_response(response):
+        def sanitize_response(response, context):
+            del context
             return {
                 "id": "chatcmpl-sanitized",
                 "model": "gpt-4",

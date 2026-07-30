@@ -25,6 +25,9 @@ service RelayHostRuntime {
   rpc ToolNext(ToolNextRequest) returns (JsonResult);
   rpc LlmNext(LlmNextRequest) returns (JsonResult);
   rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
+  rpc DecodeLlmCodecRequest(LlmCodecDecodeRequest) returns (JsonResult);
+  rpc EncodeLlmCodecRequest(LlmCodecEncodeRequest) returns (JsonResult);
+  rpc DecodeLlmCodecResponse(LlmCodecDecodeResponse) returns (JsonResult);
 }
 
 message JsonEnvelope {
@@ -49,6 +52,13 @@ enum RegistrationSurface {
   MARK_SANITIZE_GUARDRAIL = 30;
   SCOPE_SANITIZE_START_GUARDRAIL = 31;
   SCOPE_SANITIZE_END_GUARDRAIL = 32;
+}
+
+enum LlmCodecKind {
+  LLM_CODEC_KIND_UNSPECIFIED = 0;
+  LLM_CODEC_KIND_BUILTIN = 1;
+  LLM_CODEC_KIND_RUNTIME = 2;
+  LLM_CODEC_KIND_OPAQUE = 3;
 }
 
 enum ScopeType {
@@ -132,6 +142,7 @@ message Registration {
   RegistrationSurface surface = 2;
   int32 priority = 3;
   bool break_chain = 4;
+  reserved 5;
 }
 
 message InvokeRequest {
@@ -160,6 +171,28 @@ message LlmInvocation {
   JsonEnvelope request = 2;
   JsonEnvelope annotated_request = 3;
   JsonEnvelope response = 4;
+  reserved 5, 6, 7, 8;
+  oneof sanitize_context {
+    LlmSanitizeRequestContext request_sanitize_context = 9;
+    LlmSanitizeResponseContext response_sanitize_context = 10;
+  }
+}
+
+message LlmCodecIdentity {
+  LlmCodecKind kind = 1;
+  optional string id = 2;
+}
+
+message LlmSanitizeRequestContext {
+  LlmCodecIdentity codec = 1;
+  // Opaque, invocation-scoped host capability. SDKs must not expose this value.
+  optional string codec_capability_id = 2;
+}
+
+message LlmSanitizeResponseContext {
+  LlmCodecIdentity codec = 1;
+  // Opaque, invocation-scoped host capability. SDKs must not expose this value.
+  optional string codec_capability_id = 2;
 }
 
 message InvokeResponse {
@@ -301,4 +334,29 @@ message LlmStreamNextRequest {
   string auth_token = 2;
   string continuation_id = 3;
   JsonEnvelope request = 4;
+}
+
+message LlmCodecDecodeRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string codec_capability_id = 3;
+  JsonEnvelope request = 4;
+  string invocation_id = 5;
+}
+
+message LlmCodecEncodeRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string codec_capability_id = 3;
+  JsonEnvelope annotated_request = 4;
+  JsonEnvelope original_request = 5;
+  string invocation_id = 6;
+}
+
+message LlmCodecDecodeResponse {
+  string activation_id = 1;
+  string auth_token = 2;
+  string codec_capability_id = 3;
+  JsonEnvelope response = 4;
+  string invocation_id = 5;
 }

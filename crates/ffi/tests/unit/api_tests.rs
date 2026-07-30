@@ -6,31 +6,37 @@
 use super::*;
 use std::ffi::{CStr, CString};
 use std::ptr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::PluginRegistrationContext;
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
-use crate::callable::{NemoRelayLlmExecNextFn, NemoRelayToolExecNextFn};
+use crate::callable::{
+    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
+    NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecNextFn,
+};
 use crate::convert::nemo_relay_string_free;
 use crate::error::{NemoRelayStatus, nemo_relay_last_error};
 use crate::types::{
-    FfiAtifExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest, FfiOpenTelemetrySubscriber,
-    FfiPluginActivation, FfiScopeStack, FfiToolHandle, nemo_relay_atif_exporter_free,
-    nemo_relay_event_data, nemo_relay_event_input, nemo_relay_event_metadata,
-    nemo_relay_event_model_name, nemo_relay_event_name, nemo_relay_event_output,
-    nemo_relay_event_parent_uuid, nemo_relay_event_scope_type, nemo_relay_event_timestamp,
-    nemo_relay_event_tool_call_id, nemo_relay_event_uuid, nemo_relay_llm_handle_attributes,
-    nemo_relay_llm_handle_free, nemo_relay_llm_handle_name, nemo_relay_llm_handle_parent_uuid,
-    nemo_relay_llm_handle_uuid, nemo_relay_llm_request_content, nemo_relay_llm_request_free,
-    nemo_relay_llm_request_headers, nemo_relay_llm_request_new, nemo_relay_otel_subscriber_free,
-    nemo_relay_scope_handle_attributes, nemo_relay_scope_handle_data, nemo_relay_scope_handle_free,
-    nemo_relay_scope_handle_metadata, nemo_relay_scope_handle_name,
-    nemo_relay_scope_handle_parent_uuid, nemo_relay_scope_handle_scope_type,
-    nemo_relay_scope_handle_uuid, nemo_relay_scope_stack_free, nemo_relay_tool_handle_attributes,
-    nemo_relay_tool_handle_free, nemo_relay_tool_handle_name, nemo_relay_tool_handle_parent_uuid,
-    nemo_relay_tool_handle_uuid,
+    FfiAtifExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest, FfiLlmSanitizeRequestCodec,
+    FfiLlmSanitizeResponseCodec, FfiOpenTelemetrySubscriber, FfiPluginActivation, FfiScopeStack,
+    FfiToolHandle, nemo_relay_atif_exporter_free, nemo_relay_event_data, nemo_relay_event_input,
+    nemo_relay_event_metadata, nemo_relay_event_model_name, nemo_relay_event_name,
+    nemo_relay_event_output, nemo_relay_event_parent_uuid, nemo_relay_event_scope_type,
+    nemo_relay_event_timestamp, nemo_relay_event_tool_call_id, nemo_relay_event_uuid,
+    nemo_relay_llm_handle_attributes, nemo_relay_llm_handle_free, nemo_relay_llm_handle_name,
+    nemo_relay_llm_handle_parent_uuid, nemo_relay_llm_handle_uuid, nemo_relay_llm_request_content,
+    nemo_relay_llm_request_free, nemo_relay_llm_request_headers, nemo_relay_llm_request_new,
+    nemo_relay_otel_subscriber_free, nemo_relay_scope_handle_attributes,
+    nemo_relay_scope_handle_data, nemo_relay_scope_handle_free, nemo_relay_scope_handle_metadata,
+    nemo_relay_scope_handle_name, nemo_relay_scope_handle_parent_uuid,
+    nemo_relay_scope_handle_scope_type, nemo_relay_scope_handle_uuid, nemo_relay_scope_stack_free,
+    nemo_relay_tool_handle_attributes, nemo_relay_tool_handle_free, nemo_relay_tool_handle_name,
+    nemo_relay_tool_handle_parent_uuid, nemo_relay_tool_handle_uuid,
 };
 use crate::{api, callable, types};
 
@@ -226,6 +232,57 @@ unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
     stack
 }
 
+#[test]
+fn propagation_context_json_round_trips_through_the_ffi() {
+    let _guard = lock_unpoisoned(&TEST_MUTEX);
+    let root_uuid = "018f13f0-7c1a-7a80-8000-000000000001";
+    let root = CString::new(root_uuid).unwrap();
+    let mut context_json = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            crate::api::nemo_relay_capture_propagation_context_with_root_json(
+                root.as_ptr(),
+                &mut context_json,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let context = unsafe { returned_json(context_json) };
+    assert_eq!(context["version"], 1);
+    assert_eq!(context["root_uuid"], root_uuid);
+
+    let payload = CString::new(context.to_string()).unwrap();
+    let mut stack = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
+                payload.as_ptr(),
+                &mut stack,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(!stack.is_null());
+    unsafe { nemo_relay_scope_stack_free(stack) };
+
+    for invalid_context in [
+        "not-json",
+        r#"{\"version\":2,\"parent_uuid\":\"018f13f0-7c1a-7a80-8000-000000000002\"}"#,
+        r#"{\"version\":1,\"root_uuid\":\"00000000-0000-0000-0000-000000000000\",\"parent_uuid\":\"018f13f0-7c1a-7a80-8000-000000000002\"}"#,
+    ] {
+        let payload = CString::new(invalid_context).unwrap();
+        let mut rejected_stack = ptr::null_mut();
+        let status = unsafe {
+            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
+                payload.as_ptr(),
+                &mut rejected_stack,
+            )
+        };
+        assert_ne!(status, NemoRelayStatus::Ok);
+        assert!(rejected_stack.is_null());
+    }
+}
+
 fn reset_globals() {
     lock_unpoisoned(event_log()).clear();
     lock_unpoisoned(collected_chunks()).clear();
@@ -340,6 +397,7 @@ unsafe extern "C" fn tool_exec_intercept_cb(
 unsafe extern "C" fn llm_request_cb(
     _user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
+    _context: NemoRelayLlmSanitizeRequestContext,
 ) -> *mut FfiLLMRequest {
     let request = unsafe { &*request };
     let mut content = request.0.content.clone();
@@ -353,6 +411,7 @@ unsafe extern "C" fn llm_request_cb(
 unsafe extern "C" fn llm_response_cb(
     _user_data: *mut libc::c_void,
     response_json: *const c_char,
+    _context: NemoRelayLlmSanitizeResponseContext,
 ) -> *mut c_char {
     let mut response: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(response_json) }
@@ -385,7 +444,17 @@ unsafe extern "C" fn llm_request_intercept_cb(
     _annotated_json: *const c_char,
     out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
-    let transformed = unsafe { Box::from_raw(llm_request_cb(ptr::null_mut(), request)) };
+    let transformed = unsafe {
+        Box::from_raw(llm_request_cb(
+            ptr::null_mut(),
+            request,
+            NemoRelayLlmSanitizeRequestContext {
+                codec_kind: NemoRelayLlmSanitizeCodecKind::None,
+                codec_id: ptr::null(),
+                codec: ptr::null(),
+            },
+        ))
+    };
     let outcome = json!({
         "request": transformed.0,
         "annotated_request": null,
@@ -626,6 +695,86 @@ unsafe extern "C" fn plugin_register_fail_with_last_error(
 ) -> NemoRelayStatus {
     set_last_error("plugin register callback set last error explicitly");
     NemoRelayStatus::Internal
+}
+
+struct PanickingFfiSanitizerCodec;
+
+impl LlmCodec for PanickingFfiSanitizerCodec {
+    fn decode(
+        &self,
+        _request: &nemo_relay::api::llm::LlmRequest,
+    ) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+        panic!("request decode panic")
+    }
+
+    fn encode(
+        &self,
+        _annotated: &AnnotatedLlmRequest,
+        _original: &nemo_relay::api::llm::LlmRequest,
+    ) -> nemo_relay::error::Result<nemo_relay::api::llm::LlmRequest> {
+        panic!("request encode panic")
+    }
+}
+
+impl LlmResponseCodec for PanickingFfiSanitizerCodec {
+    fn decode_response(&self, _response: &Json) -> nemo_relay::error::Result<AnnotatedLlmResponse> {
+        panic!("response decode panic")
+    }
+}
+
+#[test]
+fn ffi_sanitizer_codec_entrypoints_contain_codec_panics() {
+    let request_codec =
+        FfiLlmSanitizeRequestCodec(Arc::new(PanickingFfiSanitizerCodec) as Arc<dyn LlmCodec>);
+    let response_codec = FfiLlmSanitizeResponseCodec(
+        Arc::new(PanickingFfiSanitizerCodec) as Arc<dyn LlmResponseCodec>
+    );
+    let request = FfiLLMRequest(nemo_relay::api::llm::LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"model": "gpt-test", "messages": []}),
+    });
+    let annotated_json = cstring(&serde_json::to_string(&AnnotatedLlmRequest::default()).unwrap());
+    let response_json = cstring("{}");
+
+    let decoded = unsafe {
+        api::nemo_relay_llm_sanitize_request_codec_decode(
+            ptr::from_ref(&request_codec),
+            ptr::from_ref(&request),
+        )
+    };
+    assert!(decoded.is_null());
+    assert!(
+        unsafe { read_last_error() }
+            .unwrap()
+            .contains("sanitizer request codec decode panicked")
+    );
+
+    let encoded = unsafe {
+        api::nemo_relay_llm_sanitize_request_codec_encode(
+            ptr::from_ref(&request_codec),
+            annotated_json.as_ptr(),
+            ptr::from_ref(&request),
+        )
+    };
+    assert!(encoded.is_null());
+    assert!(
+        unsafe { read_last_error() }
+            .unwrap()
+            .contains("sanitizer request codec encode panicked")
+    );
+
+    let decoded = unsafe {
+        api::nemo_relay_llm_sanitize_response_codec_decode(
+            ptr::from_ref(&response_codec),
+            response_json.as_ptr(),
+        )
+    };
+    assert!(decoded.is_null());
+    assert!(
+        unsafe { read_last_error() }
+            .unwrap()
+            .contains("sanitizer response codec decode panicked")
+    );
 }
 
 #[path = "api/core_tests.rs"]

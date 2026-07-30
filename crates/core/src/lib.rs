@@ -38,7 +38,7 @@
 //! - [`observability`] — Built-in observability backends including
 //!   [`atif::AtifExporter`](observability::atif::AtifExporter),
 //!   [`otel::OpenTelemetrySubscriber`](observability::otel::OpenTelemetrySubscriber),
-//!   and [`openinference::OpenInferenceSubscriber`](observability::openinference::OpenInferenceSubscriber).
+//!   with full, GenAI, or OpenInference projection.
 //! - [`stream`] — [`stream::LlmStreamWrapper`] — a stream adapter that applies per-chunk
 //!   intercepts and aggregates streaming LLM responses.
 //!

@@ -88,8 +88,12 @@ fn overlay_openai_responses_response(mut payload: Json, annotated: &AnnotatedLlm
             .map(openai_responses_status),
     );
 
+    let message_text = annotated_message_text(annotated.message.as_ref());
+    if root.contains_key("output_text") {
+        set_optional_string_field(root, "output_text", message_text.as_deref());
+    }
     if let Some(items) = root.get_mut("output").and_then(Json::as_array_mut) {
-        overlay_output_text_blocks(items, annotated_message_text(annotated.message.as_ref()));
+        overlay_output_text_blocks(items, message_text);
         overlay_openai_responses_tool_calls(items, annotated.tool_calls.as_deref());
     }
     payload

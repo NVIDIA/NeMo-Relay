@@ -94,7 +94,10 @@ pub(crate) fn prompt_user(
 /// `agent_hint` carries the agent the user typed on the easy path (`nemo-relay claude`); when
 /// `Some`, the agent multi-select is skipped because intent is already declared. `None` from
 /// `nemo-relay config` asks the full set so users can configure multiple agents at once.
-pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
+pub(crate) async fn run(
+    agent_hint: Option<CodingAgent>,
+    explicit_plugin_path: Option<PathBuf>,
+) -> Result<(), CliError> {
     let detected = detect_installed_agents();
     let answers = prompt_user(&detected, agent_hint)?;
 
@@ -116,18 +119,22 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
         println!("    {}", path.display());
     }
     println!();
-    continue_to_plugins(answers.scope)
+    continue_to_plugins(answers.scope, explicit_plugin_path)
 }
 
 /// After the base config is saved, offers to continue into plugin configuration in-process.
 ///
-/// Prompts once. On acceptance it runs the existing plugin editor targeting the scope derived
-/// from the base setup (project for `Project`/`Both`, user for `Global`). On decline it reports
-/// that the base config was saved, that plugin setup was skipped, and prints the command to
-/// resume later. Prompt interruption is treated as a skip; other prompt or editor failures
-/// surface an error that makes clear the base config remains saved. The saved `config.toml`
-/// is never rolled back here.
-fn continue_to_plugins(scope: ConfigScope) -> Result<(), CliError> {
+/// Prompts once. On acceptance it runs the existing plugin editor targeting an explicit runtime
+/// plugin path when present, otherwise the scope derived from base setup (project for
+/// `Project`/`Both`, user for `Global`). On decline it reports that the base config was saved,
+/// that plugin setup was skipped, and prints the command to resume later. Prompt interruption is
+/// treated as a skip; other prompt or editor failures surface an error that makes clear the base
+/// config remains saved. The saved `config.toml` is never rolled back here.
+fn continue_to_plugins(
+    scope: ConfigScope,
+    explicit_plugin_path: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let resume_command = plugins_resume_command(scope, explicit_plugin_path.as_deref());
     let proceed = match Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Configure Relay plugins now?")
         .default(true)
@@ -135,22 +142,23 @@ fn continue_to_plugins(scope: ConfigScope) -> Result<(), CliError> {
     {
         Ok(proceed) => proceed,
         Err(error) if plugin_prompt_was_interrupted(&error) => {
-            print_plugins_skipped(scope);
+            print_plugins_skipped(&resume_command);
             return Ok(());
         }
         Err(error) => {
             return Err(CliError::Config(format!(
                 "plugin setup did not complete; base configuration remains saved. \
                  Resume with `{}`. Cause: {error}",
-                plugins_resume_command(scope)
+                resume_command
             )));
         }
     };
     if !proceed {
-        print_plugins_skipped(scope);
+        print_plugins_skipped(&resume_command);
         return Ok(());
     }
-    crate::plugins::edit(plugins_edit_command_for_scope(scope)).map_err(|error| {
+    let result = crate::plugins::edit(plugins_edit_command_for_scope(scope, explicit_plugin_path));
+    result.map_err(|error| {
         let cause = match error {
             CliError::Config(message) => message,
             other => other.to_string(),
@@ -158,7 +166,7 @@ fn continue_to_plugins(scope: ConfigScope) -> Result<(), CliError> {
         CliError::Config(format!(
             "plugin setup did not complete; base configuration remains saved. \
              Resume with `{}`. Cause: {cause}",
-            plugins_resume_command(scope)
+            resume_command
         ))
     })
 }
@@ -174,13 +182,10 @@ fn plugin_prompt_was_interrupted(error: &dialoguer::Error) -> bool {
     )
 }
 
-fn print_plugins_skipped(scope: ConfigScope) {
+fn print_plugins_skipped(resume_command: &str) {
     println!();
     println!("  Base configuration saved. Plugin configuration skipped.");
-    println!(
-        "  Configure plugins later with `{}`.",
-        plugins_resume_command(scope)
-    );
+    println!("  Configure plugins later with `{resume_command}`.");
     println!();
 }
 

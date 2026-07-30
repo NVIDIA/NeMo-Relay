@@ -10,8 +10,6 @@ from typing import Literal, Protocol, cast
 
 from nemo_relay import Json, JsonObject, UnsupportedBehavior
 
-MarkProjection = Literal["inherit", "event", "tool"]
-
 
 class _SupportsToDict(Protocol):
     def to_dict(self) -> JsonObject: ...
@@ -214,53 +212,66 @@ class AtifConfig:
 
 
 @dataclass(slots=True)
-class OtlpConfig:
-    """Shared OpenTelemetry/OpenInference OTLP export settings."""
+class OpenTelemetryEndpointConfig:
+    """One typed OpenTelemetry OTLP destination."""
 
-    enabled: bool = False
-    mark_projection: MarkProjection = "inherit"
+    type: Literal["full", "gen_ai", "openinference"]
+    endpoint: str
+    mark_projection: Literal["inherit", "event", "tool"] = "inherit"
     mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
+    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
     transport: Literal["http_binary", "grpc"] = "http_binary"
-    endpoint: str | None = None
-    headers: dict[str, str] = field(default_factory=dict)
-    resource_attributes: dict[str, str] = field(default_factory=dict)
-    service_name: str = "nemo-relay"
+    service_name: str = "unknown_service"
     service_namespace: str | None = None
     service_version: str | None = None
-    instrumentation_scope: str | None = None
+    instrumentation_scope: str = "opentelemetry"
     timeout_millis: int = 3000
-    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
+    headers: dict[str, str] = field(default_factory=dict)
+    header_env: dict[str, str] = field(default_factory=dict)
+    resource_attributes: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> JsonObject:
-        """Serialize this OTLP config to the canonical JSON object shape."""
+        """Serialize this endpoint to the canonical plugin shape."""
         return _normalize_object(
             {
-                "enabled": self.enabled,
+                "type": self.type,
+                "endpoint": self.endpoint,
                 "mark_projection": self.mark_projection,
                 "mark_exclude_names": self.mark_exclude_names,
                 "attribute_mappings": self.attribute_mappings,
                 "transport": self.transport,
-                "endpoint": self.endpoint,
-                "headers": self.headers,
-                "resource_attributes": self.resource_attributes,
                 "service_name": self.service_name,
                 "service_namespace": self.service_namespace,
                 "service_version": self.service_version,
                 "instrumentation_scope": self.instrumentation_scope,
                 "timeout_millis": self.timeout_millis,
+                "headers": self.headers,
+                "header_env": self.header_env,
+                "resource_attributes": self.resource_attributes,
             }
         )
+
+
+@dataclass(slots=True)
+class OpenTelemetrySectionConfig:
+    """Multi-endpoint OpenTelemetry plugin settings."""
+
+    enabled: bool = False
+    endpoints: list[OpenTelemetryEndpointConfig] = field(default_factory=list)
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this section to the canonical plugin shape."""
+        return _normalize_object({"enabled": self.enabled, "endpoints": self.endpoints})
 
 
 @dataclass(slots=True)
 class ObservabilityConfig:
     """Canonical config document for the top-level observability component."""
 
-    version: int = 2
+    version: int = 3
     atof: AtofConfig | None = None
     atif: AtifConfig | None = None
-    opentelemetry: OtlpConfig | None = None
-    openinference: OtlpConfig | None = None
+    opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
 
     def to_dict(self) -> JsonObject:
@@ -271,7 +282,6 @@ class ObservabilityConfig:
                 "atof": self.atof,
                 "atif": self.atif,
                 "opentelemetry": self.opentelemetry,
-                "openinference": self.openinference,
                 "policy": self.policy,
             }
         )
@@ -304,9 +314,9 @@ __all__ = [
     "AtofConfig",
     "AtifConfig",
     "HttpStorageConfig",
-    "MarkProjection",
     "S3StorageConfig",
-    "OtlpConfig",
+    "OpenTelemetryEndpointConfig",
+    "OpenTelemetrySectionConfig",
     "ObservabilityConfig",
     "OBSERVABILITY_PLUGIN_KIND",
     "ComponentSpec",

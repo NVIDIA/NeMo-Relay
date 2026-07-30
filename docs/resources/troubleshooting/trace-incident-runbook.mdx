@@ -149,10 +149,11 @@ For ATOF streaming endpoints, confirm these settings:
 - A failed streaming endpoint is isolated from file output and from other
   configured endpoints.
 
-For OpenTelemetry or OpenInference export, confirm these settings:
+For typed OpenTelemetry export, confirm these settings:
 
-- The OpenTelemetry Protocol (OTLP) endpoint, headers, credentials, and network
-  egress are available in the target environment.
+- Each endpoint has the intended `full`, `gen_ai`, or `openinference` type.
+- The OpenTelemetry Protocol (OTLP) endpoint, headers, `header_env` variables,
+  credentials, and network egress are available in the target environment.
 - The exporter is enabled in the active configuration file or plugin document.
 - The backend receives spans with `nemo_relay.uuid` and
   `nemo_relay.parent_uuid` attributes.
@@ -162,7 +163,7 @@ For OpenTelemetry or OpenInference export, confirm these settings:
 Refer to [Agent Trajectory Observability Format (ATOF)](/configure-plugins/observability/atof),
 [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif),
 [OpenTelemetry](/configure-plugins/observability/opentelemetry), and
-[OpenInference](/configure-plugins/observability/openinference).
+[OpenInference Projection](/configure-plugins/observability/openinference).
 
 ## Check For Duplicate Event Sources
 

@@ -31,9 +31,9 @@ The release pipeline publishes these package surfaces from a tag push:
 | Ecosystem | Published Surface |
 |---|---|
 | crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-switchyard`, `nemo-relay-ffi`, `nemo-relay-cli` |
-| PyPI | `nemo-relay`, `nemo-relay-plugin` |
-| npm | `nemo-relay-node`, `nemo-relay-openclaw` |
-| GitHub Releases | CLI binaries and `SHA256SUMS` |
+| PyPI | `nemo-relay`, `nemo-relay-plugin`, `nemo-relay-cli-bin` |
+| npm | `nemo-relay-node` and its five platform packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and its five platform packages |
+| GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, CLI and Node npm tarballs, and checksums |
 | Fern | The documentation site |
 
 Go remains source-first. There is no separate Go package-manager publication
@@ -61,6 +61,9 @@ NeMo Relay versions are anchored on the workspace SemVer in the repository root
   lock entries and must be updated with it.
 - `integrations/openclaw/package.json` carries the base npm version for the
   OpenClaw plugin package and must stay aligned with the same release version.
+- `packages/cli-bin/package.json` and `python/cli-bin/pyproject.toml` carry the
+  base CLI package versions in their registry-specific SemVer and PEP 440
+  spellings. The `nemo-relay[cli]` extra must pin the exact PyPI version.
 - The Python package version is derived at packaging time. `pyproject.toml`
   stays `dynamic = ["version"]` in the repository, and the packaging recipe
   writes a concrete version into `pyproject.toml` and `crates/python/Cargo.toml`
@@ -141,6 +144,16 @@ Before you create a release tag, confirm the following:
      [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
+   - Pending or existing PyPI trusted publishing is configured for
+     `nemo-relay-cli-bin`
+   - npm trusted publishers are configured for `nemo-relay-node`,
+     `nemo-relay-node-linux-x64-gnu`, `nemo-relay-node-linux-arm64-gnu`,
+     `nemo-relay-node-darwin-arm64`, `nemo-relay-node-win32-x64-msvc`, and
+     `nemo-relay-node-win32-arm64-msvc`
+   - npm trusted publishers are configured for `nemo-relay-cli-bin` and
+     `nemo-relay-cli-bin-linux-x64`, `nemo-relay-cli-bin-linux-arm64`,
+     `nemo-relay-cli-bin-darwin-arm64`, `nemo-relay-cli-bin-win32-x64`, and
+     `nemo-relay-cli-bin-win32-arm64`
 5. The GitHub Release entry is ready to become the only canonical release-notes
    surface.
 
@@ -167,6 +180,8 @@ The helper updates:
 4. [`integrations/openclaw/package.json`](integrations/openclaw/package.json)
    and the `integrations/openclaw` entry in the root
    [`package-lock.json`](package-lock.json) to the same release version.
+5. The Python and npm `nemo-relay-cli-bin` metadata, including the exact
+   `nemo-relay[cli]` dependency version.
 Review docs and snippets that mention explicit versions, including:
 
 - [`README.md`](README.md)
@@ -239,12 +254,23 @@ The release pipeline then:
    validation.
 3. Builds publishable package artifacts with the exact tag version:
    - `package-rust` packs the published Rust crates for local validation.
-   - `package-node` packs the npm Node.js package.
+   - `package-node` packs one native npm Node.js package per supported platform
+     and creates the JavaScript and TypeScript metapackage once.
    - `package-openclaw` packs the npm OpenClaw plugin package.
    - `package-python` builds platform `nemo-relay` wheels.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
-   - The CLI release-asset job uploads each platform `nemo-relay` binary and
-     includes those binaries in `SHA256SUMS`.
+   - The Rust CLI matrix packages each prebuilt binary as a
+     `nemo-relay-cli-bin` wheel and npm platform package, and creates the npm
+     launcher package once.
+   - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
+     API wheels, CLI wheels, CLI npm packages, and split Node npm packages.
+     `SHA256SUMS` covers every attached distribution artifact, and raw CLI
+     binaries also receive individual `.sha256` files for installer
+     compatibility.
+     GitHub-facing npm artifacts use
+     `nemo-relay-bin-npm[-<os>-<cpu>]-<version>.tgz` for the CLI and
+     `nemo-relay-node-npm[-<os>-<cpu>]-<version>.tgz` for Node.js; their
+     registry package names remain in the tarball manifests.
 4. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
@@ -254,11 +280,12 @@ The release pipeline then:
      `nemo-relay-switchyard`, `nemo-relay-ffi`, and `nemo-relay-cli` through
      trusted publishing from
      the top-level workflow
-   - `publish-python` downloads both the `nemo-relay` and `nemo-relay-plugin`
-     wheel artifacts and uploads them to PyPI with trusted publishing from the
-     top-level workflow
-   - `publish-npm` publishes the Node.js and OpenClaw plugin npm packages
-     through npm trusted publishing from the top-level workflow
+   - `publish-python` downloads the `nemo-relay`, `nemo-relay-plugin`, and
+     `nemo-relay-cli-bin` wheel artifacts and uploads them to PyPI with trusted
+     publishing from the top-level workflow
+   - `publish-npm` publishes the Node.js and CLI native packages before their
+     metapackages, then publishes the OpenClaw package, through npm trusted
+     publishing from the top-level workflow
      - Stable tags publish to the npm `latest` dist-tag
      - Prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
        dist-tag so they do not become the default upgrade target
@@ -291,9 +318,9 @@ NVIDIA Artifactory publication for the same tag:
 npm trusted publishing has its own registry-side constraints:
 
 - Each npm package can only have one trusted publisher configured at a time.
-- Because this repository publishes `nemo-relay-node` and `nemo-relay-openclaw`,
-  configure trusted publishers for both packages
-  before pushing a release tag.
+- Configure trusted publishers for `nemo-relay-node`, all five Node platform
+  packages, `nemo-relay-openclaw`, `nemo-relay-cli-bin`, and all five CLI
+  platform packages before pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
 
@@ -324,9 +351,10 @@ After the release is live, verify:
    `nemo-relay-pii-redaction`, `nemo-relay-switchyard`, `nemo-relay-ffi`, and
    `nemo-relay-cli` crates
    are visible on crates.io.
-2. The `nemo-relay` wheel is visible on PyPI.
-3. The `nemo-relay-node` and `nemo-relay-openclaw` packages
-   are visible on npm.
+2. The `nemo-relay` and `nemo-relay-cli-bin` wheels are visible on PyPI, and
+   `pip install "nemo-relay[cli]"` exposes `nemo-relay`.
+3. The `nemo-relay-node`, its five platform packages, `nemo-relay-openclaw`,
+   `nemo-relay-cli-bin`, and its five platform packages are visible on npm.
 4. The Unix and Windows installers resolve the new stable tag and verify
    matching CLI release asset checksums on their supported platforms.
 5. The Fern documentation site shows the expected version and release notes.

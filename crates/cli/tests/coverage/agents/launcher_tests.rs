@@ -62,6 +62,16 @@ impl Drop for EnvScope {
     }
 }
 
+struct DropSignal(Option<oneshot::Sender<()>>);
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
 #[test]
 fn infers_agent_from_command_or_uses_override() {
     let command = RunOverrides {
@@ -488,7 +498,7 @@ fn exporter_destinations_describe_observability_outputs() {
                 "kind": OBSERVABILITY_PLUGIN_KIND,
                 "enabled": true,
                 "config": {
-                    "version": 2,
+                    "version": 3,
                     "atof": {
                         "enabled": true,
                         "sinks": [
@@ -510,10 +520,16 @@ fn exporter_destinations_describe_observability_outputs() {
                     },
                     "opentelemetry": {
                         "enabled": true,
-                        "endpoint": "http://127.0.0.1:4318/v1/traces"
-                    },
-                    "openinference": {
-                        "enabled": true
+                        "endpoints": [
+                            {
+                                "type": "full",
+                                "endpoint": "http://127.0.0.1:4318/v1/traces"
+                            },
+                            {
+                                "type": "openinference",
+                                "endpoint": "http://127.0.0.1:4318/v1/traces"
+                            }
+                        ]
                     }
                 }
             }]
@@ -543,12 +559,12 @@ fn exporter_destinations_describe_observability_outputs() {
     assert!(
         destinations
             .iter()
-            .any(|line| line == "OpenTelemetry http://127.0.0.1:4318/v1/traces")
+            .any(|line| line == "OpenTelemetry full http://127.0.0.1:4318/v1/traces")
     );
     assert!(
         destinations
             .iter()
-            .any(|line| line == "OpenInference OTLP endpoint from environment/default")
+            .any(|line| line == "OpenTelemetry openinference http://127.0.0.1:4318/v1/traces")
     );
 }
 
@@ -2003,6 +2019,61 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
+}
+
+#[tokio::test]
+async fn gateway_stop_aborts_a_task_that_exceeds_the_grace_period() {
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (dropped_tx, dropped_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _drop_signal = DropSignal(Some(dropped_tx));
+        let _ = started_tx.send(());
+        std::future::pending::<Result<(), CliError>>().await
+    });
+    started_rx.await.unwrap();
+    let gateway = RunningGateway { shutdown_tx, task };
+
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        gateway.stop_with_interrupt_and_timeout(std::future::pending(), Duration::from_millis(10)),
+    )
+    .await
+    .expect("forced gateway shutdown did not finish")
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), dropped_rx)
+        .await
+        .expect("aborted gateway task was not dropped")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn gateway_stop_interrupt_aborts_a_stuck_task() {
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (dropped_tx, dropped_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _drop_signal = DropSignal(Some(dropped_tx));
+        let _ = started_tx.send(());
+        std::future::pending::<Result<(), CliError>>().await
+    });
+    started_rx.await.unwrap();
+    let gateway = RunningGateway { shutdown_tx, task };
+
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        gateway.stop_with_interrupt_and_timeout(
+            async { Ok(()) },
+            TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT,
+        ),
+    )
+    .await
+    .expect("interrupt did not force gateway shutdown")
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), dropped_rx)
+        .await
+        .expect("interrupted gateway task was not dropped")
+        .unwrap();
 }
 
 #[tokio::test]

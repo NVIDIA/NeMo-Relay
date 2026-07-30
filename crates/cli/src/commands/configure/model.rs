@@ -35,22 +35,35 @@ impl ConfigScope {
 
 /// Maps the base setup scope to the plugin editor target for the guided continuation.
 ///
-/// `Project` and `Both` configure the project `plugins.toml`; `Global` configures the user
-/// `plugins.toml`. Returns the existing `PluginsEditRequest` so the in-process editor behaves
-/// exactly like the equivalent `nemo-relay plugins edit` invocation.
-pub(crate) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditRequest {
+/// An explicit plugin path follows the runtime contract and wins over the wizard scope. Without
+/// one, `Project` and `Both` configure the project `plugins.toml`, while `Global` configures the
+/// user `plugins.toml`.
+pub(crate) fn plugins_edit_command_for_scope(
+    scope: ConfigScope,
+    explicit_path: Option<PathBuf>,
+) -> PluginsEditRequest {
     let scope = match scope {
         ConfigScope::Project | ConfigScope::Both => ConfigurationScope::Project,
         ConfigScope::Global => ConfigurationScope::User,
     };
-    PluginsEditRequest { scope }
+    PluginsEditRequest {
+        scope,
+        explicit_path,
+    }
 }
 
 /// Returns the exact command a user runs to resume plugin setup after skipping the continuation.
-pub(crate) fn plugins_resume_command(scope: ConfigScope) -> &'static str {
+pub(crate) fn plugins_resume_command(scope: ConfigScope, explicit_path: Option<&Path>) -> String {
+    if let Some(path) = explicit_path {
+        let path = crate::process::shell_quote_arg_for_platform(
+            &path.display().to_string(),
+            cfg!(windows),
+        );
+        return format!("nemo-relay --plugin-config-path {path} plugins edit");
+    }
     match scope {
-        ConfigScope::Project | ConfigScope::Both => "nemo-relay plugins edit --project",
-        ConfigScope::Global => "nemo-relay plugins edit",
+        ConfigScope::Project | ConfigScope::Both => "nemo-relay plugins edit --project".into(),
+        ConfigScope::Global => "nemo-relay plugins edit".into(),
     }
 }
 

@@ -73,6 +73,14 @@ A plugin can install one or more of these runtime surfaces:
   conditional-execution guardrails, request intercepts, execution intercepts,
   and stream execution intercepts.
 
+LLM sanitize guardrails always receive the request or response first, followed
+by a structured context whose `codec` is `none`, `builtin(id)`, `runtime(id)`,
+or `opaque`. Every callback declares `(payload, context)` and may omit the LLM
+event payload by returning no value. In-process sanitizer contexts can resolve
+the active codec for normalized processing. Worker sanitizer contexts resolve
+an invocation-scoped asynchronous codec proxy, so workers can perform the same
+directional normalization without receiving a host-process object.
+
 Start with one surface. Add a bundle only when one configuration document clearly controls related behavior, such as a subscriber plus the request intercepts needed to add correlation metadata.
 
 ## Registration Lifecycle

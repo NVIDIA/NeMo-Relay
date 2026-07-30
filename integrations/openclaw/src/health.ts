@@ -85,8 +85,13 @@ function configuredObservabilityOutputs(config: NemoRelayHookBackendConfig): {
 
     const componentConfig = asRecord(record.config);
     outputs.atif ||= sectionEnabled(componentConfig?.atif);
-    outputs.otel ||= sectionEnabled(componentConfig?.opentelemetry);
-    outputs.openInference ||= sectionEnabled(componentConfig?.openinference);
+    const opentelemetry = asRecord(componentConfig?.opentelemetry);
+    const opentelemetryEnabled = sectionEnabled(opentelemetry);
+    outputs.otel ||= opentelemetryEnabled;
+    outputs.openInference ||=
+      opentelemetryEnabled &&
+      Array.isArray(opentelemetry?.endpoints) &&
+      opentelemetry.endpoints.some((endpoint) => asRecord(endpoint)?.type === 'openinference');
   }
 
   return outputs;

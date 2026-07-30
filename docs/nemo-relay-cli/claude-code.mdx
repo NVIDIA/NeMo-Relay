@@ -121,12 +121,18 @@ version = 1
 kind = "observability"
 enabled = true
 
+[components.config]
+version = 3
+
 [components.config.atif]
 enabled = true
 output_directory = ".nemo-relay/atif"
 
-[components.config.openinference]
+[components.config.opentelemetry]
 enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
@@ -198,8 +204,8 @@ printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
 
 The response should be valid Claude Code hook JSON. For most lifecycle events it
 is an allow/continue response. A full observability smoke fixture should produce
-expected OpenInference spans, raw ATOF events, and ATIF trajectories for at
-least one user turn, one LLM call, and one tool call.
+expected `openinference` OpenTelemetry spans, raw ATOF events, and ATIF
+trajectories for at least one user turn, one LLM call, and one tool call.
 
 ## Verify Export
 

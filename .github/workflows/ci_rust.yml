@@ -278,9 +278,66 @@ jobs:
           mkdir -p "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli"
           cp "$source" "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli/${asset}"
 
+      - name: Package CLI binary for PyPI and npm
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          binary="nemo-relay"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            binary="${binary}.exe"
+          fi
+          source="${NEMO_RELAY_CI_WORKSPACE}/target/${target}/release/${binary}"
+          version="${{ github.ref_name }}"
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)+${GIT_COMMIT::8}"
+          fi
+          rm -rf "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
+          mkdir -p "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
+          args=(
+            --binary "$source"
+            --target "$target"
+            --version "$version"
+            --output-dir "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
+          )
+          if [ "${{ matrix.platform }}" = "linux-amd64" ]; then
+            args+=(--npm-launcher)
+          fi
+          python scripts/package-cli-bin.py "${args[@]}"
+
+      - name: Install and run CLI wheel
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          wheels=("${NEMO_RELAY_CI_WORKSPACE_TMP}"/cli-packages/*.whl)
+          python -m venv "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            venv_python="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/Scripts/python.exe"
+            venv_cli="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/Scripts/nemo-relay.exe"
+          else
+            venv_python="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/bin/python"
+            venv_cli="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/bin/nemo-relay"
+          fi
+          "$venv_python" -m pip install --force-reinstall --no-deps "${wheels[0]}"
+          "$venv_cli" --version
+
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: cli-${{ matrix.platform }}
+          name: cli-binary-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli/*
+          if-no-files-found: error
+
+      - name: Upload CLI wheel artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cli-python-wheel-${{ matrix.platform }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.whl
+          if-no-files-found: error
+
+      - name: Upload CLI npm artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cli-npm-package-${{ matrix.platform }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.tgz
           if-no-files-found: error

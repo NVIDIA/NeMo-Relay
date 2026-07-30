@@ -998,6 +998,77 @@ async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
 }
 
 #[tokio::test]
+async fn streaming_provider_error_does_not_poison_the_next_request() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let error_body = r#"{"error":{"type":"rate_limit_error"}}"#;
+    let error_response = format!(
+        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 7\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        error_body.len(),
+        error_body
+    );
+    let sse_body = "data: {\"type\":\"message_stop\"}\n\n";
+    let success_response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        sse_body.len(),
+        sse_body
+    );
+    let server = tokio::spawn(async move {
+        for response in [error_response.as_str(), success_response.as_str()] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+
+    let state = AppState::new(GatewayConfig::default());
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/v1/messages".into(),
+        provider: ProviderRoute::AnthropicMessages,
+        upstream_url: format!("http://{address}/v1/messages"),
+        body_bytes: Bytes::from_static(b"{}"),
+        request_json: json!({}),
+        streaming: true,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: false,
+        },
+    };
+    let func = build_streaming_func(state, &prepared);
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({}),
+    };
+
+    let error = match func(request.clone()).await {
+        Ok(_) => panic!("expected the provider error to terminate managed streaming"),
+        Err(error) => error,
+    };
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure, got {error:?}");
+    };
+    assert_eq!(failure.status, Some(429));
+    assert_eq!(failure.class, UpstreamFailureClass::RetryableStatus);
+    assert_eq!(
+        failure.headers.get("content-type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(failure.headers.get("retry-after"), Some(&"7".to_string()));
+    assert_eq!(failure.body, error_body);
+
+    let mut stream = func(request).await.unwrap();
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({"type": "message_stop"})
+    );
+    assert!(stream.next().await.is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn buffered_body_read_failure_stays_structured() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

@@ -64,6 +64,16 @@ pub(super) async fn execute(
     crate::process::launcher::run(command.into_runtime(), Some(&inherited)).await
 }
 
+/// Resolves the plugin document that easy-path setup must preserve.
+pub(super) fn easy_path_plugin_config_path(
+    inherited: &crate::server::GatewayOverrides,
+) -> Option<PathBuf> {
+    crate::configuration::explicit_plugin_config_path(
+        inherited.config.as_ref(),
+        inherited.plugin_config_path.as_ref(),
+    )
+}
+
 pub(super) async fn easy_path(
     agent: CodingAgent,
     command: EasyPathCommand,
@@ -76,7 +86,8 @@ pub(super) async fn easy_path(
     let explicit_config = inherited.config.as_deref();
     let needs_setup = explicit_config.is_none() && !crate::configuration::any_config_file_exists();
     if needs_setup {
-        super::configure::run(Some(agent)).await?;
+        let explicit_plugin_path = easy_path_plugin_config_path(&inherited);
+        super::configure::run(Some(agent), explicit_plugin_path).await?;
     }
     let runtime = crate::process::RunOverrides {
         agent: Some(agent),

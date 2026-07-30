@@ -68,7 +68,7 @@ collect:github-artifacts:
       fi
       export GH_TOKEN="${NEMO_RELAY_CI_GITHUB_TOKEN}"
 
-      mkdir -p collected/wheels collected/node downloaded
+      mkdir -p collected/wheels collected/node collected/cli-npm downloaded
 
       tag="${CI_COMMIT_TAG:-}"
       if [ -z "$tag" ]; then
@@ -132,23 +132,26 @@ collect:github-artifacts:
       fi
 
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'wheel-*' --dir downloaded/wheels
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'cli-python-wheel-*' --dir downloaded/cli-wheels
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'cli-npm-package-*' --dir downloaded/cli-npm
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name 'plugin-wheel' --dir downloaded/wheels
-      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name npm-consolidated --dir downloaded/node
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'node-npm-package-*' --dir downloaded/node
 
       find downloaded/wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
-      node_zip="$(find downloaded/node -type f -name consolidated.zip -print -quit)"
-      if [ -z "$node_zip" ]; then
-        echo "Error: collected GitHub npm-consolidated artifact did not contain consolidated.zip." >&2
-        exit 1
-      fi
-      cp "$node_zip" collected/node/consolidated.zip
+      find downloaded/cli-wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
+      find downloaded/cli-npm -type f -name '*.tgz' -exec cp {} collected/cli-npm/ \;
+      find downloaded/node -type f -name '*.tgz' -exec cp {} collected/node/ \;
 
       if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
         echo "Error: collected GitHub wheel artifacts did not contain any .whl files." >&2
         exit 1
       fi
-      if [ ! -f collected/node/consolidated.zip ]; then
-        echo "Error: collected GitHub npm-consolidated artifact did not contain consolidated.zip." >&2
+      if ! ls collected/node/*.tgz >/dev/null 2>&1; then
+        echo "Error: collected GitHub Node artifacts did not contain any .tgz files." >&2
+        exit 1
+      fi
+      if ! ls collected/cli-npm/*.tgz >/dev/null 2>&1; then
+        echo "Error: collected GitHub CLI npm artifacts did not contain any .tgz files." >&2
         exit 1
       fi
 
@@ -166,7 +169,8 @@ collect:github-artifacts:
     expire_in: 7 days
     paths:
       - collected/wheels/*.whl
-      - collected/node/consolidated.zip
+      - collected/node/*.tgz
+      - collected/cli-npm/*.tgz
       - collected/github-run.json
 
 publish:artifactory:wheels:
@@ -302,8 +306,6 @@ publish:artifactory:npm:
   needs:
     - job: collect:github-artifacts
       artifacts: true
-  before_script:
-    - apt-get update -qq && apt-get install -y --no-install-recommends unzip ca-certificates && rm -rf /var/lib/apt/lists/*
   script:
     - |
       set -eu
@@ -312,14 +314,8 @@ publish:artifactory:npm:
         echo "Error: uploading npm packages to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_USER, NEMO_RELAY_CI_ARTIFACTORY_KEY, and NEMO_RELAY_CI_ARTIFACTORY_NPM_URL." >&2
         exit 1
       fi
-      if [ ! -f collected/node/consolidated.zip ]; then
-        echo "Error: no collected consolidated Node package artifact found." >&2
-        exit 1
-      fi
-      mkdir -p collected/node/consolidated
-      unzip -q collected/node/consolidated.zip -d collected/node/consolidated
-      if [ ! -d collected/node/consolidated/package ]; then
-        echo "Error: consolidated Node artifact did not contain a package directory." >&2
+      if ! ls collected/node/*.tgz >/dev/null 2>&1; then
+        echo "Error: no collected split Node package artifacts found." >&2
         exit 1
       fi
 
@@ -329,4 +325,13 @@ publish:artifactory:npm:
       npm config set registry "$registry_url"
       npm config set "${registry_key}:_auth" "$npm_auth"
 
-      npm publish --tag dev collected/node/consolidated/package
+      for platform in linux-x64 linux-arm64 darwin-arm64 win32-x64 win32-arm64; do
+        package="collected/node/nemo-relay-node-npm-${platform}-${CI_COMMIT_TAG}.tgz"
+        npm publish --tag dev "$package"
+      done
+      npm publish --tag dev "collected/node/nemo-relay-node-npm-${CI_COMMIT_TAG}.tgz"
+      for platform in linux-x64 linux-arm64 darwin-arm64 win32-x64 win32-arm64; do
+        package="collected/cli-npm/nemo-relay-bin-npm-${platform}-${CI_COMMIT_TAG}.tgz"
+        npm publish --tag dev "$package"
+      done
+      npm publish --tag dev "collected/cli-npm/nemo-relay-bin-npm-${CI_COMMIT_TAG}.tgz"

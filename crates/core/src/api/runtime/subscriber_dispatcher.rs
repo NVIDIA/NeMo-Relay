@@ -4,7 +4,10 @@
 //! Asynchronous subscriber delivery for native targets.
 
 use crate::api::event::Event;
-use crate::api::runtime::EventSubscriberFn;
+use crate::api::registry::Guardrail;
+use crate::api::runtime::{
+    EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
+};
 use crate::error::Result;
 
 mod native {
@@ -24,6 +27,7 @@ mod native {
     enum DispatcherMessage {
         Deliver {
             event: Box<Event>,
+            sanitizers: Vec<Guardrail<EventSanitizeFn>>,
             subscribers: Vec<EventSubscriberFn>,
             scope_stack: ScopeStackHandle,
         },
@@ -46,6 +50,7 @@ mod native {
         }
         let message = DispatcherMessage::Deliver {
             event: Box::new(event.clone()),
+            sanitizers: Vec::new(),
             subscribers: subscribers.to_vec(),
             scope_stack: current_scope_stack(),
         };
@@ -69,6 +74,44 @@ mod native {
                     event = "subscriber_dispatcher_failed",
                     error_kind = "initialization";
                     "Subscriber dispatcher failed to start"
+                );
+                false
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub(super) fn dispatch_sanitized_event(
+        event: Event,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> bool {
+        if subscribers.is_empty() {
+            return true;
+        }
+        let message = DispatcherMessage::Deliver {
+            event: Box::new(event),
+            sanitizers,
+            subscribers: subscribers.to_vec(),
+            scope_stack,
+        };
+        match dispatcher_sender() {
+            Ok(sender) if sender.send(message).is_ok() => true,
+            Ok(_) => {
+                log::warn!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_event_dropped",
+                    reason = "dispatcher_disconnected";
+                    "Subscriber event was dropped because the dispatcher stopped"
+                );
+                false
+            }
+            Err(error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_dispatcher_failed";
+                    "Subscriber dispatcher failed to start: {error}"
                 );
                 false
             }
@@ -149,9 +192,10 @@ mod native {
         match message {
             DispatcherMessage::Deliver {
                 event,
+                sanitizers,
                 subscribers,
                 scope_stack,
-            } => deliver_event(event, subscribers, scope_stack),
+            } => deliver_event(event, sanitizers, subscribers, scope_stack),
             DispatcherMessage::Flush { done } => {
                 let _ = done.send(());
             }
@@ -160,12 +204,14 @@ mod native {
 
     fn deliver_event(
         event: Box<Event>,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         subscribers: Vec<EventSubscriberFn>,
         scope_stack: ScopeStackHandle,
     ) {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         IN_DISPATCHER.with(|flag| flag.set(true));
+        let event = NemoRelayContextState::event_sanitize_snapshot_chain(*event, &sanitizers);
         for subscriber in subscribers {
             if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
                 log::error!(
@@ -183,6 +229,17 @@ mod native {
 /// Queue an event for subscriber delivery.
 pub(crate) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
     native::dispatch_event(event, subscribers)
+}
+
+/// Queue a snapshot for serial event sanitization followed by subscriber
+/// delivery. Used by synchronous scope and mark APIs.
+pub(crate) fn dispatch_sanitized_event(
+    event: Event,
+    sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> bool {
+    native::dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.

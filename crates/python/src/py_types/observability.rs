@@ -14,21 +14,6 @@ use super::{
     FORCE_ATIF_EXPORT_JSON_SERIALIZATION_ERROR, FORCE_ATIF_EXPORT_VALUE_SERIALIZATION_ERROR,
 };
 
-fn py_attribute_mappings(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
-    let value = py_to_json(value)?;
-    let mappings: Vec<nemo_relay::observability::OtlpAttributeMapping> =
-        serde_json::from_value(value).map_err(|error| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "attribute_mappings must be a list of {{key: str, alias: str}} objects: {error}"
-            ))
-        })?;
-    nemo_relay::observability::validate_attribute_mappings(&mappings)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
-    Ok(mappings)
-}
-
 // ---------------------------------------------------------------------------
 // AtifExporter
 // ---------------------------------------------------------------------------
@@ -425,17 +410,17 @@ impl PyAtofExporter {
 ///
 /// Example:
 /// ```python
-/// config = OpenTelemetryConfig()
-/// config.endpoint = "http://localhost:4318/v1/traces"
+/// config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 /// config.service_name = "demo-agent"
-/// config.headers = {"authorization": "Bearer token"}
 /// ```
 #[pyclass(name = "OpenTelemetryConfig")]
 pub struct PyOpenTelemetryConfig {
+    #[pyo3(get, set, name = "type")]
+    pub(crate) otel_type: String,
     #[pyo3(get, set)]
     pub(crate) transport: String,
     #[pyo3(get, set)]
-    pub(crate) endpoint: Option<String>,
+    pub(crate) endpoint: String,
     #[pyo3(get, set)]
     pub(crate) service_name: String,
     #[pyo3(get, set)]
@@ -446,6 +431,10 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) instrumentation_scope: String,
     #[pyo3(get, set)]
     pub(crate) timeout_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) mark_projection: String,
+    #[pyo3(get, set)]
+    pub(crate) mark_exclude_names: Vec<String>,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
     pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
@@ -455,25 +444,39 @@ impl PyOpenTelemetryConfig {
     pub(crate) fn to_rust_config(
         &self,
     ) -> PyResult<nemo_relay::observability::otel::OpenTelemetryConfig> {
-        let mut config = match self.transport.as_str() {
-            "http_binary" => nemo_relay::observability::otel::OpenTelemetryConfig::http_binary(
-                self.service_name.clone(),
-            ),
-            "grpc" => nemo_relay::observability::otel::OpenTelemetryConfig::grpc(
-                self.service_name.clone(),
-            ),
+        let otel_type = match self.otel_type.as_str() {
+            "full" => nemo_relay::observability::OpenTelemetryType::Full,
+            "gen_ai" => nemo_relay::observability::OpenTelemetryType::GenAi,
+            "openinference" => nemo_relay::observability::OpenTelemetryType::OpenInference,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "type must be 'full', 'gen_ai', or 'openinference', got {other:?}"
+                )));
+            }
+        };
+        if self.endpoint.trim().is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "endpoint is required and must be nonblank",
+            ));
+        }
+        let transport = match self.transport.as_str() {
+            "http_binary" => nemo_relay::observability::otel::OtlpTransport::HttpBinary,
+            "grpc" => nemo_relay::observability::otel::OtlpTransport::Grpc,
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "transport must be 'http_binary' or 'grpc', got {other:?}"
                 )));
             }
-        }
+        };
+        let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(
+            otel_type,
+            self.endpoint.clone(),
+        )
+        .with_transport(transport)
+        .with_service_name(self.service_name.clone())
         .with_instrumentation_scope(self.instrumentation_scope.clone())
         .with_timeout(Duration::from_millis(self.timeout_millis));
 
-        if let Some(endpoint) = &self.endpoint {
-            config = config.with_endpoint(endpoint.clone());
-        }
         if let Some(namespace) = &self.service_namespace {
             config = config.with_service_namespace(namespace.clone());
         }
@@ -486,23 +489,33 @@ impl PyOpenTelemetryConfig {
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
-        config = config.with_attribute_mappings(self.attribute_mappings.clone());
-        Ok(config)
+        let mark_projection =
+            serde_json::from_value(serde_json::Value::String(self.mark_projection.clone()))
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        nemo_relay::observability::validate_attribute_mappings(&self.attribute_mappings)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(config
+            .with_mark_projection(mark_projection)
+            .with_mark_exclude_names(self.mark_exclude_names.clone())
+            .with_attribute_mappings(self.attribute_mappings.clone()))
     }
 }
 
 #[pymethods]
 impl PyOpenTelemetryConfig {
     #[new]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(otel_type: String, endpoint: String) -> Self {
         Self {
+            otel_type,
             transport: "http_binary".to_string(),
-            endpoint: None,
-            service_name: "nemo-relay".to_string(),
+            endpoint,
+            service_name: "unknown_service".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nemo-relay-otel".to_string(),
+            instrumentation_scope: "opentelemetry".to_string(),
             timeout_millis: 3_000,
+            mark_projection: "inherit".to_string(),
+            mark_exclude_names: nemo_relay::observability::default_mark_exclude_names(),
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
             attribute_mappings: Vec::new(),
@@ -550,7 +563,14 @@ impl PyOpenTelemetryConfig {
         &mut self,
         attribute_mappings: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        self.attribute_mappings = py_attribute_mappings(attribute_mappings)?;
+        self.attribute_mappings =
+            serde_json::from_value(py_to_json(attribute_mappings)?).map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "attribute_mappings must be a list of mappings: {error}"
+                ))
+            })?;
+        nemo_relay::observability::validate_attribute_mappings(&self.attribute_mappings)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(())
     }
 
@@ -577,229 +597,30 @@ impl PyOpenTelemetryConfig {
 #[pyclass(name = "OpenTelemetrySubscriber")]
 pub struct PyOpenTelemetrySubscriber {
     inner: nemo_relay::observability::otel::OpenTelemetrySubscriber,
+    owned_runtime: Option<Runtime>,
 }
 
 #[pymethods]
 impl PyOpenTelemetrySubscriber {
     #[new]
     pub(crate) fn new(config: PyRef<'_, PyOpenTelemetryConfig>) -> PyResult<Self> {
-        let inner =
-            nemo_relay::observability::otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        Ok(Self { inner })
-    }
-
-    /// Register this subscriber globally with the given name.
-    pub(crate) fn register(&self, name: String) -> PyResult<()> {
-        self.inner
-            .register(&name)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-    }
-
-    /// Deregister a subscriber by name. Returns ``True`` if found.
-    pub(crate) fn deregister(&self, name: String) -> PyResult<bool> {
-        self.inner
-            .deregister(&name)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-    }
-
-    /// Force a flush of finished spans through the exporter.
-    pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| self.inner.force_flush())
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-    }
-
-    /// Shut down the underlying tracer provider.
-    pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| self.inner.shutdown())
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-    }
-
-    pub(crate) fn __repr__(&self) -> String {
-        "<OpenTelemetrySubscriber>".to_string()
-    }
-}
-
-/// Mutable config object for ``OpenInferenceSubscriber``.
-///
-/// Example:
-/// ```python
-/// config = OpenInferenceConfig()
-/// config.endpoint = "http://localhost:4318/v1/traces"
-/// config.service_name = "demo-agent"
-/// config.headers = {"authorization": "Bearer token"}
-/// ```
-#[pyclass(name = "OpenInferenceConfig")]
-pub struct PyOpenInferenceConfig {
-    #[pyo3(get, set)]
-    pub(crate) transport: String,
-    #[pyo3(get, set)]
-    pub(crate) endpoint: Option<String>,
-    #[pyo3(get, set)]
-    pub(crate) service_name: String,
-    #[pyo3(get, set)]
-    pub(crate) service_namespace: Option<String>,
-    #[pyo3(get, set)]
-    pub(crate) service_version: Option<String>,
-    #[pyo3(get, set)]
-    pub(crate) instrumentation_scope: String,
-    #[pyo3(get, set)]
-    pub(crate) timeout_millis: u64,
-    pub(crate) headers: HashMap<String, String>,
-    pub(crate) resource_attributes: HashMap<String, String>,
-    pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
-}
-
-impl PyOpenInferenceConfig {
-    pub(crate) fn to_rust_config(
-        &self,
-    ) -> PyResult<nemo_relay::observability::openinference::OpenInferenceConfig> {
-        let transport = match self.transport.as_str() {
-            "http_binary" => nemo_relay::observability::openinference::OtlpTransport::HttpBinary,
-            "grpc" => nemo_relay::observability::openinference::OtlpTransport::Grpc,
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "transport must be 'http_binary' or 'grpc', got {other:?}"
-                )));
-            }
-        };
-
-        let mut config = nemo_relay::observability::openinference::OpenInferenceConfig::new()
-            .with_transport(transport)
-            .with_service_name(self.service_name.clone())
-            .with_instrumentation_scope(self.instrumentation_scope.clone())
-            .with_timeout(Duration::from_millis(self.timeout_millis));
-
-        if let Some(endpoint) = &self.endpoint {
-            config = config.with_endpoint(endpoint.clone());
-        }
-        if let Some(namespace) = &self.service_namespace {
-            config = config.with_service_namespace(namespace.clone());
-        }
-        if let Some(version) = &self.service_version {
-            config = config.with_service_version(version.clone());
-        }
-        for (key, value) in &self.headers {
-            config = config.with_header(key.clone(), value.clone());
-        }
-        for (key, value) in &self.resource_attributes {
-            config = config.with_resource_attribute(key.clone(), value.clone());
-        }
-        config = config.with_attribute_mappings(self.attribute_mappings.clone());
-        Ok(config)
-    }
-}
-
-#[pymethods]
-impl PyOpenInferenceConfig {
-    #[new]
-    pub(crate) fn new() -> Self {
-        Self {
-            transport: "http_binary".to_string(),
-            endpoint: None,
-            service_name: "nemo-relay".to_string(),
-            service_namespace: None,
-            service_version: None,
-            instrumentation_scope: "nemo-relay-openinference".to_string(),
-            timeout_millis: 3_000,
-            headers: HashMap::new(),
-            resource_attributes: HashMap::new(),
-            attribute_mappings: Vec::new(),
-        }
-    }
-
-    #[getter]
-    pub(crate) fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(py, &serde_json::to_value(&self.headers).unwrap_or_default())
-    }
-
-    #[setter]
-    pub(crate) fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.headers = py_string_map(headers, "headers")?;
-        Ok(())
-    }
-
-    #[getter]
-    pub(crate) fn resource_attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(
-            py,
-            &serde_json::to_value(&self.resource_attributes).unwrap_or_default(),
-        )
-    }
-
-    #[setter]
-    pub(crate) fn set_resource_attributes(
-        &mut self,
-        resource_attributes: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
-        self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
-        Ok(())
-    }
-
-    #[getter]
-    pub(crate) fn attribute_mappings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(
-            py,
-            &serde_json::to_value(&self.attribute_mappings).unwrap_or_default(),
-        )
-    }
-
-    #[setter]
-    pub(crate) fn set_attribute_mappings(
-        &mut self,
-        attribute_mappings: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
-        self.attribute_mappings = py_attribute_mappings(attribute_mappings)?;
-        Ok(())
-    }
-
-    pub(crate) fn set_header(&mut self, key: String, value: String) {
-        self.headers.insert(key, value);
-    }
-
-    pub(crate) fn set_resource_attribute(&mut self, key: String, value: String) {
-        self.resource_attributes.insert(key, value);
-    }
-
-    pub(crate) fn __repr__(&self) -> String {
-        format!(
-            "<OpenInferenceConfig transport={:?} endpoint={:?}>",
-            self.transport, self.endpoint
-        )
-    }
-}
-
-/// OpenInference-backed event subscriber.
-#[pyclass(name = "OpenInferenceSubscriber")]
-pub struct PyOpenInferenceSubscriber {
-    inner: nemo_relay::observability::openinference::OpenInferenceSubscriber,
-    owned_runtime: Option<Runtime>,
-}
-
-#[pymethods]
-impl PyOpenInferenceSubscriber {
-    #[new]
-    pub(crate) fn new(config: PyRef<'_, PyOpenInferenceConfig>) -> PyResult<Self> {
         let rust_config = config.to_rust_config()?;
         let needs_owned_runtime = config.transport == "grpc" && Handle::try_current().is_err();
-
         if needs_owned_runtime {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             let _guard = runtime.enter();
-            let inner =
-                nemo_relay::observability::openinference::OpenInferenceSubscriber::new(rust_config)
-                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(rust_config)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(Self {
                 inner,
                 owned_runtime: Some(runtime),
             })
         } else {
-            let inner =
-                nemo_relay::observability::openinference::OpenInferenceSubscriber::new(rust_config)
-                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(rust_config)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(Self {
                 inner,
                 owned_runtime: None,
@@ -807,6 +628,7 @@ impl PyOpenInferenceSubscriber {
         }
     }
 
+    /// Register this subscriber globally with the given name.
     pub(crate) fn register(&self, name: String) -> PyResult<()> {
         self.with_runtime_context(|| {
             self.inner
@@ -815,6 +637,7 @@ impl PyOpenInferenceSubscriber {
         })
     }
 
+    /// Deregister a subscriber by name. Returns ``True`` if found.
     pub(crate) fn deregister(&self, name: String) -> PyResult<bool> {
         self.with_runtime_context(|| {
             self.inner
@@ -823,6 +646,7 @@ impl PyOpenInferenceSubscriber {
         })
     }
 
+    /// Force a flush of finished spans through the exporter.
     pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| {
             self.with_runtime_context(|| {
@@ -833,6 +657,7 @@ impl PyOpenInferenceSubscriber {
         })
     }
 
+    /// Shut down the underlying tracer provider.
     pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| {
             self.with_runtime_context(|| {
@@ -844,11 +669,11 @@ impl PyOpenInferenceSubscriber {
     }
 
     pub(crate) fn __repr__(&self) -> String {
-        "<OpenInferenceSubscriber>".to_string()
+        "<OpenTelemetrySubscriber>".to_string()
     }
 }
 
-impl PyOpenInferenceSubscriber {
+impl PyOpenTelemetrySubscriber {
     fn with_runtime_context<T>(&self, f: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
         if let Some(runtime) = &self.owned_runtime {
             let _guard = runtime.enter();

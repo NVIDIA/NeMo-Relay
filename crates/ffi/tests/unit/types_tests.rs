@@ -261,7 +261,6 @@ fn test_llm_request_null_inputs_event_null_guards_and_free_nulls() {
         nemo_relay_scope_stack_free(std::ptr::null_mut());
         nemo_relay_atif_exporter_free(std::ptr::null_mut());
         nemo_relay_otel_subscriber_free(std::ptr::null_mut());
-        nemo_relay_openinference_subscriber_free(std::ptr::null_mut());
         nemo_relay_adaptive_runtime_free(std::ptr::null_mut());
     }
 }

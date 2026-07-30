@@ -1448,7 +1448,7 @@ async fn test_response_codec_annotation_uses_sanitized_managed_response() {
     register_llm_sanitize_response_guardrail(
         "sanitize_resp_codec_annotation",
         1,
-        Arc::new(|_response| make_openai_chat_response("Sanitized")),
+        Arc::new(|_response, _context| Some(make_openai_chat_response("Sanitized"))),
     )
     .unwrap();
 
@@ -1648,9 +1648,11 @@ async fn test_request_codec_annotation_uses_sanitized_start_payload() {
     register_llm_sanitize_request_guardrail(
         "sanitize_req_codec_annotation",
         1,
-        Arc::new(|request| LlmRequest {
-            headers: request.headers,
-            content: make_openai_chat_request("Sanitized").content,
+        Arc::new(|request, _context| {
+            Some(LlmRequest {
+                headers: request.headers,
+                content: make_openai_chat_request("Sanitized").content,
+            })
         }),
     )
     .unwrap();
@@ -1914,7 +1916,7 @@ async fn test_stream_response_codec_annotation_uses_sanitized_aggregated_respons
     register_llm_sanitize_response_guardrail(
         "stream_sanitize_resp_codec_annotation",
         1,
-        Arc::new(|_response| make_openai_chat_response("Sanitized")),
+        Arc::new(|_response, _context| Some(make_openai_chat_response("Sanitized"))),
     )
     .unwrap();
 

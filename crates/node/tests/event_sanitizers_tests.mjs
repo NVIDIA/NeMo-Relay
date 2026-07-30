@@ -4,6 +4,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createRequire } from 'node:module';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -28,6 +31,18 @@ function assertSanitizerFieldsCleared(event) {
   assert.equal(event.metadata, null);
 }
 
+async function initializeWithoutDiscoveredPluginConfig(config) {
+  const previousDirectory = process.cwd();
+  const directory = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-'));
+  try {
+    process.chdir(directory);
+    return await plugin.initialize(config);
+  } finally {
+    process.chdir(previousDirectory);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 describe('event sanitizer registries', () => {
   it('orders mark sanitizers and supports field removal', async () => {
     const events = capture('node-event-sanitize-order-sub');
@@ -42,7 +57,7 @@ describe('event sanitizer registries', () => {
     });
     try {
       lib.event('checkpoint', null, { secret: 'raw' }, { secret: 'raw' });
-      lib.flushSubscribers();
+      await lib.flushSubscribers();
       await waitFor(events, 1);
     } finally {
       lib.deregisterMarkSanitizeGuardrail('node-event-first');
@@ -78,7 +93,7 @@ describe('event sanitizer registries', () => {
         { secret: 'input' },
       );
       lib.popScope(handle, { secret: 'output' }, null, { secret: 'end' });
-      lib.flushSubscribers();
+      await lib.flushSubscribers();
       await waitFor(events, 2);
     } finally {
       lib.deregisterScopeSanitizeStartGuardrail('node-scope-start');
@@ -114,14 +129,14 @@ describe('event sanitizer registries', () => {
         lib.registerMarkSanitizeGuardrail(name, 0, sanitizer);
         try {
           lib.event(name, null, { kept: kind }, { kept: kind });
-          lib.flushSubscribers();
+          await lib.flushSubscribers();
           await waitFor(events, Object.keys(invalidResults).indexOf(kind) + 1);
         } finally {
           lib.deregisterMarkSanitizeGuardrail(seedName);
           lib.deregisterMarkSanitizeGuardrail(name);
         }
         assertSanitizerFieldsCleared(events.at(-1));
-        assert.match(lib.getLastCallbackError(), /event sanitizer callback failed/);
+        assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
       }
     } finally {
       lib.deregisterSubscriber('node-event-sanitize-invalid-sub');
@@ -136,7 +151,7 @@ describe('event sanitizer registries', () => {
     }));
     try {
       await lib.toolCallExecute('background-tool', { raw: true }, (args) => args);
-      lib.flushSubscribers();
+      await lib.flushSubscribers();
       await waitFor(events, 2);
     } finally {
       lib.deregisterScopeSanitizeStartGuardrail('node-background-start');
@@ -169,7 +184,7 @@ describe('event sanitizer registries', () => {
         lib.registerScopeSanitizeStartGuardrail(name, 0, sanitizer);
         try {
           await lib.toolCallExecute(name, { kept: kind }, (args) => args);
-          lib.flushSubscribers();
+          await lib.flushSubscribers();
           await waitFor(events, (Object.keys(invalidResults).indexOf(kind) + 1) * 2);
         } finally {
           lib.deregisterScopeSanitizeStartGuardrail(seedName);
@@ -200,7 +215,7 @@ describe('event sanitizer registries', () => {
     });
     try {
       await lib.toolCallExecute('background-throw-tool', { kept: true }, (args) => args);
-      lib.flushSubscribers();
+      await lib.flushSubscribers();
       await waitFor(events, 2);
       const start = events.find(
         (event) => event.kind === 'scope' && event.name === 'background-throw-tool' && event.scope_category === 'start',
@@ -228,7 +243,7 @@ describe('event sanitizer registries', () => {
     lib.popScope(child);
     lib.popScope(owner);
     lib.event('outside', null, { raw: true });
-    lib.flushSubscribers();
+    await lib.flushSubscribers();
     await waitFor(events, 3);
     lib.deregisterSubscriber('node-event-sanitize-local-sub');
     const marks = Object.fromEntries(
@@ -251,13 +266,16 @@ describe('event sanitizer registries', () => {
       },
     });
     try {
-      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(kind)] });
+      await initializeWithoutDiscoveredPluginConfig({
+        version: 1,
+        components: [plugin.ComponentSpec(kind)],
+      });
       lib.event('configured', null, { raw: true });
-      lib.flushSubscribers();
+      await lib.flushSubscribers();
       await waitFor(events, 1);
       plugin.clear();
       lib.event('cleared', null, { raw: true });
-      lib.flushSubscribers();
+      await lib.flushSubscribers();
       await waitFor(events, 2);
     } finally {
       plugin.clear();
@@ -289,9 +307,12 @@ describe('event sanitizer registries', () => {
     });
     lib.clearLastCallbackError();
     try {
-      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(kind)] });
+      await initializeWithoutDiscoveredPluginConfig({
+        version: 1,
+        components: [plugin.ComponentSpec(kind)],
+      });
       lib.event('plugin-throw', null, { raw: true }, { raw: true });
-      lib.flushSubscribers();
+      await lib.flushSubscribers();
       await waitFor(events, 1);
       assertSanitizerFieldsCleared(events.at(-1));
       assert.match(lib.getLastCallbackError() ?? '', /plugin sanitizer boom/i);

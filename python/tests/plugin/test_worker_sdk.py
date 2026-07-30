@@ -29,6 +29,8 @@ from nemo_relay_plugin import (  # noqa: E402
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
+    LlmSanitizeRequestContext,
+    LlmSanitizeResponseContext,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
@@ -246,6 +248,37 @@ class RecordingHostStub:
 
         return stream()
 
+    async def DecodeLlmCodecRequest(self, request: Any) -> Any:
+        self.requests.append(request)
+        if self.failures.get("DecodeLlmCodecRequest") == "error":
+            return pb.JsonResult(error=_worker_error("DecodeLlmCodecRequest failed"))
+        value = _envelope_value(request.request)
+        model = value.get("content", {}).get("model")
+        return pb.JsonResult(
+            value=_json_envelope(
+                ANNOTATED_LLM_REQUEST_SCHEMA,
+                {"messages": [], "model": model},
+            )
+        )
+
+    async def EncodeLlmCodecRequest(self, request: Any) -> Any:
+        self.requests.append(request)
+        if self.failures.get("EncodeLlmCodecRequest") == "error":
+            return pb.JsonResult(error=_worker_error("EncodeLlmCodecRequest failed"))
+        return pb.JsonResult(value=request.original_request)
+
+    async def DecodeLlmCodecResponse(self, request: Any) -> Any:
+        self.requests.append(request)
+        if self.failures.get("DecodeLlmCodecResponse") == "error":
+            return pb.JsonResult(error=_worker_error("DecodeLlmCodecResponse failed"))
+        value = _envelope_value(request.response)
+        return pb.JsonResult(
+            value=_json_envelope(
+                JSON_SCHEMA,
+                {"model": value.get("model"), "message": value.get("message")},
+            )
+        )
+
     def _host_ack(self, method: str) -> Any:
         failure = self.failures.get(method)
         if failure == "empty":
@@ -301,10 +334,12 @@ class AllSurfacesPlugin(WorkerPlugin):
                 pending_marks=[PendingMarkSpec("worker.tool.execution")],
             )
 
-        def llm_sanitize_request(request: Json) -> Json:
+        def llm_sanitize_request(request: Json, context: LlmSanitizeRequestContext) -> Json:
+            del context
             return _tag_llm_request(request, "llm_sanitize_request")
 
-        async def llm_sanitize_response(response: Json) -> Json:
+        async def llm_sanitize_response(response: Json, context: LlmSanitizeResponseContext) -> Json:
+            del context
             return _tag(response, "llm_sanitize_response")
 
         def llm_block(request: Json) -> str | None:
@@ -697,6 +732,266 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
     assert registrations.count(("duplicate", pb.TOOL_REQUEST_INTERCEPT)) == 1
     assert ("shared", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL) in registrations
     assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
+
+
+def test_plugin_context_registers_llm_sanitizers_under_standard_names():
+    context = PluginContext()
+
+    context.register_llm_sanitize_request_guardrail(
+        "request",
+        lambda request, codec_context: request if codec_context.codec.kind != "none" else None,
+    )
+    context.register_llm_sanitize_response_guardrail(
+        "response",
+        lambda response, codec_context: response if codec_context.codec.kind == "builtin" else None,
+    )
+
+    assert [(registration.local_name, registration.surface) for registration in context._handlers.registrations] == [
+        ("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL),
+        ("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL),
+    ]
+
+
+async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
+    seen: list[tuple[str, LlmSanitizeRequestContext | LlmSanitizeResponseContext]] = []
+
+    class ContextualSanitizerPlugin(WorkerPlugin):
+        plugin_id = "tests.llm_sanitizer"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def request_sanitizer(request: Json, codec_context: LlmSanitizeRequestContext) -> None:
+                del request
+                seen.append(("request", codec_context))
+
+            def response_sanitizer(response: Json, codec_context: LlmSanitizeResponseContext) -> None:
+                del response
+                seen.append(("response", codec_context))
+
+            ctx.register_llm_sanitize_request_guardrail("request", request_sanitizer)
+            ctx.register_llm_sanitize_response_guardrail("response", response_sanitizer)
+
+    service = _service(ContextualSanitizerPlugin(), RecordingHostStub())
+    await _register(service)
+    for codec_kind, codec_id in [
+        (pb.LLM_CODEC_KIND_UNSPECIFIED, None),
+        (pb.LLM_CODEC_KIND_BUILTIN, "openai_chat"),
+        (pb.LLM_CODEC_KIND_BUILTIN, "openai_responses"),
+        (pb.LLM_CODEC_KIND_BUILTIN, "anthropic_messages"),
+        (pb.LLM_CODEC_KIND_RUNTIME, "com.example.chat.v1"),
+        (pb.LLM_CODEC_KIND_OPAQUE, None),
+    ]:
+        codec = pb.LlmCodecIdentity(kind=codec_kind)
+        if codec_id is not None:
+            codec.id = codec_id
+        request_payload = _llm_payload(
+            request={"content": {"prompt": "secret"}},
+            response={"secret": "value"},
+        )
+        request_payload.request_sanitize_context.CopyFrom(pb.LlmSanitizeRequestContext(codec=codec))
+        response_payload = _llm_payload(
+            request={"content": {"prompt": "secret"}},
+            response={"secret": "value"},
+        )
+        response_payload.response_sanitize_context.CopyFrom(pb.LlmSanitizeResponseContext(codec=codec))
+
+        request_response = await service.Invoke(
+            _invoke_request(
+                "request",
+                pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
+                llm=request_payload,
+            ),
+            AbortContext(),
+        )
+        response_response = await service.Invoke(
+            _invoke_request(
+                "response",
+                pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
+                llm=response_payload,
+            ),
+            AbortContext(),
+        )
+        assert request_response.WhichOneof("result") == "empty"
+        assert response_response.WhichOneof("result") == "empty"
+
+    assert seen == [
+        ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("none"))),
+        ("response", LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("none"))),
+        ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("builtin", "openai_chat"))),
+        ("response", LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("builtin", "openai_chat"))),
+        ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("builtin", "openai_responses"))),
+        ("response", LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("builtin", "openai_responses"))),
+        (
+            "request",
+            LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("builtin", "anthropic_messages")),
+        ),
+        (
+            "response",
+            LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("builtin", "anthropic_messages")),
+        ),
+        ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
+        ("response", LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
+        ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("opaque"))),
+        ("response", LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("opaque"))),
+    ]
+
+
+async def test_llm_sanitizers_resolve_directional_codec_proxies():
+    calls: list[tuple[str, Json]] = []
+
+    class CodecSanitizerPlugin(WorkerPlugin):
+        plugin_id = "tests.llm_codec_proxy"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def request_sanitizer(
+                request: Json,
+                context: LlmSanitizeRequestContext,
+            ) -> Json:
+                codec = context.resolve_codec()
+                assert codec is not None
+                annotated = await codec.decode(request)
+                calls.append(("request_decode", annotated))
+                return await codec.encode(annotated, request)
+
+            async def response_sanitizer(
+                response: Json,
+                context: LlmSanitizeResponseContext,
+            ) -> Json:
+                codec = context.resolve_codec()
+                assert codec is not None
+                calls.append(("response_decode", await codec.decode(response)))
+                return response
+
+            ctx.register_llm_sanitize_request_guardrail("request", request_sanitizer)
+            ctx.register_llm_sanitize_response_guardrail("response", response_sanitizer)
+
+    host = RecordingHostStub()
+    service = _service(CodecSanitizerPlugin(), host)
+    await _register(service)
+
+    request_payload = _llm_payload(
+        request={"headers": {}, "content": {"model": "runtime-model"}},
+    )
+    request_payload.request_sanitize_context.CopyFrom(
+        pb.LlmSanitizeRequestContext(
+            codec=pb.LlmCodecIdentity(
+                kind=pb.LLM_CODEC_KIND_RUNTIME,
+                id="com.example.runtime",
+            ),
+            codec_capability_id="request-capability",
+        )
+    )
+    request_result = await service.Invoke(
+        _invoke_request(
+            "request",
+            pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
+            llm=request_payload,
+        ),
+        AbortContext(),
+    )
+    assert request_result.WhichOneof("result") == "json", request_result
+
+    response_payload = _llm_payload(response={"model": "opaque-model", "message": "secret"})
+    response_payload.response_sanitize_context.CopyFrom(
+        pb.LlmSanitizeResponseContext(
+            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
+            codec_capability_id="response-capability",
+        )
+    )
+    response_result = await service.Invoke(
+        _invoke_request(
+            "response",
+            pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
+            llm=response_payload,
+        ),
+        AbortContext(),
+    )
+    assert response_result.WhichOneof("result") == "json", response_result
+    assert calls == [
+        ("request_decode", {"messages": [], "model": "runtime-model"}),
+        (
+            "response_decode",
+            {"model": "opaque-model", "message": "secret"},
+        ),
+    ]
+    assert [request.codec_capability_id for request in host.requests if hasattr(request, "codec_capability_id")] == [
+        "request-capability",
+        "request-capability",
+        "response-capability",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure", "surface", "registration_name"),
+    [
+        ("DecodeLlmCodecRequest", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
+        ("EncodeLlmCodecRequest", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
+        ("DecodeLlmCodecResponse", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, "response"),
+    ],
+)
+async def test_llm_sanitizer_codec_rpc_failures_return_invocation_errors(
+    failure: str,
+    surface: int,
+    registration_name: str,
+):
+    class CodecFailurePlugin(WorkerPlugin):
+        plugin_id = "tests.llm_codec_failure"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def request_sanitizer(
+                request: Json,
+                context: LlmSanitizeRequestContext,
+            ) -> Json:
+                codec = context.resolve_codec()
+                assert codec is not None
+                annotated = await codec.decode(request)
+                return await codec.encode(annotated, request)
+
+            async def response_sanitizer(
+                response: Json,
+                context: LlmSanitizeResponseContext,
+            ) -> Json:
+                codec = context.resolve_codec()
+                assert codec is not None
+                await codec.decode(response)
+                return response
+
+            ctx.register_llm_sanitize_request_guardrail("request", request_sanitizer)
+            ctx.register_llm_sanitize_response_guardrail("response", response_sanitizer)
+
+    host = RecordingHostStub()
+    host.failures[failure] = "error"
+    service = _service(CodecFailurePlugin(), host)
+    await _register(service)
+
+    if surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
+        payload = _llm_payload(request={"headers": {}, "content": {"model": "test"}})
+        payload.request_sanitize_context.CopyFrom(
+            pb.LlmSanitizeRequestContext(
+                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
+                codec_capability_id="request-capability",
+            )
+        )
+    else:
+        payload = _llm_payload(response={"model": "test", "message": "secret"})
+        payload.response_sanitize_context.CopyFrom(
+            pb.LlmSanitizeResponseContext(
+                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
+                codec_capability_id="response-capability",
+            )
+        )
+
+    result = await service.Invoke(
+        _invoke_request(registration_name, surface, llm=payload),
+        AbortContext(),
+    )
+    assert result.WhichOneof("result") == "error"
+    assert f"{failure} failed" in result.error.message
 
 
 @pytest.mark.parametrize(

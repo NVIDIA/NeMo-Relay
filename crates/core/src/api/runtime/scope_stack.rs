@@ -10,8 +10,10 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::{Arc, RwLock};
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::runtime::callbacks::EventSubscriberFn;
@@ -31,6 +33,66 @@ pub struct ScopeStack {
     stack: Vec<ScopeHandle>,
     scope_registries: HashMap<Uuid, ScopeLocalRegistries>,
     fresh_agents: HashSet<Uuid>,
+    propagated_parent_uuid: Option<Uuid>,
+}
+
+/// Versioned, transport-neutral causal context for crossing a Relay boundary.
+///
+/// Applications are responsible for serializing, transporting, authenticating,
+/// and trusting this value. It intentionally contains only Relay identifiers;
+/// OpenTelemetry `traceparent` and `tracestate` remain transport sidecars.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropagationContext {
+    /// Wire-format version. Version 1 is the only currently supported value.
+    pub version: u16,
+    /// Stable session root when the sending application knows one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_uuid: Option<Uuid>,
+    /// Immediate Relay event or scope that caused the boundary crossing.
+    pub parent_uuid: Uuid,
+}
+
+impl PropagationContext {
+    /// The current wire-format version.
+    pub const VERSION: u16 = 1;
+
+    /// Serialize this validated context for application-managed transport.
+    pub fn to_json(&self) -> Result<String> {
+        self.validate()?;
+        Ok(serde_json::to_string(self).expect("PropagationContext is always JSON serializable"))
+    }
+
+    /// Deserialize and validate a context received from application-managed transport.
+    pub fn from_json(value: &str) -> Result<Self> {
+        let context: Self = serde_json::from_str(value).map_err(|error| {
+            FlowError::InvalidArgument(format!("invalid propagation context JSON: {error}"))
+        })?;
+        context.validate()?;
+        Ok(context)
+    }
+
+    /// Validate a context received from an untrusted transport.
+    pub fn validate(&self) -> Result<()> {
+        if self.version != Self::VERSION {
+            return Err(FlowError::InvalidArgument(format!(
+                "unsupported propagation context version {}; expected {}",
+                self.version,
+                Self::VERSION
+            )));
+        }
+        for (name, uuid) in [("parent_uuid", self.parent_uuid)]
+            .into_iter()
+            .chain(self.root_uuid.map(|uuid| ("root_uuid", uuid)))
+        {
+            let bytes = uuid.as_bytes();
+            if bytes.iter().all(|byte| *byte == 0) || bytes[8..].iter().all(|byte| *byte == 0) {
+                return Err(FlowError::InvalidArgument(format!(
+                    "propagation context {name} is not a usable Relay identifier"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl ScopeStack {
@@ -49,7 +111,49 @@ impl ScopeStack {
             stack: vec![root],
             scope_registries: HashMap::new(),
             fresh_agents: HashSet::from([root_uuid]),
+            propagated_parent_uuid: None,
         }
+    }
+
+    fn from_propagation(context: &PropagationContext) -> Result<Self> {
+        context.validate()?;
+        let (root, parent) = match context.root_uuid {
+            Some(root_uuid) => {
+                let root = ScopeHandle::builder()
+                    .uuid(root_uuid)
+                    .name("propagated-root")
+                    .scope_type(ScopeType::Agent)
+                    .build();
+                let parent = (root_uuid != context.parent_uuid).then(|| {
+                    ScopeHandle::builder()
+                        .uuid(context.parent_uuid)
+                        .parent_uuid(root_uuid)
+                        .name("propagated-parent")
+                        .scope_type(ScopeType::Unknown)
+                        .build()
+                });
+                (root, parent)
+            }
+            None => (
+                ScopeHandle::builder()
+                    .uuid(context.parent_uuid)
+                    .name("propagated-root")
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+                None,
+            ),
+        };
+        let root_uuid = root.uuid;
+        let mut stack = vec![root];
+        if let Some(parent) = parent {
+            stack.push(parent);
+        }
+        Ok(Self {
+            stack,
+            scope_registries: HashMap::new(),
+            fresh_agents: HashSet::from([root_uuid]),
+            propagated_parent_uuid: context.root_uuid.map(|_| context.parent_uuid),
+        })
     }
 
     /// Push a scope handle onto the top of the stack.
@@ -96,6 +200,11 @@ impl ScopeStack {
             .first()
             .expect("scope stack should never be empty")
             .uuid
+    }
+
+    /// Whether `uuid` is the synthetic parent imported from propagation.
+    pub fn is_propagated_parent(&self, uuid: Uuid) -> bool {
+        self.propagated_parent_uuid == Some(uuid)
     }
 
     /// Return the full ordered stack of scope handles.
@@ -276,6 +385,13 @@ pub struct ThreadScopeStackBinding {
     explicit: bool,
 }
 
+impl ThreadScopeStackBinding {
+    /// Return the captured thread-local scope stack handle.
+    pub fn stack(&self) -> ScopeStackHandle {
+        self.stack.clone()
+    }
+}
+
 /// Create a new scope stack handle with an implicit root scope.
 ///
 /// The returned handle wraps a freshly initialized [`ScopeStack`] inside an
@@ -290,9 +406,48 @@ pub fn create_scope_stack() -> ScopeStackHandle {
     Arc::new(RwLock::new(ScopeStack::new()))
 }
 
+/// Create an isolated scope stack rooted below a supplied propagation context.
+///
+/// The imported handles are synthetic bookkeeping only; Relay never emits their
+/// lifecycle events or transfers scope-local registrations across the boundary.
+pub fn create_scope_stack_from_propagation(
+    context: &PropagationContext,
+) -> Result<ScopeStackHandle> {
+    Ok(Arc::new(RwLock::new(ScopeStack::from_propagation(
+        context,
+    )?)))
+}
+
+/// Capture the current causal parent without asserting a session root.
+pub fn capture_propagation_context() -> Result<PropagationContext> {
+    capture_propagation_context_with_root(None)
+}
+
+/// Capture the current causal parent and an application-supplied session root.
+pub fn capture_propagation_context_with_root(
+    root_uuid: Option<Uuid>,
+) -> Result<PropagationContext> {
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid,
+        parent_uuid: ACTIVE_EVENT_UUID
+            .try_with(|uuid| *uuid)
+            .unwrap_or_else(|_| task_scope_top().uuid),
+    };
+    context.validate()?;
+    Ok(context)
+}
+
 tokio::task_local! {
     /// Task-local scope stack handle used by async execution contexts.
     pub static TASK_SCOPE_STACK: ScopeStackHandle;
+    /// Managed tool or LLM event currently executing in this task.
+    static ACTIVE_EVENT_UUID: Uuid;
+}
+
+/// Run a future with `uuid` as the causally active managed event.
+pub async fn with_active_event_uuid<T>(uuid: Uuid, future: impl Future<Output = T>) -> T {
+    ACTIVE_EVENT_UUID.scope(uuid, future).await
 }
 
 thread_local! {

@@ -426,7 +426,7 @@ export class HookReplayBackend {
     this.materializeDeferredSessionRoot(session);
     drainSession(this.sessionManager(), session);
     closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary, metadata);
-    this.flushSubscriberDelivery('session_close');
+    await this.flushSubscriberDelivery('session_close');
     this.forgetPendingSubagentLineage(session);
     deleteSession(this.stateValue, session);
   }
@@ -466,9 +466,9 @@ export class HookReplayBackend {
   }
 
   /** Wait for native subscriber/exporter delivery after a replay closure boundary. */
-  private flushSubscriberDelivery(label: string): void {
+  private async flushSubscriberDelivery(label: string): Promise<void> {
     try {
-      this.nf.flushSubscribers?.();
+      await this.nf.flushSubscribers?.();
     } catch (error) {
       this.logBoundedWarn(
         `flush-subscribers:${label}`,

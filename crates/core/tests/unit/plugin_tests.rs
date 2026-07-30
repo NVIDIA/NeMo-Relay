@@ -494,8 +494,9 @@ fn reset_global() {
 #[test]
 fn test_layer_config_overlay_wins() {
     // The overlay is the higher-precedence layer: it overrides shared component fields, deep-merges
-    // nested config objects, replaces arrays, appends overlay-only kinds, preserves base-only kinds,
-    // replaces top-level scalars, and recursively merges top-level objects (policy).
+    // nested config objects, concatenates config lists, appends overlay-only kinds, preserves
+    // base-only kinds, replaces top-level scalars, and recursively merges top-level objects
+    // (policy).
     let base = json!({
         "version": 1,
         "components": [
@@ -552,8 +553,8 @@ fn test_layer_config_overlay_wins() {
     );
     assert_eq!(
         alpha["config"]["list"],
-        json!([9]),
-        "arrays are replaced, not merged"
+        json!([9, 1, 2, 3]),
+        "config lists concatenate with higher-precedence entries first"
     );
 
     // Base-only component is preserved.
@@ -567,6 +568,115 @@ fn test_layer_config_overlay_wins() {
         json!("warn"),
         "base-only policy field preserved"
     );
+}
+
+#[test]
+fn test_layer_config_concatenates_nested_observability_lists() {
+    let base = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {
+                    "sinks": [{"type": "file", "output_directory": "/system"}]
+                },
+                "opentelemetry": {
+                    "endpoints": [{"type": "full", "endpoint": "http://system:4318/v1/traces"}]
+                },
+                "atif": {
+                    "storage": [{"type": "http", "endpoint": "http://system/trajectory"}]
+                },
+                "implementation": {
+                    "nested": [1, 2]
+                }
+            }
+        }]
+    });
+    let overlay = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {
+                    "sinks": [{"type": "file", "output_directory": "/user"}]
+                },
+                "opentelemetry": {
+                    "endpoints": [
+                        {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
+                        {"type": "openinference", "endpoint": "http://user:4319/v1/traces"}
+                    ]
+                },
+                "atif": {
+                    "storage": [{"type": "http", "endpoint": "http://user/trajectory"}]
+                },
+                "implementation": {
+                    "nested": [9]
+                }
+            }
+        }]
+    });
+
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
+    let config = &merged["components"][0]["config"];
+
+    assert_eq!(
+        config["atof"]["sinks"],
+        json!([
+            {"type": "file", "output_directory": "/user"},
+            {"type": "file", "output_directory": "/system"}
+        ])
+    );
+    assert_eq!(
+        config["opentelemetry"]["endpoints"],
+        json!([
+            {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
+            {"type": "openinference", "endpoint": "http://user:4319/v1/traces"},
+            {"type": "full", "endpoint": "http://system:4318/v1/traces"}
+        ])
+    );
+    assert_eq!(
+        config["atif"]["storage"],
+        json!([
+            {"type": "http", "endpoint": "http://user/trajectory"},
+            {"type": "http", "endpoint": "http://system/trajectory"}
+        ])
+    );
+    assert_eq!(
+        config["implementation"]["nested"],
+        json!([9]),
+        "deeper implementation-specific lists retain replacement semantics"
+    );
+}
+
+#[test]
+fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
+    let mut merged = json!({
+        "components": [{
+            "kind": "third.party",
+            "config": {
+                "atof": {"sinks": ["base"]},
+                "opentelemetry": {"endpoints": ["base"]},
+                "atif": {"storage": ["base"]}
+            }
+        }]
+    });
+    layer_config(
+        &mut merged,
+        json!({
+            "components": [{
+                "kind": "third.party",
+                "config": {
+                    "atof": {"sinks": ["overlay"]},
+                    "opentelemetry": {"endpoints": ["overlay"]},
+                    "atif": {"storage": ["overlay"]}
+                }
+            }]
+        }),
+    );
+
+    let config = &merged["components"][0]["config"];
+    assert_eq!(config["atof"]["sinks"], json!(["overlay"]));
+    assert_eq!(config["opentelemetry"]["endpoints"], json!(["overlay"]));
+    assert_eq!(config["atif"]["storage"], json!(["overlay"]));
 }
 
 #[test]
@@ -1511,13 +1621,13 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm_sanitize_request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Some(request)),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm_sanitize_response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     ctx.register_llm_conditional_execution_guardrail(
@@ -1651,14 +1761,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Some(request)),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_request_guardrail(
             "llm-sanitize-request",
             1,
-            Arc::new(|request| request),
+            Arc::new(|request, _context| Some(request)),
         ),
         "llm sanitize request guardrail:",
     );
@@ -1666,14 +1776,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_response_guardrail(
             "llm-sanitize-response",
             1,
-            Arc::new(|response| response),
+            Arc::new(|response, _context| Some(response)),
         ),
         "llm sanitize response guardrail:",
     );
@@ -1815,13 +1925,13 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request| request),
+        Arc::new(|request, _context| Some(request)),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response| response),
+        Arc::new(|response, _context| Some(response)),
     )
     .unwrap();
     ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))

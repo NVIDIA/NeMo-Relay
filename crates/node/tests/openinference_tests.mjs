@@ -4,10 +4,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { assertOtlpStringAttribute, startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
+import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
-const { OpenInferenceSubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
+const { OpenTelemetrySubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
 
 function unique(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -17,9 +17,10 @@ function assertBodyContains(body, text) {
   assert.equal(body.includes(Buffer.from(text, 'utf8')), true, `expected OTLP payload to contain ${text}`);
 }
 
-describe('OpenInferenceSubscriber', () => {
+describe('OpenTelemetrySubscriber openinference projection', () => {
   it('constructs from a mutable config object and supports lifecycle methods', () => {
-    const subscriber = new OpenInferenceSubscriber({
+    const subscriber = new OpenTelemetrySubscriber({
+      type: 'openinference',
       endpoint: 'http://localhost:4318/v1/traces',
       serviceName: 'node-agent',
       serviceNamespace: 'agents',
@@ -32,7 +33,6 @@ describe('OpenInferenceSubscriber', () => {
       resourceAttributes: {
         'deployment.environment': 'test',
       },
-      attributeMappings: [{ key: 'openinference.metadata.tenant', alias: 'tenant.id' }],
     });
 
     const name = unique('node_openinference');
@@ -46,14 +46,18 @@ describe('OpenInferenceSubscriber', () => {
   it('rejects invalid config values', () => {
     assert.throws(
       () =>
-        new OpenInferenceSubscriber({
+        new OpenTelemetrySubscriber({
+          type: 'openinference',
+          endpoint: 'http://localhost:4318/v1/traces',
           transport: 'invalid',
         }),
       /transport must be/i,
     );
     assert.throws(
       () =>
-        new OpenInferenceSubscriber({
+        new OpenTelemetrySubscriber({
+          type: 'openinference',
+          endpoint: 'http://localhost:4318/v1/traces',
           headers: {
             authorization: 1,
           },
@@ -62,28 +66,23 @@ describe('OpenInferenceSubscriber', () => {
     );
     assert.throws(
       () =>
-        new OpenInferenceSubscriber({
+        new OpenTelemetrySubscriber({
+          type: 'openinference',
+          endpoint: 'http://localhost:4318/v1/traces',
           resourceAttributes: {
             env: 1,
           },
         }),
       /resourceAttributes must be an object of string values/i,
     );
-    assert.throws(
-      () =>
-        new OpenInferenceSubscriber({
-          attributeMappings: [{ key: '', alias: 'tenant.id' }],
-        }),
-      /attribute mapping key must not be blank/i,
-    );
   });
 
   it('exports scope push/pop and mark events end to end', async () => {
     const collector = await startCollector();
-    const subscriber = new OpenInferenceSubscriber({
+    const subscriber = new OpenTelemetrySubscriber({
+      type: 'openinference',
       endpoint: collector.endpoint,
       serviceName: 'node-agent',
-      attributeMappings: [{ key: 'openinference.metadata.tenant', alias: 'tenant.id' }],
     });
 
     const name = unique('node_openinference_e2e');
@@ -111,7 +110,6 @@ describe('OpenInferenceSubscriber', () => {
       assertBodyContains(request.body, 'AGENT');
       assertBodyContains(request.body, 'metadata');
       assertBodyContains(request.body, 'openinference_mark');
-      assertOtlpStringAttribute(request.body, 'tenant.id', 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

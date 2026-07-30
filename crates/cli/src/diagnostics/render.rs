@@ -86,8 +86,13 @@ pub(super) fn format_human_environment(out: &mut String, report: &DoctorReport) 
 
 pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport) {
     out.push_str("  Configuration\n");
+    let workspace_label = if report.configuration.explicit_config {
+        "Explicit"
+    } else {
+        "Workspace"
+    };
     out.push_str(&format!(
-        "    Workspace  {}\n",
+        "    {workspace_label:<11}{}\n",
         format_layer(&report.configuration.workspace)
     ));
     out.push_str(&format!(

@@ -18,6 +18,7 @@
 use serde::Deserialize;
 
 use crate::api::llm::LlmRequest;
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
@@ -1194,6 +1195,10 @@ fn patch_responses_common_fields(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OpenAIResponsesCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+    }
+
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         let raw: RawResponsesResponse = serde_json::from_value(response.clone())
             .map_err(|e| FlowError::Internal(format!("OpenAI Responses response decode: {e}")))?;
@@ -1275,6 +1280,10 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OpenAIResponsesCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+    }
+
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         let obj = request
             .content

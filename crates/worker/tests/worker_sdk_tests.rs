@@ -200,7 +200,22 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 19);
+    assert_eq!(registrations.len(), 21);
+    for local_name in [
+        "llm-sanitize-request",
+        "llm-sanitize-response",
+        "llm-sanitize-omit-request",
+        "llm-sanitize-omit-response",
+    ] {
+        assert_eq!(
+            registrations
+                .iter()
+                .filter(|registration| registration.local_name == local_name)
+                .count(),
+            1,
+            "expected exactly one {local_name} registration"
+        );
+    }
     assert_eq!(
         registrations
             .iter()
@@ -484,7 +499,20 @@ async fn worker_service_invokes_every_registration_surface() {
     let plugin = Arc::new(SurfacePlugin::default());
     let events = plugin.events.clone();
     let (worker_handle, mut client) = spawn_worker(plugin, tcp_endpoint(&host_endpoint)).await;
-    register_plugin(&mut client).await;
+    let registrations = register_plugin(&mut client).await;
+    for name in [
+        "llm-sanitize-request",
+        "llm-sanitize-response",
+        "llm-sanitize-omit-request",
+        "llm-sanitize-omit-response",
+    ] {
+        assert!(
+            registrations
+                .iter()
+                .any(|registration| registration.local_name == name),
+            "{name} must be registered"
+        );
+    }
 
     let subscriber_response = client
         .invoke(Request::new(event_invoke("subscriber")))
@@ -632,6 +660,47 @@ async fn worker_service_invokes_every_registration_surface() {
         "phase",
         "llm_sanitize_response",
     );
+    let omitted_request = client
+        .invoke(Request::new(llm_invoke(
+            "llm-sanitize-omit-request",
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+            llm_request(),
+            None,
+            None,
+        )))
+        .await
+        .expect("request omission invoke")
+        .into_inner();
+    assert_empty_response(omitted_request);
+    let omitted_response = client
+        .invoke(Request::new(llm_invoke(
+            "llm-sanitize-omit-response",
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
+            llm_request(),
+            None,
+            Some(json!({})),
+        )))
+        .await
+        .expect("response omission invoke")
+        .into_inner();
+    assert_empty_response(omitted_response);
+    let codec_request_result = invoke_json(&mut client, llm_request_codec_invoke()).await;
+    assert_eq!(
+        codec_request_result,
+        json!({
+            "headers": {},
+            "content": {"phase": "llm_sanitize_request"},
+        })
+    );
+
+    let codec_response_result = invoke_json(&mut client, llm_response_codec_invoke()).await;
+    assert_eq!(
+        codec_response_result,
+        json!({
+            "value": "secret",
+            "phase": "llm_sanitize_response",
+        })
+    );
     assert_eq!(
         invoke_guardrail(
             &mut client,
@@ -718,6 +787,9 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"tool_next:next-1".into()));
     assert!(calls.contains(&"llm_next:next-1".into()));
     assert!(calls.contains(&"llm_stream_next:next-1".into()));
+    assert!(calls.contains(&"codec_request_decode:request-capability".into()));
+    assert!(calls.contains(&"codec_request_encode:request-capability".into()));
+    assert!(calls.contains(&"codec_response_decode:response-capability".into()));
     assert!(calls.contains(&"mark:stream-poll:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:scope-agent:explicit-stack:".into()));
     assert!(calls.contains(&"push:scope-unknown:explicit-stack:".into()));
@@ -1439,6 +1511,43 @@ async fn worker_service_propagates_host_runtime_errors() {
         "llm next failed",
     );
 
+    for (failures, request, expected) in [
+        (
+            MockHostFailures {
+                codec_request_decode: true,
+                ..Default::default()
+            },
+            llm_request_codec_invoke(),
+            "codec request decode failed",
+        ),
+        (
+            MockHostFailures {
+                codec_request_encode: true,
+                ..Default::default()
+            },
+            llm_request_codec_invoke(),
+            "codec request encode failed",
+        ),
+        (
+            MockHostFailures {
+                codec_response_decode: true,
+                ..Default::default()
+            },
+            llm_response_codec_invoke(),
+            "codec response decode failed",
+        ),
+    ] {
+        host.set_failures(failures);
+        assert_worker_error(
+            client
+                .invoke(Request::new(request))
+                .await
+                .expect("codec failure returns structured error")
+                .into_inner(),
+            expected,
+        );
+    }
+
     for (mode, expected) in [
         (MockStreamMode::WorkerError, "stream worker failed"),
         (MockStreamMode::EmptyChunk, "empty stream chunk"),
@@ -1489,8 +1598,8 @@ impl WorkerPlugin for DuplicateEventSanitizerPlugin {
     }
 
     fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        ctx.register_mark_sanitize_guardrail("duplicate", 0, |_, fields| fields);
-        ctx.register_mark_sanitize_guardrail("duplicate", 1, |_, fields| fields);
+        ctx.register_mark_sanitize_guardrail("duplicate", 0, |_, fields| async move { Ok(fields) });
+        ctx.register_mark_sanitize_guardrail("duplicate", 1, |_, fields| async move { Ok(fields) });
         Ok(())
     }
 }
@@ -1634,22 +1743,33 @@ impl WorkerPlugin for SurfacePlugin {
                 .push(event.name().into());
         });
         ctx.register_mark_sanitize_guardrail("event-sanitize", 1, |event, mut fields| {
-            fields.data = Some(json!({"name": event.name(), "phase": "mark"}));
-            fields
+            let event_name = event.name().to_owned();
+            async move {
+                fields.data = Some(json!({"name": event_name, "phase": "mark"}));
+                Ok(fields)
+            }
         });
-        ctx.register_scope_sanitize_start_guardrail("event-sanitize", 1, |_, mut fields| {
-            fields.metadata = Some(json!({"phase": "scope_start"}));
-            fields
+        ctx.register_scope_sanitize_start_guardrail(
+            "event-sanitize",
+            1,
+            |_, mut fields| async move {
+                fields.metadata = Some(json!({"phase": "scope_start"}));
+                Ok(fields)
+            },
+        );
+        ctx.register_scope_sanitize_end_guardrail(
+            "event-sanitize",
+            1,
+            |_, mut fields| async move {
+                fields.metadata = Some(json!({"phase": "scope_end"}));
+                Ok(fields)
+            },
+        );
+        ctx.register_tool_sanitize_request_guardrail("tool-sanitize", 1, |_, value| async move {
+            Ok(set_json_field(value, "phase", "tool_sanitize_request"))
         });
-        ctx.register_scope_sanitize_end_guardrail("event-sanitize", 1, |_, mut fields| {
-            fields.metadata = Some(json!({"phase": "scope_end"}));
-            fields
-        });
-        ctx.register_tool_sanitize_request_guardrail("tool-sanitize", 1, |_, value| {
-            set_json_field(value, "phase", "tool_sanitize_request")
-        });
-        ctx.register_tool_sanitize_response_guardrail("tool-sanitize", 1, |_, value| {
-            set_json_field(value, "phase", "tool_sanitize_response")
+        ctx.register_tool_sanitize_response_guardrail("tool-sanitize", 1, |_, value| async move {
+            Ok(set_json_field(value, "phase", "tool_sanitize_response"))
         });
         ctx.register_tool_conditional_execution_guardrail("tool-conditional", 1, |_, value| {
             Ok(value
@@ -1730,12 +1850,41 @@ impl WorkerPlugin for SurfacePlugin {
             }
         });
 
-        ctx.register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, |request| {
-            set_llm_phase(request, "llm_sanitize_request")
-        });
-        ctx.register_llm_sanitize_response_guardrail("llm-sanitize-response", 1, |value| {
-            set_json_field(value, "phase", "llm_sanitize_response")
-        });
+        ctx.register_llm_sanitize_request_guardrail(
+            "llm-sanitize-request",
+            1,
+            |mut request, context| async move {
+                if let Some(codec) = context.resolve_codec() {
+                    let annotated = codec.decode(&request).await?;
+                    request = codec.encode(&annotated, &request).await?;
+                }
+                Ok(Some(set_llm_phase(request, "llm_sanitize_request")))
+            },
+        );
+        ctx.register_llm_sanitize_response_guardrail(
+            "llm-sanitize-response",
+            1,
+            |value, context| async move {
+                if let Some(codec) = context.resolve_codec() {
+                    codec.decode(&value).await?;
+                }
+                Ok(Some(set_json_field(
+                    value,
+                    "phase",
+                    "llm_sanitize_response",
+                )))
+            },
+        );
+        ctx.register_llm_sanitize_request_guardrail(
+            "llm-sanitize-omit-request",
+            1,
+            |_request, _context| async { Ok(None) },
+        );
+        ctx.register_llm_sanitize_response_guardrail(
+            "llm-sanitize-omit-response",
+            1,
+            |_response, _context| async { Ok(None) },
+        );
         ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, |request| {
             Ok(request
                 .content
@@ -1854,6 +2003,9 @@ struct MockHostFailures {
     tool_next: bool,
     llm_next: bool,
     llm_stream_mode: MockStreamMode,
+    codec_request_decode: bool,
+    codec_request_encode: bool,
+    codec_response_decode: bool,
 }
 
 #[derive(Clone, Default)]
@@ -2061,6 +2213,81 @@ impl RelayHostRuntime for MockHost {
             };
         let stream = tokio_stream::iter(chunks);
         Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn decode_llm_codec_request(
+        &self,
+        request: Request<nemo_relay_worker_proto::v1::LlmCodecDecodeRequest>,
+    ) -> std::result::Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record(format!(
+            "codec_request_decode:{}",
+            request.codec_capability_id
+        ));
+        if self.failures().codec_request_decode {
+            return Ok(Response::new(JsonResult {
+                value: None,
+                error: Some(worker_error("codec request decode failed")),
+            }));
+        }
+        Ok(Response::new(JsonResult {
+            value: Some(
+                json_envelope("nemo.relay.AnnotatedLlmRequest@2", &json!({}))
+                    .expect("encode annotated request"),
+            ),
+            error: None,
+        }))
+    }
+
+    async fn encode_llm_codec_request(
+        &self,
+        request: Request<nemo_relay_worker_proto::v1::LlmCodecEncodeRequest>,
+    ) -> std::result::Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record(format!(
+            "codec_request_encode:{}",
+            request.codec_capability_id
+        ));
+        if self.failures().codec_request_encode {
+            return Ok(Response::new(JsonResult {
+                value: None,
+                error: Some(worker_error("codec request encode failed")),
+            }));
+        }
+        Ok(Response::new(JsonResult {
+            value: Some(
+                json_envelope(
+                    "nemo.relay.LlmRequest@1",
+                    &json!({"headers": {}, "content": {}}),
+                )
+                .expect("encode LLM request"),
+            ),
+            error: None,
+        }))
+    }
+
+    async fn decode_llm_codec_response(
+        &self,
+        request: Request<nemo_relay_worker_proto::v1::LlmCodecDecodeResponse>,
+    ) -> std::result::Result<Response<JsonResult>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record(format!(
+            "codec_response_decode:{}",
+            request.codec_capability_id
+        ));
+        if self.failures().codec_response_decode {
+            return Ok(Response::new(JsonResult {
+                value: None,
+                error: Some(worker_error("codec response decode failed")),
+            }));
+        }
+        Ok(Response::new(JsonResult {
+            value: Some(json_env(json!({}))),
+            error: None,
+        }))
     }
 }
 
@@ -2317,6 +2544,7 @@ fn llm_invoke(
                 ),
                 annotated_request: annotated_request.map(json_env),
                 response: response.map(json_env),
+                sanitize_context: None,
             },
         )),
     }
@@ -2340,6 +2568,7 @@ fn llm_invoke_without_request(
                 request: None,
                 annotated_request: None,
                 response: None,
+                sanitize_context: None,
             },
         )),
     }
@@ -2402,6 +2631,58 @@ fn llm_request_with_block() -> LlmRequest {
         headers: Default::default(),
         content: json!({"block": true}),
     }
+}
+
+fn llm_request_codec_invoke() -> InvokeRequest {
+    let mut request = llm_invoke(
+        "llm-sanitize-request",
+        RegistrationSurface::LlmSanitizeRequestGuardrail,
+        llm_request(),
+        None,
+        None,
+    );
+    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+        request.payload.as_mut()
+    {
+        invocation.sanitize_context = Some(
+            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
+                nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Builtin as i32,
+                        id: Some("openai_chat".into()),
+                    }),
+                    codec_capability_id: Some("request-capability".into()),
+                },
+            ),
+        );
+    }
+    request
+}
+
+fn llm_response_codec_invoke() -> InvokeRequest {
+    let mut request = llm_invoke(
+        "llm-sanitize-response",
+        RegistrationSurface::LlmSanitizeResponseGuardrail,
+        llm_request(),
+        None,
+        Some(json!({"value": "secret"})),
+    );
+    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+        request.payload.as_mut()
+    {
+        invocation.sanitize_context = Some(
+            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
+                nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Opaque as i32,
+                        id: None,
+                    }),
+                    codec_capability_id: Some("response-capability".into()),
+                },
+            ),
+        );
+    }
+    request
 }
 
 fn set_json_field(mut value: Json, key: &str, field_value: &str) -> Json {

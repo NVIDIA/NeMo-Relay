@@ -30,7 +30,7 @@ function rejectWithPrimitive(value) {
 }
 
 async function flushSubscriberCallbacks() {
-  flushSubscribers();
+  await flushSubscribers();
   for (let i = 0; i < 10; i += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
@@ -362,13 +362,12 @@ describe('Subscribers', () => {
     }
   });
 
-  it('flushSubscribers is a native barrier before JS event-loop delivery', async () => {
+  it('flushSubscribers asynchronously drains the native dispatcher', async () => {
     const events = [];
     registerSubscriber('node_flush_collector', (e) => events.push(e));
     try {
       event('node_flush_mark', null, null, null);
-      flushSubscribers();
-      assert.equal(events.length, 0);
+      await flushSubscribers();
       await new Promise((resolve) => setImmediate(resolve));
       assert.ok(events.some((e) => e.kind === 'mark' && e.name === 'node_flush_mark'));
     } finally {

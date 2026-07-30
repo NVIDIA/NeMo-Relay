@@ -7,8 +7,11 @@ use uuid::Uuid;
 
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::llm::LlmRequest;
+use crate::api::registry::Guardrail;
 use crate::api::runtime::global_context;
-use crate::api::runtime::{EventSubscriberFn, NemoRelayContextState, ScopeStackHandle};
+use crate::api::runtime::{
+    EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
+};
 use crate::api::runtime::{current_scope_stack, task_scope_top};
 use crate::api::scope::ScopeHandle;
 use crate::api::scope::ScopeType;
@@ -51,7 +54,22 @@ pub(crate) fn sanitize_event_with_scope_stack(
     event: Event,
     scope_stack: &ScopeStackHandle,
 ) -> Option<Event> {
-    let entries = {
+    let entries = snapshot_event_sanitizers(&event, scope_stack)?;
+    Some(NemoRelayContextState::event_sanitize_snapshot_chain(
+        event, &entries,
+    ))
+}
+
+/// Snapshot the event sanitizer chain visible on a captured scope stack.
+///
+/// The snapshot remains valid after the emitting scope is removed, allowing
+/// synchronous scope and mark APIs to enqueue publication without changing
+/// which scope-local middleware observes the event.
+pub(crate) fn snapshot_event_sanitizers(
+    event: &Event,
+    scope_stack: &ScopeStackHandle,
+) -> Option<Vec<Guardrail<EventSanitizeFn>>> {
+    Some({
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let context = global_context();
         let state = match context.read() {
@@ -87,10 +105,7 @@ pub(crate) fn sanitize_event_with_scope_stack(
                 )
             }
         }
-    };
-    Some(NemoRelayContextState::event_sanitize_snapshot_chain(
-        event, &entries,
-    ))
+    })
 }
 
 pub(crate) fn ensure_runtime_owner() -> Result<()> {

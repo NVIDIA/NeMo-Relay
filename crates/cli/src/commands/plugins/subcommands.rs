@@ -164,9 +164,19 @@ impl From<PluginsScopeArgs> for crate::plugins::ConfigurationScope {
 }
 
 impl PluginsEditCommand {
-    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsEditRequest {
+    pub(crate) fn into_runtime(
+        self,
+        explicit_path: Option<PathBuf>,
+    ) -> crate::plugins::PluginsEditRequest {
+        let scope = self.scope.into();
+        let explicit_path = if matches!(scope, crate::plugins::ConfigurationScope::Default) {
+            explicit_path
+        } else {
+            None
+        };
         crate::plugins::PluginsEditRequest {
-            scope: self.scope.into(),
+            explicit_path,
+            scope,
         }
     }
 }

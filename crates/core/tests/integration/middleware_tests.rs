@@ -64,16 +64,10 @@ use nemo_relay::codec::optimization::{
 };
 use nemo_relay::error::FlowError;
 use nemo_relay::json::Json;
-#[cfg(all(feature = "otel", feature = "openinference"))]
-use nemo_relay::observability::MarkProjection;
-#[cfg(all(feature = "otel", feature = "openinference"))]
+use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
-#[cfg(all(feature = "otel", feature = "openinference"))]
-use nemo_relay::observability::openinference::OpenInferenceSubscriber;
-#[cfg(all(feature = "otel", feature = "openinference"))]
 use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use nemo_relay::plugin::{PluginRegistrationContext, rollback_registrations};
-#[cfg(all(feature = "otel", feature = "openinference"))]
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
 
@@ -821,7 +815,6 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
     deregister_subscriber("tool_outcome_mark_observer").unwrap();
 }
 
-#[cfg(all(feature = "otel", feature = "openinference"))]
 #[tokio::test]
 async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() {
     let _lock = TEST_MUTEX.lock().unwrap();
@@ -852,10 +845,9 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     let otel_provider = SdkTracerProvider::builder()
         .with_simple_exporter(otel_exporter.clone())
         .build();
-    let otel = OpenTelemetrySubscriber::from_tracer_provider_with_mark_projection(
+    let otel = OpenTelemetrySubscriber::from_tracer_provider(
         otel_provider,
         "managed-tool-projection-otel",
-        MarkProjection::Tool,
     );
     register_subscriber("managed_tool_projection_otel", otel.subscriber()).unwrap();
 
@@ -863,10 +855,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
         .build();
-    let openinference = OpenInferenceSubscriber::from_tracer_provider_with_mark_projection(
+    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
         openinference_provider,
         "managed-tool-projection-openinference",
-        MarkProjection::Tool,
+        OpenTelemetryType::OpenInference,
     );
     register_subscriber(
         "managed_tool_projection_openinference",
@@ -952,8 +944,8 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     assert_eq!(otel_mark.parent_span_id, otel_tool.span_context.span_id());
     assert!(otel_mark.start_time > otel_tool.end_time);
     assert!(otel_mark.attributes.iter().any(|attribute| {
-        attribute.key.as_str() == "nemo_relay.mark.projection"
-            && attribute.value.to_string() == "tool"
+        attribute.key.as_str() == "nemo_relay.mark.orphan"
+            && attribute.value == opentelemetry::Value::Bool(true)
     }));
     for (key, value) in [
         ("nemo_relay.mark.category", "custom"),
@@ -984,7 +976,12 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     );
     assert!(openinference_mark.start_time > openinference_tool.end_time);
     assert!(openinference_mark.attributes.iter().any(|attribute| {
-        attribute.key.as_str() == "openinference.span.kind" && attribute.value.to_string() == "TOOL"
+        attribute.key.as_str() == "nemo_relay.mark.orphan"
+            && attribute.value == opentelemetry::Value::Bool(true)
+    }));
+    assert!(openinference_mark.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "openinference.span.kind"
+            && attribute.value.to_string() == "CHAIN"
     }));
     for (key, value) in [
         ("nemo_relay.mark.category", "custom"),
@@ -2638,10 +2635,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     register_llm_sanitize_request_guardrail(
         "lock_global_llm_sanitize_request",
         1,
-        Arc::new(move |request| {
+        Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_global");
             assert_middleware_callback_locks_are_free();
-            request
+            Some(request)
         }),
     )
     .unwrap();
@@ -2650,10 +2647,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         &scope.uuid,
         "lock_scope_llm_sanitize_request",
         2,
-        Arc::new(move |request| {
+        Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_scope");
             assert_middleware_callback_locks_are_free();
-            request
+            Some(request)
         }),
     )
     .unwrap();
@@ -2707,10 +2704,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     register_llm_sanitize_response_guardrail(
         "lock_global_llm_sanitize_response",
         1,
-        Arc::new(move |response| {
+        Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_global");
             assert_middleware_callback_locks_are_free();
-            response
+            Some(response)
         }),
     )
     .unwrap();
@@ -2719,10 +2716,10 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         &scope.uuid,
         "lock_scope_llm_sanitize_response",
         2,
-        Arc::new(move |response| {
+        Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_scope");
             assert_middleware_callback_locks_are_free();
-            response
+            Some(response)
         }),
     )
     .unwrap();

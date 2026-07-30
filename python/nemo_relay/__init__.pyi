@@ -64,6 +64,9 @@ from nemo_relay._native import (
     LLMAttributes as LLMAttributes,
 )
 from nemo_relay._native import (
+    LlmCodecIdentity as LlmCodecIdentity,
+)
+from nemo_relay._native import (
     LLMHandle as LLMHandle,
 )
 from nemo_relay._native import (
@@ -73,13 +76,19 @@ from nemo_relay._native import (
     LLMRequestInterceptOutcome as LLMRequestInterceptOutcome,
 )
 from nemo_relay._native import (
+    LlmSanitizeRequestCodec as LlmSanitizeRequestCodec,
+)
+from nemo_relay._native import (
+    LlmSanitizeRequestContext as LlmSanitizeRequestContext,
+)
+from nemo_relay._native import (
+    LlmSanitizeResponseCodec as LlmSanitizeResponseCodec,
+)
+from nemo_relay._native import (
+    LlmSanitizeResponseContext as LlmSanitizeResponseContext,
+)
+from nemo_relay._native import (
     MarkEvent as MarkEvent,
-)
-from nemo_relay._native import (
-    OpenInferenceConfig as OpenInferenceConfig,
-)
-from nemo_relay._native import (
-    OpenInferenceSubscriber as OpenInferenceSubscriber,
 )
 from nemo_relay._native import (
     OpenTelemetryConfig as OpenTelemetryConfig,
@@ -89,6 +98,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     PendingMarkSpec as PendingMarkSpec,
+)
+from nemo_relay._native import (
+    PropagationContext as PropagationContext,
 )
 from nemo_relay._native import (
     ScopeAttributes as ScopeAttributes,
@@ -172,23 +184,31 @@ Arguments:
 Return:
     ``None`` to allow execution, or a rejection message to block it.
 """
-LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest, "LlmSanitizeRequestContext"], Optional[LLMRequest]]
 """Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 
 Arguments:
-    The current LLM request.
+    The current LLM request and a context object containing a tagged ``codec``
+    identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
+    ``builtin`` and ``runtime`` identities include ``id``. Use
+    ``context.resolve_codec()`` to access the active in-process codec.
 
 Return:
-    Request object recorded on the emitted lifecycle event.
+    Request object recorded on the emitted lifecycle event, or ``None`` to omit
+    the LLM observability payload and annotation.
 """
-LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[Json, "LlmSanitizeResponseContext"], Optional[Json]]
 """Guardrail callback that sanitizes an emitted JSON LLM response payload.
 
 Arguments:
-    The response object to sanitize for observability.
+    The response object and a context object containing a tagged ``codec``
+    identity. Its ``kind`` is ``none``, ``builtin``, ``runtime``, or ``opaque``;
+    ``builtin`` and ``runtime`` identities include ``id``. Use
+    ``context.resolve_codec()`` to access the active in-process codec.
 
 Return:
-    Response object recorded on the emitted lifecycle event.
+    Response object recorded on the emitted lifecycle event, or ``None`` to
+    omit the LLM observability payload and annotation.
 """
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
 """Guardrail callback that can block an LLM call.
@@ -344,6 +364,10 @@ def create_scope_stack() -> ScopeStack:
     """
     ...
 
+def capture_propagation_context() -> PropagationContext: ...
+def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext: ...
+def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack: ...
+def use_scope_stack(stack: ScopeStack): ...
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Install a scope stack into the current thread's native runtime context.
 

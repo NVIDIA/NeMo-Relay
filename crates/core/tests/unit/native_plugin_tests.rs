@@ -10,11 +10,18 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay_plugin::{
-    NemoRelayNativeLlmNextFn, NemoRelayNativeLlmStreamNextFn, NemoRelayNativeToolNextFn,
+    NemoRelayNativeLlmNextFn, NemoRelayNativeLlmSanitizeRequestContext,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamNextFn,
+    NemoRelayNativeToolNextFn,
 };
 use serde_json::json;
 
-use crate::api::runtime::{NemoRelayContextState, global_context};
+use crate::api::runtime::{
+    BuiltinLlmCodec, LlmSanitizeRequestContext, LlmSanitizeResponseContext, NemoRelayContextState,
+    global_context,
+};
+use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::response::AnnotatedLlmResponse;
 
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
@@ -63,6 +70,50 @@ fn assert_last_error_contains(expected: &str) {
         error.contains(expected),
         "expected native error '{error}' to contain '{expected}'"
     );
+}
+
+struct FailingNativeCodec;
+
+impl LlmCodec for FailingNativeCodec {
+    fn decode(&self, _request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
+        Err(FlowError::Internal("request decode rejected".into()))
+    }
+
+    fn encode(
+        &self,
+        _annotated: &AnnotatedLlmRequest,
+        _original: &LlmRequest,
+    ) -> FlowResult<LlmRequest> {
+        Err(FlowError::Internal("request encode rejected".into()))
+    }
+}
+
+impl LlmResponseCodec for FailingNativeCodec {
+    fn decode_response(&self, _response: &Json) -> FlowResult<AnnotatedLlmResponse> {
+        Err(FlowError::Internal("response decode rejected".into()))
+    }
+}
+
+struct PanickingNativeCodec;
+
+impl LlmCodec for PanickingNativeCodec {
+    fn decode(&self, _request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
+        panic!("request decode panic")
+    }
+
+    fn encode(
+        &self,
+        _annotated: &AnnotatedLlmRequest,
+        _original: &LlmRequest,
+    ) -> FlowResult<LlmRequest> {
+        panic!("request encode panic")
+    }
+}
+
+impl LlmResponseCodec for PanickingNativeCodec {
+    fn decode_response(&self, _response: &Json) -> FlowResult<AnnotatedLlmResponse> {
+        panic!("response decode panic")
+    }
 }
 
 #[test]
@@ -512,6 +563,7 @@ unsafe extern "C" fn noop_tool_execution(
 unsafe extern "C" fn noop_llm_request(
     _user_data: *mut c_void,
     _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeRequestContext,
     _out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -520,6 +572,7 @@ unsafe extern "C" fn noop_llm_request(
 unsafe extern "C" fn noop_json(
     _user_data: *mut c_void,
     _payload_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeResponseContext,
     _out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
@@ -705,6 +758,239 @@ fn native_registration_entrypoints_reject_null_contexts() {
     assert_last_error_contains("plugin context is null");
 }
 
+#[test]
+fn native_codec_operations_report_json_and_codec_failures() {
+    let openai_request_codec =
+        NativeHostLlmRequestCodec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmCodec>);
+    let openai_response_codec =
+        NativeHostLlmResponseCodec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>);
+    let failing_request_codec =
+        NativeHostLlmRequestCodec(Arc::new(FailingNativeCodec) as Arc<dyn LlmCodec>);
+    let failing_response_codec =
+        NativeHostLlmResponseCodec(Arc::new(FailingNativeCodec) as Arc<dyn LlmResponseCodec>);
+    let invalid_json = native_string("not-json");
+    let mut output = ptr::null_mut();
+
+    assert_eq!(
+        unsafe {
+            native_llm_request_codec_decode(
+                ptr::from_ref(&openai_request_codec).cast(),
+                invalid_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("invalid request JSON");
+
+    assert_eq!(
+        unsafe {
+            native_llm_response_codec_decode(
+                ptr::from_ref(&openai_response_codec).cast(),
+                invalid_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("invalid response JSON");
+    unsafe { native_string_free(invalid_json) };
+
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}]
+        }),
+    };
+    let request_json = native_string(&serde_json::to_string(&request).unwrap());
+    assert_eq!(
+        unsafe {
+            native_llm_request_codec_decode(
+                ptr::from_ref(&failing_request_codec).cast(),
+                request_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("request decode rejected");
+
+    let annotated = OpenAIChatCodec.decode(&request).unwrap();
+    let annotated_json = native_string(&serde_json::to_string(&annotated).unwrap());
+    assert_eq!(
+        unsafe {
+            native_llm_request_codec_encode(
+                ptr::from_ref(&failing_request_codec).cast(),
+                annotated_json,
+                request_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("request encode rejected");
+
+    let response_json = native_string(
+        r#"{"id":"chatcmpl-test","model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"secret"},"finish_reason":"stop"}]}"#,
+    );
+    assert_eq!(
+        unsafe {
+            native_llm_response_codec_decode(
+                ptr::from_ref(&failing_response_codec).cast(),
+                response_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("response decode rejected");
+
+    unsafe {
+        native_string_free(request_json);
+        native_string_free(annotated_json);
+        native_string_free(response_json);
+    }
+}
+
+#[test]
+fn native_codec_operations_contain_codec_panics() {
+    let request_codec =
+        NativeHostLlmRequestCodec(Arc::new(PanickingNativeCodec) as Arc<dyn LlmCodec>);
+    let response_codec =
+        NativeHostLlmResponseCodec(Arc::new(PanickingNativeCodec) as Arc<dyn LlmResponseCodec>);
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}]
+        }),
+    };
+    let request_json = native_string(&serde_json::to_string(&request).unwrap());
+    let annotated = OpenAIChatCodec.decode(&request).unwrap();
+    let annotated_json = native_string(&serde_json::to_string(&annotated).unwrap());
+    let response_json = native_string(
+        r#"{"id":"chatcmpl-test","model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"secret"},"finish_reason":"stop"}]}"#,
+    );
+    let mut output = ptr::null_mut();
+
+    assert_eq!(
+        unsafe {
+            native_llm_request_codec_decode(
+                ptr::from_ref(&request_codec).cast(),
+                request_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("request codec decode panicked");
+
+    assert_eq!(
+        unsafe {
+            native_llm_request_codec_encode(
+                ptr::from_ref(&request_codec).cast(),
+                annotated_json,
+                request_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("request codec encode panicked");
+
+    assert_eq!(
+        unsafe {
+            native_llm_response_codec_decode(
+                ptr::from_ref(&response_codec).cast(),
+                response_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("response codec decode panicked");
+
+    unsafe {
+        native_string_free(request_json);
+        native_string_free(annotated_json);
+        native_string_free(response_json);
+    }
+}
+
+#[test]
+fn native_codec_operations_clear_output_slots_on_null_arguments() {
+    let request_codec = NativeHostLlmRequestCodec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmCodec>);
+    let response_codec =
+        NativeHostLlmResponseCodec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>);
+    let request_json = native_string(
+        r#"{"headers":{},"content":{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}}"#,
+    );
+
+    let request_decode_sentinel = native_string("request-decode-sentinel");
+    let mut output = request_decode_sentinel;
+    set_native_last_error("stale request decode error");
+    assert_eq!(
+        unsafe {
+            native_llm_request_codec_decode(
+                ptr::from_ref(&request_codec).cast(),
+                ptr::null(),
+                &mut output,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("request codec decode request is null");
+    unsafe { native_string_free(request_decode_sentinel) };
+
+    let request_encode_sentinel = native_string("request-encode-sentinel");
+    output = request_encode_sentinel;
+    set_native_last_error("stale request encode error");
+    assert_eq!(
+        unsafe {
+            native_llm_request_codec_encode(
+                ptr::from_ref(&request_codec).cast(),
+                ptr::null(),
+                request_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("request codec encode annotated request is null");
+    unsafe { native_string_free(request_encode_sentinel) };
+
+    let response_decode_sentinel = native_string("response-decode-sentinel");
+    output = response_decode_sentinel;
+    set_native_last_error("stale response decode error");
+    assert_eq!(
+        unsafe {
+            native_llm_response_codec_decode(
+                ptr::from_ref(&response_codec).cast(),
+                ptr::null(),
+                &mut output,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert!(output.is_null());
+    assert_last_error_contains("response codec decode response is null");
+    unsafe {
+        native_string_free(response_decode_sentinel);
+        native_string_free(request_json);
+    }
+}
+
 unsafe extern "C" fn tool_json_echo(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
@@ -730,10 +1016,70 @@ unsafe extern "C" fn tool_json_error(
 unsafe extern "C" fn llm_request_echo(
     _user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeRequestContext,
     out_request_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     let request = read_native_string(request_json).unwrap();
     unsafe { *out_request_json = native_string(&request) };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn llm_request_alias(
+    _user_data: *mut c_void,
+    request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeRequestContext,
+    out_request_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_request_json = request_json.cast_mut() };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn llm_request_codec_round_trip(
+    _user_data: *mut c_void,
+    request_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeRequestContext,
+    out_request_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    assert!(!context.codec.is_null());
+    let mut annotated = ptr::null_mut();
+    let status =
+        unsafe { native_llm_request_codec_decode(context.codec, request_json, &mut annotated) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    let status = unsafe {
+        native_llm_request_codec_encode(context.codec, annotated, request_json, out_request_json)
+    };
+    unsafe { native_string_free(annotated) };
+    status
+}
+
+unsafe extern "C" fn llm_response_codec_decode_and_echo(
+    _user_data: *mut c_void,
+    response_json: *const NemoRelayNativeString,
+    context: NemoRelayNativeLlmSanitizeResponseContext,
+    out_response_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    assert!(!context.codec.is_null());
+    let mut annotated = ptr::null_mut();
+    let status =
+        unsafe { native_llm_response_codec_decode(context.codec, response_json, &mut annotated) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    unsafe { native_string_free(annotated) };
+    let response = read_native_string(response_json).unwrap();
+    unsafe { *out_response_json = native_string(&response) };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn llm_response_alias(
+    _user_data: *mut c_void,
+    response_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeResponseContext,
+    out_response_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_response_json = response_json.cast_mut() };
     NemoRelayStatus::Ok
 }
 
@@ -755,9 +1101,172 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
         content: json!({"model": "test"}),
     };
     assert_eq!(
-        call_llm_request_callback(llm_request_echo, ptr::null_mut(), &request).unwrap(),
-        request
+        call_llm_sanitize_request_callback(
+            llm_request_echo,
+            ptr::null_mut(),
+            &request,
+            LlmSanitizeRequestContext::default(),
+        )
+        .unwrap(),
+        Some(request)
     );
+
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({"model": "alias"}),
+    };
+    assert_eq!(
+        call_llm_sanitize_request_callback(
+            llm_request_alias,
+            ptr::null_mut(),
+            &request,
+            LlmSanitizeRequestContext::default(),
+        )
+        .unwrap(),
+        Some(request)
+    );
+
+    let response = json!({"message": "alias"});
+    assert_eq!(
+        call_llm_sanitize_response_callback(
+            llm_response_alias,
+            ptr::null_mut(),
+            &response,
+            LlmSanitizeResponseContext::default(),
+        )
+        .unwrap(),
+        Some(response)
+    );
+}
+
+#[test]
+fn native_sanitizer_context_resolves_directional_codecs() {
+    let codec = Arc::new(OpenAIChatCodec);
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}],
+            "preserve": true
+        }),
+    };
+    let sanitized = call_llm_sanitize_request_callback(
+        llm_request_codec_round_trip,
+        ptr::null_mut(),
+        &request,
+        LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+    )
+    .unwrap()
+    .expect("native request sanitizer returns a request");
+    assert_eq!(sanitized, request);
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let sanitized = call_llm_sanitize_response_callback(
+        llm_response_codec_decode_and_echo,
+        ptr::null_mut(),
+        &response,
+        LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+    )
+    .unwrap()
+    .expect("native response sanitizer returns a response");
+    assert_eq!(sanitized, response);
+}
+
+#[test]
+fn native_llm_sanitize_context_preserves_all_codec_identity_states() {
+    let cases = [
+        (
+            LlmCodecIdentity::None,
+            NemoRelayNativeLlmCodecKind::None,
+            None,
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("openai_chat"),
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("openai_responses"),
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("anthropic_messages"),
+        ),
+        (
+            LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
+            NemoRelayNativeLlmCodecKind::Runtime,
+            Some("com.example.chat.v1"),
+        ),
+        (
+            LlmCodecIdentity::Opaque,
+            NemoRelayNativeLlmCodecKind::Opaque,
+            None,
+        ),
+    ];
+
+    for (codec, expected_kind, expected_id) in cases {
+        let (codec_kind, context_id) =
+            native_llm_codec_identity(&codec).expect("native context conversion should succeed");
+        assert_eq!(codec_kind, expected_kind);
+        assert_eq!(
+            context_id.map(|id| read_native_string(id).unwrap()),
+            expected_id.map(str::to_owned),
+        );
+        if let Some(context_id) = context_id {
+            unsafe { native_string_free(context_id) };
+        }
+    }
+}
+
+#[test]
+fn native_llm_sanitizer_input_allocation_failures_release_codec_ids() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({"model": "test"}),
+    };
+    let identity = LlmCodecIdentity::Runtime("com.example.chat.v1".into());
+    let live_before = native_string_live_allocations();
+
+    fail_native_string_allocation_after(1);
+    let request_error = call_llm_sanitize_request_callback(
+        llm_request_alias,
+        ptr::null_mut(),
+        &request,
+        LlmSanitizeRequestContext::with_identity(identity.clone()),
+    )
+    .unwrap_err();
+    assert!(
+        request_error
+            .to_string()
+            .contains("failed to allocate native LLM request")
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
+
+    fail_native_string_allocation_after(1);
+    let response_error = call_llm_sanitize_response_callback(
+        llm_response_alias,
+        ptr::null_mut(),
+        &json!({"model": "test"}),
+        LlmSanitizeResponseContext::with_identity(identity),
+    )
+    .unwrap_err();
+    assert!(
+        response_error
+            .to_string()
+            .contains("failed to allocate native LLM response")
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
 }
 
 fn tool_next(output: FlowResult<Json>) -> ToolExecutionNextFn {

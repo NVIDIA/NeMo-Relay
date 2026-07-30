@@ -32,7 +32,7 @@ it(
               kind: 'observability',
               enabled: true,
               config: {
-                version: 2,
+          version: 3,
                 atif: {
                   enabled: true,
                   agent_name: 'openclaw',

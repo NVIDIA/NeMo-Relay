@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::plugin_component::{
     AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
@@ -24,6 +25,8 @@ use crate::server;
 use crate::server::GatewayOverrides;
 
 use super::{PreparedAgentLaunch, RunOverrides};
+
+const TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
 ///
@@ -377,13 +380,59 @@ impl RunningGateway {
             .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
     }
 
-    // Requests shutdown and joins the server task. The send can fail only if the task already exited;
-    // the join result still captures whether serving ended cleanly.
+    // Requests shutdown and joins the server task. A second Ctrl-C aborts cleanup immediately;
+    // otherwise, a stuck in-flight request is aborted after the grace period.
     async fn stop(self) -> Result<(), CliError> {
+        self.stop_with_interrupt_and_timeout(
+            tokio::signal::ctrl_c(),
+            TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn stop_with_interrupt_and_timeout<F>(
+        mut self,
+        interrupt: F,
+        timeout: Duration,
+    ) -> Result<(), CliError>
+    where
+        F: std::future::Future<Output = std::io::Result<()>>,
+    {
         let _ = self.shutdown_tx.send(());
-        self.task
-            .await
-            .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
+        tokio::pin!(interrupt);
+        let timeout_duration = timeout;
+        let timeout_sleep = tokio::time::sleep(timeout_duration);
+        tokio::pin!(timeout_sleep);
+        tokio::select! {
+            result = &mut self.task => {
+                result.map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
+            }
+            interrupt_result = &mut interrupt => {
+                interrupt_result?;
+                self.task.abort();
+                match self.task.await {
+                    Err(error) if error.is_cancelled() => Ok(()),
+                    result => result.map_err(|error| {
+                        CliError::Launch(format!("gateway task failed: {error}"))
+                    })?,
+                }
+            }
+            _ = &mut timeout_sleep => {
+                log::info!(
+                    target: "nemo_relay.server",
+                    event = "transparent_gateway_shutdown_timed_out",
+                    timeout_ms = timeout_duration.as_millis();
+                    "Transparent gateway shutdown timed out; aborting task"
+                );
+                self.task.abort();
+                match self.task.await {
+                    Err(error) if error.is_cancelled() => Ok(()),
+                    result => result.map_err(|error| {
+                        CliError::Launch(format!("gateway task failed: {error}"))
+                    })?,
+                }
+            }
+        }
     }
 }
 
@@ -693,30 +742,17 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
         .as_ref()
         .filter(|section| section.enabled)
     {
-        destinations.push(format!(
-            "OpenTelemetry {}",
-            section
-                .endpoint
-                .as_deref()
-                .map(sanitized_url)
-                .as_deref()
-                .unwrap_or("OTLP endpoint from environment/default")
-        ));
-    }
-    if let Some(section) = config
-        .openinference
-        .as_ref()
-        .filter(|section| section.enabled)
-    {
-        destinations.push(format!(
-            "OpenInference {}",
-            section
-                .endpoint
-                .as_deref()
-                .map(sanitized_url)
-                .as_deref()
-                .unwrap_or("OTLP endpoint from environment/default")
-        ));
+        for endpoint in &section.endpoints {
+            let endpoint_type = match endpoint.otel_type {
+                OpenTelemetryType::Full => "full",
+                OpenTelemetryType::GenAi => "gen_ai",
+                OpenTelemetryType::OpenInference => "openinference",
+            };
+            destinations.push(format!(
+                "OpenTelemetry {endpoint_type} {}",
+                sanitized_url(&endpoint.endpoint)
+            ));
+        }
     }
     destinations
 }

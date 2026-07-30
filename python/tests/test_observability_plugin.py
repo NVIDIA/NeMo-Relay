@@ -25,7 +25,8 @@ from nemo_relay.observability import (
     ComponentSpec,
     HttpStorageConfig,
     ObservabilityConfig,
-    OtlpConfig,
+    OpenTelemetryEndpointConfig,
+    OpenTelemetrySectionConfig,
     S3StorageConfig,
 )
 
@@ -91,25 +92,35 @@ class TestObservabilityConfigHelpers:
             "model_name": "unknown",
             "filename_template": "nemo-relay-atif-{session_id}.json",
         }
-        assert OtlpConfig().to_dict() == {
+        assert OpenTelemetrySectionConfig().to_dict() == {
             "enabled": False,
+            "endpoints": [],
+        }
+        assert OpenTelemetryEndpointConfig(
+            "gen_ai",
+            "http://localhost:4318/v1/traces",
+            header_env={"authorization": "OTEL_AUTHORIZATION"},
+        ).to_dict() == {
+            "type": "gen_ai",
+            "endpoint": "http://localhost:4318/v1/traces",
             "mark_projection": "inherit",
             "mark_exclude_names": ["llm.chunk"],
             "attribute_mappings": [],
             "transport": "http_binary",
-            "headers": {},
-            "resource_attributes": {},
-            "service_name": "nemo-relay",
+            "service_name": "unknown_service",
+            "instrumentation_scope": "opentelemetry",
             "timeout_millis": 3000,
+            "headers": {},
+            "header_env": {"authorization": "OTEL_AUTHORIZATION"},
+            "resource_attributes": {},
         }
-        assert OtlpConfig(mark_projection="tool").to_dict()["mark_projection"] == "tool"
 
         wrapped = ComponentSpec(ObservabilityConfig(atof=AtofConfig())).to_dict()
         assert wrapped["kind"] == OBSERVABILITY_PLUGIN_KIND
         assert wrapped["enabled"] is True
         wrapped_config = wrapped["config"]
         assert isinstance(wrapped_config, dict)
-        assert wrapped_config["version"] == 2
+        assert wrapped_config["version"] == 3
 
     def test_validation_rejects_bad_values(self):
         report = plugin.validate(
@@ -117,7 +128,7 @@ class TestObservabilityConfigHelpers:
                 components=[
                     ComponentSpec(
                         {
-                            "version": 2,
+                            "version": 3,
                             "atof": {"sinks": [{"type": "file", "mode": "bad"}]},
                             "atif": {"filename_template": "missing-placeholder"},
                         }

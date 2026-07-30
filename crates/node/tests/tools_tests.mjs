@@ -48,7 +48,7 @@ function sparseArray() {
 }
 
 async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  flushSubscribers();
+  await flushSubscribers();
   // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
   // subscriber callbacks are queued onto Node's event loop through N-API
   // ThreadsafeFunction. Yield event-loop turns until the observed JS-side

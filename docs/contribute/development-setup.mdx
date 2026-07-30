@@ -30,6 +30,7 @@ Install these tools before you start:
 - Go 1.21 or newer
 - Node.js LTS
 - `cargo-deny`
+- `cargo-about` 0.9.1
 
 If you touch Go or the raw FFI surface, build and validate those
 bindings from source in the same branch.
@@ -40,6 +41,7 @@ Clone the repository and build the workspace:
 git clone <repo-url> && cd NeMo-Relay
 uv sync
 cargo install just --locked
+cargo install cargo-about --version 0.9.1 --locked --features cli
 uv run pre-commit install
 just build-rust
 just build-python

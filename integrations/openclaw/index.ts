@@ -17,7 +17,7 @@ type NemoRelayPluginEntry = ReturnType<typeof definePluginEntry>;
 const nemoRelayPluginEntry: NemoRelayPluginEntry = definePluginEntry({
   id: 'nemo-relay',
   name: 'NeMo Relay Observability',
-  description: 'ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Relay',
+  description: 'ATIF and typed OpenTelemetry telemetry through NeMo Relay',
   configSchema: nemoRelayConfigSchema,
   register(api: OpenClawPluginApi) {
     registerNemoRelayPlugin(api);
