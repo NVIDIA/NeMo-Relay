@@ -144,7 +144,8 @@ fn collect_configuration(
 ) -> ConfigurationInfo {
     let explicit_config = gateway_overrides.config.is_some();
     let workspace_path = cwd
-        .map(|p| p.join(".nemo-relay").join("config.toml"))
+        .and_then(crate::configuration::find_project_config)
+        .or_else(|| cwd.map(|p| p.join(".nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
     // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
     // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.

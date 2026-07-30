@@ -1160,7 +1160,7 @@ fn implicit_plugin_config_paths(
 
 // Walks upward from the current directory and returns the nearest project-local gateway config.
 // The first hit wins so nested projects can override parent workspace defaults.
-fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
+pub(crate) fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
         let path = ancestor.join(".nemo-relay/config.toml");
         if path.exists() {

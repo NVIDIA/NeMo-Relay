@@ -3255,6 +3255,44 @@ fn cli_doctor_json_reports_a_missing_explicit_config() {
 }
 
 #[test]
+fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("services/relay");
+    let project_config = project.join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &project_config,
+        "[gateway]\nmax_hook_payload_bytes = 1048576\n",
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let workspace = &report["configuration"]["workspace"];
+    let reported_path = PathBuf::from(workspace["path"].as_str().unwrap());
+    assert!(
+        reported_path.exists(),
+        "doctor reported undiscovered workspace path {}",
+        reported_path.display()
+    );
+    assert_eq!(
+        reported_path.canonicalize().unwrap(),
+        project_config.canonicalize().unwrap()
+    );
+    assert_eq!(workspace["status"], "pass");
+    assert_eq!(workspace["active"], true);
+}
+
+#[test]
 fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
