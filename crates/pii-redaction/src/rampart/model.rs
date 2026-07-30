@@ -60,8 +60,8 @@ pub(super) struct Detection {
 
 pub(super) struct RampartDetector {
     tokenizer: RampartTokenizer,
-    // Each run creates invocation-local tract state; the sanitizer bounds how
-    // many callers may share this immutable plan concurrently.
+    // Single-flight admission is enforced before this immutable plan enters
+    // Tokio's blocking pool.
     plan: Arc<TypedRunnableModel>,
     labels: Arc<[String]>,
     cls_id: i64,

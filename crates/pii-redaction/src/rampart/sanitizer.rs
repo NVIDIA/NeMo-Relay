@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
@@ -31,10 +31,6 @@ use super::model::{Detection, RampartDetector};
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 const MAX_TEXTS_PER_PAYLOAD: usize = 256;
 const MAX_PAYLOAD_TEXT_BYTES: usize = 256 * 1024;
-// Bound parallelism without multiplying worst-case request-local tensor memory.
-// Additional observability work fails closed instead of queueing.
-const MAX_CONCURRENT_INFERENCE: usize = 2;
-
 pub(super) trait DetectionModel: Send + Sync {
     fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>>;
 }
@@ -54,7 +50,7 @@ pub(super) struct RampartSanitizer {
     excluded_labels: Arc<HashSet<String>>,
     replacement: Arc<str>,
     legacy_surface: Option<ProviderSurface>,
-    admission: Arc<AtomicUsize>,
+    admission: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -91,12 +87,12 @@ enum EventField {
 }
 
 struct SanitizerPermit {
-    admission: Arc<AtomicUsize>,
+    admission: Arc<AtomicBool>,
 }
 
 impl Drop for SanitizerPermit {
     fn drop(&mut self) {
-        self.admission.fetch_sub(1, Ordering::Release);
+        self.admission.store(false, Ordering::Release);
     }
 }
 
@@ -131,16 +127,14 @@ impl RampartSanitizer {
             excluded_labels: Arc::new(config.excluded_labels.into_iter().collect()),
             replacement: config.replacement.into(),
             legacy_surface,
-            admission: Arc::new(AtomicUsize::new(0)),
+            admission: Arc::new(AtomicBool::new(false)),
         })
     }
 
     fn try_admit(&self, surface: &'static str) -> Option<SanitizerPermit> {
         if self
             .admission
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < MAX_CONCURRENT_INFERENCE).then_some(active + 1)
-            })
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
             log::warn!(
@@ -912,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn admission_bounds_work_queued_for_the_blocking_pool() {
+    fn contention_does_not_queue_behind_the_blocking_pool() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .max_blocking_threads(1)
@@ -930,7 +924,6 @@ mod tests {
                 }),
                 vec!["/message"],
             );
-            let admission = Arc::clone(&backend.admission);
             let callback = tool_sanitize_callback(backend);
             let active = tokio::spawn(callback(
                 "active".into(),
@@ -944,31 +937,21 @@ mod tests {
             .await
             .expect("blocking detector should start");
 
-            let queued = tokio::spawn(callback(
-                "queued".into(),
-                serde_json::json!({"message": "private"}),
-            ));
-            assert_eq!(admission.load(Ordering::Acquire), 2);
-
-            let overloaded = tokio::time::timeout(
+            let contending = tokio::time::timeout(
                 Duration::from_millis(100),
                 callback(
-                    "overloaded".into(),
+                    "contending".into(),
                     serde_json::json!({"message": "private", "metadata": "visible"}),
                 ),
             )
             .await
-            .expect("overloaded sanitizer should not enter the blocking pool")
+            .expect("contending sanitizer should not enter the blocking pool")
             .unwrap();
-            assert_eq!(overloaded, Json::String("[REDACTED]".into()));
+            assert_eq!(contending, Json::String("[REDACTED]".into()));
 
             release.store(true, Ordering::Release);
             assert_eq!(
                 active.await.unwrap().unwrap(),
-                serde_json::json!({"message": "private"})
-            );
-            assert_eq!(
-                queued.await.unwrap().unwrap(),
                 serde_json::json!({"message": "private"})
             );
         });
@@ -1003,14 +986,9 @@ mod tests {
 
         active.abort();
         assert!(active.await.unwrap_err().is_cancelled());
-        let admitted = tokio::spawn(callback(
-            "admitted".into(),
-            serde_json::json!({"message": "private"}),
-        ));
-        assert_eq!(admission.load(Ordering::Acquire), 2);
         assert_eq!(
             callback(
-                "overloaded".into(),
+                "contending".into(),
                 serde_json::json!({"message": "private"}),
             )
             .await
@@ -1019,12 +997,8 @@ mod tests {
         );
 
         release.store(true, Ordering::Release);
-        assert_eq!(
-            admitted.await.unwrap().unwrap(),
-            serde_json::json!({"message": "private"})
-        );
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !finished.load(Ordering::Acquire) || admission.load(Ordering::Acquire) != 0 {
+            while !finished.load(Ordering::Acquire) || admission.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
             }
         })
