@@ -16,7 +16,7 @@ use nemo_relay::codec::resolve::{
     response_codec as build_response_codec,
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -488,8 +488,9 @@ pub(super) fn tool_sanitize_callback(backend: RampartSanitizer) -> ToolSanitizeF
             let payload = backend.fail_closed_payload();
             return Box::pin(async move { Ok(payload) });
         };
+        let fallback = backend.fail_closed_payload();
         Box::pin(async move {
-            run_blocking("tool payload", permit, move || {
+            run_blocking("tool payload", permit, fallback, move || {
                 backend.sanitize_json(payload)
             })
             .await
@@ -513,8 +514,9 @@ pub(super) fn event_sanitize_callback(
             let fields = fail_closed_event_fields(event.as_ref(), fields);
             return Box::pin(async move { Ok(fields) });
         };
+        let fallback = fail_closed_event_fields(event.as_ref(), fields.clone());
         Box::pin(async move {
-            run_blocking("event fields", permit, move || {
+            run_blocking("event fields", permit, fallback, move || {
                 let specialized_scope = is_specialized_scope(event.as_ref());
 
                 let mut selected = Vec::with_capacity(3);
@@ -561,7 +563,7 @@ pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSan
             return Box::pin(async move { Ok(None) });
         };
         Box::pin(async move {
-            run_blocking("LLM request", permit, move || {
+            run_blocking("LLM request", permit, None, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
@@ -600,7 +602,7 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
             return Box::pin(async move { Ok(None) });
         };
         Box::pin(async move {
-            run_blocking("LLM response", permit, move || {
+            run_blocking("LLM response", permit, None, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
@@ -645,21 +647,32 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
 async fn run_blocking<T>(
     target: &'static str,
     permit: SanitizerPermit,
+    fallback: T,
     operation: impl FnOnce() -> T + Send + 'static,
 ) -> FlowResult<T>
 where
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(move || {
+    match tokio::task::spawn_blocking(move || {
         let _permit = permit;
         operation()
     })
     .await
-    .map_err(|error| {
-        FlowError::Internal(format!(
-            "Rampart {target} sanitization task failed: {error}"
-        ))
-    })
+    {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            log::error!(
+                target: "nemo_relay.plugin",
+                event = "rampart_pii_inference_failed",
+                plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
+                reason = "blocking_task",
+                target,
+                panicked = error.is_panic();
+                "Rampart PII blocking sanitization failed closed: {error}"
+            );
+            Ok(fallback)
+        }
+    }
 }
 
 fn skips_event_sanitization(event: &Event, scope_categories: Option<(bool, bool)>) -> bool {
@@ -745,6 +758,14 @@ mod tests {
     impl DetectionModel for FailingDetector {
         fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
             Err(PluginError::Internal("model failure".into()))
+        }
+    }
+
+    struct PanickingDetector;
+
+    impl DetectionModel for PanickingDetector {
+        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
+            panic!("model panic")
         }
     }
 
@@ -902,6 +923,64 @@ mod tests {
         assert_eq!(
             task.await.unwrap().unwrap(),
             serde_json::json!({"message": "private"})
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_task_panics_fail_closed_for_every_surface() {
+        use nemo_relay::api::event::{BaseEvent, MarkEvent};
+        use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+
+        let backend = sanitizer(Arc::new(PanickingDetector), vec!["/message"]);
+        let tool = tool_sanitize_callback(backend.clone());
+        assert_eq!(
+            tool(
+                "tool".into(),
+                serde_json::json!({"message": "private", "metadata": "visible"}),
+            )
+            .await
+            .unwrap(),
+            Json::String("[REDACTED]".into())
+        );
+
+        let event = Arc::new(Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("mark")
+                .data(serde_json::json!({"message": "private"}))
+                .metadata(serde_json::json!({"message": "private"}))
+                .build(),
+            None,
+            None,
+        )));
+        let fields = event.sanitize_fields();
+        assert_eq!(
+            event_sanitize_callback(backend.clone(), None)(event, fields)
+                .await
+                .unwrap(),
+            EventSanitizeFields::default()
+        );
+
+        let request = LlmRequest {
+            headers: Map::new(),
+            content: serde_json::json!({"message": "private"}),
+        };
+        assert!(
+            llm_sanitize_request_callback(backend.clone())(
+                request,
+                LlmSanitizeRequestContext::default(),
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            llm_sanitize_response_callback(backend)(
+                serde_json::json!({"message": "private"}),
+                LlmSanitizeResponseContext::default(),
+            )
+            .await
+            .unwrap()
+            .is_none()
         );
     }
 
