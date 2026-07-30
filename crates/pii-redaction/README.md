@@ -285,6 +285,14 @@ Configuration helpers are available through these binding modules:
 Go and the raw C FFI remain experimental and source-first. Model loading and
 inference run in the shared Rust implementation for every binding.
 
+Rampart admits at most two sanitizer operations before submitting work to
+Tokio's blocking pool. Additional operations do not queue for model inference.
+They fail closed immediately: tool observability payloads become the configured
+replacement, LLM bodies are omitted, and mutable mark or generic scope fields
+are omitted. Tool and LLM scope metadata is omitted independently so an
+already-sanitized specialized payload remains available. These fallbacks do not
+change the arguments or return values seen by the underlying tool or model.
+
 ## Documentation
 
 [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)

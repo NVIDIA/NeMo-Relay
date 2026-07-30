@@ -3,8 +3,9 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
@@ -30,6 +31,9 @@ use super::model::{Detection, RampartDetector};
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 const MAX_TEXTS_PER_PAYLOAD: usize = 256;
 const MAX_PAYLOAD_TEXT_BYTES: usize = 256 * 1024;
+// Bound parallelism without multiplying worst-case request-local tensor memory.
+// Additional observability work fails closed instead of queueing.
+const MAX_CONCURRENT_INFERENCE: usize = 2;
 
 pub(super) trait DetectionModel: Send + Sync {
     fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>>;
@@ -50,6 +54,7 @@ pub(super) struct RampartSanitizer {
     excluded_labels: Arc<HashSet<String>>,
     replacement: Arc<str>,
     legacy_surface: Option<ProviderSurface>,
+    admission: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -85,6 +90,16 @@ enum EventField {
     Metadata,
 }
 
+struct SanitizerPermit {
+    admission: Arc<AtomicUsize>,
+}
+
+impl Drop for SanitizerPermit {
+    fn drop(&mut self) {
+        self.admission.fetch_sub(1, Ordering::Release);
+    }
+}
+
 impl RampartSanitizer {
     pub(super) fn new(
         config: RampartPiiConfig,
@@ -116,7 +131,35 @@ impl RampartSanitizer {
             excluded_labels: Arc::new(config.excluded_labels.into_iter().collect()),
             replacement: config.replacement.into(),
             legacy_surface,
+            admission: Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    fn try_admit(&self, surface: &'static str) -> Option<SanitizerPermit> {
+        if self
+            .admission
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < MAX_CONCURRENT_INFERENCE).then_some(active + 1)
+            })
+            .is_err()
+        {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "rampart_pii_inference_failed",
+                plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
+                reason = "contention",
+                surface;
+                "Rampart PII sanitization failed closed before blocking admission"
+            );
+            return None;
+        }
+        Some(SanitizerPermit {
+            admission: Arc::clone(&self.admission),
+        })
+    }
+
+    fn fail_closed_payload(&self) -> Json {
+        Json::String(self.replacement.to_string())
     }
 
     fn sanitize_json(&self, value: Json) -> Json {
@@ -447,8 +490,15 @@ impl RampartSanitizer {
 pub(super) fn tool_sanitize_callback(backend: RampartSanitizer) -> ToolSanitizeFn {
     Arc::new(move |_name, payload| {
         let backend = backend.clone();
+        let Some(permit) = backend.try_admit("tool") else {
+            let payload = backend.fail_closed_payload();
+            return Box::pin(async move { Ok(payload) });
+        };
         Box::pin(async move {
-            run_blocking("tool payload", move || backend.sanitize_json(payload)).await
+            run_blocking("tool payload", permit, move || {
+                backend.sanitize_json(payload)
+            })
+            .await
         })
     })
 }
@@ -459,24 +509,19 @@ pub(super) fn event_sanitize_callback(
 ) -> EventSanitizeFn {
     Arc::new(move |event, mut fields| {
         let backend = backend.clone();
+        if skips_event_sanitization(event.as_ref(), scope_categories) {
+            return Box::pin(async move { Ok(fields) });
+        }
+        if !event_has_candidate_fields(event.as_ref(), &fields) {
+            return Box::pin(async move { Ok(fields) });
+        }
+        let Some(permit) = backend.try_admit("event") else {
+            let fields = fail_closed_event_fields(event.as_ref(), fields);
+            return Box::pin(async move { Ok(fields) });
+        };
         Box::pin(async move {
-            run_blocking("event fields", move || {
-                if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
-                    matches!(event.as_ref(), Event::Scope(_))
-                        && event
-                            .category()
-                            .is_some_and(|category| match category.as_str() {
-                                "llm" => !sanitize_llm,
-                                "tool" => !sanitize_tool,
-                                _ => false,
-                            })
-                }) {
-                    return fields;
-                }
-                let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
-                    && event
-                        .category()
-                        .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
+            run_blocking("event fields", permit, move || {
+                let specialized_scope = is_specialized_scope(event.as_ref());
 
                 let mut selected = Vec::with_capacity(3);
                 if !specialized_scope && let Some(data) = fields.data.take() {
@@ -518,8 +563,11 @@ pub(super) fn event_sanitize_callback(
 pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSanitizeRequestFn {
     Arc::new(move |request, context| {
         let backend = backend.clone();
+        let Some(permit) = backend.try_admit("llm_request") else {
+            return Box::pin(async move { Ok(None) });
+        };
         Box::pin(async move {
-            run_blocking("LLM request", move || {
+            run_blocking("LLM request", permit, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
@@ -554,8 +602,11 @@ pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSan
 pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSanitizeResponseFn {
     Arc::new(move |payload, context| {
         let backend = backend.clone();
+        let Some(permit) = backend.try_admit("llm_response") else {
+            return Box::pin(async move { Ok(None) });
+        };
         Box::pin(async move {
-            run_blocking("LLM response", move || {
+            run_blocking("LLM response", permit, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
@@ -599,18 +650,59 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
 
 async fn run_blocking<T>(
     target: &'static str,
+    permit: SanitizerPermit,
     operation: impl FnOnce() -> T + Send + 'static,
 ) -> FlowResult<T>
 where
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(operation)
-        .await
-        .map_err(|error| {
-            FlowError::Internal(format!(
-                "Rampart {target} sanitization task failed: {error}"
-            ))
-        })
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        operation()
+    })
+    .await
+    .map_err(|error| {
+        FlowError::Internal(format!(
+            "Rampart {target} sanitization task failed: {error}"
+        ))
+    })
+}
+
+fn skips_event_sanitization(event: &Event, scope_categories: Option<(bool, bool)>) -> bool {
+    scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
+        matches!(event, Event::Scope(_))
+            && event
+                .category()
+                .is_some_and(|category| match category.as_str() {
+                    "llm" => !sanitize_llm,
+                    "tool" => !sanitize_tool,
+                    _ => false,
+                })
+    })
+}
+
+fn fail_closed_event_fields(event: &Event, mut fields: EventSanitizeFields) -> EventSanitizeFields {
+    if is_specialized_scope(event) {
+        fields.metadata = None;
+        fields
+    } else {
+        EventSanitizeFields::default()
+    }
+}
+
+fn event_has_candidate_fields(event: &Event, fields: &EventSanitizeFields) -> bool {
+    if is_specialized_scope(event) {
+        fields.metadata.is_some()
+    } else {
+        fields.data.is_some() || fields.category_profile.is_some() || fields.metadata.is_some()
+    }
+}
+
+fn is_specialized_scope(event: &Event) -> bool {
+    matches!(event, Event::Scope(_))
+        && event
+            .category()
+            .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"))
 }
 
 fn compile_json_pointer(pointer: String) -> Vec<String> {
@@ -674,6 +766,7 @@ mod tests {
     struct BlockingDetector {
         started: Arc<AtomicBool>,
         release: Arc<AtomicBool>,
+        finished: Arc<AtomicBool>,
     }
 
     impl DetectionModel for BlockingDetector {
@@ -682,6 +775,7 @@ mod tests {
             while !self.release.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(1));
             }
+            self.finished.store(true, Ordering::Release);
             Ok(Vec::new())
         }
     }
@@ -774,10 +868,12 @@ mod tests {
     async fn async_callback_does_not_block_the_runtime_thread() {
         let started = Arc::new(AtomicBool::new(false));
         let release = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
         let backend = sanitizer(
             Arc::new(BlockingDetector {
                 started: Arc::clone(&started),
                 release: Arc::clone(&release),
+                finished,
             }),
             vec!["/message"],
         );
@@ -812,6 +908,161 @@ mod tests {
         assert_eq!(
             task.await.unwrap().unwrap(),
             serde_json::json!({"message": "private"})
+        );
+    }
+
+    #[test]
+    fn admission_bounds_work_queued_for_the_blocking_pool() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let started = Arc::new(AtomicBool::new(false));
+            let release = Arc::new(AtomicBool::new(false));
+            let finished = Arc::new(AtomicBool::new(false));
+            let backend = sanitizer(
+                Arc::new(BlockingDetector {
+                    started: Arc::clone(&started),
+                    release: Arc::clone(&release),
+                    finished,
+                }),
+                vec!["/message"],
+            );
+            let admission = Arc::clone(&backend.admission);
+            let callback = tool_sanitize_callback(backend);
+            let active = tokio::spawn(callback(
+                "active".into(),
+                serde_json::json!({"message": "private"}),
+            ));
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !started.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("blocking detector should start");
+
+            let queued = tokio::spawn(callback(
+                "queued".into(),
+                serde_json::json!({"message": "private"}),
+            ));
+            assert_eq!(admission.load(Ordering::Acquire), 2);
+
+            let overloaded = tokio::time::timeout(
+                Duration::from_millis(100),
+                callback(
+                    "overloaded".into(),
+                    serde_json::json!({"message": "private", "metadata": "visible"}),
+                ),
+            )
+            .await
+            .expect("overloaded sanitizer should not enter the blocking pool")
+            .unwrap();
+            assert_eq!(overloaded, Json::String("[REDACTED]".into()));
+
+            release.store(true, Ordering::Release);
+            assert_eq!(
+                active.await.unwrap().unwrap(),
+                serde_json::json!({"message": "private"})
+            );
+            assert_eq!(
+                queued.await.unwrap().unwrap(),
+                serde_json::json!({"message": "private"})
+            );
+        });
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_callback_keeps_admission_until_blocking_work_finishes() {
+        let started = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let backend = sanitizer(
+            Arc::new(BlockingDetector {
+                started: Arc::clone(&started),
+                release: Arc::clone(&release),
+                finished: Arc::clone(&finished),
+            }),
+            vec!["/message"],
+        );
+        let admission = Arc::clone(&backend.admission);
+        let callback = tool_sanitize_callback(backend);
+        let active = tokio::spawn(callback(
+            "active".into(),
+            serde_json::json!({"message": "private"}),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking detector should start");
+
+        active.abort();
+        assert!(active.await.unwrap_err().is_cancelled());
+        let admitted = tokio::spawn(callback(
+            "admitted".into(),
+            serde_json::json!({"message": "private"}),
+        ));
+        assert_eq!(admission.load(Ordering::Acquire), 2);
+        assert_eq!(
+            callback(
+                "overloaded".into(),
+                serde_json::json!({"message": "private"}),
+            )
+            .await
+            .unwrap(),
+            Json::String("[REDACTED]".into())
+        );
+
+        release.store(true, Ordering::Release);
+        assert_eq!(
+            admitted.await.unwrap().unwrap(),
+            serde_json::json!({"message": "private"})
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !finished.load(Ordering::Acquire) || admission.load(Ordering::Acquire) != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached blocking work should finish");
+        assert_eq!(
+            callback(
+                "recovered".into(),
+                serde_json::json!({"message": "private"}),
+            )
+            .await
+            .unwrap(),
+            serde_json::json!({"message": "private"})
+        );
+    }
+
+    #[test]
+    fn empty_specialized_scope_does_not_require_admission() {
+        use nemo_relay::api::event::{
+            BaseEvent, CategoryProfile, EventCategory, ScopeCategory, ScopeEvent,
+        };
+
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .name("tool")
+                .data(serde_json::json!({"message": "[REDACTED]"}))
+                .build(),
+            ScopeCategory::Start,
+            Default::default(),
+            EventCategory::tool(),
+            Some(CategoryProfile::default()),
+        ));
+        let fields = event.sanitize_fields();
+        assert!(!event_has_candidate_fields(&event, &fields));
+        assert_eq!(
+            fail_closed_event_fields(&event, fields.clone()),
+            fields,
+            "specialized data already handled by the tool sanitizer must be preserved"
         );
     }
 
