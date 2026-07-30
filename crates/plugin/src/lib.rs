@@ -885,6 +885,18 @@ pub type NemoRelayNativeAsyncNextStreamCb = unsafe extern "C" fn(
     done: bool,
 ) -> bool;
 
+/// Receives one completion from a unary execution-continuation invocation.
+///
+/// Exactly one of `value_json` and `error` is non-null. The callback owns its
+/// `user_data` and is invoked exactly once after a successful
+/// `async_next_invoke_result` call, including when the owning interceptor
+/// settles and cancels unfinished downstream work.
+pub type NemoRelayNativeAsyncNextResultCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    value_json: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+);
+
 /// Incremental native LLM stream intercept callback.
 ///
 /// The callback owns `next` and `stream` and must release each exactly once.
@@ -892,9 +904,13 @@ pub type NemoRelayNativeAsyncNextStreamCb = unsafe extern "C" fn(
 /// `Pending`; no implicit timeout is applied. Relay can invoke separate
 /// middleware calls concurrently without stable OS-thread affinity. Retained
 /// handles may be used from a plugin-owned thread, while callbacks supplied to
-/// `async_next_invoke_stream` run on a Relay runtime worker. The plugin must
-/// synchronize shared `user_data` and callback state and serialize each
-/// handle's final release after its last operation returns.
+/// `async_next_invoke_stream` run on a Relay runtime worker. The output stream
+/// owns the callback lifetime: `next` may be invoked repeatedly or concurrently
+/// until that stream finishes, rejects, or is cancelled, and each invocation
+/// has independent callback state. Relay rejects or cancels unfinished and
+/// later invocations after settlement. The plugin must synchronize shared
+/// `user_data` and callback state and serialize each handle's final release
+/// after its last operation returns.
 pub type NemoRelayNativeAsyncStreamMiddlewareCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
@@ -916,9 +932,11 @@ pub type NemoRelayNativeAsyncStreamMiddlewareCb = unsafe extern "C" fn(
 /// the Tokio runtime worker polling that middleware invocation, without stable
 /// OS-thread affinity; separate invocations may run concurrently. After
 /// returning `Pending`, retained completion and `next` handles may be used from
-/// a plugin-owned thread. The plugin must synchronize shared `user_data` and
-/// callback state and serialize each handle's final release after its last
-/// operation returns.
+/// a plugin-owned thread until the completion settles. Every `next` operation
+/// must finish before resolving or rejecting the completion; Relay rejects or
+/// cancels unfinished and later continuation calls. The plugin must synchronize
+/// shared `user_data` and callback state and serialize each handle's final
+/// release after its last operation returns.
 pub type NemoRelayNativeAsyncMiddlewareCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
@@ -953,7 +971,10 @@ pub struct NemoRelayNativeHostApiV3 {
         unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion),
     /// Invokes an execution continuation and settles a supplied completion.
     ///
-    /// Cancellation of that completion aborts an in-flight continuation.
+    /// Cancellation of that completion aborts an in-flight continuation. This
+    /// legacy convenience hook is one-shot because its result settles the
+    /// middleware completion; use `async_next_invoke_result` for repeated or
+    /// concurrent calls.
     pub async_next_invoke: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,
@@ -1010,7 +1031,8 @@ pub struct NemoRelayNativeHostApiV3 {
     /// The host reports consumer cancellation through one terminal callback
     /// with a non-null error. If a result callback returns `false`, it must
     /// reclaim its own `user_data` before returning because no terminal
-    /// callback follows.
+    /// callback follows. This hook may be called repeatedly or concurrently
+    /// with independent callback state while the output stream remains active.
     pub async_next_invoke_stream: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,
@@ -1028,6 +1050,16 @@ pub struct NemoRelayNativeHostApiV3 {
         free_fn: NemoRelayNativeFreeFn,
     )
         -> NemoRelayStatus,
+    /// Invokes a unary execution continuation with an independent result sink.
+    ///
+    /// Unlike the legacy completion-coupled `async_next_invoke`, this hook may
+    /// be called repeatedly or concurrently with distinct `user_data`.
+    pub async_next_invoke_result: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        invocation_json: *const NemoRelayNativeString,
+        cb: NemoRelayNativeAsyncNextResultCb,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
 }
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
@@ -2560,7 +2592,10 @@ impl<'a> PluginContext<'a> {
     /// `free_fn`; callback-owned `next` and `stream` handles must each be
     /// released exactly once. Stream pushes and rejection are nonblocking:
     /// `Internal` with a host last-error containing `backpressured` means the
-    /// bounded queue is full and the operation may be retried.
+    /// bounded queue is full and the operation may be retried. The output
+    /// stream owns the callback lifetime. `next` may be invoked repeatedly or
+    /// concurrently until that stream settles; Relay then rejects or cancels
+    /// unfinished and later calls.
     pub unsafe fn register_async_stream_middleware_raw(
         &mut self,
         name: &str,

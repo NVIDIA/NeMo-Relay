@@ -503,6 +503,18 @@ pub fn current_scope_stack() -> ScopeStackHandle {
         .unwrap_or_else(|_| THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone()))
 }
 
+/// Return a scope stack explicitly bound to the current task or override.
+///
+/// Unlike [`current_scope_stack`], this does not fall back to ambient
+/// thread-local state. Continuation adapters use it to distinguish an
+/// intentional per-call scope selection from an unrelated runtime-worker
+/// thread binding.
+pub(crate) fn current_context_scope_stack() -> Option<ScopeStackHandle> {
+    SCOPE_STACK_OVERRIDE
+        .with(|stack| stack.borrow().clone())
+        .or_else(|| TASK_SCOPE_STACK.try_with(Clone::clone).ok())
+}
+
 /// Run a synchronous callback with `handle` as the visible scope stack.
 ///
 /// This override takes precedence over task-local and thread-local stacks for

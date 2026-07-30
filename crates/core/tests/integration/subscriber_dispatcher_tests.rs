@@ -142,7 +142,11 @@ fn nested_event_sanitizer_publication_precedes_already_queued_events() {
                 if event.name() == "outer-event" {
                     started_tx.send(()).unwrap();
                     release_rx.lock().unwrap().recv().unwrap();
-                    emit_mark("nested-event");
+                    tokio::spawn(async {
+                        emit_mark("nested-event");
+                    })
+                    .await
+                    .unwrap();
                 }
                 Ok(fields)
             })

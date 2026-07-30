@@ -109,6 +109,12 @@ pub type ToolInterceptFn =
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
 pub type ToolExecutionNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Wrap or replace tool execution.
@@ -417,6 +423,12 @@ pub type LlmRequestInterceptFn = Arc<
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
 pub type LlmExecutionNextFn =
     Arc<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Wrap or replace non-streaming LLM execution.
@@ -572,6 +584,16 @@ pub(crate) type LlmStreamExecutionRegistryRefs<'a> = &'a [LlmStreamExecutionRegi
 /// # Errors
 /// The future resolves to an error when the remaining streaming execution
 /// chain fails.
+///
+/// # Lifetime
+/// This continuation can be called repeatedly or concurrently while its
+/// execution-intercept callback is still running. Each invocation receives an
+/// isolated snapshot of the scopes visible when `next` is called. Calls that
+/// remain unfinished or begin after the interceptor settles are rejected.
+/// Returning an interceptor stream extends that active lifetime until the
+/// stream closes, which permits lazy stream adapters to call `next` while they
+/// are being consumed. A stream successfully returned by `next` keeps its
+/// ordinary stream lifetime.
 pub type LlmStreamExecutionNextFn = Arc<
     dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>> + Send + Sync,
 >;

@@ -47,18 +47,30 @@ synchronous: they create or close their handle immediately and queue observabili
 work rather than awaiting it.
 
 <Warning>
-Event sanitizers, conditional-execution guardrails, request intercepts, and
-execution intercepts are not re-entrant. These callbacks must not invoke
-another NeMo Relay API that runs middleware, flushes subscriber delivery, waits
-on an exporter, or clears plugins. Scope APIs remain supported: callbacks may
-create, push, or pop scopes at any nesting level and may replace the active
-scope stack with an arbitrary stack. Emitting a new event is the only
-supported operation that can enqueue additional callback work; Relay queues
-that event for later publication instead of recursively dispatching it.
+Event sanitizers, conditional-execution guardrails, request intercepts,
+execution intercepts, and subscribers are not re-entrant. These callbacks must
+not invoke another NeMo Relay API that runs middleware, flushes subscriber
+delivery, waits on an exporter, or clears plugins. Scope APIs remain supported:
+callbacks may create, push, or pop scopes at any nesting level and may replace
+the active scope stack with an arbitrary stack. Emitting a new event is the
+only supported operation that can enqueue additional callback work; Relay
+queues that event for later publication instead of recursively dispatching it.
+An event sanitizer must await child tasks whose emissions belong to its
+reserved FIFO position. Relay cancels detached async sanitizer tasks after the
+sanitizer returns. Detached blocking work runs without that sanitizer
+publication context and must not emit events for the completed publication.
 
 An execution intercept may invoke the `next` continuation supplied to that
 callback. This is the only supported way for an intercept to enter the
-remaining execution chain. Call `next` only as documented for that intercept.
+remaining execution chain. The callback may await `next` repeatedly or
+concurrently for retries or fan-out. Each call receives an isolated snapshot of
+the scopes visible when it begins, so scope changes in one branch do not mutate
+another branch or the enclosing interceptor. Every `next` call must finish
+before the interceptor callback settles; unfinished or later calls are
+rejected. For a streaming execution intercept, the interceptor's returned
+stream extends that active lifetime until it closes, so a lazy stream adapter
+can call `next` while it is being consumed. A stream successfully returned by
+streaming `next` keeps its ordinary stream lifetime.
 </Warning>
 
 ## Registration Levels

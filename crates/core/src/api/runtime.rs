@@ -20,6 +20,8 @@ pub use callbacks::{
 };
 #[doc(hidden)]
 pub use continuation_context::MiddlewareContinuationContext;
+#[cfg(test)]
+pub(crate) use continuation_context::MiddlewareContinuationLease;
 pub use global::global_context;
 pub use scope_stack::{
     PropagationContext, ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK, ThreadScopeStackBinding,

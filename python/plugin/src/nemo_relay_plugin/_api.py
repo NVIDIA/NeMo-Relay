@@ -1617,7 +1617,9 @@ class ToolNext:
 
         Note:
             An intercept can call this method zero, one, or multiple times while
-            its invocation is active.
+            its invocation is active, including concurrently. Each call gets an
+            isolated scope-stack branch. Finish every call before the
+            interceptor returns; unfinished and later calls are rejected.
         """
         response = await self._runtime._host_stub.ToolNext(
             pb.ToolNextRequest(
@@ -1625,6 +1627,7 @@ class ToolNext:
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 value=_json_envelope(JSON_SCHEMA, value),
+                scope=self._runtime._scope_context(),
             )
         )
         return _json_result_to_value(response)
@@ -1661,7 +1664,9 @@ class LlmNext:
 
         Note:
             An intercept can call this method zero, one, or multiple times while
-            its invocation is active.
+            its invocation is active, including concurrently. Each call gets an
+            isolated scope-stack branch. Finish every call before the
+            interceptor returns; unfinished and later calls are rejected.
         """
         response = await self._runtime._host_stub.LlmNext(
             pb.LlmNextRequest(
@@ -1669,6 +1674,7 @@ class LlmNext:
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
+                scope=self._runtime._scope_context(),
             )
         )
         return _json_result_to_value(response)
@@ -1706,8 +1712,12 @@ class LlmStreamNext:
 
         Note:
             An intercept can call this method zero, one, or multiple times while
-            its invocation is active. Consume each returned iterator before the
-            invocation completes.
+            its invocation is active, including concurrently. Each call gets an
+            isolated scope-stack branch. The interceptor's returned iterator
+            extends the active invocation until it closes, so it can call this
+            method lazily. Unfinished and later calls are rejected after that
+            iterator closes. A downstream iterator returned successfully by
+            this method keeps its normal streaming lifetime.
         """
         scope_context = _SCOPE_CONTEXT.get()
         stream = self._runtime._host_stub.LlmStreamNext(
@@ -1716,6 +1726,7 @@ class LlmStreamNext:
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
+                scope=self._runtime._scope_context(),
             )
         )
 

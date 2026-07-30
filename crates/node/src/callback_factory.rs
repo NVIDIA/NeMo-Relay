@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v5";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v6";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -104,7 +104,10 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     };
     const safeNext = next === undefined
       ? undefined
-      : (value) => next(jsonValue(value === undefined ? null : value));
+      : (value) => next(
+        jsonValue(value === undefined ? null : value),
+        eventSanitizerContext.getStore()?.scopeStack,
+      );
     const invoke = () => {
       Promise.resolve().then(() => (
         safeNext === undefined
@@ -180,6 +183,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           publicationContextId,
           scopeStack,
         );
+      };
+    },
+
+    scopedStream(fn) {
+      return function __nemo_relay_scoped_stream_wrapper(arg, scopeStack) {
+        const current = eventSanitizerContext.getStore();
+        const token = {
+          publicationState: current?.publicationState ?? { active: false },
+          publicationContextId: current?.publicationContextId,
+          scopeStack,
+        };
+        return eventSanitizerContext.run(token, () => fn(arg));
       };
     },
 
@@ -268,6 +283,13 @@ pub(crate) fn wrap_execution_callback(env: &Env, func: &JsFunction) -> napi::Res
 
 pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
     wrap_callback(env, func, "promise")
+}
+
+pub(crate) fn wrap_scoped_stream_callback(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "scopedStream")
 }
 
 pub(crate) fn publication_callback_active(env: &Env) -> napi::Result<bool> {

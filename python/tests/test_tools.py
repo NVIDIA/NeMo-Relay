@@ -22,11 +22,13 @@ from nemo_relay import (
     ToolAttributes,
     ToolExecutionInterceptOutcome,
     ToolHandle,
+    create_scope_stack,
     guardrails,
     intercepts,
     scope,
     subscribers,
     tools,
+    use_scope_stack,
 )
 
 
@@ -687,6 +689,155 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_next")
             subscribers.deregister("py_exec_mark_sub")
+
+    async def test_execution_intercept_rejects_detached_next_after_settlement(self):
+        release_late_next = asyncio.Event()
+        late_task: asyncio.Task[dict] | None = None
+        provider_calls: list[dict] = []
+
+        async def middleware(_name, args, next):
+            nonlocal late_task
+
+            async def invoke_late():
+                await release_late_next.wait()
+                return await next(args)
+
+            late_task = asyncio.create_task(invoke_late())
+            return ToolExecutionInterceptOutcome({"source": "intercept"})
+
+        def provider(args):
+            provider_calls.append(args)
+            return args
+
+        intercepts.register_tool_execution("py_exec_late_next", 1, middleware)
+        try:
+            result = await tools.execute("late_next_tool", {"value": 1}, provider)
+            assert result == {"source": "intercept"}
+            assert late_task is not None
+            release_late_next.set()
+            with pytest.raises(RuntimeError, match="execution continuation is no longer active"):
+                await late_task
+        finally:
+            release_late_next.set()
+            if late_task is not None and not late_task.done():
+                late_task.cancel()
+            intercepts.deregister_tool_execution("py_exec_late_next")
+
+        assert provider_calls == []
+
+    async def test_execution_intercept_isolates_concurrent_next_scope_branches(self):
+        both_pushed = asyncio.Event()
+        pushed = 0
+
+        async def middleware(_name, _args, next):
+            first, second = await asyncio.gather(
+                next({"branch": "first"}),
+                next({"branch": "second"}),
+            )
+            return ToolExecutionInterceptOutcome([first, second])
+
+        async def provider(args):
+            nonlocal pushed
+            handle = scope.push(f"python-next-{args['branch']}", ScopeType.Custom)
+            try:
+                pushed += 1
+                if pushed == 2:
+                    both_pushed.set()
+                await both_pushed.wait()
+                if args["branch"] == "first":
+                    await asyncio.sleep(0)
+                assert scope.get_handle().uuid == handle.uuid
+                return args
+            finally:
+                scope.pop(handle)
+
+        intercepts.register_tool_execution("py_exec_concurrent_next_scopes", 1, middleware)
+        try:
+            result = await tools.execute("concurrent_next_tool", {}, provider)
+            assert result == [{"branch": "first"}, {"branch": "second"}]
+        finally:
+            intercepts.deregister_tool_execution("py_exec_concurrent_next_scopes")
+
+    async def test_execution_next_honors_concurrent_scope_stack_replacements(self):
+        first_stack = create_scope_stack()
+        second_stack = create_scope_stack()
+        both_entered = asyncio.Event()
+        entered = 0
+        with use_scope_stack(first_stack):
+            first_scope = scope.get_handle().uuid
+        with use_scope_stack(second_stack):
+            second_scope = scope.get_handle().uuid
+
+        async def middleware(_name, _args, next):
+            async def invoke(stack, branch):
+                nonlocal entered
+                with use_scope_stack(stack):
+                    entered += 1
+                    if entered == 2:
+                        both_entered.set()
+                    await both_entered.wait()
+                    await asyncio.sleep(0)
+                    return await next({"branch": branch})
+
+            first, second = await asyncio.gather(
+                invoke(first_stack, "first"),
+                invoke(second_stack, "second"),
+            )
+            return ToolExecutionInterceptOutcome([first, second])
+
+        async def provider(args):
+            await asyncio.sleep(0)
+            return {"branch": args["branch"], "scope": scope.get_handle().uuid}
+
+        intercepts.register_tool_execution("py_exec_replaced_next_scopes", 1, middleware)
+        try:
+            result = await tools.execute("replaced_next_scopes", {}, provider)
+            assert result == [
+                {"branch": "first", "scope": first_scope},
+                {"branch": "second", "scope": second_scope},
+            ]
+        finally:
+            intercepts.deregister_tool_execution("py_exec_replaced_next_scopes")
+
+    async def test_plain_next_uses_each_concurrent_middleware_invocation_scope(self):
+        first_stack = create_scope_stack()
+        second_stack = create_scope_stack()
+        both_entered = asyncio.Event()
+        entered = 0
+
+        async def middleware(_name, args, next):
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await both_entered.wait()
+            await asyncio.sleep(0)
+            return ToolExecutionInterceptOutcome(await next(args))
+
+        async def provider(args):
+            await asyncio.sleep(0)
+            return {"branch": args["branch"], "scope": scope.get_handle().uuid}
+
+        async def invoke(stack, branch):
+            with use_scope_stack(stack):
+                expected_scope = scope.get_handle().uuid
+                result = await tools.execute(
+                    f"plain_next_{branch}",
+                    {"branch": branch},
+                    provider,
+                )
+                return result, expected_scope
+
+        intercepts.register_tool_execution("py_exec_plain_next_scopes", 1, middleware)
+        try:
+            (first, first_scope), (second, second_scope) = await asyncio.gather(
+                invoke(first_stack, "first"),
+                invoke(second_stack, "second"),
+            )
+            assert first == {"branch": "first", "scope": first_scope}
+            assert second == {"branch": "second", "scope": second_scope}
+        finally:
+            intercepts.deregister_tool_execution("py_exec_plain_next_scopes")
 
     async def test_execution_intercept_rejects_legacy_raw_result(self):
         intercepts.register_tool_execution(

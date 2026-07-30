@@ -10,11 +10,14 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::future::Future;
 use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
-use futures_util::FutureExt;
+use futures_util::{FutureExt, Stream};
 
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
@@ -26,10 +29,14 @@ use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, LlmStreamInner, ToolConditionalFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn,
+    ToolSanitizeFn,
+};
+use crate::api::runtime::continuation_context::{
+    MiddlewareContinuationContext, MiddlewareContinuationGuard, MiddlewareContinuationLease,
 };
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
@@ -49,6 +56,90 @@ use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
+
+struct ContinuationGuardedLlmStream {
+    inner: LlmJsonStream,
+    guard: Option<MiddlewareContinuationGuard>,
+}
+
+struct ContextualizedLlmStream {
+    inner: LlmJsonStream,
+    context: MiddlewareContinuationContext,
+}
+
+impl Stream for ContextualizedLlmStream {
+    type Item = crate::error::Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let context = this.context.clone();
+        let inner = &mut this.inner;
+        let future = context.run(futures_util::future::poll_fn(|inner_cx| {
+            Pin::new(&mut *inner).poll_next(inner_cx)
+        }));
+        tokio::pin!(future);
+        future.poll(cx)
+    }
+}
+
+impl LlmStreamInner for ContextualizedLlmStream {
+    fn close(
+        self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let this = self.get_mut();
+            let context = this.context.clone();
+            context.run(this.inner.close()).await
+        })
+    }
+}
+
+fn contextualize_stream(
+    stream: LlmJsonStream,
+    context: MiddlewareContinuationContext,
+) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(ContextualizedLlmStream {
+        inner: stream,
+        context,
+    })
+}
+
+impl Stream for ContinuationGuardedLlmStream {
+    type Item = crate::error::Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.inner).poll_next(cx);
+        if matches!(&result, Poll::Ready(None)) {
+            this.guard.take();
+        }
+        result
+    }
+}
+
+impl LlmStreamInner for ContinuationGuardedLlmStream {
+    fn close(
+        self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let this = self.get_mut();
+            let guard = this.guard.take();
+            let result = this.inner.close().await;
+            drop(guard);
+            result
+        })
+    }
+}
+
+fn guard_stream_continuation(
+    stream: LlmJsonStream,
+    guard: MiddlewareContinuationGuard,
+) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(ContinuationGuardedLlmStream {
+        inner: stream,
+        guard: Some(guard),
+    })
+}
 
 struct GuardrailScopeCompletion<'a> {
     handle: Option<ScopeHandle>,
@@ -1047,18 +1138,21 @@ impl NemoRelayContextState {
             next = Arc::new(move |args| {
                 let callable = callable.clone();
                 let current_name = current_name.clone();
+                let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
                 let next_sequence = Arc::new(AtomicUsize::new(0));
                 let downstream_marks = Arc::new(Mutex::new(Vec::new()));
                 let raw_next: ToolExecutionNextFn = {
                     let current_next = current_next.clone();
+                    let continuation = continuation.clone();
                     let next_sequence = next_sequence.clone();
                     let downstream_marks = downstream_marks.clone();
                     Arc::new(move |args| {
                         let sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
                         let current_next = current_next.clone();
+                        let invocation = continuation.begin();
                         let downstream_marks = downstream_marks.clone();
                         Box::pin(async move {
-                            let outcome = current_next(args).await?;
+                            let outcome = invocation?.invoke(move || current_next(args)).await?;
                             downstream_marks
                                 .lock()
                                 .expect("tool pending mark accumulator lock poisoned")
@@ -1068,7 +1162,9 @@ impl NemoRelayContextState {
                     })
                 };
                 Box::pin(async move {
-                    let mut outcome = callable(&current_name, args, raw_next).await?;
+                    let outcome = callable(&current_name, args, raw_next).await;
+                    drop(continuation_guard);
+                    let mut outcome = outcome?;
                     let mut downstream_batches = std::mem::take(
                         &mut *downstream_marks
                             .lock()
@@ -1474,7 +1570,24 @@ impl NemoRelayContextState {
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
-            next = Arc::new(move |request| callable(&current_name, request, current_next.clone()));
+            next = Arc::new(move |request| {
+                let callable = callable.clone();
+                let current_next = current_next.clone();
+                let current_name = current_name.clone();
+                Box::pin(async move {
+                    let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
+                    let raw_next: LlmExecutionNextFn = Arc::new(move |request| {
+                        let invocation = continuation.begin();
+                        let current_next = current_next.clone();
+                        Box::pin(
+                            async move { invocation?.invoke(move || current_next(request)).await },
+                        )
+                    });
+                    let result = callable(&current_name, request, raw_next).await;
+                    drop(continuation_guard);
+                    result
+                })
+            });
         }
         next
     }
@@ -1507,7 +1620,26 @@ impl NemoRelayContextState {
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
-            next = Arc::new(move |request| callable(&current_name, request, current_next.clone()));
+            next = Arc::new(move |request| {
+                let callable = callable.clone();
+                let current_next = current_next.clone();
+                let current_name = current_name.clone();
+                Box::pin(async move {
+                    let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
+                    let raw_next: LlmStreamExecutionNextFn = Arc::new(move |request| {
+                        let invocation = continuation.begin();
+                        let current_next = current_next.clone();
+                        Box::pin(async move {
+                            let invocation = invocation?;
+                            let context = invocation.context().clone();
+                            let stream = invocation.invoke(move || current_next(request)).await?;
+                            Ok(contextualize_stream(stream, context))
+                        })
+                    });
+                    let result = callable(&current_name, request, raw_next).await;
+                    result.map(|stream| guard_stream_continuation(stream, continuation_guard))
+                })
+            });
         }
         next
     }

@@ -172,7 +172,18 @@ fn build_next_unknown(
             env.create_function_from_closure("__nemo_relay_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
-                let continuation_context = continuation_context.clone();
+                let scope_stack = match ctx.get::<&ScopeStack>(1) {
+                    Ok(scope_stack) => Some(scope_stack.inner.clone()),
+                    Err(_) => callback_factory::callback_scope_stack(ctx.env)?
+                        .map(|(scope_stack, _)| scope_stack),
+                };
+                let continuation_context = match scope_stack {
+                    Some(scope_stack) => {
+                        continuation_context.isolated_with_scope_stack(&scope_stack)
+                    }
+                    None => continuation_context.isolated(),
+                }
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
                 let publication_context_id = publication_context_id.clone();
                 ctx.env.execute_tokio_future(
                     async move {
@@ -199,7 +210,18 @@ fn build_next_unknown(
             env.create_function_from_closure("__nemo_relay_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
-                let continuation_context = continuation_context.clone();
+                let scope_stack = match ctx.get::<&ScopeStack>(1) {
+                    Ok(scope_stack) => Some(scope_stack.inner.clone()),
+                    Err(_) => callback_factory::callback_scope_stack(ctx.env)?
+                        .map(|(scope_stack, _)| scope_stack),
+                };
+                let continuation_context = match scope_stack {
+                    Some(scope_stack) => {
+                        continuation_context.isolated_with_scope_stack(&scope_stack)
+                    }
+                    None => continuation_context.isolated(),
+                }
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
                 let publication_context_id = publication_context_id.clone();
                 ctx.env.execute_tokio_future(
                     async move {

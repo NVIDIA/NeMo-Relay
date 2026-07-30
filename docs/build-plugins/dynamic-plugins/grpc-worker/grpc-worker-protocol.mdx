@@ -148,6 +148,16 @@ current sanitizer invocation. Relay rejects missing, forged, expired,
 wrong-direction, or activation-mismatched capabilities. Codec transformation
 failures are non-retryable worker errors.
 
+A worker may call an execution continuation repeatedly or concurrently while
+the corresponding `Invoke` or `InvokeStream` callback is active. Each call gets
+an isolated scope-stack branch containing the scopes visible at invocation.
+The worker must finish continuation calls before returning its middleware
+result; Relay removes the continuation ID and cancels unfinished calls when the
+callback settles. For `InvokeStream`, the returned worker stream extends the
+active callback lifetime until it closes, so it can call `LlmStreamNext` lazily.
+A stream successfully returned by `LlmStreamNext` keeps its normal streaming
+lifetime.
+
 ## Authentication and Endpoints
 
 Relay supplies an activation ID, an activation token, the worker endpoint, and

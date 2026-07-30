@@ -556,6 +556,21 @@ async def coro_non_json():
 }
 
 #[test]
+fn continuation_scope_lookup_supports_native_only_embeddings() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        assert!(
+            python_invocation_scope_stack_from_module(
+                py,
+                "__nemo_relay_missing_wrapper_for_test__",
+            )
+            .unwrap()
+            .is_none()
+        );
+    });
+}
+
+#[test]
 fn next_wrappers_cover_success_and_error_paths() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {

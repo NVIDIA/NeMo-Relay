@@ -9,7 +9,7 @@ use crate::api::optimization::{
 };
 use crate::api::runtime::{
     BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
-    NemoRelayContextState,
+    MiddlewareContinuationLease, NemoRelayContextState,
 };
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::optimization::LlmOptimizationContribution;
@@ -2014,6 +2014,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
             auth_token: AUTH_TOKEN.into(),
             continuation_id: llm_continuation,
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
         }))
         .await
         .expect_err("wrong continuation type should fail");
@@ -2033,6 +2034,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 schema: JSON_SCHEMA.into(),
                 json: b"not-json".to_vec(),
             }),
+            scope: None,
         }))
         .await
         .expect_err("invalid tool next JSON should fail");
@@ -2051,6 +2053,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
             auth_token: AUTH_TOKEN.into(),
             continuation_id: tool_continuation,
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
         }))
         .await
         .expect("tool panic should become a structured result")
@@ -2075,6 +2078,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 schema: LLM_REQUEST_SCHEMA.into(),
                 json: b"not-json".to_vec(),
             }),
+            scope: None,
         }))
         .await
         .expect_err("invalid LLM next request should fail");
@@ -2096,6 +2100,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
                     .expect("llm request envelope"),
             ),
+            scope: None,
         }))
         .await
         .expect("LLM panic should become a structured result")
@@ -2130,6 +2135,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 )
                 .expect("llm request envelope"),
             ),
+            scope: None,
         }))
         .await
         .expect("stream next should return stream");
@@ -2166,6 +2172,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
                     .expect("llm request envelope"),
             ),
+            scope: None,
         }))
         .await
         .expect("stream next should return a stream before polling");
@@ -2196,6 +2203,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 schema: LLM_REQUEST_SCHEMA.into(),
                 json: b"not-json".to_vec(),
             }),
+            scope: None,
         }))
         .await
     {
@@ -2203,6 +2211,144 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         Err(error) => error,
     };
     assert_eq!(invalid_stream_request.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn worker_continuations_reject_calls_after_the_interceptor_settles() {
+    enable_operational_logs();
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let provider_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (lease, guard) = MiddlewareContinuationLease::capture();
+    let continuation_id = state
+        .insert_continuation(Continuation::tool(Arc::new({
+            let provider_calls = provider_calls.clone();
+            move |value| {
+                let provider_calls = provider_calls.clone();
+                let invocation = lease.begin();
+                Box::pin(async move {
+                    invocation?
+                        .invoke(|| async move {
+                            provider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Ok(value)
+                        })
+                        .await
+                })
+            }
+        })))
+        .expect("tool continuation should insert");
+
+    drop(guard);
+    let result = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: continuation_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect("late worker next should return a structured callback error")
+        .into_inner();
+    assert!(
+        result.error.is_some_and(|error| {
+            error
+                .message
+                .contains("execution continuation is no longer active")
+        }),
+        "late worker next should expose the shared continuation error"
+    );
+    assert_eq!(provider_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    state.remove_continuation(&continuation_id);
+    let error = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id,
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect_err("cleaned-up worker continuation should no longer be addressable");
+    assert_eq!(error.code(), tonic::Code::NotFound);
+    assert_eq!(provider_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let mut expected = Vec::new();
+    for stack_id in ["worker-next-first", "worker-next-second"] {
+        let stack = crate::api::runtime::create_scope_stack();
+        let scope = crate::api::runtime::with_scope_stack(stack.clone(), || {
+            crate::api::scope::push_scope(
+                crate::api::scope::PushScopeParams::builder()
+                    .name(stack_id)
+                    .scope_type(crate::api::scope::ScopeType::Agent)
+                    .build(),
+            )
+        })
+        .unwrap();
+        expected.push(scope.uuid.to_string());
+        state.scope_stacks.lock().unwrap().insert(
+            stack_id.into(),
+            StoredScopeStack {
+                handle: stack,
+                publication_buffer: None,
+                invocation_base_depth: None,
+            },
+        );
+    }
+    let continuation_id = state
+        .insert_continuation(Continuation::tool(Arc::new(|_| {
+            Box::pin(async {
+                Ok(json!(
+                    crate::api::runtime::task_scope_top().uuid.to_string()
+                ))
+            })
+        })))
+        .expect("tool continuation should insert");
+    let request = |stack_id: &str| {
+        Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: continuation_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: Some(ScopeContext {
+                scope_stack_id: stack_id.into(),
+                parent_scope_id: String::new(),
+            }),
+        })
+    };
+
+    let (first, second) = tokio::join!(
+        service.tool_next(request("worker-next-first")),
+        service.tool_next(request("worker-next-second"))
+    );
+    let decode = |response: tonic::Response<JsonResult>| {
+        decode_json_envelope::<Json>(
+            &response
+                .into_inner()
+                .value
+                .expect("tool next should return a value"),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(decode(first.unwrap()), json!(expected[0]));
+    assert_eq!(decode(second.unwrap()), json!(expected[1]));
 }
 
 fn valid_llm_request() -> LlmRequest {

@@ -32,8 +32,8 @@ use nemo_relay::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
-    ToolSanitizeFn, current_scope_stack,
+    MiddlewareContinuationContext, ScopeStackHandle, ToolConditionalFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn, current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -941,6 +941,41 @@ pub fn wrap_py_tool_exec_fn(
     })
 }
 
+fn python_invocation_scope_stack(py: Python<'_>) -> PyResult<Option<ScopeStackHandle>> {
+    python_invocation_scope_stack_from_module(py, "nemo_relay")
+}
+
+fn python_invocation_scope_stack_from_module(
+    py: Python<'_>,
+    module_name: &str,
+) -> PyResult<Option<ScopeStackHandle>> {
+    let Ok(nemo_relay) = py.import(module_name) else {
+        return Ok(None);
+    };
+    let Ok(scope_stack_var) = nemo_relay.getattr("_scope_stack_var") else {
+        // Embedded users may load only the native module, without the Python
+        // wrapper that owns the task-local scope stack.
+        return Ok(None);
+    };
+    let scope_stack = scope_stack_var.call_method1("get", (py.None(),))?;
+    if scope_stack.is_none() {
+        return Ok(None);
+    }
+    let scope_stack: PyRef<'_, PyScopeStack> = scope_stack.extract()?;
+    Ok(Some(scope_stack.inner.clone()))
+}
+
+fn isolated_python_continuation_context(
+    py: Python<'_>,
+    context: &MiddlewareContinuationContext,
+) -> PyResult<MiddlewareContinuationContext> {
+    let context = match python_invocation_scope_stack(py)? {
+        Some(scope_stack) => context.isolated_with_scope_stack(&scope_stack),
+        None => context.isolated(),
+    };
+    context.map_err(|error| PyRuntimeError::new_err(error.to_string()))
+}
+
 /// Python-callable wrapper for the Rust `ToolExecutionNextFn`.
 ///
 /// The Python intercept calls `await next(args)` to invoke the next layer
@@ -960,7 +995,7 @@ impl PyToolNextFn {
         args: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.clone();
-        let context = self.context.clone();
+        let context = isolated_python_continuation_context(py, &self.context)?;
         let json_args = py_to_json(args)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = context
@@ -984,7 +1019,7 @@ struct PyLlmNextFn {
 impl PyLlmNextFn {
     fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.clone();
-        let context = self.context.clone();
+        let context = isolated_python_continuation_context(py, &self.context)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = context
                 .invoke(move || next(request.inner))
@@ -1007,7 +1042,7 @@ struct PyLlmStreamNextFn {
 impl PyLlmStreamNextFn {
     fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.clone();
-        let context = self.context.clone();
+        let context = isolated_python_continuation_context(py, &self.context)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let rust_stream = context
                 .invoke(move || next(request.inner))

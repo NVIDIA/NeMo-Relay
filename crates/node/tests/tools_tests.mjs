@@ -989,6 +989,68 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution intercept rejects a detached next call after settlement', async () => {
+    let releaseLateNext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateNext = resolve;
+    });
+    let lateNext;
+    let providerCalls = 0;
+    registerToolExecutionIntercept('node_tool_exec_late_next', 10, async (args, next) => {
+      lateNext = lateGate.then(() => next(args));
+      return { result: { source: 'intercept' } };
+    });
+    try {
+      const result = await toolCallExecute('late_next_tool', { value: 1 }, (args) => {
+        providerCalls += 1;
+        return args;
+      });
+      assert.deepEqual(result, { source: 'intercept' });
+      releaseLateNext();
+      await assert.rejects(lateNext, /execution continuation is no longer active/i);
+      assert.equal(providerCalls, 0);
+    } finally {
+      releaseLateNext?.();
+      await lateNext?.catch(() => {});
+      deregisterToolExecutionIntercept('node_tool_exec_late_next');
+    }
+  });
+
+  it('execution intercept isolates concurrent next scope branches', async () => {
+    let releaseBoth;
+    const bothPushed = new Promise((resolve) => {
+      releaseBoth = resolve;
+    });
+    let pushed = 0;
+    registerToolExecutionIntercept('node_tool_exec_concurrent_next_scopes', 10, async (_args, next) => {
+      const [first, second] = await Promise.all([next({ branch: 'first' }), next({ branch: 'second' })]);
+      return { result: [first, second] };
+    });
+    try {
+      const result = await toolCallExecuteAsync('concurrent_next_tool', {}, async (args) => {
+        const handle = pushScope(`node-next-${args.branch}`, ScopeType.Custom);
+        try {
+          pushed += 1;
+          if (pushed === 2) {
+            releaseBoth();
+          }
+          await bothPushed;
+          if (args.branch === 'first') {
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          assert.equal(lib.getHandle().uuid, handle.uuid);
+          return args;
+        } finally {
+          popScope(handle);
+        }
+      });
+      assert.deepEqual(result, [{ branch: 'first' }, { branch: 'second' }]);
+    } finally {
+      releaseBoth?.();
+      deregisterToolExecutionIntercept('node_tool_exec_concurrent_next_scopes');
+    }
+  });
+
   it('execution intercept rejects non-JSON next arguments without aborting Node', async () => {
     registerToolExecutionIntercept('node_tool_exec_bigint_next', 10, async (_args, next) => ({
       result: await next(1n),
