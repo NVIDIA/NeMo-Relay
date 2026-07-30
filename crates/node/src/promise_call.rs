@@ -14,6 +14,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use napi::bindgen_prelude::ToNapiValue;
 use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
@@ -90,6 +91,7 @@ struct CallArgs {
     scope_stack: Option<ScopeStackHandle>,
     publication_buffer: Option<PublicationBuffer>,
     continuation_context: Option<MiddlewareContinuationContext>,
+    cancellation: CallCancellation,
     completion: CallCompletion,
 }
 
@@ -129,6 +131,65 @@ impl CallCompletion {
     fn send(&self, value: FlowResult<Json>) {
         if let Some(sender) = self.sender.lock().unwrap().take() {
             let _ = sender.send(value);
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct CallCancellation {
+    requested: Arc<AtomicBool>,
+    abort: Arc<std::sync::Mutex<Option<ThreadsafeFunction<()>>>>,
+}
+
+impl CallCancellation {
+    fn register(&self, env: &Env, abort: &JsFunction) -> napi::Result<()> {
+        let mut abort = abort.create_threadsafe_function(0, |_ctx: ThreadSafeCallContext<()>| {
+            Ok(Vec::<JsUnknown>::new())
+        })?;
+        abort.unref(env)?;
+        let abort = {
+            let mut registered = self.abort.lock().unwrap();
+            *registered = Some(abort);
+            registered.as_ref().cloned()
+        };
+        if self.requested.load(Ordering::Acquire) {
+            Self::call_abort(abort);
+        }
+        Ok(())
+    }
+
+    fn cancel(&self) {
+        self.requested.store(true, Ordering::Release);
+        let abort = self.abort.lock().unwrap().as_ref().cloned();
+        Self::call_abort(abort);
+    }
+
+    fn call_abort(abort: Option<ThreadsafeFunction<()>>) {
+        if let Some(abort) = abort {
+            let _ = abort.call(
+                Ok(()),
+                napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+            );
+        }
+    }
+}
+
+struct CallCancellationGuard(Option<CallCancellation>);
+
+impl CallCancellationGuard {
+    fn new(cancellation: CallCancellation) -> Self {
+        Self(Some(cancellation))
+    }
+
+    fn disarm(&mut self) {
+        self.0.take();
+    }
+}
+
+impl Drop for CallCancellationGuard {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.0.take() {
+            cancellation.cancel();
         }
     }
 }
@@ -281,6 +342,18 @@ fn build_completion_unknowns(
     ))
 }
 
+fn build_abort_registration_unknown(
+    env: &Env,
+    cancellation: CallCancellation,
+) -> napi::Result<JsUnknown> {
+    let register = env.create_function_from_closure("__nemo_relay_register_abort", move |ctx| {
+        let abort = ctx.get::<JsFunction>(0)?;
+        cancellation.register(ctx.env, &abort)?;
+        ctx.env.get_undefined()
+    })?;
+    Ok(function_to_unknown(env, &register))
+}
+
 /// A wrapper around a JS function that can be called from any thread and
 /// transparently handles both synchronous and Promise return values.
 pub struct PromiseAwareFn {
@@ -356,6 +429,8 @@ impl PromiseAwareFn {
                     };
                     let (resolve, reject) =
                         build_completion_unknowns(&ctx.env, ctx.value.completion)?;
+                    let register_abort =
+                        build_abort_registration_unknown(&ctx.env, ctx.value.cancellation)?;
                     Ok(vec![
                         arg0,
                         spread,
@@ -365,6 +440,7 @@ impl PromiseAwareFn {
                         publication,
                         publication_context_id,
                         scope_stack,
+                        register_abort,
                     ])
                 })();
                 if let Err(error) = &result {
@@ -479,6 +555,8 @@ impl PromiseAwareFn {
         next: Option<NextFn>,
     ) -> FlowResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
+        let cancellation = CallCancellation::default();
+        let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
         let continuation_context = next
             .as_ref()
             .map(|_| MiddlewareContinuationContext::capture());
@@ -502,15 +580,18 @@ impl PromiseAwareFn {
                 scope_stack: Some(current_scope_stack()),
                 publication_buffer: capture_nested_publication_buffer(),
                 continuation_context,
+                cancellation,
                 completion: CallCompletion::new(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
         );
         queue_status_result(status)?;
 
-        receiver
+        let result = receiver
             .await
-            .map_err(|e| FlowError::Internal(e.to_string()))?
+            .map_err(|e| FlowError::Internal(e.to_string()))?;
+        cancellation_guard.disarm();
+        result
     }
 }
 

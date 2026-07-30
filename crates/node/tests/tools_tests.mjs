@@ -1020,6 +1020,46 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution intercept aborts an already-started async provider after settlement', async () => {
+    let releaseProvider;
+    const providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    let providerStarted;
+    const started = new Promise((resolve) => {
+      providerStarted = resolve;
+    });
+    let downstream;
+    let providerSideEffects = 0;
+    registerToolExecutionIntercept('node_tool_exec_abort_started_provider', 10, async (args, next) => {
+      downstream = next(args);
+      await started;
+      return { result: { source: 'intercept' } };
+    });
+    try {
+      const result = await toolCallExecuteAsync('abort_started_tool', { value: 1 }, async (_args, signal) => {
+        providerStarted();
+        await Promise.race([
+          providerGate,
+          new Promise((_, reject) => {
+            signal.addEventListener('abort', () => reject(new Error('provider aborted')), { once: true });
+          }),
+        ]);
+        providerSideEffects += 1;
+        return { source: 'provider' };
+      });
+      assert.deepEqual(result, { source: 'intercept' });
+      await assert.rejects(downstream, /execution continuation is no longer active/i);
+      releaseProvider();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(providerSideEffects, 0);
+    } finally {
+      releaseProvider?.();
+      await downstream?.catch(() => {});
+      deregisterToolExecutionIntercept('node_tool_exec_abort_started_provider');
+    }
+  });
+
   it('execution intercept isolates concurrent next scope branches', async () => {
     let releaseBoth;
     const bothPushed = new Promise((resolve) => {

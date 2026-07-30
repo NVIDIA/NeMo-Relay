@@ -1320,6 +1320,55 @@ describe('LLM intercepts', () => {
     }
   });
 
+  it('execution intercept aborts an already-started async provider after settlement', async () => {
+    let releaseProvider;
+    const providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    let providerStarted;
+    const started = new Promise((resolve) => {
+      providerStarted = resolve;
+    });
+    let downstream;
+    let providerSideEffects = 0;
+    registerLlmExecutionIntercept('node_llm_exec_abort_started_provider', 10, async (native, next) => {
+      downstream = next(native);
+      await started;
+      return { source: 'intercept' };
+    });
+    try {
+      const result = await llmCallExecuteAsync(
+        'abort_started_llm',
+        makeNative(),
+        async (_request, signal) => {
+          providerStarted();
+          await Promise.race([
+            providerGate,
+            new Promise((_, reject) => {
+              signal.addEventListener('abort', () => reject(new Error('provider aborted')), { once: true });
+            }),
+          ]);
+          providerSideEffects += 1;
+          return { source: 'provider' };
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { source: 'intercept' });
+      await assert.rejects(downstream, /execution continuation is no longer active/i);
+      releaseProvider();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(providerSideEffects, 0);
+    } finally {
+      releaseProvider?.();
+      await downstream?.catch(() => {});
+      deregisterLlmExecutionIntercept('node_llm_exec_abort_started_provider');
+    }
+  });
+
   it('execution intercept rejects invalid next request payloads', async () => {
     registerLlmExecutionIntercept('node_llm_exec_invalid_next', 10, async (_native, next) => {
       return next({

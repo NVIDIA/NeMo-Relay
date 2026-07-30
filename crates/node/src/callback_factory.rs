@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v6";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v7";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -69,7 +69,10 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     publication,
     publicationContextId,
     scopeStack,
+    registerAbort,
   ) {
+    const controller = new AbortController();
+    registerAbort(() => controller.abort());
     let ownsPublicationState = false;
     let publicationState;
     if (publicationContextId !== undefined) {
@@ -111,8 +114,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     const invoke = () => {
       Promise.resolve().then(() => (
         safeNext === undefined
-          ? (spread ? fn(...arg0) : fn(arg0))
-          : (spread ? fn(...arg0, safeNext) : fn(arg0, safeNext))
+          ? (spread ? fn(...arg0, controller.signal) : fn(arg0, controller.signal))
+          : (spread ? fn(...arg0, safeNext, controller.signal) : fn(arg0, safeNext, controller.signal))
       )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
         settlePublication();
         resolve(value);
@@ -161,6 +164,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         publication,
         publicationContextId,
         scopeStack,
+        registerAbort,
       ) {
         if (error != null) {
           let message = 'unknown error';
@@ -182,6 +186,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           publication,
           publicationContextId,
           scopeStack,
+          registerAbort,
         );
       };
     },
