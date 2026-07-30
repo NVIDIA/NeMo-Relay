@@ -294,9 +294,11 @@ The CLI initializes operational logging before operational commands run.
 `nemo-relay config` and `nemo-relay plugins edit` skip initialization so invalid
 logging settings do not prevent configuration repair.
 
-File sinks from layered `config.toml` files aggregate by their exact configured
-`path`, with system entries first. A higher layer recursively overlays a sink
-with the same path; distinct paths remain active together.
+File sinks from layered `config.toml` files aggregate by their resolved
+destination `path`, with system entries first. A higher layer recursively
+overlays a sink with the same path; path aliases such as `relay.log` and
+`./relay.log` resolve to one sink, while distinct destinations remain active
+together.
 
 Configure temporary CLI settings with `--log-level` and
 `--log-stderr-format`, or select an absolute TOML file with

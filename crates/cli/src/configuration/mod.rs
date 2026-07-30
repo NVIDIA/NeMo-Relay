@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1707,11 +1707,11 @@ fn merge_logging_sink_lists(lower: Vec<toml::Value>, higher: Vec<toml::Value>) -
     let mut merged = Vec::with_capacity(lower.len() + higher.len());
 
     for higher_sink in higher {
-        let identity = logging_sink_path(&higher_sink).map(str::to_owned);
-        let lower_match = identity.as_deref().and_then(|path| {
+        let identity = logging_sink_identity(&higher_sink);
+        let lower_match = identity.as_ref().and_then(|path| {
             lower
                 .iter()
-                .position(|sink| logging_sink_path(sink) == Some(path))
+                .position(|sink| logging_sink_identity(sink).as_ref() == Some(path))
         });
         if let Some(index) = lower_match {
             let mut sink = lower[index].clone();
@@ -1735,11 +1735,11 @@ fn merge_logging_sink_lists(lower: Vec<toml::Value>, higher: Vec<toml::Value>) -
 fn coalesce_logging_sinks(sinks: Vec<toml::Value>) -> Vec<toml::Value> {
     let mut coalesced: Vec<toml::Value> = Vec::with_capacity(sinks.len());
     for sink in sinks {
-        let identity = logging_sink_path(&sink).map(str::to_owned);
-        let existing = identity.as_deref().and_then(|path| {
+        let identity = logging_sink_identity(&sink);
+        let existing = identity.as_ref().and_then(|path| {
             coalesced
                 .iter()
-                .position(|candidate| logging_sink_path(candidate) == Some(path))
+                .position(|candidate| logging_sink_identity(candidate).as_ref() == Some(path))
         });
         if let Some(index) = existing {
             merge_toml(&mut coalesced[index], sink);
@@ -1752,6 +1752,49 @@ fn coalesce_logging_sinks(sinks: Vec<toml::Value>) -> Vec<toml::Value> {
 
 fn logging_sink_path(sink: &toml::Value) -> Option<&str> {
     sink.as_table()?.get("path")?.as_str()
+}
+
+fn logging_sink_identity(sink: &toml::Value) -> Option<PathBuf> {
+    let path = Path::new(logging_sink_path(sink)?);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    Some(logging_path_identity(&absolute))
+}
+
+// Keep merge-time identity aligned with core logging's runtime duplicate-path detection: prefer
+// canonical paths, canonicalize an existing parent for not-yet-created sinks, then fall back to
+// lexical component normalization.
+fn logging_path_identity(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            let file_name = path.file_name().unwrap_or_default();
+            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+                return canonical_parent.join(file_name);
+            }
+            normalize_path_components(parent).join(file_name)
+        }
+        _ => normalize_path_components(path),
+    }
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {

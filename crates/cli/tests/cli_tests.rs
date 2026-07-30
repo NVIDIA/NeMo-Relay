@@ -312,6 +312,57 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
 }
 
 #[test]
+fn cli_layered_logging_path_aliases_initialize_one_sink() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workspace");
+    let project_config = cwd.join(".nemo-relay/config.toml");
+    let explicit_config = temp.path().join("explicit/config.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(explicit_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &explicit_config,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+level = "debug"
+queue_capacity = 64
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &project_config,
+        r#"
+[[logging.sinks]]
+path = "./relay.log"
+level = "info"
+format = "jsonl"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            explicit_config.to_str().unwrap(),
+            "agents",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "layered aliases should initialize one logging sink: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("duplicate logging sink path"));
+}
+
+#[test]
 fn cli_claude_startup_probe_bypass_is_debug_only() {
     let default_stderr = run_claude_startup_probe(None);
     assert!(

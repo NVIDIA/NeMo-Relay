@@ -3662,6 +3662,40 @@ format = "human"
 }
 
 #[test]
+fn logging_sink_path_aliases_coalesce_by_runtime_destination() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let mut merged = r#"
+[[logging.sinks]]
+path = "relay.log"
+level = "debug"
+queue_capacity = 128
+"#
+    .parse::<toml::Table>()
+    .map(toml::Value::Table)
+    .unwrap();
+    let higher = r#"
+[[logging.sinks]]
+path = "./relay.log"
+level = "warn"
+format = "human"
+"#
+    .parse::<toml::Table>()
+    .map(toml::Value::Table)
+    .unwrap();
+
+    merge_gateway_config_toml(&mut merged, higher);
+
+    let sinks = merged["logging"]["sinks"].as_array().unwrap();
+    assert_eq!(sinks.len(), 1);
+    assert_eq!(logging_sink_path(&sinks[0]), Some("./relay.log"));
+    assert_eq!(sinks[0]["level"].as_str(), Some("warn"));
+    assert_eq!(sinks[0]["format"].as_str(), Some("human"));
+    assert_eq!(sinks[0]["queue_capacity"].as_integer(), Some(128));
+}
+
+#[test]
 fn empty_higher_logging_sink_list_preserves_lower_sinks() {
     let mut merged = r#"
 [[logging.sinks]]
