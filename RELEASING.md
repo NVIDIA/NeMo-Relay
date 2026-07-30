@@ -359,7 +359,7 @@ After the release is live, verify:
    are visible on crates.io.
 2. The `nemo-relay` and `nemo-relay-cli-bin` wheels are visible on PyPI, and
    `pip install "nemo-relay[cli]"` exposes `nemo-relay`.
-3. The `nemo-relay-node`, its five platform packages, `nemo-relay-openclaw`,
+3. The `nemo-relay-node`, its seven platform packages, `nemo-relay-openclaw`,
    `nemo-relay-cli-bin`, and its seven platform packages are visible on npm.
 4. The Unix and Windows installers resolve the new stable tag and verify
    matching CLI release asset checksums on their supported platforms.
