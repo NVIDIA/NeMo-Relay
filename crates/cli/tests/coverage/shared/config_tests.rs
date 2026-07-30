@@ -1264,6 +1264,50 @@ level = "warn"
 }
 
 #[test]
+fn operational_logging_aggregates_sinks_from_all_config_layers() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("nested");
+    let xdg = temp.path().join("xdg");
+    let project_config_dir = project.join(".nemo-relay");
+    let explicit_config_dir = temp.path().join("explicit");
+    let project_sink = temp.path().join("project.log.jsonl");
+    let explicit_sink = temp.path().join("explicit.log.jsonl");
+    std::fs::create_dir_all(&project_config_dir).unwrap();
+    std::fs::create_dir_all(&explicit_config_dir).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        format!(
+            "[[logging.sinks]]\npath = {}\n",
+            toml_basic_string(project_sink.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    let explicit_config = explicit_config_dir.join("config.toml");
+    std::fs::write(
+        &explicit_config,
+        format!(
+            "[[logging.sinks]]\npath = {}\n",
+            toml_basic_string(explicit_sink.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&nested, &xdg);
+
+    let logging = resolve_logging_config(Some(&explicit_config), false).unwrap();
+    let paths = logging
+        .sinks
+        .iter()
+        .map(|sink| match sink {
+            LogSinkConfig::File(file) => file.path.as_path(),
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths, vec![project_sink.as_path(), explicit_sink.as_path()]);
+}
+
+#[test]
 fn discovered_plugins_toml_upserts_components_by_kind() {
     let temp = tempfile::tempdir().unwrap();
     let project_plugin = temp.path().join("project-plugins.toml");

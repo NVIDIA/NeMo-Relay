@@ -130,7 +130,7 @@ pub(crate) fn resolve_logging_config(
             .map_err(|error| {
                 CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
             })?;
-        merge_toml(&mut merged, parsed);
+        merge_gateway_config_toml(&mut merged, parsed);
     }
 
     if merged.get("logging").is_none() {
