@@ -400,6 +400,16 @@ jobs:
           name: plugin-wheel
           path: dist/
 
+      - name: Verify Python API wheel artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wheels=(dist/nemo_relay-*.whl)
+          if [ "${#wheels[@]}" -ne 7 ]; then
+            echo "Error: expected 7 Python API wheel artifacts, found ${#wheels[@]}" >&2
+            exit 1
+          fi
+
       - name: Publish to PyPI with trusted publishing
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:

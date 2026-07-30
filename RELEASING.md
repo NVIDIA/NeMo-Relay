@@ -239,12 +239,16 @@ The release pipeline then:
    validation.
 3. Builds publishable package artifacts with the exact tag version:
    - `package-rust` packs the published Rust crates for local validation.
-   - `package-node` packs the npm Node.js package.
+   - `package-node` packs the npm Node.js package with GNU and musl Linux
+     N-API binaries for x86_64 and ARM64.
    - `package-openclaw` packs the npm OpenClaw plugin package.
-   - `package-python` builds platform `nemo-relay` wheels.
+   - `package-python` builds platform `nemo-relay` wheels, including
+     `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels for tagged
+     releases.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
-   - The CLI release-asset job uploads each platform `nemo-relay` binary and
-     includes those binaries in `SHA256SUMS`.
+   - The CLI release-asset job uploads each platform `nemo-relay` binary,
+     validates the Linux binaries on musllinux, and includes those binaries in
+     `SHA256SUMS`.
 4. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
