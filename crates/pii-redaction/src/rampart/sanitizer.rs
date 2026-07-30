@@ -15,6 +15,7 @@ use nemo_relay::codec::resolve::{
     response_codec as build_response_codec,
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -444,7 +445,12 @@ impl RampartSanitizer {
 }
 
 pub(super) fn tool_sanitize_callback(backend: RampartSanitizer) -> ToolSanitizeFn {
-    Arc::new(move |_name, payload| backend.sanitize_json(payload))
+    Arc::new(move |_name, payload| {
+        let backend = backend.clone();
+        Box::pin(async move {
+            run_blocking("tool payload", move || backend.sanitize_json(payload)).await
+        })
+    })
 }
 
 pub(super) fn event_sanitize_callback(
@@ -452,117 +458,159 @@ pub(super) fn event_sanitize_callback(
     scope_categories: Option<(bool, bool)>,
 ) -> EventSanitizeFn {
     Arc::new(move |event, mut fields| {
-        if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
-            matches!(event, Event::Scope(_))
-                && event
-                    .category()
-                    .is_some_and(|category| match category.as_str() {
-                        "llm" => !sanitize_llm,
-                        "tool" => !sanitize_tool,
-                        _ => false,
-                    })
-        }) {
-            return fields;
-        }
-        let specialized_scope = matches!(event, Event::Scope(_))
-            && event
-                .category()
-                .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
-
-        let mut selected = Vec::with_capacity(3);
-        if !specialized_scope && let Some(data) = fields.data.take() {
-            selected.push((EventField::Data, data));
-        }
-        if !specialized_scope
-            && let Some(profile) = fields.category_profile.take()
-            && let Ok(profile) = serde_json::to_value(profile)
-        {
-            selected.push((EventField::CategoryProfile, profile));
-        }
-        if let Some(metadata) = fields.metadata.take() {
-            selected.push((EventField::Metadata, metadata));
-        }
-
-        let values = selected
-            .iter_mut()
-            .map(|(_, value)| std::mem::take(value))
-            .collect();
-        for ((field, _), value) in selected
-            .into_iter()
-            .zip(backend.sanitize_json_values(values))
-        {
-            match field {
-                EventField::Data => fields.data = Some(value),
-                EventField::CategoryProfile => {
-                    fields.category_profile = serde_json::from_value(value).ok();
+        let backend = backend.clone();
+        Box::pin(async move {
+            run_blocking("event fields", move || {
+                if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
+                    matches!(event.as_ref(), Event::Scope(_))
+                        && event
+                            .category()
+                            .is_some_and(|category| match category.as_str() {
+                                "llm" => !sanitize_llm,
+                                "tool" => !sanitize_tool,
+                                _ => false,
+                            })
+                }) {
+                    return fields;
                 }
-                EventField::Metadata => fields.metadata = Some(value),
-            }
-        }
-        fields
+                let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
+                    && event
+                        .category()
+                        .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
+
+                let mut selected = Vec::with_capacity(3);
+                if !specialized_scope && let Some(data) = fields.data.take() {
+                    selected.push((EventField::Data, data));
+                }
+                if !specialized_scope
+                    && let Some(profile) = fields.category_profile.take()
+                    && let Ok(profile) = serde_json::to_value(profile)
+                {
+                    selected.push((EventField::CategoryProfile, profile));
+                }
+                if let Some(metadata) = fields.metadata.take() {
+                    selected.push((EventField::Metadata, metadata));
+                }
+
+                let values = selected
+                    .iter_mut()
+                    .map(|(_, value)| std::mem::take(value))
+                    .collect();
+                for ((field, _), value) in selected
+                    .into_iter()
+                    .zip(backend.sanitize_json_values(values))
+                {
+                    match field {
+                        EventField::Data => fields.data = Some(value),
+                        EventField::CategoryProfile => {
+                            fields.category_profile = serde_json::from_value(value).ok();
+                        }
+                        EventField::Metadata => fields.metadata = Some(value),
+                    }
+                }
+                fields
+            })
+            .await
+        })
     })
 }
 
 pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSanitizeRequestFn {
     Arc::new(move |request, context| {
-        if matches!(context.codec(), LlmCodecIdentity::None) && backend.legacy_surface.is_none() {
-            return backend.sanitize_raw_request(request);
-        }
-        let resolved = context.resolve_codec();
-        let fallback = if resolved.is_none() {
-            backend
-                .selected_surface(context.codec())
-                .map(build_request_codec)
-        } else {
-            None
-        };
-        let sanitized = resolved
-            .as_deref()
-            .or(fallback.as_deref())
-            .and_then(|codec| backend.sanitize_request_with_codec(codec, &request));
-        if sanitized.is_none() {
-            backend.log_codec_failure(
-                "request",
-                context.codec(),
-                "codec decode, sanitize, or encode failure",
-            );
-        }
-        sanitized
+        let backend = backend.clone();
+        Box::pin(async move {
+            run_blocking("LLM request", move || {
+                if matches!(context.codec(), LlmCodecIdentity::None)
+                    && backend.legacy_surface.is_none()
+                {
+                    return backend.sanitize_raw_request(request);
+                }
+                let resolved = context.resolve_codec();
+                let fallback = if resolved.is_none() {
+                    backend
+                        .selected_surface(context.codec())
+                        .map(build_request_codec)
+                } else {
+                    None
+                };
+                let sanitized = resolved
+                    .as_deref()
+                    .or(fallback.as_deref())
+                    .and_then(|codec| backend.sanitize_request_with_codec(codec, &request));
+                if sanitized.is_none() {
+                    backend.log_codec_failure(
+                        "request",
+                        context.codec(),
+                        "codec decode, sanitize, or encode failure",
+                    );
+                }
+                sanitized
+            })
+            .await
+        })
     })
 }
 
 pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSanitizeResponseFn {
     Arc::new(move |payload, context| {
-        if matches!(context.codec(), LlmCodecIdentity::None) && backend.legacy_surface.is_none() {
-            return Some(backend.sanitize_json(payload));
-        }
-        if matches!(context.codec(), LlmCodecIdentity::None)
-            && !backend.uses_compatible_legacy_response_codec(&payload)
-        {
-            backend.log_codec_failure("response", context.codec(), "no compatible legacy codec");
-            return None;
-        }
-        let surface = backend.selected_surface(context.codec());
-        let resolved = context.resolve_codec();
-        let fallback = if resolved.is_none() {
-            surface.map(build_response_codec)
-        } else {
-            None
-        };
-        let sanitized = surface
-            .zip(resolved.as_deref().or(fallback.as_deref()))
-            .and_then(|(surface, codec)| {
-                backend.sanitize_response_with_codec(codec, surface, payload)
-            });
-        if sanitized.is_none() {
-            backend.log_codec_failure(
-                "response",
-                context.codec(),
-                "codec decode, sanitize, or encode failure",
-            );
-        }
-        sanitized
+        let backend = backend.clone();
+        Box::pin(async move {
+            run_blocking("LLM response", move || {
+                if matches!(context.codec(), LlmCodecIdentity::None)
+                    && backend.legacy_surface.is_none()
+                {
+                    return Some(backend.sanitize_json(payload));
+                }
+                if matches!(context.codec(), LlmCodecIdentity::None)
+                    && !backend.uses_compatible_legacy_response_codec(&payload)
+                {
+                    backend.log_codec_failure(
+                        "response",
+                        context.codec(),
+                        "no compatible legacy codec",
+                    );
+                    return None;
+                }
+                let surface = backend.selected_surface(context.codec());
+                let resolved = context.resolve_codec();
+                let fallback = if resolved.is_none() {
+                    surface.map(build_response_codec)
+                } else {
+                    None
+                };
+                let sanitized = surface
+                    .zip(resolved.as_deref().or(fallback.as_deref()))
+                    .and_then(|(surface, codec)| {
+                        backend.sanitize_response_with_codec(codec, surface, payload)
+                    });
+                if sanitized.is_none() {
+                    backend.log_codec_failure(
+                        "response",
+                        context.codec(),
+                        "codec decode, sanitize, or encode failure",
+                    );
+                }
+                sanitized
+            })
+            .await
+        })
     })
+}
+
+async fn run_blocking<T>(
+    target: &'static str,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> FlowResult<T>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| {
+            FlowError::Internal(format!(
+                "Rampart {target} sanitization task failed: {error}"
+            ))
+        })
 }
 
 fn compile_json_pointer(pointer: String) -> Vec<String> {
@@ -581,7 +629,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
 
     use super::*;
 
@@ -618,6 +667,21 @@ mod tests {
     impl DetectionModel for CountingDetector {
         fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
             self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(Vec::new())
+        }
+    }
+
+    struct BlockingDetector {
+        started: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl DetectionModel for BlockingDetector {
+        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
+            self.started.store(true, Ordering::Release);
+            while !self.release.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
             Ok(Vec::new())
         }
     }
@@ -704,6 +768,51 @@ mod tests {
             128
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_callback_does_not_block_the_runtime_thread() {
+        let started = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let backend = sanitizer(
+            Arc::new(BlockingDetector {
+                started: Arc::clone(&started),
+                release: Arc::clone(&release),
+            }),
+            vec!["/message"],
+        );
+        let callback = tool_sanitize_callback(backend);
+        let task = tokio::spawn(callback(
+            "tool".into(),
+            serde_json::json!({"message": "private"}),
+        ));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking detector should start");
+
+        let heartbeat = Arc::new(AtomicUsize::new(0));
+        let heartbeat_task = {
+            let heartbeat = Arc::clone(&heartbeat);
+            tokio::spawn(async move {
+                for _ in 0..4 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    heartbeat.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+        heartbeat_task.await.unwrap();
+        assert_eq!(heartbeat.load(Ordering::Relaxed), 4);
+
+        release.store(true, Ordering::Release);
+        assert_eq!(
+            task.await.unwrap().unwrap(),
+            serde_json::json!({"message": "private"})
+        );
     }
 
     #[test]

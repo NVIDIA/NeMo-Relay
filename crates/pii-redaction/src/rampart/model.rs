@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 use serde::Deserialize;
@@ -67,8 +67,9 @@ pub(super) struct RampartDetector {
     pad_id: i64,
     max_windows_per_payload: usize,
     inference_batch_size: usize,
-    // Tokenization and inference share one admission point to bound aggregate
-    // request-local tensor memory under concurrent Relay traffic.
+    // Tokenization and inference share one non-waiting admission point. Async
+    // sanitizer callbacks fail closed on contention instead of occupying
+    // blocking threads while another inference is running.
     inference_lock: Mutex<()>,
 }
 
@@ -195,9 +196,7 @@ impl RampartDetector {
     }
 
     pub(super) fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>> {
-        let _guard = self.inference_lock.lock().map_err(|error| {
-            PluginError::Internal(format!("Rampart inference lock poisoned: {error}"))
-        })?;
+        let _guard = try_inference_guard(&self.inference_lock)?;
         let prepared = texts
             .iter()
             .map(|text| PreparedText::new(text))
@@ -645,6 +644,17 @@ fn required_verified_file(
     })
 }
 
+fn try_inference_guard(lock: &Mutex<()>) -> PluginResult<MutexGuard<'_, ()>> {
+    lock.try_lock().map_err(|error| match error {
+        TryLockError::WouldBlock => {
+            PluginError::Internal("Rampart inference is already running".into())
+        }
+        TryLockError::Poisoned(error) => {
+            PluginError::Internal(format!("Rampart inference lock poisoned: {error}"))
+        }
+    })
+}
+
 fn invalid_model(message: impl Into<String>) -> PluginError {
     PluginError::InvalidConfig(message.into())
 }
@@ -657,6 +667,8 @@ fn inference_error(message: impl Into<String>) -> PluginError {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     #[test]
     fn batches_bound_padded_token_volume() {
@@ -685,6 +697,25 @@ mod tests {
                     .unwrap()
                 <= MAX_PADDED_TOKENS_PER_BATCH
         }));
+    }
+
+    #[test]
+    fn inference_admission_does_not_wait_for_the_active_model() {
+        let lock = Arc::new(Mutex::new(()));
+        let active = lock.lock().unwrap();
+        let contender = Arc::clone(&lock);
+        let (result_tx, result_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = try_inference_guard(&contender).map(|_| ());
+            result_tx.send(result).unwrap();
+        });
+
+        let error = result_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("contending inference admission should not wait")
+            .unwrap_err();
+        assert!(error.to_string().contains("already running"));
+        drop(active);
     }
 
     #[test]
