@@ -48,7 +48,7 @@ pub struct UpstreamFailure {
 }
 
 impl UpstreamFailure {
-    /// Whether Switchyard may be consulted for another bounded provider attempt.
+    /// Whether another bounded provider attempt may be made.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.class,
