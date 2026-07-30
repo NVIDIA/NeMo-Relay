@@ -8,7 +8,6 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { waitForSubscriberCallbacks } from './test_support.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -177,10 +176,7 @@ describe('LLM lifecycle', () => {
       const native = makeNative();
       const handle = llmCall('evt_llm', native, null, null, null, null, null);
       llmCallEnd(handle, {}, null, null);
-      const deadline = Date.now() + 2000;
-      while (events.length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       assert.ok(events.length >= 2, 'Expected at least 2 events');
     } finally {
       deregisterSubscriber('node_llm_evt_sub');
@@ -306,11 +302,7 @@ describe('LLM execute', () => {
         /llm status failure/,
       );
 
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some((e) => e.name === 'exec_status_ok_llm' && e.scope_category === 'end') &&
-          events.some((e) => e.name === 'exec_status_error_llm' && e.scope_category === 'end'),
-      );
+      await flushSubscribers();
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'end',
@@ -405,11 +397,7 @@ describe('LLM guardrails', () => {
       assert.deepEqual(result, { ok: true });
       assert.equal(requestContextChecked, true);
       assert.equal(responseContextChecked, true);
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start') &&
-          events.some((event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'end'),
-      );
+      await flushSubscribers();
       const start = events.find(
         (event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start',
       );
@@ -798,16 +786,7 @@ describe('LLM guardrails', () => {
       assert.deepEqual(result, {
         model: 'test-model',
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_req_evt_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'start',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const start = events.find(
         (e) =>
           e.name === 'san_req_evt_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'start',
@@ -862,15 +841,7 @@ describe('LLM guardrails', () => {
     try {
       const request = makeNative();
       await llmCallExecute('llm_san_req_throw', request, () => ({ ok: true }), null, null, null, null, null);
-      await waitForSubscriberCallbacks(() =>
-        events.some(
-          (event) =>
-            event.name === 'llm_san_req_throw' &&
-            event.kind === 'scope' &&
-            event.category === 'llm' &&
-            event.scope_category === 'start',
-        ),
-      );
+      await flushSubscribers();
       const start = events.find(
         (event) =>
           event.name === 'llm_san_req_throw' &&
@@ -958,16 +929,7 @@ describe('LLM guardrails', () => {
       assert.deepEqual(result, {
         ok: true,
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_resp_evt_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'end',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const end = events.find(
         (e) =>
           e.name === 'san_resp_evt_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'end',
@@ -992,15 +954,7 @@ describe('LLM guardrails', () => {
     try {
       const response = { ok: true };
       await llmCallExecute('llm_san_resp_throw', makeNative(), () => response, null, null, null, null, null);
-      await waitForSubscriberCallbacks(() =>
-        events.some(
-          (event) =>
-            event.name === 'llm_san_resp_throw' &&
-            event.kind === 'scope' &&
-            event.category === 'llm' &&
-            event.scope_category === 'end',
-        ),
-      );
+      await flushSubscribers();
       const end = events.find(
         (event) =>
           event.name === 'llm_san_resp_throw' &&
@@ -1152,12 +1106,7 @@ describe('LLM intercepts', () => {
         null,
       );
       assert.deepEqual(result, { ok: true });
-      await waitForSubscriberCallbacks(() =>
-        events.some(
-          (event) =>
-            event.name === 'propagation_parent_llm' && event.kind === 'scope' && event.scope_category === 'end',
-        ),
-      );
+      await flushSubscribers();
       const start = events.find(
         (event) =>
           event.name === 'propagation_parent_llm' && event.kind === 'scope' && event.scope_category === 'start',
@@ -2084,10 +2033,7 @@ describe('LLM event fields', () => {
         },
       );
 
-      const deadline = Date.now() + 2000;
-      while (events.filter((e) => e.name === 'field_llm').length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
 
       const start = events.find(
         (e) => e.name === 'field_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'start',

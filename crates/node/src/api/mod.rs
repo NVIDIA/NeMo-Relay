@@ -3319,18 +3319,17 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
     core_subscriber_api::deregister_subscriber(&name).map_err(to_napi_err)
 }
 
-/// Return a Promise that resolves when native subscriber callbacks and managed
-/// terminal publications registered before this call finish.
+/// Return a Promise that resolves when native and JavaScript subscriber callbacks and
+/// managed terminal publications registered before this call finish.
 ///
 /// Call this function outside subscribers, event sanitizers, conditional
 /// guardrails, and request or execution intercepts. A queued tool or LLM
 /// observability sanitizer may call it, but the Promise resolves without
 /// waiting for its own publication.
 ///
-/// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
-/// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
-/// Native events emitted later by a JavaScript subscriber are separate publications and may
-/// require another flush after the JavaScript callback runs.
+/// Awaiting this Promise does not block the Node event loop while Promise-returning event
+/// sanitizers settle or queued JavaScript subscriber callbacks run. Native events emitted by a
+/// JavaScript subscriber are separate publications and may require another flush.
 ///
 /// The Promise rejects if the blocking task fails or the core subscriber flush returns an error.
 /// Callers should handle errors when awaiting it.
@@ -3342,10 +3341,13 @@ pub fn flush_subscribers(env: Env) -> Result<JsObject> {
             if reentrant {
                 return Ok(());
             }
-            tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
-                .await
-                .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
-                .map_err(to_napi_err)
+            tokio::task::spawn_blocking(|| {
+                core_subscriber_api::flush_subscribers()?;
+                callable::flush_js_subscriber_callbacks()
+            })
+            .await
+            .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
+            .map_err(to_napi_err)
         },
         |env, _| env.get_undefined(),
     )

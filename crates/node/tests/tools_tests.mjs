@@ -4,7 +4,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { waitForSubscriberCallbacks } from './test_support.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -135,10 +134,7 @@ describe('Tool lifecycle', () => {
     try {
       const handle = toolCall('evt_tool', {}, null, null, null, null);
       toolCallEnd(handle, {}, null, null);
-      const deadline = Date.now() + 2000;
-      while (events.length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       assert.ok(events.length >= 2, 'Expected at least 2 events');
     } finally {
       deregisterSubscriber('node_tool_evt_sub');
@@ -180,10 +176,7 @@ describe('Tool lifecycle', () => {
         },
       );
 
-      const deadline = Date.now() + 2000;
-      while (events.filter((e) => e.name === 'field_tool').length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
 
       const start = events.find(
         (e) => e.name === 'field_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'start',
@@ -403,23 +396,7 @@ describe('Tool execute', () => {
         /tool status failure/,
       );
 
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some(
-            (e) =>
-              e.name === 'exec_status_ok_tool' &&
-              e.kind === 'scope' &&
-              e.category === 'tool' &&
-              e.scope_category === 'end',
-          ) &&
-          events.some(
-            (e) =>
-              e.name === 'exec_status_error_tool' &&
-              e.kind === 'scope' &&
-              e.category === 'tool' &&
-              e.scope_category === 'end',
-          ),
-      );
+      await flushSubscribers();
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
@@ -520,19 +497,7 @@ describe('Tool guardrails', () => {
       assert.deepEqual(result, {
         x: 1,
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_req_evt_tool' &&
-            e.kind === 'scope' &&
-            e.category === 'tool' &&
-            e.scope_category === 'start',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const start = events.find(
         (e) =>
           e.name === 'san_req_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'start',
@@ -579,16 +544,7 @@ describe('Tool guardrails', () => {
       assert.deepEqual(result, {
         ok: true,
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_resp_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const end = events.find(
         (e) =>
           e.name === 'san_resp_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
@@ -733,7 +689,7 @@ describe('Tool guardrails', () => {
     });
     try {
       await toolCallExecute('tool_sanitize_throw', { original: true }, (args) => args, null, null, null, null);
-      await waitForSubscriberCallbacks(() => events.some((event) => event.name === 'tool_sanitize_throw'));
+      await flushSubscribers();
       const start = events.find(
         (event) =>
           event.name === 'tool_sanitize_throw' &&
@@ -768,11 +724,7 @@ describe('Tool guardrails', () => {
     try {
       const handle = toolCall('node_manual_tool_flush', { original: true });
       toolCallEnd(handle, { ok: true });
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start') &&
-          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'end'),
-      );
+      await flushSubscribers();
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_manual_tool_flush_request');
       deregisterToolSanitizeResponseGuardrail('node_manual_tool_flush_response');
@@ -982,12 +934,7 @@ describe('Tool intercepts', () => {
       );
       assert.equal(result.original, false);
       assert.equal(result.wrapped, true);
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some(
-            (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
-          ) && events.some((event) => event.name === 'node.tool.execution'),
-      );
+      await flushSubscribers();
       const start = events.find(
         (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'start',
       );
@@ -1025,12 +972,7 @@ describe('Tool intercepts', () => {
         return { ok: true };
       });
       assert.deepEqual(result, { ok: true });
-      await waitForSubscriberCallbacks(() =>
-        events.some(
-          (event) =>
-            event.name === 'propagation_parent_tool' && event.kind === 'scope' && event.scope_category === 'end',
-        ),
-      );
+      await flushSubscribers();
       const start = events.find(
         (event) =>
           event.name === 'propagation_parent_tool' && event.kind === 'scope' && event.scope_category === 'start',

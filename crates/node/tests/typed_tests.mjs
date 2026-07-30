@@ -51,6 +51,7 @@ const {
   deregisterLlmExecutionIntercept,
   registerSubscriber,
   deregisterSubscriber,
+  flushSubscribers,
 } = lib;
 
 // ===========================================================================
@@ -372,19 +373,7 @@ describe('typedToolExecute', () => {
         },
       );
 
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (event) =>
-            event.kind === 'scope' &&
-            event.category === 'llm' &&
-            event.scope_category === 'start' &&
-            event.name === 'typed_node_falsy_opts_llm',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await flushSubscribers();
 
       const startEvent = events.find(
         (event) =>
@@ -672,19 +661,7 @@ describe('typedLlmExecute', () => {
 
       assert.equal(result.content[0].text, 'Anthropic hello');
 
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (event) =>
-            event.kind === 'scope' &&
-            event.category === 'llm' &&
-            event.scope_category === 'end' &&
-            event.name === 'typed_anthropic_codec_llm',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await flushSubscribers();
 
       const endEvent = events.find(
         (event) =>
@@ -952,19 +929,7 @@ describe('typedLlmStreamExecute', () => {
       assert.equal(interceptedAnnotated.instructions, 'Be terse.');
       assert.equal(interceptedAnnotated.messages[0].role, 'user');
 
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (event) =>
-            event.kind === 'scope' &&
-            event.category === 'llm' &&
-            event.scope_category === 'end' &&
-            event.name === 'typed_responses_stream_llm',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await flushSubscribers();
 
       const endEvent = events.find(
         (event) =>
@@ -1016,19 +981,7 @@ describe('typedLlmStreamExecute', () => {
         // Drain stream
       }
 
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (event) =>
-            event.kind === 'scope' &&
-            event.category === 'llm' &&
-            event.scope_category === 'end' &&
-            event.name === 'typed_stream_bad_response_codec_llm',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await flushSubscribers();
 
       const endEvent = events.find(
         (event) =>
