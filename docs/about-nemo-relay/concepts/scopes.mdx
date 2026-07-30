@@ -142,6 +142,55 @@ Use this when:
 - The boundary cannot safely carry a native stack handle
 - You want a clean root scope with isolated scope-local registrations
 
+### Fork Concurrent Work
+
+Fork a scope stack before starting concurrent work when the child should remain
+part of the parent's event tree without sharing its mutable stack. The fork
+preserves the immediate parent but does not transfer scope-local middleware or
+subscribers.
+
+<Tabs>
+<Tab title="Python" language="python">
+
+```python
+import asyncio
+
+import nemo_relay
+
+async def worker() -> None:
+    with nemo_relay.scope.scope("worker", nemo_relay.ScopeType.Function):
+        await asyncio.sleep(0)
+
+async def main() -> None:
+    with nemo_relay.scope.scope("parent", nemo_relay.ScopeType.Agent):
+        await asyncio.create_task(
+            worker(),
+            context=nemo_relay.fork_asyncio_context(),
+        )
+```
+
+</Tab>
+<Tab title="Rust" language="rust">
+
+```rust
+use nemo_relay::api::runtime::{TASK_SCOPE_STACK, fork_scope_stack};
+
+let stack = fork_scope_stack()?;
+tokio::spawn(TASK_SCOPE_STACK.scope(stack, async {
+    // Relay work in an isolated child task.
+}));
+```
+
+</Tab>
+<Tab title="Node.js" language="javascript">
+
+Node.js does not yet provide an asynchronous scope-forking helper. Its
+`withScopeStack()` API is synchronous and must not be used to bind work across
+an `await` boundary.
+
+</Tab>
+</Tabs>
+
 ## Cross-Process Propagation
 
 When work crosses a process or remote-workflow boundary, applications can carry

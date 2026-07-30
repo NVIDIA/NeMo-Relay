@@ -367,6 +367,17 @@ def create_scope_stack() -> ScopeStack:
 def capture_propagation_context() -> PropagationContext: ...
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext: ...
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack: ...
+def fork_asyncio_context() -> contextvars.Context:
+    """Create a child asyncio context with an isolated Relay scope stack.
+
+    The returned context preserves the current Relay causal parent and all
+    unrelated context variables, but does not transfer scope-local middleware
+    or subscribers. Pass it to ``asyncio.create_task(..., context=...)`` or
+    ``asyncio.TaskGroup.create_task(..., context=...)`` before the child task
+    starts.
+    """
+    ...
+
 def use_scope_stack(stack: ScopeStack): ...
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Install a scope stack into the current thread's native runtime context.
