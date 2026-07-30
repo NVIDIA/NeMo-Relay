@@ -2086,22 +2086,22 @@ async fn test_dropped_stream_end_keeps_fifo_position_before_later_mark() {
     )
     .unwrap();
 
-    let (release_started_tx, release_started_rx) = std::sync::mpsc::channel();
-    let release_thread = std::thread::spawn(move || {
-        release_started_tx.send(()).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        sanitizer_release.notify_one();
+    let (flush_started_tx, flush_started_rx) = std::sync::mpsc::channel();
+    let flush_thread = std::thread::spawn(move || {
+        flush_started_tx.send(()).unwrap();
+        flush_subscribers()
     });
-    release_started_rx
+    flush_started_rx
         .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("sanitizer release thread did not start");
-    let flush_started = std::time::Instant::now();
-    flush_subscribers().unwrap();
+        .expect("subscriber flush thread did not start");
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let returned_before_release = flush_thread.is_finished();
+    sanitizer_release.notify_one();
+    flush_thread.join().unwrap().unwrap();
     assert!(
-        flush_started.elapsed() >= std::time::Duration::from_millis(50),
+        !returned_before_release,
         "flush must wait for the pending stream END"
     );
-    release_thread.join().unwrap();
 
     let events = events.lock().unwrap();
     let end_index = events
