@@ -50,29 +50,6 @@ e2e_wait_for() {
   return 1
 }
 
-e2e_random_token() {
-  python3 -c 'import secrets; print(secrets.token_hex(24))'
-}
-
-# The experimental Relay integration is tested against a specific public
-# Switchyard topic-branch commit. Override this only when intentionally testing
-# another revision.
-e2e_verify_switchyard_checkout() {
-  local root="$1"
-  local expected="${2:-8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8}"
-  local actual
-  actual="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || {
-    echo "Switchyard worktree is not a git checkout: $root" >&2
-    return 1
-  }
-  if [[ "$actual" != "$expected" ]]; then
-    echo "Switchyard checkout mismatch: expected $expected, found $actual" >&2
-    echo "Set SWITCHYARD_EXPECTED_COMMIT only when intentionally testing another revision." >&2
-    return 1
-  fi
-  printf 'Switchyard revision: %s (%s)\n' "$actual" "$(git -C "$root" show -s --format=%s HEAD)"
-}
-
 e2e_tail_logs() {
   local directory="$1"
   local log

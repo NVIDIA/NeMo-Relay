@@ -15,7 +15,7 @@ use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
 #[cfg(feature = "switchyard")]
-use nemo_relay_switchyard::{SWITCHYARD_PLUGIN_KIND, SwitchyardConfig};
+use nemo_relay_switchyard::{AlgorithmConfig, SWITCHYARD_PLUGIN_KIND, SwitchyardConfig};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -52,7 +52,7 @@ impl EditableComponent {
             Self::NemoGuardrails(_) => "NeMo Guardrails",
             Self::PiiRedaction(_) => "PII Redaction",
             #[cfg(feature = "switchyard")]
-            Self::Switchyard(_) => "Switchyard Decision API",
+            Self::Switchyard(_) => "Switchyard libsy",
         }
     }
 
@@ -1174,20 +1174,18 @@ pub(super) fn pii_redaction_summary(state: &ComponentEditorState<PiiRedactionCon
 
 #[cfg(feature = "switchyard")]
 pub(super) fn switchyard_configured(config: &SwitchyardConfig) -> bool {
-    !config.decision_profile_id.is_empty() || !config.targets.is_empty()
+    !config.targets.is_empty()
 }
 
 #[cfg(feature = "switchyard")]
 pub(super) fn switchyard_summary(state: &ComponentEditorState<SwitchyardConfig>) -> String {
-    let profile = if state.config.decision_profile_id.is_empty() {
-        "unconfigured"
-    } else {
-        state.config.decision_profile_id.as_str()
+    let algorithm = match &state.config.algorithm {
+        AlgorithmConfig::Random { .. } => "random",
     };
     format!(
-        "component {}, profile {}, targets {}",
+        "component {}, algorithm {}, targets {}",
         if state.enabled { "enabled" } else { "disabled" },
-        profile,
+        algorithm,
         state.config.targets.len()
     )
 }

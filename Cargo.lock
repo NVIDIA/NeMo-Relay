@@ -1614,7 +1614,7 @@ dependencies = [
  "nemo-relay-worker-proto",
  "object_store",
  "openinference-semantic-conventions",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "reqwest",
@@ -1685,7 +1685,7 @@ dependencies = [
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",
  "nemo-relay-switchyard",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "opentelemetry_sdk",
  "percent-encoding",
  "rcgen",
@@ -1799,17 +1799,16 @@ dependencies = [
 name = "nemo-relay-switchyard"
 version = "0.6.0"
 dependencies = [
- "async-stream",
- "axum",
  "futures-util",
+ "http",
  "nemo-relay",
- "reqwest",
  "schemars",
  "serde",
  "serde_json",
+ "switchyard-libsy",
+ "switchyard-protocol",
  "switchyard-translation",
  "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -2005,7 +2004,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eea63d12c54e611c8b28e031ac1d6d8778c7f399dc1f661da9260a543676a07d"
 dependencies = [
- "opentelemetry",
+ "opentelemetry 0.31.0",
 ]
 
 [[package]]
@@ -2029,6 +2028,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
+dependencies = [
+ "js-sys",
+]
+
+[[package]]
 name = "opentelemetry-http"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2037,7 +2045,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "reqwest",
 ]
 
@@ -2048,7 +2056,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
 dependencies = [
  "http",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
@@ -2065,7 +2073,7 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
 dependencies = [
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "opentelemetry_sdk",
  "prost",
  "tonic",
@@ -2081,7 +2089,7 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "percent-encoding",
  "rand 0.9.3",
  "thiserror 2.0.18",
@@ -2548,11 +2556,22 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
+dependencies = [
+ "libc",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166"
 dependencies = [
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "rand_core 0.9.5",
 ]
 
@@ -2569,12 +2588,31 @@ dependencies = [
 
 [[package]]
 name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_chacha"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -3290,21 +3328,43 @@ dependencies = [
 ]
 
 [[package]]
-name = "switchyard-protocol"
+name = "switchyard-libsy"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c80192a3665425e92b4e10df3bff748cc60180cd028ba207bd70fb95df6869d5"
+source = "git+https://github.com/bbednarski9/Switchyard.git?rev=773a451125231e69209cadb697666a1f03d8f909#773a451125231e69209cadb697666a1f03d8f909"
 dependencies = [
+ "async-trait",
+ "futures",
+ "opentelemetry 0.32.0",
+ "parking_lot",
+ "rand 0.8.7",
  "serde",
  "serde_json",
+ "switchyard-protocol",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "switchyard-protocol"
+version = "0.1.0"
+source = "git+https://github.com/bbednarski9/Switchyard.git?rev=773a451125231e69209cadb697666a1f03d8f909#773a451125231e69209cadb697666a1f03d8f909"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "switchyard-translation"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7c977a683d8921e1ee7f01373162e14cbbfac28ef2a87dde8441c1691b2fed9"
+source = "git+https://github.com/bbednarski9/Switchyard.git?rev=773a451125231e69209cadb697666a1f03d8f909#773a451125231e69209cadb697666a1f03d8f909"
 dependencies = [
+ "async-stream",
+ "futures",
  "serde",
  "serde_json",
  "switchyard-protocol",

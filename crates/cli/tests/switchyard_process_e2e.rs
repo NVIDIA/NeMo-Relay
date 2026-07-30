@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
@@ -29,53 +29,6 @@ impl Drop for ChildGuard {
 }
 
 #[derive(Clone, Default)]
-struct DecisionState {
-    requests: Arc<Mutex<Vec<(HeaderMap, Value)>>>,
-}
-
-async fn decide(
-    State(state): State<DecisionState>,
-    headers: HeaderMap,
-    Json(request): Json<Value>,
-) -> Response {
-    let call = {
-        let mut requests = state.requests.lock().unwrap();
-        requests.push((headers, request));
-        requests.len()
-    };
-    if call == 4 {
-        return Response::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .body(Body::from("decision API unavailable"))
-            .unwrap();
-    }
-    let body = json!({
-        "schema_version": "switchyard.routing_decision.v1",
-        "decision_id": format!("decision-{call}"),
-        "router": {"name": "fake-ci-router", "version": "1"},
-        "route": {
-            "tier": "strong",
-            "target_model": "provider/selected",
-            "backend_id": "selected-chat",
-            "target_protocol_profile": "openai_chat",
-            "target_endpoint": "/v1/chat/completions"
-        },
-        "confidence": 0.99,
-        "reason_code": "ci_fixture",
-        "reason_summary": "deterministic process E2E decision"
-    });
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap()
-}
-
-async fn switchyard_health() -> Json<Value> {
-    Json(json!({"status": "ok"}))
-}
-
-#[derive(Clone, Default)]
 struct ProviderState {
     requests: Arc<Mutex<Vec<(HeaderMap, Value)>>>,
 }
@@ -89,9 +42,7 @@ async fn provide(
     let model = request["model"].as_str().unwrap_or("unknown").to_string();
     let malformed_response = !stream
         && model == "provider/selected"
-        && headers
-            .get("x-nemo-relay-request-id")
-            .is_some_and(|value| value == "malformed-response");
+        && request["messages"][0]["content"] == "malformed-response";
     state.requests.lock().unwrap().push((headers, request));
     if malformed_response {
         return Response::builder()
@@ -103,6 +54,7 @@ async fn provide(
     if stream {
         let first = json!({
             "id": "chat-ci", "object": "chat.completion.chunk", "model": model,
+            "system_fingerprint": "fp_process_e2e",
             "choices": [{"index": 0, "delta": {"role": "assistant", "content": "streamed"}, "finish_reason": null}]
         });
         let last = json!({
@@ -162,17 +114,7 @@ async fn wait_for_gateway(client: &reqwest::Client, url: &str, child: &mut Child
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn switchyard_plugin_routes_buffered_and_streaming_then_fails_open() {
-    let decision_state = DecisionState::default();
-    let decision_requests = Arc::clone(&decision_state.requests);
-    let (decision_url, decision_task) = start_server(
-        Router::new()
-            .route("/v1/routing/decision", post(decide))
-            .route("/health", get(switchyard_health))
-            .with_state(decision_state),
-    )
-    .await;
-
+async fn switchyard_plugin_routes_buffered_and_streaming_without_a_service() {
     let provider_state = ProviderState::default();
     let provider_requests = Arc::clone(&provider_state.requests);
     let (provider_url, provider_task) = start_server(
@@ -192,42 +134,30 @@ kind = "switchyard"
 enabled = true
 
 [components.config]
-mode = "enforce"
-decision_api_url = "{decision_url}/v1/routing/decision"
-decision_profile_id = "ci-process-e2e"
-request_materialization = "full_body"
-context_mode = "payload_only"
-decision_timeout_millis = 1000
+version = 2
 max_retries = 0
+enabled_inbound_profiles = ["openai_chat"]
+
+[components.config.algorithm]
+kind = "random"
+seed = 42
 
 [components.config.default_targets]
 openai_chat = "fallback-chat"
-openai_responses = "fallback-responses"
-anthropic_messages = "fallback-anthropic"
 
 [components.config.targets.selected-chat]
 model = "provider/selected"
 protocol = "openai_chat"
 endpoint = "/v1/chat/completions"
 base_url = "{provider_url}"
+weight = 1
 
 [components.config.targets.fallback-chat]
 model = "provider/fallback"
 protocol = "openai_chat"
 endpoint = "/v1/chat/completions"
 base_url = "{provider_url}"
-
-[components.config.targets.fallback-responses]
-model = "provider/fallback"
-protocol = "openai_responses"
-endpoint = "/v1/responses"
-base_url = "{provider_url}"
-
-[components.config.targets.fallback-anthropic]
-model = "provider/fallback"
-protocol = "anthropic_messages"
-endpoint = "/v1/messages"
-base_url = "{provider_url}"
+weight = 0
 "#
     );
     std::fs::write(&config_path, config).unwrap();
@@ -251,6 +181,7 @@ base_url = "{provider_url}"
     let send_chat = |request_id: &'static str, stream: bool| {
         client
             .post(format!("{gateway_url}/v1/chat/completions"))
+            .header("authorization", "Bearer caller-secret")
             .header("x-nemo-relay-session-id", "ci-process-session")
             .header("x-nemo-relay-request-id", request_id)
             .header(
@@ -261,7 +192,7 @@ base_url = "{provider_url}"
             .json(&json!({
                 "model": "client/model",
                 "stream": stream,
-                "messages": [{"role": "user", "content": "process boundary test"}]
+                "messages": [{"role": "user", "content": request_id}]
             }))
             .send()
     };
@@ -271,55 +202,17 @@ base_url = "{provider_url}"
     let buffered: Value = buffered.json().await.unwrap();
     assert_eq!(buffered["model"], "provider/selected");
 
-    let translated = client
-        .post(format!("{gateway_url}/v1/responses"))
-        .header("x-nemo-relay-session-id", "ci-process-session")
-        .header("x-nemo-relay-request-id", "translated-request")
-        .json(&json!({
-            "model": "client/model",
-            "stream": false,
-            "input": "process boundary response translation"
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert!(translated.status().is_success());
-    let translated: Value = translated.json().await.unwrap();
-    assert_eq!(translated["object"], "response");
-
     let streaming = send_chat("stream-request", true).await.unwrap();
     assert!(streaming.status().is_success());
     let streaming = streaming.text().await.unwrap();
     assert!(streaming.contains("streamed"));
+    assert!(streaming.contains("fp_process_e2e"));
     assert!(streaming.contains("[DONE]"));
-
-    let fallback = send_chat("fallback-request", false).await.unwrap();
-    assert!(fallback.status().is_success());
-    let fallback: Value = fallback.json().await.unwrap();
-    assert_eq!(fallback["model"], "provider/fallback");
 
     let malformed = send_chat("malformed-response", false).await.unwrap();
     assert!(malformed.status().is_success());
     let malformed: Value = malformed.json().await.unwrap();
     assert_eq!(malformed["model"], "provider/fallback");
-
-    let decisions = decision_requests.lock().unwrap();
-    assert_eq!(decisions.len(), 5);
-    for (headers, body) in decisions.iter() {
-        assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
-        assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));
-        assert_eq!(
-            headers
-                .get("x-nemo-relay-session-id")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "ci-process-session"
-        );
-        assert_eq!(body["schema_version"], "switchyard.routing_request.v1");
-        assert_eq!(body["decision_profile"]["profile_id"], "ci-process-e2e");
-    }
-    drop(decisions);
 
     let providers = provider_requests.lock().unwrap();
     let models = providers
@@ -332,25 +225,12 @@ base_url = "{provider_url}"
             "provider/selected",
             "provider/selected",
             "provider/selected",
-            "provider/fallback",
-            "provider/selected",
             "provider/fallback"
         ]
     );
-    assert!(providers[1].1["messages"].is_array());
-    assert!(providers[1].1.get("input").is_none());
-    assert_eq!(providers[1].1["messages"][0]["role"], "user");
-    assert_eq!(
-        providers[1].1["messages"][0]["content"],
-        "process boundary response translation"
-    );
     let malformed_models = providers
         .iter()
-        .filter(|(headers, _)| {
-            headers
-                .get("x-nemo-relay-request-id")
-                .is_some_and(|value| value == "malformed-response")
-        })
+        .filter(|(_, body)| body["messages"][0]["content"] == "malformed-response")
         .map(|(_, body)| body["model"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(
@@ -360,8 +240,8 @@ base_url = "{provider_url}"
     for (headers, _) in providers.iter() {
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));
+        assert!(!headers.contains_key("authorization"));
     }
 
-    decision_task.abort();
     provider_task.abort();
 }

@@ -24,6 +24,7 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl-fake",
                     "object": "chat.completion.chunk",
                     "model": model,
+                    "system_fingerprint": "fp_switchyard_example",
                     "choices": [
                         {
                             "index": 0,
@@ -36,6 +37,7 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl-fake",
                     "object": "chat.completion.chunk",
                     "model": model,
+                    "system_fingerprint": "fp_switchyard_example",
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 },
             ]
@@ -52,6 +54,7 @@ class Handler(BaseHTTPRequestHandler):
             "id": "chatcmpl-fake",
             "object": "chat.completion",
             "model": model,
+            "system_fingerprint": "fp_switchyard_example",
             "choices": [
                 {
                     "index": 0,

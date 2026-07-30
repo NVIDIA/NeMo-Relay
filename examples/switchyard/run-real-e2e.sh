@@ -6,19 +6,8 @@ set -euo pipefail
 
 relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$relay_root/examples/switchyard/e2e-common.sh"
-relay_toolchain=""
-if command -v rustup >/dev/null 2>&1; then
-  relay_toolchain="$(cd "$relay_root" && rustup show active-toolchain)"
-  relay_toolchain="${relay_toolchain%% *}"
-fi
-switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-topic-nemo-relay-integration}"
-switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8}"
 work_dir="$(mktemp -d)"
 upstream_log="$work_dir/upstream.jsonl"
-token="$(e2e_random_token)"
-
-[[ -d "$switchyard_root" ]] || { echo "Switchyard worktree not found: $switchyard_root" >&2; exit 1; }
-e2e_verify_switchyard_checkout "$switchyard_root" "$switchyard_expected_commit"
 
 cleanup() {
   local status=$?
@@ -32,58 +21,45 @@ cleanup() {
 }
 trap cleanup EXIT
 
+for dependency in cargo curl python3; do
+  command -v "$dependency" >/dev/null || {
+    echo "missing required command: $dependency" >&2
+    exit 1
+  }
+done
+
 python3 "$relay_root/examples/switchyard/fake_upstream.py" \
   --port 4101 --log "$upstream_log" >"$work_dir/upstream.log" 2>&1 &
 e2e_add_pid "$!"
 
 (
-  cd "$switchyard_root"
-  SWITCHYARD_ATOF_BEARER_TOKEN="$token" cargo run -p switchyard-server -- \
-    --config "$relay_root/examples/switchyard/real-e2e-profiles.yaml" --port 4000
-) >"$work_dir/switchyard.log" 2>&1 &
-e2e_add_pid "$!"
-
-e2e_wait_for http://127.0.0.1:4000/health
-
-(
-  if [[ -n "$relay_toolchain" ]]; then
-    export RUSTUP_TOOLCHAIN="$relay_toolchain"
-  fi
-  cd "$work_dir"
-  SWITCHYARD_AUTHORIZATION="Bearer $token" cargo run \
-    --manifest-path "$relay_root/Cargo.toml" -p nemo-relay-cli --features switchyard -- \
-    --plugin-config-path "$relay_root/examples/switchyard/real-e2e-plugins.toml" \
+  cd "$relay_root"
+  cargo run -p nemo-relay-cli --features switchyard -- \
+    --plugin-config-path "$relay_root/examples/switchyard/plugins.toml" \
     --bind 127.0.0.1:4041
 ) >"$work_dir/relay.log" 2>&1 &
 relay_pid="$!"
 e2e_add_pid "$relay_pid"
 
-e2e_wait_for http://127.0.0.1:4041/healthz 120 0.25 "$relay_pid"
+e2e_wait_for http://127.0.0.1:4041/healthz 240 0.25 "$relay_pid"
 
-request() {
-  local request_id="$1"
-  local stream="$2"
-  curl --fail --silent --no-buffer http://127.0.0.1:4041/v1/chat/completions \
+for request in $(seq 1 8); do
+  curl --fail --silent http://127.0.0.1:4041/v1/chat/completions \
     -H 'content-type: application/json' \
-    -H 'x-nemo-relay-session-id: e2e-session' \
-    -H "x-nemo-relay-request-id: $request_id" \
-    --data-binary "{\"model\":\"client-model\",\"stream\":$stream,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
-}
-
-request cold-request false >"$work_dir/cold.json"
-
-for payload in \
-  '{"hook_event_name":"on_session_start","session_id":"e2e-session"}' \
-  '{"hook_event_name":"pre_tool_call","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"extra":{"task_id":"task-1","tool_call_id":"call-1"}}' \
-  '{"hook_event_name":"post_tool_call","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"tool_response":{"output":"CUDA out of memory"},"extra":{"task_id":"task-1","tool_call_id":"call-1"}}'
-do
-  curl --fail --silent http://127.0.0.1:4041/hooks/hermes \
-    -H 'content-type: application/json' --data-binary "$payload" >/dev/null
+    -H 'x-nemo-relay-session-id: libsy-example' \
+    -H "x-nemo-relay-request-id: buffered-$request" \
+    --data-binary \
+      '{"model":"client/model","stream":false,"messages":[{"role":"user","content":"hello"}]}' \
+    >"$work_dir/buffered-$request.json"
 done
 
-sleep 1
-request warm-request false >"$work_dir/warm.json"
-request stream-request true >"$work_dir/stream.sse"
+curl --fail --silent --no-buffer http://127.0.0.1:4041/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'x-nemo-relay-session-id: libsy-example' \
+  -H 'x-nemo-relay-request-id: stream-1' \
+  --data-binary \
+    '{"model":"client/model","stream":true,"messages":[{"role":"user","content":"stream hello"}]}' \
+  >"$work_dir/stream.sse"
 
 python3 - "$upstream_log" "$work_dir/stream.sse" <<'PY'
 import json
@@ -92,10 +68,12 @@ import sys
 
 records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
 models = [record["body"]["model"] for record in records]
-if models != ["provider/weak", "provider/strong", "provider/strong"]:
-    raise SystemExit(f"unexpected cold/warm/stream route sequence: {models}")
+if set(models) != {"provider/fast", "provider/quality"}:
+    raise SystemExit(f"seeded libsy router did not exercise both targets: {models}")
 stream = pathlib.Path(sys.argv[2]).read_text()
 if "fake" not in stream or "[DONE]" not in stream:
     raise SystemExit(f"unexpected SSE output: {stream}")
-print(f"real Switchyard E2E passed: {models}")
+if '"system_fingerprint":"fp_switchyard_example"' not in stream:
+    raise SystemExit(f"provider stream extension was not preserved: {stream}")
+print(f"in-process Switchyard libsy E2E passed: {models}")
 PY

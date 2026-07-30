@@ -29,9 +29,7 @@ use nemo_relay::plugin::{
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 #[cfg(feature = "switchyard")]
-use nemo_relay_switchyard::{
-    register_switchyard_component, validate_switchyard_atof_configuration,
-};
+use nemo_relay_switchyard::register_switchyard_component;
 use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
@@ -894,8 +892,6 @@ pub(crate) enum PluginComponentSetupError {
     PiiRedaction(String),
     #[cfg(feature = "switchyard")]
     Switchyard(String),
-    #[cfg(feature = "switchyard")]
-    SwitchyardAtof(String),
 }
 
 impl PluginComponentSetupError {
@@ -905,8 +901,6 @@ impl PluginComponentSetupError {
             Self::PiiRedaction(_) => "PII redaction plugin",
             #[cfg(feature = "switchyard")]
             Self::Switchyard(_) => "Switchyard plugin",
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardAtof(_) => "Switchyard ATOF",
         }
     }
 
@@ -917,8 +911,6 @@ impl PluginComponentSetupError {
             }
             #[cfg(feature = "switchyard")]
             Self::Switchyard(error) => format!("registration failed: {error}"),
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardAtof(error) => error.clone(),
         }
     }
 }
@@ -939,10 +931,6 @@ impl std::fmt::Display for PluginComponentSetupError {
             Self::Switchyard(error) => {
                 write!(formatter, "Switchyard plugin registration failed: {error}")
             }
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardAtof(error) => {
-                write!(formatter, "Switchyard ATOF validation failed: {error}")
-            }
         }
     }
 }
@@ -960,10 +948,6 @@ pub(crate) fn register_and_validate_plugin_components(
     #[cfg(feature = "switchyard")]
     if let Err(error) = register_switchyard_component() {
         errors.push(PluginComponentSetupError::Switchyard(error.to_string()));
-    }
-    #[cfg(feature = "switchyard")]
-    if let Err(error) = validate_switchyard_atof_configuration(_plugin_config) {
-        errors.push(PluginComponentSetupError::SwitchyardAtof(error));
     }
     errors
 }

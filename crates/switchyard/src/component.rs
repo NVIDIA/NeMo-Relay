@@ -1,61 +1,54 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Switchyard plugin configuration and Relay execution integration.
+//! Switchyard libsy plugin configuration and Relay execution integration.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
+use http::Uri;
+use http::header::{HeaderName, HeaderValue};
 use nemo_relay::api::event::{CategoryProfile, DataSchema, EventCategory};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::optimization::record_llm_optimization_contribution;
 use nemo_relay::api::runtime::{
-    LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn, LlmStreamInner,
+    LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, task_scope_top,
 };
 use nemo_relay::api::scope::{EmitMarkEventParams, event};
-use nemo_relay::codec::optimization::{
-    LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
-    LlmOptimizationModelTransition,
-};
 use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::observability::atof::{AtofEndpointFieldNamePolicy, AtofEndpointTransport};
 use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, deregister_plugin, register_plugin,
 };
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json, json};
-use uuid::Uuid;
-
-use crate::contract::{
-    DecisionAttempt, DecisionProfile, ROUTING_DECISION_SCHEMA_VERSION,
-    ROUTING_REQUEST_SCHEMA_VERSION, RequestIdentity, RequestMaterialization, RequestProtocol,
-    RequestSummary, RoutingDecision, RoutingRequest, RoutingTarget,
+use switchyard_libsy::algorithms::Random;
+use switchyard_libsy::{
+    Algorithm, CallLlmRequest, Context as LibsyContext, Decision, LibsyError, LlmResponse,
+    LlmTarget, LlmTargetSet, Request as LibsyRequest, Response as LibsyResponse, Step,
 };
-use crate::stream_translation::StreamTranscoder;
+use switchyard_protocol::{LlmClientError, Metadata};
+
+use crate::stream_translation::{
+    StreamCloseTracker, flow_to_client_error, provider_response_stream, relay_response_stream,
+};
 use crate::translation::{
-    decode_request, encode_request, latest_user_prompt, recent_message_window, translate_response,
-    translation_engine, validate_portable_request,
+    decode_request, decode_response, encode_request, encode_response, translation_engine,
+    wire_format,
 };
 
 /// Plugin kind used in Relay plugin configuration.
 pub const SWITCHYARD_PLUGIN_KIND: &str = "switchyard";
 
-const SWITCHYARD_HEALTH_PATH: &str = "/health";
-const SWITCHYARD_HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
-const SWITCHYARD_HEALTH_MAX_ATTEMPTS: usize = 3;
-const SWITCHYARD_HEALTH_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
+const RELAY_REQUEST_ID_HEADER: &str = "x-nemo-relay-request-id";
+const RELAY_TURN_ID_HEADER: &str = "x-nemo-relay-turn-id";
 const ROUTING_MARK_SCHEMA: &str = "switchyard.routing_mark";
-const ROUTING_CONTRIBUTION_SCHEMA: &str = "nvidia.switchyard.routing_optimization";
 
 /// Supported provider wire protocols.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -71,7 +64,7 @@ pub enum WireProtocol {
 }
 
 impl WireProtocol {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::OpenaiChat => "openai_chat",
             Self::OpenaiResponses => "openai_responses",
@@ -87,7 +80,7 @@ impl WireProtocol {
         }
     }
 
-    fn from_call(name: &str, request: &LlmRequest) -> Option<Self> {
+    fn from_call(name: &str) -> Option<Self> {
         match name {
             "openai.chat_completions" | "openai_chat" | "openai_chat_completions" => {
                 Some(Self::OpenaiChat)
@@ -96,68 +89,36 @@ impl WireProtocol {
             "anthropic.messages" | "anthropic" | "anthropic_messages" => {
                 Some(Self::AnthropicMessages)
             }
-            _ if request.content.get("input").is_some() => Some(Self::OpenaiResponses),
-            _ if request.content.get("system").is_some() => Some(Self::AnthropicMessages),
-            _ if request.content.get("messages").is_some() => Some(Self::OpenaiChat),
             _ => None,
         }
     }
 }
 
-/// Routing rollout mode.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum RoutingMode {
-    /// Apply Switchyard decisions.
-    #[default]
-    Enforce,
-    /// Record decisions but dispatch trusted defaults.
-    ObserveOnly,
-}
-
-impl RoutingMode {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Enforce => "enforce",
-            Self::ObserveOnly => "observe_only",
-        }
-    }
-}
-
-/// Whether the selected Switchyard profile depends on ATOF-derived history.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ContextMode {
-    /// The router uses only current request material.
-    PayloadOnly,
-    /// Stable identity and a configured ATOF endpoint are required.
-    AtofRequired,
-}
-
-/// Exact Relay-owned backend binding for one Switchyard backend ID.
+/// Exact Relay-owned provider binding for one libsy semantic target.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TargetBinding {
-    /// Exact model expected in the Switchyard decision.
+    /// Provider model sent on the physical request.
     pub model: String,
-    /// Exact protocol expected in the Switchyard decision.
+    /// Provider wire protocol.
     pub protocol: WireProtocol,
-    /// Exact endpoint expected in the Switchyard decision.
+    /// Provider endpoint.
     pub endpoint: String,
-    /// Relay-owned backend base URL.
+    /// Relay-owned provider base URL.
     pub base_url: String,
-    /// Static non-sensitive backend headers.
+    /// Relative random-routing weight.
+    #[serde(default = "default_weight")]
+    pub weight: f64,
+    /// Static non-sensitive provider headers.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
-    /// Backend headers resolved from environment variables.
+    /// Provider headers resolved from environment variables.
     #[serde(default)]
     pub header_env: BTreeMap<String, String>,
 }
 
-/// Trusted fallback target IDs for each inbound protocol.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// Trusted fallback target names for each inbound protocol.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProtocolDefaults {
     /// OpenAI Chat fallback target.
@@ -181,111 +142,81 @@ impl ProtocolDefaults {
     }
 }
 
+/// In-process libsy algorithm configuration.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AlgorithmConfig {
+    /// Uniform or weighted random routing.
+    Random {
+        /// Optional deterministic random seed.
+        #[serde(default)]
+        seed: Option<u64>,
+    },
+}
+
+impl Default for AlgorithmConfig {
+    fn default() -> Self {
+        Self::Random { seed: None }
+    }
+}
+
 /// Versioned Switchyard plugin configuration.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SwitchyardConfig {
-    /// Config schema version.
+    /// Config schema version. The libsy-only contract is version 2.
     #[serde(default = "default_version")]
     pub version: u32,
-    /// Enforce or observe-only rollout mode.
-    #[serde(default)]
-    pub mode: RoutingMode,
     /// Execution-intercept priority.
     #[serde(default)]
     pub priority: i32,
-    /// Switchyard Decision API URL.
-    pub decision_api_url: String,
-    /// Switchyard profile ID.
-    pub decision_profile_id: String,
-    /// Current-request materialization.
-    pub request_materialization: RequestMaterialization,
-    /// Profile context requirement.
-    pub context_mode: ContextMode,
-    /// Decision call timeout.
-    #[serde(default = "default_decision_timeout_millis")]
-    pub decision_timeout_millis: u64,
-    /// Provider retries after the initial attempt.
+    /// Provider retries after the initial libsy run.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
-    /// Number of messages in recent-message materialization.
-    #[serde(default = "default_recent_message_count")]
-    pub recent_message_count: usize,
-    /// Static non-sensitive Decision API headers.
+    /// In-process libsy algorithm.
     #[serde(default)]
-    pub decision_headers: BTreeMap<String, String>,
-    /// Decision API headers resolved from environment variables.
-    #[serde(default)]
-    pub decision_header_env: BTreeMap<String, String>,
-    /// Enabled inbound protocols.
-    #[serde(default = "default_enabled_protocols")]
-    pub enabled_inbound_profiles: BTreeSet<WireProtocol>,
-    /// Exact backend bindings keyed by Switchyard backend ID.
+    pub algorithm: AlgorithmConfig,
+    /// Semantic libsy targets mapped to Relay-owned provider bindings.
     pub targets: BTreeMap<String, TargetBinding>,
     /// Trusted per-protocol fallbacks.
-    pub default_targets: ProtocolDefaults,
-    /// Named observability ATOF endpoint used by history-backed profiles.
     #[serde(default)]
-    pub atof_endpoint_name: Option<String>,
+    pub default_targets: ProtocolDefaults,
+    /// Inbound protocols handled by this component.
+    #[serde(default = "default_enabled_protocols")]
+    pub enabled_inbound_profiles: BTreeSet<WireProtocol>,
 }
 
 impl Default for SwitchyardConfig {
     fn default() -> Self {
         Self {
             version: default_version(),
-            mode: RoutingMode::default(),
             priority: 0,
-            decision_api_url: "http://127.0.0.1:8080/v1/routing/decision".into(),
-            decision_profile_id: String::new(),
-            request_materialization: RequestMaterialization::SummaryOnly,
-            context_mode: ContextMode::PayloadOnly,
-            decision_timeout_millis: default_decision_timeout_millis(),
             max_retries: default_max_retries(),
-            recent_message_count: default_recent_message_count(),
-            decision_headers: BTreeMap::new(),
-            decision_header_env: BTreeMap::new(),
-            enabled_inbound_profiles: default_enabled_protocols(),
+            algorithm: AlgorithmConfig::default(),
             targets: BTreeMap::new(),
-            default_targets: ProtocolDefaults {
-                openai_chat: String::new(),
-                openai_responses: String::new(),
-                anthropic_messages: String::new(),
-            },
-            atof_endpoint_name: None,
+            default_targets: ProtocolDefaults::default(),
+            enabled_inbound_profiles: default_enabled_protocols(),
         }
     }
 }
 
 nemo_relay::editor_config! {
     impl SwitchyardConfig {
-        mode => { label: "Rollout mode", kind: Enum, values: ["enforce", "observe_only"] },
         priority => { label: "Intercept priority", kind: Integer },
-        decision_api_url => { label: "Decision API URL", kind: String },
-        decision_profile_id => { label: "Decision profile ID", kind: String },
-        request_materialization => {
-            label: "Request materialization",
-            kind: Enum,
-            values: ["none", "summary_only", "latest_user_prompt", "recent_message_window", "annotated_request", "full_body"]
-        },
-        context_mode => { label: "Context mode", kind: Enum, values: ["payload_only", "atof_required"] },
-        decision_timeout_millis => { label: "Decision timeout (ms)", kind: Integer },
         max_retries => { label: "Maximum provider retries", kind: Integer },
-        recent_message_count => { label: "Recent message count", kind: Integer },
-        decision_headers => { label: "Decision API static headers", kind: StringMap },
-        decision_header_env => { label: "Decision API environment headers", kind: StringMap },
-        enabled_inbound_profiles => { label: "Enabled inbound profiles", kind: Json },
-        targets => { label: "Backend target bindings", kind: Json },
+        algorithm => { label: "libsy algorithm", kind: Json },
+        targets => { label: "Provider target bindings", kind: Json },
         default_targets => { label: "Trusted protocol defaults", kind: Json },
-        atof_endpoint_name => { label: "ATOF endpoint name", kind: String, optional: true }
+        enabled_inbound_profiles => { label: "Enabled inbound profiles", kind: Json }
     }
 }
 
 impl From<SwitchyardConfig> for PluginComponentSpec {
     fn from(value: SwitchyardConfig) -> Self {
-        let Json::Object(config) =
-            serde_json::to_value(value).expect("Switchyard config should serialize to an object")
-        else {
-            unreachable!("Switchyard config must serialize to an object")
+        let config = match serde_json::to_value(value) {
+            Ok(Json::Object(config)) => config,
+            _ => Map::new(),
         };
         Self {
             kind: SWITCHYARD_PLUGIN_KIND.into(),
@@ -296,17 +227,17 @@ impl From<SwitchyardConfig> for PluginComponentSpec {
 }
 
 fn default_version() -> u32 {
-    1
+    2
 }
-fn default_decision_timeout_millis() -> u64 {
-    25
-}
+
 fn default_max_retries() -> u32 {
     3
 }
-fn default_recent_message_count() -> usize {
-    8
+
+fn default_weight() -> f64 {
+    1.0
 }
+
 fn default_enabled_protocols() -> BTreeSet<WireProtocol> {
     BTreeSet::from([
         WireProtocol::OpenaiChat,
@@ -351,10 +282,7 @@ impl Plugin for SwitchyardPlugin {
                     .and_then(SwitchyardRuntime::new)
                     .map_err(PluginError::InvalidConfig)?,
             );
-            runtime
-                .require_healthy_sidecar()
-                .await
-                .map_err(PluginError::RegistrationFailed)?;
+
             let buffered = Arc::clone(&runtime);
             let buffered_intercept: LlmExecutionFn = Arc::new(move |name, request, next| {
                 let runtime = Arc::clone(&buffered);
@@ -362,7 +290,7 @@ impl Plugin for SwitchyardPlugin {
                 Box::pin(async move { runtime.execute_buffered(&name, request, next).await })
             });
             ctx.register_llm_execution_intercept(
-                "decision",
+                "libsy",
                 runtime.config.priority,
                 buffered_intercept,
             )?;
@@ -374,7 +302,7 @@ impl Plugin for SwitchyardPlugin {
                 Box::pin(async move { runtime.execute_stream(&name, request, next).await })
             });
             ctx.register_llm_stream_execution_intercept(
-                "decision_stream",
+                "libsy_stream",
                 runtime.config.priority,
                 stream_intercept,
             )?;
@@ -399,939 +327,556 @@ pub fn deregister_switchyard_component() -> bool {
     deregister_plugin(SWITCHYARD_PLUGIN_KIND)
 }
 
-/// Validate the cross-component ATOF requirement for enabled history-backed profiles.
-pub fn validate_switchyard_atof_configuration(config: &PluginConfig) -> Result<(), String> {
-    let Some(component) = config
-        .components
-        .iter()
-        .find(|component| component.enabled && component.kind == SWITCHYARD_PLUGIN_KIND)
-    else {
-        return Ok(());
-    };
-    let switchyard = parse_config(&component.config)?;
-    if switchyard.context_mode != ContextMode::AtofRequired {
-        return Ok(());
-    }
-    let required_name = validate_atof_endpoint_name(switchyard.atof_endpoint_name.as_deref())?
-        .ok_or_else(|| {
-            "atof_required Switchyard profiles require atof_endpoint_name".to_string()
-        })?;
-    let observability = config
-        .components
-        .iter()
-        .find(|component| component.enabled && component.kind == "observability")
-        .ok_or_else(|| "atof_required Switchyard profiles require observability".to_string())?;
-    let sinks = observability
-        .config
-        .get("atof")
-        .filter(|atof| atof.get("enabled").and_then(Json::as_bool) == Some(true))
-        .and_then(|atof| atof.get("sinks"))
-        .and_then(Json::as_array)
-        .ok_or_else(|| {
-            "atof_required Switchyard profiles require an enabled ATOF endpoint".to_string()
-        })?;
-    let matching_sinks = sinks
-        .iter()
-        .filter(|sink| {
-            sink.get("type").and_then(Json::as_str) == Some("stream")
-                && sink.get("name").and_then(Json::as_str) == Some(required_name)
-        })
-        .collect::<Vec<_>>();
-    let endpoint = match matching_sinks.as_slice() {
-        [sink] => *sink,
-        [] => {
-            return Err(format!(
-                "atof_required Switchyard profile requires named ATOF endpoint {required_name:?}"
-            ));
-        }
-        _ => {
-            return Err(format!(
-                "ATOF endpoint name {required_name:?} must resolve to exactly one endpoint"
-            ));
-        }
-    };
-    let transport = endpoint.get("transport").map_or_else(
-        || Some(AtofEndpointTransport::default()),
-        |value| value.as_str().and_then(AtofEndpointTransport::parse),
-    );
-    if transport != Some(AtofEndpointTransport::HttpPost) {
-        return Err(format!(
-            "Switchyard ATOF endpoint {required_name:?} must use transport = http_post"
-        ));
-    }
-    let field_name_policy = endpoint.get("field_name_policy").map_or_else(
-        || Some(AtofEndpointFieldNamePolicy::default()),
-        |value| value.as_str().and_then(AtofEndpointFieldNamePolicy::parse),
-    );
-    if field_name_policy != Some(AtofEndpointFieldNamePolicy::Preserve) {
-        return Err(format!(
-            "Switchyard ATOF endpoint {required_name:?} must use field_name_policy = preserve"
-        ));
-    }
-    if endpoint
-        .get("header_env")
-        .and_then(Json::as_object)
-        .is_none_or(Map::is_empty)
-    {
-        return Err(format!(
-            "Switchyard ATOF endpoint {required_name:?} authentication must use at least one environment-referenced header"
-        ));
-    }
-    Ok(())
-}
-
 fn parse_config(config: &Map<String, Json>) -> Result<SwitchyardConfig, String> {
+    if config.get("version").and_then(Json::as_u64) == Some(1)
+        || config.contains_key("decision_api_url")
+    {
+        return Err(
+            "Switchyard config version 1 used the removed switchyard-server Decision API; migrate to version = 2 with [components.config.algorithm]".into(),
+        );
+    }
     serde_json::from_value(Json::Object(config.clone()))
         .map_err(|error| format!("invalid Switchyard plugin config: {error}"))
 }
 
 struct SwitchyardRuntime {
     config: SwitchyardConfig,
-    client: reqwest::Client,
+    algorithm: Arc<dyn Algorithm>,
     target_headers: BTreeMap<String, Map<String, Json>>,
     translation: switchyard_translation::TranslationEngine,
-}
-
-enum BufferedAttempt {
-    Complete(Json),
-    Retry((String, String)),
-    Fallback(&'static str),
-}
-
-enum StreamAttempt {
-    Committed(LlmJsonStream),
-    Retry((String, String)),
-    Fallback(&'static str),
-}
-
-struct StreamAttemptContext {
-    routing_request: RoutingRequest,
-    decision: RoutingDecision,
-    attempt: u32,
-    max_attempts: u32,
-}
-
-fn provider_fallback_reason(error: &FlowError) -> &'static str {
-    if error_is_retryable(error) {
-        "retry_exhausted"
-    } else {
-        "non_retryable_provider_error"
-    }
 }
 
 impl SwitchyardRuntime {
     fn new(config: SwitchyardConfig) -> Result<Self, String> {
         validate_config(&config)?;
-        let headers = resolve_headers(&config.decision_headers, &config.decision_header_env)?;
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .timeout(Duration::from_millis(config.decision_timeout_millis))
-            .build()
-            .map_err(|error| format!("failed to build Decision API client: {error}"))?;
         let target_headers = config
             .targets
             .iter()
-            .map(|(id, target)| {
-                let headers = resolve_json_headers(&target.headers, &target.header_env)?;
-                Ok((id.clone(), headers))
+            .map(|(name, target)| {
+                resolve_json_headers(&target.headers, &target.header_env)
+                    .map(|headers| (name.clone(), headers))
             })
-            .collect::<Result<_, String>>()?;
+            .collect::<Result<_, _>>()?;
+        let algorithm = build_algorithm(&config)?;
         Ok(Self {
             config,
-            client,
+            algorithm,
             target_headers,
             translation: translation_engine(),
         })
-    }
-
-    // Skip the portability guard when no configured target uses a different protocol: with no
-    // possible cross-protocol translation, provider-specific fields never need to be portable.
-    fn may_translate_protocol(&self, inbound: WireProtocol) -> bool {
-        self.config
-            .targets
-            .values()
-            .any(|target| target.protocol != inbound)
-    }
-
-    async fn require_healthy_sidecar(&self) -> Result<(), String> {
-        let health_url = switchyard_health_url(&self.config.decision_api_url)?;
-        let client = reqwest::Client::builder()
-            .timeout(SWITCHYARD_HEALTH_TIMEOUT)
-            .build()
-            .map_err(|error| format!("failed to build Switchyard health client: {error}"))?;
-        let mut backoff = SWITCHYARD_HEALTH_INITIAL_BACKOFF;
-        let mut final_error = None;
-        for attempt in 1..=SWITCHYARD_HEALTH_MAX_ATTEMPTS {
-            match check_switchyard_health(&client, &health_url).await {
-                Ok(()) => return Ok(()),
-                Err(error) => final_error = Some(error),
-            }
-            if attempt < SWITCHYARD_HEALTH_MAX_ATTEMPTS {
-                tokio::time::sleep(backoff).await;
-                backoff *= 2;
-            }
-        }
-        Err(final_error.expect("at least one Switchyard health attempt is configured"))
     }
 
     async fn execute_buffered(
         &self,
         name: &str,
         original: LlmRequest,
-        next: nemo_relay::api::runtime::LlmExecutionNextFn,
+        next: LlmExecutionNextFn,
     ) -> FlowResult<Json> {
-        let Some(inbound) = WireProtocol::from_call(name, &original) else {
+        let Some(inbound) = WireProtocol::from_call(name) else {
             return next(original).await;
         };
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if self.may_translate_protocol(inbound)
-            && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
-        {
-            self.emit_error(
-                None,
-                0,
-                "unsupported_provider_extension",
-                &error.to_string(),
-            );
-            return self
-                .dispatch_fallback_buffered(
-                    inbound,
-                    original,
-                    next,
-                    "unsupported_provider_extension",
-                )
-                .await;
-        }
-
-        if self.config.mode == RoutingMode::ObserveOnly {
-            match self.decided_request(inbound, &original, 1, None).await {
-                Ok((_, decision, _)) => {
-                    self.record_routing_contribution(&decision, 1, false);
-                }
-                Err(error) => self.emit_error(None, 1, "decision_api", &error),
-            }
-            return self
-                .dispatch_fallback_buffered(inbound, original, next, "observe_only")
-                .await;
-        }
 
         let max_attempts = self.config.max_retries.saturating_add(1);
-        let mut previous = None;
         for attempt in 1..=max_attempts {
+            self.emit_requested(&original, inbound, attempt);
+            let request = match self.libsy_request(inbound, &original, false) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.emit_error(
+                        attempt,
+                        "request_translation",
+                        &error.to_string(),
+                        &original,
+                    );
+                    return self
+                        .dispatch_fallback_buffered(inbound, original, next, "translation_error")
+                        .await;
+                }
+            };
             match self
-                .buffered_attempt(inbound, &original, &next, attempt, previous, max_attempts)
-                .await?
+                .drive_buffered_run(
+                    request,
+                    dispatch_headers(&original.headers),
+                    next.clone(),
+                    attempt,
+                )
+                .await
             {
-                BufferedAttempt::Complete(response) => return Ok(response),
-                BufferedAttempt::Retry(retry) => previous = Some(retry),
-                BufferedAttempt::Fallback(reason) => {
+                Ok(response) => match self.finish_buffered(inbound, response) {
+                    Ok(response) => return Ok(response),
+                    Err(error) => {
+                        self.emit_error(
+                            attempt,
+                            "response_translation",
+                            &error.to_string(),
+                            &original,
+                        );
+                        return self
+                            .dispatch_fallback_buffered(
+                                inbound,
+                                original,
+                                next,
+                                "translation_error",
+                            )
+                            .await;
+                    }
+                },
+                Err(failure) if failure.is_retryable() && attempt < max_attempts => {
+                    self.emit_retry(attempt, &failure.error.to_string(), &original);
+                }
+                Err(failure) => {
+                    let reason = if failure.is_retryable() {
+                        "retry_exhausted"
+                    } else {
+                        "non_retryable_libsy_error"
+                    };
+                    self.emit_error(attempt, "libsy_run", &failure.error.to_string(), &original);
                     return self
                         .dispatch_fallback_buffered(inbound, original, next, reason)
                         .await;
                 }
             }
         }
-        unreachable!("routing attempt loop always returns")
-    }
-
-    async fn buffered_attempt(
-        &self,
-        inbound: WireProtocol,
-        original: &LlmRequest,
-        next: &nemo_relay::api::runtime::LlmExecutionNextFn,
-        attempt: u32,
-        previous: Option<(String, String)>,
-        max_attempts: u32,
-    ) -> FlowResult<BufferedAttempt> {
-        let (routing_request, decision, routed) = match self
-            .decided_request(inbound, original, attempt, previous)
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                self.emit_error(None, attempt, "decision_api", &error);
-                return Ok(BufferedAttempt::Fallback("decision_error"));
-            }
-        };
-        let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
-        match next(routed).await {
-            Ok(response) => {
-                match translate_response(&self.translation, target_protocol, inbound, &response) {
-                    Ok(response) => {
-                        self.record_routing_contribution(&decision, attempt, true);
-                        Ok(BufferedAttempt::Complete(response))
-                    }
-                    Err(error) => {
-                        self.emit_error(
-                            Some(&routing_request),
-                            attempt,
-                            "response_translation",
-                            &error.to_string(),
-                        );
-                        Ok(BufferedAttempt::Fallback("translation_error"))
-                    }
-                }
-            }
-            Err(error) if error_is_retryable(&error) && attempt < max_attempts => {
-                let retry_reason = provider_error_summary(&error);
-                self.emit_error(Some(&routing_request), attempt, "provider", &retry_reason);
-                self.emit_retry(&routing_request, &decision, attempt, &retry_reason);
-                Ok(BufferedAttempt::Retry((
-                    decision.route.backend_id,
-                    retry_reason,
-                )))
-            }
-            Err(error) => {
-                let summary = provider_error_summary(&error);
-                self.emit_error(Some(&routing_request), attempt, "provider", &summary);
-                Ok(BufferedAttempt::Fallback(provider_fallback_reason(&error)))
-            }
-        }
+        Err(FlowError::Internal(
+            "Switchyard retry loop ended without a result".into(),
+        ))
     }
 
     async fn execute_stream(
         &self,
         name: &str,
         original: LlmRequest,
-        next: nemo_relay::api::runtime::LlmStreamExecutionNextFn,
+        next: LlmStreamExecutionNextFn,
     ) -> FlowResult<LlmJsonStream> {
-        let Some(inbound) = WireProtocol::from_call(name, &original) else {
+        let Some(inbound) = WireProtocol::from_call(name) else {
             return next(original).await;
         };
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if self.may_translate_protocol(inbound)
-            && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
-        {
-            self.emit_error(
-                None,
-                0,
-                "unsupported_provider_extension",
-                &error.to_string(),
-            );
-            return self
-                .dispatch_fallback_stream(inbound, original, next, "unsupported_provider_extension")
-                .await;
-        }
-        if self.config.mode == RoutingMode::ObserveOnly {
-            match self.decided_request(inbound, &original, 1, None).await {
-                Ok((_, decision, _)) => {
-                    self.record_routing_contribution(&decision, 1, false);
-                }
-                Err(error) => self.emit_error(None, 1, "decision_api", &error),
-            }
-            return self
-                .dispatch_fallback_stream(inbound, original, next, "observe_only")
-                .await;
-        }
 
         let max_attempts = self.config.max_retries.saturating_add(1);
-        let mut previous = None;
         for attempt in 1..=max_attempts {
+            self.emit_requested(&original, inbound, attempt);
+            let request = match self.libsy_request(inbound, &original, true) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.emit_error(
+                        attempt,
+                        "request_translation",
+                        &error.to_string(),
+                        &original,
+                    );
+                    return self
+                        .dispatch_fallback_stream(inbound, original, next, "translation_error")
+                        .await;
+                }
+            };
+            let tracker = StreamCloseTracker::default();
             match self
-                .stream_attempt(inbound, &original, &next, attempt, previous, max_attempts)
-                .await?
+                .drive_stream_run(
+                    request,
+                    dispatch_headers(&original.headers),
+                    next.clone(),
+                    tracker.clone(),
+                    attempt,
+                )
+                .await
             {
-                StreamAttempt::Committed(stream) => return Ok(stream),
-                StreamAttempt::Retry(retry) => previous = Some(retry),
-                StreamAttempt::Fallback(reason) => {
+                Ok(response) => match self.finish_stream(inbound, response, tracker) {
+                    Ok(response) => return Ok(response),
+                    Err(error) => {
+                        self.emit_error(
+                            attempt,
+                            "response_translation",
+                            &error.to_string(),
+                            &original,
+                        );
+                        return self
+                            .dispatch_fallback_stream(inbound, original, next, "translation_error")
+                            .await;
+                    }
+                },
+                Err(failure) if failure.is_retryable() && attempt < max_attempts => {
+                    self.emit_retry(attempt, &failure.error.to_string(), &original);
+                }
+                Err(failure) => {
+                    let reason = if failure.is_retryable() {
+                        "retry_exhausted"
+                    } else {
+                        "non_retryable_libsy_error"
+                    };
+                    self.emit_error(
+                        attempt,
+                        "libsy_stream_run",
+                        &failure.error.to_string(),
+                        &original,
+                    );
                     return self
                         .dispatch_fallback_stream(inbound, original, next, reason)
                         .await;
                 }
             }
         }
-        unreachable!("stream routing attempt loop always returns")
+        Err(FlowError::Internal(
+            "Switchyard stream retry loop ended without a result".into(),
+        ))
     }
 
-    async fn stream_attempt(
+    async fn drive_buffered_run(
         &self,
-        inbound: WireProtocol,
-        original: &LlmRequest,
-        next: &nemo_relay::api::runtime::LlmStreamExecutionNextFn,
+        request: LibsyRequest,
+        headers: Map<String, Json>,
+        next: LlmExecutionNextFn,
         attempt: u32,
-        previous: Option<(String, String)>,
-        max_attempts: u32,
-    ) -> FlowResult<StreamAttempt> {
-        let (routing_request, decision, routed) = match self
-            .decided_request(inbound, original, attempt, previous)
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                self.emit_error(None, attempt, "decision_api", &error);
-                return Ok(StreamAttempt::Fallback("decision_error"));
-            }
-        };
-        let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
-        let context = StreamAttemptContext {
-            routing_request,
-            decision,
-            attempt,
-            max_attempts,
-        };
-        match next(routed).await {
-            Ok(mut upstream) => {
-                let first = upstream.next().await;
-                Ok(self.classify_open_stream(inbound, target_protocol, context, upstream, first))
-            }
-            Err(error) => Ok(self.classify_stream_setup_error(context, error)),
-        }
-    }
-
-    fn classify_open_stream(
-        &self,
-        inbound: WireProtocol,
-        target_protocol: WireProtocol,
-        context: StreamAttemptContext,
-        upstream: LlmJsonStream,
-        first: Option<FlowResult<Json>>,
-    ) -> StreamAttempt {
-        let StreamAttemptContext {
-            routing_request,
-            decision,
-            attempt,
-            max_attempts,
-        } = context;
-        match first {
-            Some(Ok(first)) => {
-                self.record_routing_contribution(&decision, attempt, true);
-                let committed = LlmJsonStream::from_closeable(PrefixedStream {
-                    first: Some(Ok(first)),
-                    upstream,
-                });
-                let output = if target_protocol == inbound {
-                    committed
-                } else {
-                    translated_stream(
-                        target_protocol,
-                        inbound,
-                        decision.route.target_model.clone(),
-                        committed,
+    ) -> Result<LibsyResponse, RunFailure> {
+        let values = context_values(request.metadata.as_ref(), attempt);
+        let mark_metadata = libsy_identity_metadata(request.metadata.as_ref());
+        let mut context = LibsyContext::default();
+        context.values = values.into_iter().collect();
+        let mut steps = self.algorithm.clone().run_stream(context, request);
+        let provider_error = Arc::new(Mutex::new(None));
+        while let Some(step) = steps.next().await {
+            match step {
+                Ok(Step::Decision(decision)) => {
+                    self.emit_decision(decision.as_ref(), attempt, mark_metadata.clone());
+                }
+                Ok(Step::CallLlm(call)) => {
+                    self.serve_buffered_call(
+                        *call,
+                        headers.clone(),
+                        next.clone(),
+                        Arc::clone(&provider_error),
                     )
-                };
-                StreamAttempt::Committed(mark_terminal_stream(
-                    output,
-                    "provider_stream_committed",
-                    self.config.mode.label(),
-                    identity_metadata(&routing_request),
-                ))
+                    .await
+                    .map_err(|error| RunFailure::new(error, &provider_error))?;
+                }
+                Ok(Step::ReturnToAgent(response)) => return Ok(*response),
+                Err(error) => return Err(RunFailure::new(error, &provider_error)),
             }
-            Some(Err(error)) if error_is_retryable(&error) && attempt < max_attempts => self
-                .retry_stream_attempt(
-                    &routing_request,
-                    decision,
-                    attempt,
-                    "provider_stream_open",
-                    provider_error_summary(&error),
-                ),
-            None if attempt < max_attempts => self.retry_stream_attempt(
-                &routing_request,
-                decision,
-                attempt,
-                "provider_stream_open",
-                "empty_stream".into(),
-            ),
-            Some(Err(error)) => {
-                let summary = provider_error_summary(&error);
-                self.emit_error(
-                    Some(&routing_request),
-                    attempt,
-                    "provider_stream_open",
-                    &summary,
-                );
-                StreamAttempt::Fallback(provider_fallback_reason(&error))
-            }
-            None => StreamAttempt::Fallback("empty_stream"),
         }
+        Err(RunFailure::new(
+            LibsyError::MissingFinalResponse,
+            &provider_error,
+        ))
     }
 
-    fn classify_stream_setup_error(
+    async fn drive_stream_run(
         &self,
-        context: StreamAttemptContext,
-        error: FlowError,
-    ) -> StreamAttempt {
-        let StreamAttemptContext {
-            routing_request,
-            decision,
-            attempt,
-            max_attempts,
-        } = context;
-        let summary = provider_error_summary(&error);
-        if error_is_retryable(&error) && attempt < max_attempts {
-            return self.retry_stream_attempt(
-                &routing_request,
-                decision,
-                attempt,
-                "provider_stream_setup",
-                summary,
-            );
-        }
-        self.emit_error(
-            Some(&routing_request),
-            attempt,
-            "provider_stream_setup",
-            &summary,
-        );
-        StreamAttempt::Fallback(provider_fallback_reason(&error))
-    }
-
-    fn retry_stream_attempt(
-        &self,
-        routing_request: &RoutingRequest,
-        decision: RoutingDecision,
+        request: LibsyRequest,
+        headers: Map<String, Json>,
+        next: LlmStreamExecutionNextFn,
+        tracker: StreamCloseTracker,
         attempt: u32,
-        error_class: &str,
-        reason: String,
-    ) -> StreamAttempt {
-        if reason != "empty_stream" {
-            self.emit_error(Some(routing_request), attempt, error_class, &reason);
+    ) -> Result<LibsyResponse, RunFailure> {
+        let values = context_values(request.metadata.as_ref(), attempt);
+        let mark_metadata = libsy_identity_metadata(request.metadata.as_ref());
+        let mut context = LibsyContext::default();
+        context.values = values.into_iter().collect();
+        let mut steps = self.algorithm.clone().run_stream(context, request);
+        let provider_error = Arc::new(Mutex::new(None));
+        while let Some(step) = steps.next().await {
+            match step {
+                Ok(Step::Decision(decision)) => {
+                    self.emit_decision(decision.as_ref(), attempt, mark_metadata.clone());
+                }
+                Ok(Step::CallLlm(call)) => {
+                    self.serve_stream_call(
+                        *call,
+                        headers.clone(),
+                        next.clone(),
+                        tracker.clone(),
+                        Arc::clone(&provider_error),
+                    )
+                    .await
+                    .map_err(|error| RunFailure::new(error, &provider_error))?;
+                }
+                Ok(Step::ReturnToAgent(response)) => return Ok(*response),
+                Err(error) => return Err(RunFailure::new(error, &provider_error)),
+            }
         }
-        self.emit_retry(routing_request, &decision, attempt, &reason);
-        StreamAttempt::Retry((decision.route.backend_id, reason))
+        Err(RunFailure::new(
+            LibsyError::MissingFinalResponse,
+            &provider_error,
+        ))
     }
 
-    async fn decided_request(
+    async fn serve_buffered_call(
+        &self,
+        call: CallLlmRequest,
+        headers: Map<String, Json>,
+        next: LlmExecutionNextFn,
+        provider_error: Arc<Mutex<Option<FlowError>>>,
+    ) -> switchyard_libsy::Result<()> {
+        let routed = call.get_routed().clone();
+        let target_name = routed.decision.selected_model().to_string();
+        let result = async {
+            let metadata = routed.request.metadata.clone();
+            let (target_protocol, request) =
+                self.apply_target(&target_name, routed.request, headers, false)?;
+            let response = match next(request).await {
+                Ok(response) => response,
+                Err(error) => {
+                    remember_provider_error(&provider_error, &error);
+                    return Err(flow_to_client_error(error, &target_name));
+                }
+            };
+            let response = decode_response(&self.translation, target_protocol, &response)
+                .map_err(|error| LlmClientError::ResponseTranslation(error.to_string()))?;
+            Ok(LibsyResponse {
+                llm_response: LlmResponse::Agg(response),
+                metadata: Some(response_metadata(metadata.as_ref(), target_protocol)),
+            })
+        }
+        .await
+        .map_err(|source| LibsyError::client_call(target_name, source));
+        call.respond(result)
+    }
+
+    async fn serve_stream_call(
+        &self,
+        call: CallLlmRequest,
+        headers: Map<String, Json>,
+        next: LlmStreamExecutionNextFn,
+        tracker: StreamCloseTracker,
+        provider_error: Arc<Mutex<Option<FlowError>>>,
+    ) -> switchyard_libsy::Result<()> {
+        let routed = call.get_routed().clone();
+        let target_name = routed.decision.selected_model().to_string();
+        let result = async {
+            let metadata = routed.request.metadata.clone();
+            let (target_protocol, request) =
+                self.apply_target(&target_name, routed.request, headers, true)?;
+            let mut upstream = match next(request).await {
+                Ok(upstream) => upstream,
+                Err(error) => {
+                    remember_provider_error(&provider_error, &error);
+                    return Err(flow_to_client_error(error, &target_name));
+                }
+            };
+            let first = match upstream.next().await {
+                Some(Ok(first)) => first,
+                Some(Err(error)) => {
+                    remember_provider_error(&provider_error, &error);
+                    return Err(flow_to_client_error(error, &target_name));
+                }
+                None => {
+                    return Err(LlmClientError::InvalidResponse {
+                        source: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "provider returned an empty stream",
+                        )),
+                    });
+                }
+            };
+            let response = provider_response_stream(
+                upstream,
+                wire_format(target_protocol),
+                first,
+                tracker,
+                target_name.clone(),
+            )?;
+            Ok(LibsyResponse {
+                llm_response: LlmResponse::Stream(response),
+                metadata: Some(response_metadata(metadata.as_ref(), target_protocol)),
+            })
+        }
+        .await
+        .map_err(|source| LibsyError::client_call(target_name, source));
+        call.respond(result)
+    }
+
+    fn libsy_request(
         &self,
         inbound: WireProtocol,
         original: &LlmRequest,
-        attempt: u32,
-        previous: Option<(String, String)>,
-    ) -> Result<(RoutingRequest, RoutingDecision, LlmRequest), String> {
-        let request = self.routing_request(inbound, original, attempt, previous)?;
-        self.emit_requested(&request);
-        let started = Instant::now();
-        let response = self
-            .client
-            .post(&self.config.decision_api_url)
-            .header("x-nemo-relay-session-id", &request.identity.session_id)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|error| format!("Decision API request failed: {error}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("Decision API returned HTTP {status}: {body}"));
-        }
-        let decision = response
-            .json::<RoutingDecision>()
-            .await
-            .map_err(|error| format!("Decision API returned invalid JSON: {error}"))?;
-        self.validate_decision(&decision)?;
-        if let Some(baseline) = decision.baseline_route.as_ref()
-            && let Err(error) = self.validate_target(baseline)
-        {
-            self.emit_error(Some(&request), attempt, "baseline_binding", &error);
-        }
-        let routed = self.apply_target(inbound, original.clone(), &decision)?;
-        let latency = started.elapsed().as_millis() as u64;
-        self.emit_decision(
-            &request,
-            &decision,
-            attempt,
-            self.config.mode == RoutingMode::ObserveOnly,
-            latency,
-        );
-        Ok((request, decision, routed))
-    }
-
-    fn routing_request(
-        &self,
-        inbound: WireProtocol,
-        request: &LlmRequest,
-        attempt: u32,
-        previous: Option<(String, String)>,
-    ) -> Result<RoutingRequest, String> {
-        let session = header(request, "x-nemo-relay-session-id");
-        let stable_request_id = header(request, "x-nemo-relay-request-id");
-        if self.config.context_mode == ContextMode::AtofRequired
-            && (session.is_none() || stable_request_id.is_none())
-        {
-            return Err("stable session and request identity are required for this profile".into());
-        }
-        let identity_is_stable = session.is_some() && stable_request_id.is_some();
-        let synthetic_session = format!("request-{}", Uuid::now_v7());
-        let session_id = session.unwrap_or_else(|| synthetic_session.clone());
-        let request_id = stable_request_id.unwrap_or_else(|| format!("request-{}", Uuid::now_v7()));
-        let annotated = decode_request(&self.translation, inbound, request)
-            .map_err(|error| format!("request translation decode failed: {error}"))?;
-        let current_request = self.materialize(inbound, request, &annotated)?;
-        let (previous_route, retry_reason) = previous.unzip();
-        Ok(RoutingRequest {
-            schema_version: ROUTING_REQUEST_SCHEMA_VERSION.into(),
-            decision_profile: DecisionProfile {
-                profile_id: self.config.decision_profile_id.clone(),
-                request_materialization: self.config.request_materialization,
-            },
-            identity: RequestIdentity {
-                session_id,
-                request_id,
-                turn_id: header(request, "x-nemo-relay-turn-id"),
-                parent_scope_id: header(request, "x-nemo-relay-parent-scope-id"),
-                root_scope_id: header(request, "x-nemo-relay-root-scope-id"),
-                harness: header(request, "x-nemo-relay-agent-kind")
-                    .unwrap_or_else(|| "unknown".into()),
-                source: header(request, "x-nemo-relay-source")
-                    .unwrap_or_else(|| "nemo-relay".into()),
-                owner_id: header(request, "x-nemo-relay-owner-id"),
-                quality: header(request, "x-nemo-relay-identity-quality").unwrap_or_else(|| {
-                    if identity_is_stable {
-                        "explicit".into()
-                    } else {
-                        "synthetic".into()
-                    }
-                }),
-            },
-            protocol: RequestProtocol {
-                inbound_profile: inbound.label().into(),
-                inbound_endpoint: inbound.endpoint().into(),
-                desired_response_profile: inbound.label().into(),
-            },
-            request_summary: RequestSummary {
-                client_requested_model: request
-                    .content
-                    .get("model")
-                    .and_then(Json::as_str)
-                    .map(ToOwned::to_owned),
-                prompt_token_estimate: None,
-                tool_count_in_payload: request
-                    .content
-                    .get("tools")
-                    .and_then(Json::as_array)
-                    .map(|tools| tools.len() as u64),
-                has_system_prompt: Some(
-                    annotated.instructions.iter().any(|instruction| {
-                        instruction.role == switchyard_translation::Role::System
-                    }) || annotated
-                        .messages
-                        .iter()
-                        .any(|message| message.role == switchyard_translation::Role::System),
-                ),
-            },
-            current_request,
-            attempt: DecisionAttempt {
-                routing_attempt: attempt,
-                max_routing_attempts: self.config.max_retries.saturating_add(1),
-                previous_route,
-                retry_reason,
-            },
+        streaming: bool,
+    ) -> FlowResult<LibsyRequest> {
+        let mut llm_request = decode_request(&self.translation, inbound, original)?;
+        llm_request.stream = streaming;
+        let mut metadata = relay_metadata(&string_headers(&original.headers));
+        metadata.wire_format = Some(wire_format(inbound));
+        Ok(LibsyRequest {
+            llm_request,
+            raw_request: Some(original.content.clone()),
+            metadata: Some(metadata),
         })
-    }
-
-    fn materialize(
-        &self,
-        inbound: WireProtocol,
-        request: &LlmRequest,
-        annotated: &switchyard_translation::LlmRequest,
-    ) -> Result<Option<Json>, String> {
-        match self.config.request_materialization {
-            RequestMaterialization::None | RequestMaterialization::SummaryOnly => Ok(None),
-            RequestMaterialization::FullBody => Ok(Some(json!({"body": request.content}))),
-            RequestMaterialization::AnnotatedRequest => Ok(Some(json!({
-                "body": request.content,
-                "annotated_request": annotated,
-            }))),
-            RequestMaterialization::LatestUserPrompt => {
-                let prompt = latest_user_prompt(annotated)
-                    .ok_or_else(|| "latest_user_prompt requires a user message".to_string())?;
-                let latest = recent_message_window(annotated, 1);
-                let body = encode_request(&self.translation, inbound, &latest, Map::new())
-                    .map_err(|error| format!("latest user prompt encode failed: {error}"))?
-                    .content;
-                Ok(Some(json!({"body": body, "latest_user_prompt": prompt})))
-            }
-            RequestMaterialization::RecentMessageWindow => {
-                let window = recent_message_window(annotated, self.config.recent_message_count);
-                let body = encode_request(&self.translation, inbound, &window, Map::new())
-                    .map_err(|error| format!("recent window encode failed: {error}"))?
-                    .content;
-                Ok(Some(json!({"body": body, "annotated_request": window})))
-            }
-        }
-    }
-
-    fn validate_decision(&self, decision: &RoutingDecision) -> Result<(), String> {
-        if decision.schema_version != ROUTING_DECISION_SCHEMA_VERSION {
-            return Err(format!(
-                "unsupported decision schema {:?}",
-                decision.schema_version
-            ));
-        }
-        self.validate_target(&decision.route).map(|_| ())
-    }
-
-    fn validate_target(&self, target: &RoutingTarget) -> Result<&TargetBinding, String> {
-        let binding = self
-            .config
-            .targets
-            .get(&target.backend_id)
-            .ok_or_else(|| format!("unknown backend_id {:?}", target.backend_id))?;
-        if binding.model != target.target_model
-            || binding.protocol.label() != target.target_protocol_profile
-            || binding.endpoint != target.target_endpoint
-        {
-            return Err(format!(
-                "decision target {:?} does not match its exact Relay binding",
-                target.backend_id
-            ));
-        }
-        Ok(binding)
-    }
-
-    fn record_routing_contribution(&self, decision: &RoutingDecision, attempt: u32, applied: bool) {
-        let Some(contribution) = self.routing_contribution(decision, attempt, applied) else {
-            return;
-        };
-        let _ = record_llm_optimization_contribution(contribution);
-    }
-
-    fn routing_contribution(
-        &self,
-        decision: &RoutingDecision,
-        attempt: u32,
-        applied: bool,
-    ) -> Option<LlmOptimizationContribution> {
-        let baseline = decision
-            .baseline_route
-            .as_ref()
-            .filter(|baseline| self.validate_target(baseline).is_ok())?;
-        let mut contribution = LlmOptimizationContribution::new(
-            SWITCHYARD_PLUGIN_KIND,
-            LlmOptimizationKind::model_routing(),
-        );
-        contribution.applied = applied;
-        contribution.model_transition = Some(LlmOptimizationModelTransition {
-            baseline: Some(LlmOptimizationModel::new(&baseline.target_model)),
-            effective: Some(LlmOptimizationModel::new(&decision.route.target_model)),
-        });
-        contribution.payload_schema = Some(DataSchema {
-            name: ROUTING_CONTRIBUTION_SCHEMA.to_string(),
-            version: "1".to_string(),
-        });
-        contribution.payload = Some(json!({
-            "decision_id": decision.decision_id,
-            "selected_backend_id": decision.route.backend_id,
-            "selected_tier": decision.route.tier,
-            "baseline_backend_id": baseline.backend_id,
-            "baseline_tier": baseline.tier,
-            "routing_attempt": attempt,
-            "rollout_mode": self.config.mode.label(),
-            "reason_code": decision.reason_code,
-            "reason_summary": decision.reason_summary,
-            "router_metadata": decision.metadata,
-        }));
-        Some(contribution)
     }
 
     fn apply_target(
         &self,
-        inbound: WireProtocol,
-        request: LlmRequest,
-        decision: &RoutingDecision,
-    ) -> Result<LlmRequest, String> {
-        let binding = self
-            .config
-            .targets
-            .get(&decision.route.backend_id)
-            .ok_or_else(|| format!("unknown backend_id {:?}", decision.route.backend_id))?;
-        let annotated = decode_request(&self.translation, inbound, &request)
-            .map_err(|error| format!("request decode failed: {error}"))?;
-        let mut routed = if inbound == binding.protocol {
-            request
-        } else {
-            encode_request(
-                &self.translation,
-                binding.protocol,
-                &annotated,
-                request.headers,
-            )
-            .map_err(|error| format!("request translation failed: {error}"))?
-        };
-        let object = routed
-            .content
-            .as_object_mut()
-            .ok_or_else(|| "translated request body is not an object".to_string())?;
-        object.insert("model".into(), Json::String(binding.model.clone()));
-        if let Some(headers) = self.target_headers.get(&decision.route.backend_id) {
-            routed.headers.extend(headers.clone());
+        target_name: &str,
+        mut request: LibsyRequest,
+        headers: Map<String, Json>,
+        streaming: bool,
+    ) -> Result<(WireProtocol, LlmRequest), LlmClientError> {
+        let target =
+            self.config
+                .targets
+                .get(target_name)
+                .ok_or_else(|| LlmClientError::Configuration {
+                    message: format!("libsy selected unknown target {target_name:?}"),
+                })?;
+        request.llm_request.stream = streaming;
+        let mut routed = encode_request(
+            &self.translation,
+            target.protocol,
+            &request.llm_request,
+            headers,
+        )
+        .map_err(|error| LlmClientError::RequestEncoding(error.to_string()))?;
+        let object = routed.content.as_object_mut().ok_or_else(|| {
+            LlmClientError::RequestEncoding("translated provider request is not an object".into())
+        })?;
+        object.insert("model".into(), Json::String(target.model.clone()));
+        object.insert("stream".into(), Json::Bool(streaming));
+        if let Some(target_headers) = self.target_headers.get(target_name) {
+            routed.headers.extend(target_headers.clone());
         }
         routed.headers.insert(
             INTERNAL_DISPATCH_ROUTE_HEADER.into(),
-            Json::String(binding.protocol.label().into()),
+            Json::String(target.protocol.label().into()),
         );
         routed.headers.insert(
             INTERNAL_DISPATCH_URL_HEADER.into(),
-            Json::String(dispatch_url(&binding.base_url, &binding.endpoint)),
+            Json::String(dispatch_url(&target.base_url, &target.endpoint)),
         );
         routed.headers.insert(
             INTERNAL_RETRY_AWARE_HEADER.into(),
             Json::String("true".into()),
         );
-        Ok(routed)
+        Ok((target.protocol, routed))
     }
 
-    fn fallback_request(
+    fn finish_buffered(&self, inbound: WireProtocol, response: LibsyResponse) -> FlowResult<Json> {
+        match response.llm_response {
+            LlmResponse::Agg(response) => encode_response(&self.translation, inbound, &response),
+            LlmResponse::Stream(_) => Err(FlowError::Internal(
+                "libsy returned a stream for a buffered Relay request".into(),
+            )),
+        }
+    }
+
+    fn finish_stream(
         &self,
         inbound: WireProtocol,
-        request: LlmRequest,
-    ) -> Result<LlmRequest, String> {
-        let id = self.config.default_targets.target(inbound);
-        let binding = self
-            .config
-            .targets
-            .get(id)
-            .ok_or_else(|| format!("unknown fallback target {id:?}"))?;
-        let decision = RoutingDecision {
-            schema_version: ROUTING_DECISION_SCHEMA_VERSION.into(),
-            decision_id: "relay-fallback".into(),
-            router: crate::contract::DecisionProvider {
-                name: "relay-fallback".into(),
-                version: "1".into(),
-            },
-            route: crate::contract::RoutingTarget {
-                tier: "fallback".into(),
-                target_model: binding.model.clone(),
-                backend_id: id.to_string(),
-                target_protocol_profile: binding.protocol.label().into(),
-                target_endpoint: binding.endpoint.clone(),
-            },
-            baseline_route: None,
-            confidence: None,
-            reason_code: Some("relay_trusted_fallback".into()),
-            reason_summary: None,
-            metadata: BTreeMap::new(),
-            extra: BTreeMap::new(),
-        };
-        self.apply_target(inbound, request, &decision)
+        response: LibsyResponse,
+        tracker: StreamCloseTracker,
+    ) -> FlowResult<LlmJsonStream> {
+        let source = response
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.wire_format)
+            .ok_or_else(|| {
+                FlowError::Internal("libsy streaming response omitted its source format".into())
+            })?;
+        match response.llm_response {
+            LlmResponse::Stream(response) => Ok(relay_response_stream(
+                response,
+                source,
+                wire_format(inbound),
+                tracker,
+            )),
+            LlmResponse::Agg(_) => Err(FlowError::Internal(
+                "libsy returned a buffered aggregate for a streaming Relay request".into(),
+            )),
+        }
     }
 
     async fn dispatch_fallback_buffered(
         &self,
         inbound: WireProtocol,
         original: LlmRequest,
-        next: nemo_relay::api::runtime::LlmExecutionNextFn,
+        next: LlmExecutionNextFn,
         reason: &str,
     ) -> FlowResult<Json> {
         self.emit_fallback(inbound, reason, &original);
-        let metadata = identity_metadata_from_request(&original);
-        let request = self
-            .fallback_request(inbound, original)
-            .map_err(FlowError::Internal)?;
-        match next(request).await {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                emit_terminal_error(
-                    &error,
-                    "fallback_buffered",
-                    self.config.mode.label(),
-                    metadata,
-                );
-                Err(error)
-            }
-        }
+        let request = self.fallback_request(inbound, original, false)?;
+        next(request).await
     }
 
     async fn dispatch_fallback_stream(
         &self,
         inbound: WireProtocol,
         original: LlmRequest,
-        next: nemo_relay::api::runtime::LlmStreamExecutionNextFn,
+        next: LlmStreamExecutionNextFn,
         reason: &str,
     ) -> FlowResult<LlmJsonStream> {
         self.emit_fallback(inbound, reason, &original);
-        let metadata = identity_metadata_from_request(&original);
-        let request = self
-            .fallback_request(inbound, original)
-            .map_err(FlowError::Internal)?;
-        match next(request).await {
-            Ok(stream) => Ok(mark_terminal_stream(
-                stream,
-                "fallback_stream",
-                self.config.mode.label(),
-                metadata.clone(),
-            )),
-            Err(error) => {
-                emit_terminal_error(
-                    &error,
-                    "fallback_stream_setup",
-                    self.config.mode.label(),
-                    metadata,
-                );
-                Err(error)
-            }
-        }
+        let request = self.fallback_request(inbound, original, true)?;
+        next(request).await
     }
 
-    fn emit_requested(&self, request: &RoutingRequest) {
+    fn fallback_request(
+        &self,
+        inbound: WireProtocol,
+        original: LlmRequest,
+        streaming: bool,
+    ) -> FlowResult<LlmRequest> {
+        let target = self.config.default_targets.target(inbound);
+        let request = self.libsy_request(inbound, &original, streaming)?;
+        self.apply_target(
+            target,
+            request,
+            dispatch_headers(&original.headers),
+            streaming,
+        )
+        .map(|(_, request)| request)
+        .map_err(|error| FlowError::Internal(error.to_string()))
+    }
+
+    fn emit_requested(&self, request: &LlmRequest, inbound: WireProtocol, attempt: u32) {
         emit_mark(
             "switchyard.routing.requested",
             json!({
-                "session_id": request.identity.session_id,
-                "request_id": request.identity.request_id,
-                "routing_attempt": request.attempt.routing_attempt,
-                "profile_id": request.decision_profile.profile_id,
-                "rollout_mode": self.config.mode.label(),
+                "algorithm": "random",
+                "routing_attempt": attempt,
+                "inbound_profile": inbound.label(),
             }),
             identity_metadata(request),
         );
     }
 
-    fn emit_decision(
-        &self,
-        request: &RoutingRequest,
-        decision: &RoutingDecision,
-        attempt: u32,
-        observe_only: bool,
-        latency_ms: u64,
-    ) {
+    fn emit_decision(&self, decision: &dyn Decision, attempt: u32, metadata: Json) {
         emit_mark(
             "switchyard.routing.decision",
             json!({
-                "decision_id": decision.decision_id,
-                "profile_id": request.decision_profile.profile_id,
-                "router": decision.router.name,
-                "router_version": decision.router.version,
+                "algorithm": "random",
                 "routing_attempt": attempt,
-                "backend_id": decision.route.backend_id,
-                "selected_tier": decision.route.tier,
-                "selected_model": decision.route.target_model,
-                "target_protocol_profile": decision.route.target_protocol_profile,
-                "target_endpoint": decision.route.target_endpoint,
-                "confidence": decision.confidence,
-                "reason_code": decision.reason_code,
-                "reason_summary": decision.reason_summary,
-                "router_metadata": decision.metadata,
-                "latency_ms": latency_ms,
-                "observe_only": observe_only,
-                "rollout_mode": self.config.mode.label(),
+                "semantic_target": decision.selected_model(),
+                "routing_tier": decision.routing_tier(),
+                "is_routed_call": decision.is_routed_call(),
+                "reasoning": decision.reasoning(),
+            }),
+            metadata,
+        );
+    }
+
+    fn emit_retry(&self, attempt: u32, reason: &str, request: &LlmRequest) {
+        emit_mark(
+            "switchyard.routing.retry",
+            json!({
+                "algorithm": "random",
+                "routing_attempt": attempt,
+                "retry_reason": reason,
             }),
             identity_metadata(request),
         );
     }
 
-    fn emit_retry(
-        &self,
-        request: &RoutingRequest,
-        decision: &RoutingDecision,
-        attempt: u32,
-        reason: &str,
-    ) {
-        emit_mark(
-            "switchyard.routing.retry",
-            json!({"routing_attempt": attempt, "previous_route": decision.route.backend_id, "retry_reason": reason, "rollout_mode": self.config.mode.label()}),
-            identity_metadata(request),
-        );
-    }
-
-    fn emit_error(&self, request: Option<&RoutingRequest>, attempt: u32, class: &str, error: &str) {
+    fn emit_error(&self, attempt: u32, class: &str, error: &str, request: &LlmRequest) {
         emit_mark(
             "switchyard.routing.error",
-            json!({"routing_attempt": attempt, "error_class": class, "error": error, "rollout_mode": self.config.mode.label()}),
-            request.map(identity_metadata).unwrap_or_else(|| json!({})),
+            json!({
+                "algorithm": "random",
+                "routing_attempt": attempt,
+                "error_class": class,
+                "error": error,
+            }),
+            identity_metadata(request),
         );
     }
 
@@ -1339,190 +884,118 @@ impl SwitchyardRuntime {
         emit_mark(
             "switchyard.routing.fallback",
             json!({
+                "algorithm": "random",
                 "fallback_reason": reason,
                 "fallback_route": self.config.default_targets.target(inbound),
                 "inbound_profile": inbound.label(),
-                "rollout_mode": self.config.mode.label(),
             }),
-            identity_metadata_from_request(request),
+            identity_metadata(request),
         );
     }
 }
 
-async fn check_switchyard_health(
-    client: &reqwest::Client,
-    health_url: &reqwest::Url,
-) -> Result<(), String> {
-    let response = client
-        .get(health_url.clone())
-        .send()
-        .await
-        .map_err(|error| {
-            format!("Switchyard service is required but health check {health_url} failed: {error}")
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!(
-            "Switchyard service is required but health check {health_url} returned HTTP {status}"
-        ));
-    }
-    let body = response.json::<Json>().await.map_err(|error| {
-        format!("Switchyard health check {health_url} returned invalid JSON: {error}")
-    })?;
-    if body.get("status").and_then(Json::as_str) != Some("ok") {
-        return Err(format!(
-            "Switchyard health check {health_url} did not report status=ok"
-        ));
-    }
-    Ok(())
+struct RunFailure {
+    error: LibsyError,
+    provider_error: Option<FlowError>,
 }
 
-fn switchyard_health_url(decision_api_url: &str) -> Result<reqwest::Url, String> {
-    let mut url = reqwest::Url::parse(decision_api_url)
-        .map_err(|error| format!("decision_api_url is invalid: {error}"))?;
-    url.set_path(SWITCHYARD_HEALTH_PATH);
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url)
-}
-
-fn validate_atof_endpoint_name(name: Option<&str>) -> Result<Option<&str>, String> {
-    if let Some(name) = name {
-        if name.trim().is_empty() {
-            return Err("atof_endpoint_name must be non-empty when configured".into());
-        }
-        if name != name.trim() {
-            return Err("atof_endpoint_name must not have leading or trailing whitespace".into());
+impl RunFailure {
+    fn new(error: LibsyError, provider_error: &Arc<Mutex<Option<FlowError>>>) -> Self {
+        Self {
+            error,
+            provider_error: provider_error.lock().ok().and_then(|error| error.clone()),
         }
     }
-    Ok(name)
+
+    fn is_retryable(&self) -> bool {
+        self.provider_error
+            .as_ref()
+            .is_some_and(flow_error_is_retryable)
+            || libsy_error_is_retryable(&self.error)
+    }
+}
+
+fn build_algorithm(config: &SwitchyardConfig) -> Result<Arc<dyn Algorithm>, String> {
+    let targets = config
+        .targets
+        .keys()
+        .map(|name| LlmTarget {
+            semantic_name: name.clone(),
+            llm_client: None,
+        })
+        .collect::<Vec<_>>();
+    let weights = config
+        .targets
+        .values()
+        .map(|target| target.weight)
+        .collect::<Vec<_>>();
+    match &config.algorithm {
+        AlgorithmConfig::Random { seed } => {
+            Random::new(LlmTargetSet::new(targets), Some(weights), *seed)
+                .map(|algorithm| Arc::new(algorithm) as Arc<dyn Algorithm>)
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
-    validate_scalar_config(config)?;
-    validate_decision_api_url(&config.decision_api_url)?;
-    validate_target_bindings(config)?;
-    validate_default_targets(config)
-}
-
-fn validate_scalar_config(config: &SwitchyardConfig) -> Result<(), String> {
-    if config.version != 1 {
+    if config.version != 2 {
         return Err(format!(
-            "unsupported Switchyard config version {}",
+            "unsupported Switchyard config version {}; version 1 used the removed switchyard-server Decision API, use version = 2",
             config.version
         ));
-    }
-    if config.decision_profile_id.trim().is_empty() {
-        return Err("decision_profile_id must be non-empty".into());
-    }
-    if config.decision_timeout_millis == 0 {
-        return Err("decision_timeout_millis must be greater than zero".into());
     }
     if config.max_retries > 10 {
         return Err("max_retries must not exceed 10".into());
     }
-    if config.recent_message_count == 0 {
-        return Err("recent_message_count must be greater than zero".into());
-    }
-    let atof_endpoint_name = validate_atof_endpoint_name(config.atof_endpoint_name.as_deref())?;
-    if config.context_mode == ContextMode::AtofRequired && atof_endpoint_name.is_none() {
-        return Err("atof_required Switchyard profiles require atof_endpoint_name".into());
-    }
-    Ok(())
-}
-
-fn validate_decision_api_url(decision_api_url: &str) -> Result<(), String> {
-    let url = reqwest::Url::parse(decision_api_url)
-        .map_err(|error| format!("decision_api_url is invalid: {error}"))?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err("decision_api_url must use http or https".into());
-    }
-    Ok(())
-}
-
-fn validate_target_bindings(config: &SwitchyardConfig) -> Result<(), String> {
     if config.targets.is_empty() {
         return Err("targets must not be empty".into());
     }
     if config.enabled_inbound_profiles.is_empty() {
         return Err("enabled_inbound_profiles must not be empty".into());
     }
-    let mut exact_bindings = BTreeSet::new();
-    for (id, target) in &config.targets {
-        if id.trim().is_empty()
-            || target.model.trim().is_empty()
-            || target.endpoint.trim().is_empty()
-        {
-            return Err("target IDs, models, and endpoints must be non-empty".into());
-        }
-        let base_url = reqwest::Url::parse(&target.base_url)
-            .map_err(|error| format!("target {id:?} base_url is invalid: {error}"))?;
-        if !matches!(base_url.scheme(), "http" | "https") {
-            return Err(format!("target {id:?} base_url must use http or https"));
+    for (name, target) in &config.targets {
+        if name.trim().is_empty() || target.model.trim().is_empty() {
+            return Err("target names and models must be non-empty".into());
         }
         if target.endpoint != target.protocol.endpoint() {
             return Err(format!(
-                "target {id:?} endpoint must be {:?} for {}",
+                "target {name:?} endpoint must be {:?} for {}",
                 target.protocol.endpoint(),
                 target.protocol.label()
             ));
         }
-        if !exact_bindings.insert((
-            target.model.clone(),
-            target.protocol,
-            target.endpoint.clone(),
-            target.base_url.trim_end_matches('/').to_string(),
-        )) {
+        validate_http_url(&target.base_url, name)?;
+        if !target.weight.is_finite() || target.weight < 0.0 {
             return Err(format!(
-                "target {id:?} conflicts with another exact backend binding"
+                "target {name:?} weight must be finite and nonnegative"
             ));
         }
     }
-    Ok(())
-}
-
-fn validate_default_targets(config: &SwitchyardConfig) -> Result<(), String> {
     for &protocol in &config.enabled_inbound_profiles {
-        let id = config.default_targets.target(protocol);
+        let fallback = config.default_targets.target(protocol);
         let target = config
             .targets
-            .get(id)
-            .ok_or_else(|| format!("default target {id:?} is not configured"))?;
+            .get(fallback)
+            .ok_or_else(|| format!("default target {fallback:?} is not configured"))?;
         if target.protocol != protocol {
             return Err(format!(
-                "default target {id:?} must use protocol {}",
+                "default target {fallback:?} must use protocol {}",
                 protocol.label()
             ));
         }
     }
-    Ok(())
+    build_algorithm(config).map(|_| ())
 }
 
-fn resolve_headers(
-    static_headers: &BTreeMap<String, String>,
-    environment_headers: &BTreeMap<String, String>,
-) -> Result<HeaderMap, String> {
-    let mut headers = HeaderMap::new();
-    for (name, value) in static_headers {
-        insert_http_header(&mut headers, name, value)?;
+fn validate_http_url(url: &str, target: &str) -> Result<(), String> {
+    let uri = url
+        .parse::<Uri>()
+        .map_err(|error| format!("target {target:?} base_url is invalid: {error}"))?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.authority().is_none() {
+        return Err(format!("target {target:?} base_url must use http or https"));
     }
-    for (name, variable) in environment_headers {
-        if static_headers
-            .keys()
-            .any(|configured| configured.eq_ignore_ascii_case(name))
-        {
-            return Err(format!(
-                "header {name:?} cannot appear in both headers and header_env"
-            ));
-        }
-        let value = std::env::var(variable)
-            .map_err(|_| format!("environment variable {variable:?} is not set"))?;
-        if value.trim().is_empty() {
-            return Err(format!("environment variable {variable:?} is blank"));
-        }
-        insert_http_header(&mut headers, name, &value)?;
-    }
-    Ok(headers)
+    Ok(())
 }
 
 fn resolve_json_headers(
@@ -1531,6 +1004,7 @@ fn resolve_json_headers(
 ) -> Result<Map<String, Json>, String> {
     let mut headers = Map::new();
     for (name, value) in static_headers {
+        validate_target_header(name, value)?;
         headers.insert(name.clone(), Json::String(value.clone()));
     }
     for (name, variable) in environment_headers {
@@ -1547,41 +1021,103 @@ fn resolve_json_headers(
         if value.trim().is_empty() {
             return Err(format!("environment variable {variable:?} is blank"));
         }
+        validate_target_header(name, &value)?;
         headers.insert(name.clone(), Json::String(value));
     }
     Ok(headers)
 }
 
-fn insert_http_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(), String> {
-    let name = HeaderName::from_bytes(name.as_bytes())
-        .map_err(|error| format!("invalid header name: {error}"))?;
-    let value =
-        HeaderValue::from_str(value).map_err(|error| format!("invalid header value: {error}"))?;
-    headers.insert(name, value);
+fn validate_target_header(name: &str, value: &str) -> Result<(), String> {
+    let normalized = name.to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        INTERNAL_DISPATCH_URL_HEADER | INTERNAL_DISPATCH_ROUTE_HEADER | INTERNAL_RETRY_AWARE_HEADER
+    ) {
+        return Err(format!(
+            "target header {name:?} is reserved for Relay dispatch"
+        ));
+    }
+    HeaderName::from_bytes(name.as_bytes())
+        .map_err(|error| format!("invalid target header name {name:?}: {error}"))?;
+    HeaderValue::from_str(value)
+        .map_err(|error| format!("invalid target header value for {name:?}: {error}"))?;
     Ok(())
 }
 
-fn protocol_from_label(label: &str) -> FlowResult<WireProtocol> {
-    match label {
-        "openai_chat" | "openai_chat_completions" | "openai_chat_completions.v1" => {
-            Ok(WireProtocol::OpenaiChat)
-        }
-        "openai_responses" | "openai_responses.v1" => Ok(WireProtocol::OpenaiResponses),
-        "anthropic_messages" | "anthropic_messages.v1" => Ok(WireProtocol::AnthropicMessages),
-        value => Err(FlowError::InvalidArgument(format!(
-            "unsupported Switchyard target protocol {value:?}"
-        ))),
-    }
+fn response_metadata(source: Option<&Metadata>, protocol: WireProtocol) -> Metadata {
+    let mut metadata = source.cloned().unwrap_or_default();
+    metadata.wire_format = Some(wire_format(protocol));
+    metadata
 }
 
-fn header(request: &LlmRequest, name: &str) -> Option<String> {
-    request
-        .headers
-        .get(name)
-        .and_then(Json::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+fn context_values(metadata: Option<&Metadata>, attempt: u32) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::from([
+        ("relay.routing_attempt".into(), attempt.to_string()),
+        ("relay.scope_id".into(), task_scope_top().uuid.to_string()),
+    ]);
+    if let Some(metadata) = metadata {
+        for (key, value) in [
+            ("relay.session_id", metadata.session_id.as_deref()),
+            ("relay.agent_id", metadata.agent_id.as_deref()),
+            ("relay.turn_id", metadata.turn_id.as_deref()),
+            ("relay.correlation_id", metadata.correlation_id.as_deref()),
+        ] {
+            if let Some(value) = value {
+                values.insert(key.into(), value.into());
+            }
+        }
+    }
+    values
+}
+
+fn string_headers(headers: &Map<String, Json>) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| value.as_str().map(|value| (name.clone(), value.into())))
+        .collect()
+}
+
+fn dispatch_headers(headers: &Map<String, Json>) -> Map<String, Json> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            let normalized = name.to_ascii_lowercase();
+            !matches!(
+                normalized.as_str(),
+                "authorization" | "proxy-authorization" | "x-api-key" | "api-key"
+            ) && !normalized.starts_with("x-nemo-relay-")
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+fn relay_metadata(headers: &BTreeMap<String, String>) -> Metadata {
+    let mut metadata = Metadata::from_headers(headers);
+    if metadata.turn_id.is_none() {
+        metadata.turn_id = header_value(headers, RELAY_TURN_ID_HEADER).map(ToOwned::to_owned);
+    }
+    if metadata.correlation_id.is_none() {
+        metadata.correlation_id =
+            header_value(headers, RELAY_REQUEST_ID_HEADER).map(ToOwned::to_owned);
+    }
+    metadata
+}
+
+fn libsy_identity_metadata(metadata: Option<&Metadata>) -> Json {
+    json!({
+        "session_id": metadata.and_then(|value| value.session_id.as_deref()),
+        "agent_id": metadata.and_then(|value| value.agent_id.as_deref()),
+        "turn_id": metadata.and_then(|value| value.turn_id.as_deref()),
+        "request_id": metadata.and_then(|value| value.correlation_id.as_deref()),
+    })
+}
+
+fn header_value<'a>(headers: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn dispatch_url(base_url: &str, endpoint: &str) -> String {
@@ -1594,26 +1130,40 @@ fn dispatch_url(base_url: &str, endpoint: &str) -> String {
     format!("{base}{endpoint}")
 }
 
-fn identity_metadata(request: &RoutingRequest) -> Json {
-    json!({
-        "session_id": request.identity.session_id,
-        "request_id": request.identity.request_id,
-        "turn_id": request.identity.turn_id,
-        "owner_id": request.identity.owner_id,
-    })
+fn remember_provider_error(slot: &Arc<Mutex<Option<FlowError>>>, error: &FlowError) {
+    if let Ok(mut stored) = slot.lock() {
+        *stored = Some(error.clone());
+    }
 }
 
-fn identity_metadata_from_request(request: &LlmRequest) -> Json {
-    json!({
-        "session_id": header(request, "x-nemo-relay-session-id"),
-        "request_id": header(request, "x-nemo-relay-request-id"),
-        "turn_id": header(request, "x-nemo-relay-turn-id"),
-        "owner_id": header(request, "x-nemo-relay-owner-id"),
-    })
-}
-
-fn error_is_retryable(error: &FlowError) -> bool {
+fn flow_error_is_retryable(error: &FlowError) -> bool {
     matches!(error, FlowError::Upstream(failure) if failure.is_retryable())
+}
+
+fn libsy_error_is_retryable(error: &LibsyError) -> bool {
+    match error {
+        LibsyError::ClientCall { source, .. } => match source {
+            LlmClientError::Transport { .. }
+            | LlmClientError::Timeout { .. }
+            | LlmClientError::ContextWindowExceeded { .. } => true,
+            LlmClientError::UpstreamHttp { status, .. } => {
+                matches!(*status, 408 | 409 | 425 | 429) || *status >= 500
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn identity_metadata(request: &LlmRequest) -> Json {
+    let headers = string_headers(&request.headers);
+    let metadata = relay_metadata(&headers);
+    json!({
+        "session_id": metadata.session_id,
+        "agent_id": metadata.agent_id,
+        "turn_id": metadata.turn_id,
+        "request_id": metadata.correlation_id,
+    })
 }
 
 fn emit_mark(name: &str, data: Json, metadata: Json) {
@@ -1624,7 +1174,7 @@ fn emit_mark(name: &str, data: Json, metadata: Json) {
             .data_schema(
                 DataSchema::builder()
                     .name(ROUTING_MARK_SCHEMA)
-                    .version("1")
+                    .version("2")
                     .build(),
             )
             .metadata(metadata)
@@ -1634,184 +1184,6 @@ fn emit_mark(name: &str, data: Json, metadata: Json) {
     ) {
         eprintln!("nemo-relay switchyard: failed to emit {name}: {error}");
     }
-}
-
-fn emit_terminal_error(error: &FlowError, phase: &str, rollout_mode: &str, metadata: Json) {
-    emit_mark(
-        "switchyard.routing.terminal_error",
-        json!({"error_class": provider_error_class(error), "error": provider_error_summary(error), "phase": phase, "rollout_mode": rollout_mode}),
-        metadata,
-    );
-}
-
-fn provider_error_class(error: &FlowError) -> &'static str {
-    match error {
-        FlowError::Upstream(failure) => match failure.class {
-            nemo_relay::error::UpstreamFailureClass::Connection => "connection",
-            nemo_relay::error::UpstreamFailureClass::Timeout => "timeout",
-            nemo_relay::error::UpstreamFailureClass::RetryableStatus => "retryable_status",
-            nemo_relay::error::UpstreamFailureClass::ContextWindow => "context_window",
-            nemo_relay::error::UpstreamFailureClass::ModelUnavailable => "model_unavailable",
-            nemo_relay::error::UpstreamFailureClass::Authentication => "authentication",
-            nemo_relay::error::UpstreamFailureClass::InvalidRequest => "invalid_request",
-            nemo_relay::error::UpstreamFailureClass::Other => "other",
-        },
-        _ => "relay",
-    }
-}
-
-fn provider_error_summary(error: &FlowError) -> String {
-    match error {
-        FlowError::Upstream(failure) => match failure.status {
-            Some(status) => format!("{}:http_{status}", provider_error_class(error)),
-            None => provider_error_class(error).to_string(),
-        },
-        _ => error.to_string(),
-    }
-}
-
-struct PrefixedStream {
-    first: Option<FlowResult<Json>>,
-    upstream: LlmJsonStream,
-}
-
-impl futures_util::Stream for PrefixedStream {
-    type Item = FlowResult<Json>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if let Some(first) = self.first.take() {
-            Poll::Ready(Some(first))
-        } else {
-            Pin::new(&mut self.upstream).poll_next(cx)
-        }
-    }
-}
-
-impl LlmStreamInner for PrefixedStream {
-    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
-        let this = self.get_mut();
-        this.first = None;
-        Box::pin(async move { this.upstream.close().await })
-    }
-}
-
-struct TerminalMarkedStream {
-    upstream: LlmJsonStream,
-    phase: &'static str,
-    rollout_mode: &'static str,
-    metadata: Json,
-    finished: bool,
-}
-
-impl futures_util::Stream for TerminalMarkedStream {
-    type Item = FlowResult<Json>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.finished {
-            return Poll::Ready(None);
-        }
-        match Pin::new(&mut self.upstream).poll_next(cx) {
-            Poll::Ready(Some(Ok(chunk))) => Poll::Ready(Some(Ok(chunk))),
-            Poll::Ready(Some(Err(error))) => {
-                self.finished = true;
-                emit_terminal_error(&error, self.phase, self.rollout_mode, self.metadata.clone());
-                Poll::Ready(Some(Err(error)))
-            }
-            Poll::Ready(None) => {
-                self.finished = true;
-                Poll::Ready(None)
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl LlmStreamInner for TerminalMarkedStream {
-    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
-        Box::pin(async move { self.get_mut().upstream.close().await })
-    }
-}
-
-struct TranslatedStream {
-    upstream: LlmJsonStream,
-    transcoder: StreamTranscoder,
-    buffered: VecDeque<FlowResult<Json>>,
-    upstream_finished: bool,
-}
-
-impl futures_util::Stream for TranslatedStream {
-    type Item = FlowResult<Json>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            if let Some(chunk) = self.buffered.pop_front() {
-                return Poll::Ready(Some(chunk));
-            }
-            if self.upstream_finished {
-                return Poll::Ready(None);
-            }
-
-            match Pin::new(&mut self.upstream).poll_next(cx) {
-                Poll::Ready(Some(Ok(chunk))) => match self.transcoder.transcode(&chunk) {
-                    Ok(chunks) => self.buffered.extend(chunks.into_iter().map(Ok)),
-                    Err(error) => {
-                        self.upstream_finished = true;
-                        return Poll::Ready(Some(Err(error)));
-                    }
-                },
-                Poll::Ready(Some(Err(error))) => {
-                    self.upstream_finished = true;
-                    return Poll::Ready(Some(Err(error)));
-                }
-                Poll::Ready(None) => {
-                    self.upstream_finished = true;
-                    match self.transcoder.finish() {
-                        Ok(chunks) => self.buffered.extend(chunks.into_iter().map(Ok)),
-                        Err(error) => return Poll::Ready(Some(Err(error))),
-                    }
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-impl LlmStreamInner for TranslatedStream {
-    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
-        let this = self.get_mut();
-        this.buffered.clear();
-        this.upstream_finished = true;
-        Box::pin(async move { this.upstream.close().await })
-    }
-}
-
-fn mark_terminal_stream(
-    upstream: LlmJsonStream,
-    phase: &'static str,
-    rollout_mode: &'static str,
-    metadata: Json,
-) -> LlmJsonStream {
-    LlmJsonStream::from_closeable(TerminalMarkedStream {
-        upstream,
-        phase,
-        rollout_mode,
-        metadata,
-        finished: false,
-    })
-}
-
-fn translated_stream(
-    source: WireProtocol,
-    target: WireProtocol,
-    effective_model: String,
-    upstream: LlmJsonStream,
-) -> LlmJsonStream {
-    LlmJsonStream::from_closeable(TranslatedStream {
-        upstream,
-        transcoder: StreamTranscoder::new(source, target, effective_model),
-        buffered: VecDeque::new(),
-        upstream_finished: false,
-    })
 }
 
 #[cfg(test)]
