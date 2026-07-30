@@ -25,7 +25,7 @@ This creates a point-in-time lifecycle event without pushing or popping a new sc
 
 ## Returns
 
-A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` after the event has been emitted.
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` after the event has been queued for sanitization and publication.
 
 ## Errors
 
@@ -33,4 +33,4 @@ Returns an error when the runtime owner check fails or when internal state canno
 
 ## Notes
 
-The event and its visible middleware/subscriber chains are snapshotted before this function returns. Sanitization and subscriber delivery happen later on the serial publication dispatcher.
+The mark event is queued with subscriber and sanitizer snapshots captured from the active scope stack.

@@ -27,6 +27,10 @@ A future resolving to the downstream tool result JSON. Pending marks from downst
 
 The future resolves to an error when the remaining execution chain fails.
 
+## Lifetime
+
+This continuation can be called repeatedly or concurrently while its execution-intercept callback is still running. Each invocation receives an isolated snapshot of the scopes visible when `next` is called. Calls that remain unfinished or begin after the interceptor settles are rejected.
+
 ## Aliased Type
 
 ```rust

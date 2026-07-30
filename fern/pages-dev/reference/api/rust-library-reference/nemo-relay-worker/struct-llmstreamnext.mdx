@@ -27,6 +27,8 @@ Continuation handle for LLM stream execution intercepts.
 
 Calls the remaining LLM streaming execution chain.
 
+Calls may be repeated or concurrent while the owning interceptor stream is active. Each call receives an isolated snapshot of the scope stack visible here. A returned downstream stream has its ordinary lifetime, but unfinished calls are cancelled when the interceptor stream closes.
+
 ## Trait Implementations
 
 ### `impl Clone for LlmStreamNext`

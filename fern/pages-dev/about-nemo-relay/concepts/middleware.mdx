@@ -19,6 +19,60 @@ events. NeMo Relay applies each surface at a specific lifecycle point.
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
 
+## Asynchronous Callbacks
+
+All middleware families are asynchronous in the Rust runtime. Rust callbacks
+return a future, and Node callbacks may return a value or a Promise. Python
+registrations accept callbacks that return a value or an awaitable when invoked
+through an asynchronous Relay API or queued event publication. Worker and
+native-plugin middleware can also complete asynchronously. Relay awaits entries
+sequentially in priority order, so later callbacks observe earlier middleware
+output.
+
+The experimental raw C FFI and Go binding retain synchronous middleware
+callbacks. Relay invokes each callback on a native thread and waits for it to
+return, so blocking I/O or other long-running work occupies that thread and can
+reduce middleware throughput. There is no completion-based C or Go middleware
+registration API.
+
+Synchronous standalone Python calls cannot drive an awaitable callback. Call
+the same standalone helper from a running event loop and await the returned
+value instead.
+
+Managed execution is asynchronous because its result depends on middleware
+completion. Python standalone conditional and request-intercept helpers return
+a direct value outside an event loop and an awaitable inside one. Manual lifecycle
+APIs (`tool_call`, `tool_call_end`, `llm_call`, and `llm_call_end`) remain
+synchronous: they create or close their handle immediately and queue observability
+work rather than awaiting it.
+
+<Warning>
+Event sanitizers, conditional-execution guardrails, request intercepts,
+execution intercepts, and subscribers are not re-entrant. These callbacks must
+not invoke another NeMo Relay API that runs middleware, flushes subscriber
+delivery, waits on an exporter, or clears plugins. Scope APIs remain supported:
+callbacks may create, push, or pop scopes at any nesting level and may replace
+the active scope stack with an arbitrary stack. Emitting a new event is the
+only supported operation that can enqueue additional callback work; Relay
+queues that event for later publication instead of recursively dispatching it.
+An event sanitizer must await child tasks whose emissions belong to its
+reserved FIFO position. Relay cancels detached async sanitizer tasks after the
+sanitizer returns. Detached blocking work runs without that sanitizer
+publication context and must not emit events for the completed publication.
+
+An execution intercept may invoke the `next` continuation supplied to that
+callback. This is the only supported way for an intercept to enter the
+remaining execution chain. The callback may await `next` repeatedly or
+concurrently for retries or fan-out. Each call receives an isolated snapshot of
+the scopes visible when it begins, so scope changes in one branch do not mutate
+another branch or the enclosing interceptor. Every `next` call must finish
+before the interceptor callback settles; unfinished or later calls are
+rejected. For a streaming execution intercept, the interceptor's returned
+stream extends that active lifetime until it closes, so a lazy stream adapter
+can call `next` while it is being consumed. A stream successfully returned by
+streaming `next` keeps its ordinary stream lifetime.
+</Warning>
+
 ## Registration Levels
 
 Middleware and subscribers can be registered at different levels depending on their
@@ -128,6 +182,19 @@ context. For the callback contract and binding APIs, refer to
 
 Sanitize guardrails are observability-oriented. They do not rewrite the real
 arguments passed to the callback or the real value returned to the caller.
+
+## Queued Event Publication
+
+Scope operations, marks, and manual tool/LLM lifecycle calls never become
+awaitable because an event sanitizer is asynchronous. At emission time Relay
+snapshots the event, visible sanitizer chain, and subscribers, then places the
+work on a serial dispatcher. The dispatcher awaits sanitizers and publishes the
+event later in FIFO order.
+
+Subscriber and exporter delivery is therefore delayed, while start/end/mark
+order is preserved. Closing a scope or deregistering middleware after emission
+does not affect queued snapshots. Sanitizer failures fail open: Relay records
+the callback failure and publishes the last valid event snapshot.
 
 ## Managed Execution Order
 
@@ -302,14 +369,18 @@ register_llm_sanitize_request_guardrail(
     "redact-openai-chat",
     10,
     Arc::new(|mut request, context| {
-        if context.codec() == &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
-            && let Some(codec) = context.resolve_codec()
-            && let Ok(mut annotated) = codec.decode(&request)
-        {
-            annotated.messages.clear();
-            request = codec.encode(&annotated, &request).ok()?;
-        }
-        Some(request)
+        Box::pin(async move {
+            if context.codec() == &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
+                && let Some(codec) = context.resolve_codec()
+                && let Ok(mut annotated) = codec.decode(&request)
+            {
+                annotated.messages.clear();
+                if let Ok(encoded) = codec.encode(&annotated, &request) {
+                    request = encoded;
+                }
+            }
+            Ok(Some(request))
+        })
     }),
 )?;
 ```

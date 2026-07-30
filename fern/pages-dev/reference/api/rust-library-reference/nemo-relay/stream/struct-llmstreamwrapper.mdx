@@ -78,6 +78,10 @@ A shared reference to the [`ScopeStackHandle`](/reference/api/rust-library-refer
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../api/runtime/callbacks/trait-llmstreaminner\">close</a>(\n    self: <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + '_&gt;&gt;"}} /></pre>
 
+#### `terminalize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../api/runtime/callbacks/trait-llmstreaminner\">terminalize</a>(self: <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;)"}} /></pre>
+
 ### `impl Stream for LlmStreamWrapper`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl Stream for <a href=\"struct-llmstreamwrapper\">LlmStreamWrapper</a>"}} /></pre>

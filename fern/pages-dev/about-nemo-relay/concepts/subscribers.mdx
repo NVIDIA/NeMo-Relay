@@ -130,6 +130,16 @@ shape for their target backend.
 Native subscribers are invoked by one process-wide worker thread in FIFO event
 order and subscriber snapshot order.
 
+<Warning>
+Subscriber callbacks are not re-entrant. Do not invoke a NeMo Relay API that
+runs middleware, flushes subscriber delivery, waits on an exporter, or clears
+plugins from a subscriber callback. Scope APIs remain supported: callbacks may
+create, push, or pop scopes at any nesting level and may replace the active
+scope stack with an arbitrary stack. Emitting a new event is the only
+supported operation that can enqueue additional callback work; Relay queues
+that event behind the active publication instead of recursively delivering it.
+</Warning>
+
 ## Waiting for Delivery
 
 An event-producing call returning is not a delivery barrier. These guarantees
@@ -149,8 +159,9 @@ Use the subscriber flush API when application shutdown, tests, or examples must
 observe side effects from callbacks that were already queued before the barrier:
 
 - Rust: `nemo_relay::api::subscriber::flush_subscribers()?`
-- Python: `nemo_relay.subscribers.flush()`
-- Node.js: `flushSubscribers()`, then await an event-loop tick for JavaScript
+- Python: `nemo_relay.subscribers.flush()` from synchronous code, or
+  `await nemo_relay.subscribers.flush_async()` from an `asyncio` task
+- Node.js: `await flushSubscribers()`, then await an event-loop tick for JavaScript
   callback side effects
 - FFI: `nemo_relay_flush_subscribers()`
 
@@ -161,10 +172,14 @@ exporter-specific flush, export, or shutdown operation described in
 
 <Warning>
 Do not invoke a subscriber flush, an exporter barrier, or plugin clear from a
-native subscriber callback. To avoid blocking its worker, the native dispatcher
-returns a re-entrant subscriber flush without waiting. Callbacks later in the
-active dispatch snapshot can still run after the barrier returns. Run those
-operations after the callback returns.
+subscriber, event-sanitizer, conditional-guardrail, request-intercept, or
+execution-intercept callback. These operations are not supported there and do
+not establish a valid delivery barrier; depending on the binding or exporter,
+they can also create a wait cycle. Run them after the callback returns.
+
+Queued tool and LLM observability sanitizers are a narrow exception: Python and
+Node.js permit a subscriber flush call there, but it returns without waiting
+for the sanitizer's own publication.
 
 If the process terminates before subscriber delivery and exporter teardown
 complete, queued telemetry can be lost. Returning from the event-producing API

@@ -27,11 +27,11 @@ This emits an LLM-end event for a handle previously returned by [`llm_call`](/re
 
 ## Returns
 
-A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the end event has been emitted.
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the end event has been queued for sanitization and publication.
 
 ## Errors
 
-Returns an error when the runtime owner check fails, internal state cannot be read safely, or response codec decoding fails.
+Returns an error when the runtime owner check fails or internal state cannot be read safely. Dispatcher submission failures are logged because observability publication is best effort. Sanitizer and response-codec errors discovered during queued publication are also logged and fail open.
 
 ## Notes
 

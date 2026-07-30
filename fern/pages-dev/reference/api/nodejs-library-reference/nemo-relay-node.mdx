@@ -171,17 +171,15 @@ export declare class AtofExporter {
   /** Deregister a subscriber by name. */
   deregister(name: string): boolean
   /**
-   * Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
-   * file sink or ask the stream sink to drain for up to its timeout. A re-entrant call does not
-   * establish the delivery barrier. A stream timeout is logged and does not by itself return an
-   * error.
+   * Outside subscriber and middleware callbacks, wait for queued subscriber delivery, then
+   * flush the file sink or ask the stream sink to drain for up to its timeout. A stream timeout
+   * is logged and does not by itself return an error.
    */
   forceFlush(): void
   /**
-   * Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
-   * file sink or ask the stream sink to drain and close up to its timeout. A re-entrant call
-   * does not establish the delivery barrier. A stream timeout is logged and does not by itself
-   * return an error.
+   * Outside subscriber and middleware callbacks, wait for queued subscriber delivery, then
+   * flush the file sink or ask the stream sink to drain and close up to its timeout. A stream
+   * timeout is logged and does not by itself return an error.
    */
   shutdown(): void
 }
@@ -740,17 +738,17 @@ Like `llmCallExecute`, conditional-execution guardrails run first on the raw req
 The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted or closed early and must return a JSON value representing the aggregated response. Consumers that stop reading early must await `stream.close()` to wait for producer cleanup and surface cleanup errors.
 
 ```ts
-export declare function llmStreamCallExecute(name: string, request: Json, func: (arg: Json) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<LlmStream>
+export declare function llmStreamCallExecute(name: string, request: Json, func: (...args: any[]) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<LlmStream>
 ```
 
 ### `registerMarkSanitizeGuardrail`
 
 Register an event sanitize guardrail.
 
-The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
+The callback may return fields directly or in a Promise. Scope and mark calls queue the event and return synchronously; publication resumes after the Promise settles. Callback, serialization, conversion, or invalid-result failures preserve the last valid event fields and record the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerMarkSanitizeGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
+export declare function registerMarkSanitizeGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>): void
 ```
 
 ### `deregisterMarkSanitizeGuardrail`
@@ -763,10 +761,10 @@ export declare function deregisterMarkSanitizeGuardrail(name: string): boolean
 
 Register an event sanitize guardrail.
 
-The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
+The callback may return fields directly or in a Promise. Scope and mark calls queue the event and return synchronously; publication resumes after the Promise settles. Callback, serialization, conversion, or invalid-result failures preserve the last valid event fields and record the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerScopeSanitizeStartGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
+export declare function registerScopeSanitizeStartGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>): void
 ```
 
 ### `deregisterScopeSanitizeStartGuardrail`
@@ -779,10 +777,10 @@ export declare function deregisterScopeSanitizeStartGuardrail(name: string): boo
 
 Register an event sanitize guardrail.
 
-The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
+The callback may return fields directly or in a Promise. Scope and mark calls queue the event and return synchronously; publication resumes after the Promise settles. Callback, serialization, conversion, or invalid-result failures preserve the last valid event fields and record the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerScopeSanitizeEndGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
+export declare function registerScopeSanitizeEndGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>): void
 ```
 
 ### `deregisterScopeSanitizeEndGuardrail`
@@ -798,7 +796,7 @@ Register a guardrail that sanitizes tool request arguments before execution.
 The `guardrail` callback receives `(toolName, args)` and must return sanitized args. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerToolSanitizeRequestGuardrail(name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function registerToolSanitizeRequestGuardrail(name: string, priority: number, guardrail: (toolName: string, value: Json) => Json | Promise<Json>): void
 ```
 
 ### `deregisterToolSanitizeRequestGuardrail`
@@ -818,7 +816,7 @@ Register a guardrail that sanitizes tool response data after execution.
 The `guardrail` callback receives `(toolName, result)` and must return sanitized result. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerToolSanitizeResponseGuardrail(name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function registerToolSanitizeResponseGuardrail(name: string, priority: number, guardrail: (toolName: string, value: Json) => Json | Promise<Json>): void
 ```
 
 ### `deregisterToolSanitizeResponseGuardrail`
@@ -838,7 +836,7 @@ Register a guardrail that conditionally gates tool execution.
 The `guardrail` callback receives `(toolName, args)` and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first. If the callback throws, the managed call rejects and the protected callback does not run.
 
 ```ts
-export declare function registerToolConditionalExecutionGuardrail(name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function registerToolConditionalExecutionGuardrail(name: string, priority: number, guardrail: (toolName: string, args: Json) => string | null | Promise<string | null>): void
 ```
 
 ### `deregisterToolConditionalExecutionGuardrail`
@@ -858,7 +856,7 @@ Register an intercept that transforms tool request arguments.
 The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first. If the callback throws, the managed call rejects and later middleware does not run.
 
 ```ts
-export declare function registerToolRequestIntercept(name: string, priority: number, breakChain: boolean, callable: (...args: any[]) => any): void
+export declare function registerToolRequestIntercept(name: string, priority: number, breakChain: boolean, callable: (toolName: string, args: Json) => Json | Promise<Json>): void
 ```
 
 ### `deregisterToolRequestIntercept`
@@ -875,7 +873,7 @@ export declare function deregisterToolRequestIntercept(name: string): boolean
 
 Register a tool execution intercept following the middleware chain pattern.
 
-The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
 export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
@@ -895,10 +893,10 @@ export declare function deregisterToolExecutionIntercept(name: string): boolean
 
 Register a guardrail that sanitizes LLM request data before execution.
 
-The `guardrail` callback receives `(request, context)` and must return the sanitized request, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(request, context)` and must return the sanitized request, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay preserves the last valid payload, continues publication, and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerLlmSanitizeRequestGuardrail(name: string, priority: number, guardrail: (request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null): void
+export declare function registerLlmSanitizeRequestGuardrail(name: string, priority: number, guardrail: (request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>): void
 ```
 
 ### `deregisterLlmSanitizeRequestGuardrail`
@@ -915,10 +913,10 @@ export declare function deregisterLlmSanitizeRequestGuardrail(name: string): boo
 
 Register a guardrail that sanitizes LLM response data after execution.
 
-The `guardrail` callback receives `(response, context)` and must return the sanitized response, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(response, context)` and must return the sanitized response, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists. If the callback throws, Relay preserves the last valid payload, continues publication, and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function registerLlmSanitizeResponseGuardrail(name: string, priority: number, guardrail: (response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null): void
+export declare function registerLlmSanitizeResponseGuardrail(name: string, priority: number, guardrail: (response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>): void
 ```
 
 ### `deregisterLlmSanitizeResponseGuardrail`
@@ -938,7 +936,7 @@ Register a guardrail that conditionally gates LLM execution.
 The `guardrail` callback receives the LLM request as JSON and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first. If the callback throws, the managed call rejects and the protected callback does not run.
 
 ```ts
-export declare function registerLlmConditionalExecutionGuardrail(name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function registerLlmConditionalExecutionGuardrail(name: string, priority: number, guardrail: (request: Json) => string | null | Promise<string | null>): void
 ```
 
 ### `deregisterLlmConditionalExecutionGuardrail`
@@ -958,7 +956,7 @@ Register an intercept that transforms LLM request data.
 The `callable` receives the `LlmRequest` (as JSON) and returns a transformed request. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first. If the callback throws, the managed call rejects and later middleware does not run.
 
 ```ts
-export declare function registerLlmRequestIntercept(name: string, priority: number, breakChain: boolean, callable: (args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }): void
+export declare function registerLlmRequestIntercept(name: string, priority: number, breakChain: boolean, callable: (args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>): void
 ```
 
 ### `deregisterLlmRequestIntercept`
@@ -975,10 +973,10 @@ export declare function deregisterLlmRequestIntercept(name: string): boolean
 
 Register an LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function registerLlmExecutionIntercept(name: string, priority: number, callable: (...args: any[]) => any): void
+export declare function registerLlmExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>): void
 ```
 
 ### `deregisterLlmExecutionIntercept`
@@ -995,10 +993,10 @@ export declare function deregisterLlmExecutionIntercept(name: string): boolean
 
 Register a streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (...args: any[]) => any): void
+export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>): void
 ```
 
 ### `deregisterLlmStreamExecutionIntercept`
@@ -1035,9 +1033,9 @@ export declare function deregisterSubscriber(name: string): boolean
 
 Return a Promise that resolves when native subscriber callbacks queued before this call finish.
 
-Call this function outside native subscriber callbacks. A re-entrant call returns without waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can still run.
+Call this function outside subscribers, event sanitizers, conditional guardrails, and request or execution intercepts. A queued tool or LLM observability sanitizer may call it, but the Promise resolves without waiting for its own publication.
 
-JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this Promise does not block the Node event loop while event sanitizers settle.
+JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this Promise does not block the Node event loop while Promise-returning event sanitizers settle. Native events emitted later by a JavaScript subscriber are separate publications and may require another flush after the JavaScript callback runs.
 
 The Promise rejects if the blocking task fails or the core subscriber flush returns an error. Callers should handle errors when awaiting it.
 
@@ -1049,10 +1047,10 @@ export declare function flushSubscribers(): Promise<void>
 
 Register a scope-local event sanitize guardrail.
 
-The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
+The callback may return fields directly or in a Promise. Scope and mark calls queue the event and return synchronously; publication resumes after the Promise settles. Callback, serialization, conversion, or invalid-result failures preserve the last valid event fields and record the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterMarkSanitizeGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
+export declare function scopeRegisterMarkSanitizeGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>): void
 ```
 
 ### `scopeDeregisterMarkSanitizeGuardrail`
@@ -1065,10 +1063,10 @@ export declare function scopeDeregisterMarkSanitizeGuardrail(scopeUuid: string, 
 
 Register a scope-local event sanitize guardrail.
 
-The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
+The callback may return fields directly or in a Promise. Scope and mark calls queue the event and return synchronously; publication resumes after the Promise settles. Callback, serialization, conversion, or invalid-result failures preserve the last valid event fields and record the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterScopeSanitizeStartGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
+export declare function scopeRegisterScopeSanitizeStartGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>): void
 ```
 
 ### `scopeDeregisterScopeSanitizeStartGuardrail`
@@ -1081,10 +1079,10 @@ export declare function scopeDeregisterScopeSanitizeStartGuardrail(scopeUuid: st
 
 Register a scope-local event sanitize guardrail.
 
-The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
+The callback may return fields directly or in a Promise. Scope and mark calls queue the event and return synchronously; publication resumes after the Promise settles. Callback, serialization, conversion, or invalid-result failures preserve the last valid event fields and record the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterScopeSanitizeEndGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
+export declare function scopeRegisterScopeSanitizeEndGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>): void
 ```
 
 ### `scopeDeregisterScopeSanitizeEndGuardrail`
@@ -1100,7 +1098,7 @@ Register a scope-local guardrail that sanitizes tool request arguments before ex
 The `guardrail` callback receives `(toolName, args)` and must return sanitized args. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterToolSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function scopeRegisterToolSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (toolName: string, value: Json) => Json | Promise<Json>): void
 ```
 
 ### `scopeDeregisterToolSanitizeRequestGuardrail`
@@ -1120,7 +1118,7 @@ Register a scope-local guardrail that sanitizes tool response data after executi
 The `guardrail` callback receives `(toolName, result)` and must return sanitized result. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay preserves the current emitted payload and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterToolSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function scopeRegisterToolSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (toolName: string, value: Json) => Json | Promise<Json>): void
 ```
 
 ### `scopeDeregisterToolSanitizeResponseGuardrail`
@@ -1140,7 +1138,7 @@ Register a scope-local guardrail that conditionally gates tool execution.
 The `guardrail` callback receives `(toolName, args)` and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first. If the callback throws, the managed call rejects and the protected callback does not run.
 
 ```ts
-export declare function scopeRegisterToolConditionalExecutionGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function scopeRegisterToolConditionalExecutionGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (toolName: string, args: Json) => string | null | Promise<string | null>): void
 ```
 
 ### `scopeDeregisterToolConditionalExecutionGuardrail`
@@ -1160,7 +1158,7 @@ Register a scope-local intercept that transforms tool request arguments.
 The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first. If the callback throws, the managed call rejects and later middleware does not run.
 
 ```ts
-export declare function scopeRegisterToolRequestIntercept(scopeUuid: string, name: string, priority: number, breakChain: boolean, callable: (...args: any[]) => any): void
+export declare function scopeRegisterToolRequestIntercept(scopeUuid: string, name: string, priority: number, breakChain: boolean, callable: (toolName: string, args: Json) => Json | Promise<Json>): void
 ```
 
 ### `scopeDeregisterToolRequestIntercept`
@@ -1177,7 +1175,7 @@ export declare function scopeDeregisterToolRequestIntercept(scopeUuid: string, n
 
 Register a scope-local tool execution intercept following the middleware chain pattern.
 
-The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
 export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
@@ -1197,10 +1195,10 @@ export declare function scopeDeregisterToolExecutionIntercept(scopeUuid: string,
 
 Register a scope-local guardrail that sanitizes LLM request data before execution.
 
-The `guardrail` callback receives `(request, context)` and must return the sanitized request, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(request, context)` and must return the sanitized request, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay preserves the last valid payload, continues publication, and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterLlmSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null): void
+export declare function scopeRegisterLlmSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>): void
 ```
 
 ### `scopeDeregisterLlmSanitizeRequestGuardrail`
@@ -1217,10 +1215,10 @@ export declare function scopeDeregisterLlmSanitizeRequestGuardrail(scopeUuid: st
 
 Register a scope-local guardrail that sanitizes LLM response data after execution.
 
-The `guardrail` callback receives `(response, context)` and must return the sanitized response, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay omits the payload and records the error for `getLastCallbackError()`.
+The `guardrail` callback receives `(response, context)` and must return the sanitized response, or `null` to omit the observability payload. Lower `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope. If the callback throws, Relay preserves the last valid payload, continues publication, and records the error for `getLastCallbackError()`.
 
 ```ts
-export declare function scopeRegisterLlmSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null): void
+export declare function scopeRegisterLlmSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>): void
 ```
 
 ### `scopeDeregisterLlmSanitizeResponseGuardrail`
@@ -1240,7 +1238,7 @@ Register a scope-local guardrail that conditionally gates LLM execution.
 The `guardrail` callback receives the LLM request as JSON and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first. If the callback throws, the managed call rejects and the protected callback does not run.
 
 ```ts
-export declare function scopeRegisterLlmConditionalExecutionGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (...args: any[]) => any): void
+export declare function scopeRegisterLlmConditionalExecutionGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (request: Json) => string | null | Promise<string | null>): void
 ```
 
 ### `scopeDeregisterLlmConditionalExecutionGuardrail`
@@ -1260,7 +1258,7 @@ Register a scope-local intercept that transforms LLM request data.
 The `callable` receives the `LlmRequest` (as JSON) and returns a transformed request. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first. If the callback throws, the managed call rejects and later middleware does not run.
 
 ```ts
-export declare function scopeRegisterLlmRequestIntercept(scopeUuid: string, name: string, priority: number, breakChain: boolean, callable: (args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }): void
+export declare function scopeRegisterLlmRequestIntercept(scopeUuid: string, name: string, priority: number, breakChain: boolean, callable: (args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>): void
 ```
 
 ### `scopeDeregisterLlmRequestIntercept`
@@ -1277,10 +1275,10 @@ export declare function scopeDeregisterLlmRequestIntercept(scopeUuid: string, na
 
 Register a scope-local LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function scopeRegisterLlmExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (...args: any[]) => any): void
+export declare function scopeRegisterLlmExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>): void
 ```
 
 ### `scopeDeregisterLlmExecutionIntercept`
@@ -1297,10 +1295,10 @@ export declare function scopeDeregisterLlmExecutionIntercept(scopeUuid: string, 
 
 Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (...args: any[]) => any): void
+export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>): void
 ```
 
 ### `scopeDeregisterLlmStreamExecutionIntercept`

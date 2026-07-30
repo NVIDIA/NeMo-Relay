@@ -1,6 +1,6 @@
 ---
 title: "Native Dynamic Plugins (Rust)"
-description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v2."
+description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v3."
 position: 10
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -116,10 +116,12 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
-## Native ABI v2
+## Native ABI v3
 
-The host passes a `NemoRelayNativeHostApiV1` table to the entry symbol. The
-plugin returns a `NemoRelayNativePluginV1` descriptor:
+The entry symbol receives a `*const NemoRelayNativeHostApiV1` pointer. It
+points at the v1 prefix of a v3 `NemoRelayNativeHostApiV3` table; check
+`abi_version` and `struct_size` before casting. The plugin returns a
+`NemoRelayNativePluginV1` descriptor:
 
 ```rust
 extern "C" fn nemo_relay_register_plugin(
@@ -127,6 +129,79 @@ extern "C" fn nemo_relay_register_plugin(
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus
 ```
+
+The v3 host table retains the frozen legacy prefix and appends a
+completion-based asynchronous middleware extension. An entry that rejects the
+v3 table with `InvalidArg` is retried with the legacy table. Rust plugins using the
+typed `NativePlugin` APIs continue to work unchanged. Raw ABI plugins can use
+`PluginContext::register_async_middleware_raw` when a callback must complete
+later. The callback receives a JSON invocation, an optional continuation for
+execution intercepts, and a one-shot completion handle.
+
+Return `Complete` after resolving or rejecting the completion before the
+callback returns. Return `Pending` only when retaining the completion; settle
+it exactly once, call `async_completion_release`, and release an async `next`
+handle after use. The host marks a completion cancelled when the awaiting
+runtime work is dropped; late and duplicate settlement is rejected safely.
+Invoke and finish every `next` operation before resolving or rejecting the
+owning completion. Relay rejects new calls and cancels unfinished calls after
+the completion settles.
+
+For unary execution intercepts, use `async_next_invoke_result` to call `next`
+repeatedly or concurrently with an independent result callback for each call.
+The older completion-coupled `async_next_invoke` is one-shot because its result
+settles the middleware completion. For incremental stream intercepts, the
+output stream owns the callback lifetime: `async_next_invoke_stream` may run
+repeatedly or concurrently until the output stream finishes, rejects, or is
+cancelled. Each call requires independent callback state. Relay rejects later
+calls and cancels unfinished calls when the output stream settles.
+
+Relay invokes an asynchronous middleware callback synchronously on the Tokio
+runtime worker that is polling that middleware invocation. There is no stable
+OS-thread affinity, and separate invocations can run concurrently. After
+returning `Pending`, a plugin can use its retained completion, stream, or
+`next` handle from another plugin-owned thread. The host synchronizes those
+opaque handles, schedules `next` on the captured Relay runtime, and can invoke
+an incremental downstream-stream callback on a Relay runtime worker. The
+plugin must synchronize shared `user_data` and callback state, and must keep
+them alive until the corresponding host-owned registration and all
+callback-owned handle references are released. Do not race a handle's release
+operation against settlement, cancellation inspection, stream operations, or
+`next` invocation using that same reference; serialize the final release after
+the last such call returns.
+
+Event sanitizers registered through this extension still run on Relay's serial
+publication dispatcher. Scope and mark emission remain synchronous and their
+sanitized events are delivered later in emission order.
+
+The generic v3 completion registration settles one JSON value and rejects the
+`LlmStreamExecutionIntercept` kind. Register asynchronous stream intercepts
+with `plugin_context_register_async_stream_middleware` instead. Its dedicated
+`async_next_invoke_stream` continuation forwards downstream chunks
+incrementally, so Relay does not buffer the provider stream into an array.
+
+The incremental output queue is bounded. `async_stream_push_json` and
+`async_stream_reject` never block a native callback thread. If either returns
+`Internal` and the host last-error contains `backpressured`, retain the logical
+chunk or rejection and retry after the consumer advances. `InvalidArg` means
+the stream is already closed or cancelled and must not be retried. Check
+`async_stream_is_cancelled` during longer producer work.
+
+For `async_next_invoke_stream`, Relay reports downstream failure or consumer
+cancellation through one terminal callback with a non-null error, and reports
+clean completion with `done = true`. Reclaim the callback's `user_data` in that
+terminal callback. If a chunk callback returns `false`, reclaim `user_data`
+before returning because Relay does not invoke another callback afterward.
+
+Cancelling the one-shot completion supplied to a non-stream execution
+intercept also aborts any pending `async_next_invoke` continuation. Plugins
+must still release their callback-owned completion and `next` references
+exactly once; cancellation only stops the host-side continuation and prevents
+it from retaining the plugin indefinitely.
+
+Legacy v1/v2 middleware callbacks are synchronous and run on the runtime's
+execution path. They must not block on I/O; use the v3 completion-based API for
+long-running work.
 
 Text and JSON data cross this boundary as host-owned
 `NemoRelayNativeString` handles. ABI structs also carry scalars, opaque
@@ -168,9 +243,9 @@ JSON string handles, which callers release with the ordinary host string
 release operation.
 
 A successful null sanitizer output omits the LLM observability payload and its
-annotation. Returning an error also fails closed rather than exposing the
-unsanitized payload. Neither case changes the client-visible request or
-response.
+annotation. Returning an error fails open: Relay records the callback error and
+preserves the last valid observability payload and annotation. Neither case
+changes the client-visible request or response.
 
 Use the `nemo-relay-plugin` crate rather than the host `nemo-relay` runtime
 crate. Refer to [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)

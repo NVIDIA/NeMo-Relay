@@ -53,9 +53,39 @@ the transformed observability payload.
 
 Registries run in priority order. Lower priorities run first, and each
 callback receives the fields returned by the callback before it. Invalid
-binding callback results fail open and preserve the current fields. In Node.js,
+binding callback results fail open and preserve the current fields. The same
+rule applies to tool and LLM request/response sanitizer errors: Relay preserves
+the last valid observability payload without changing provider execution. In Node.js,
 a synchronous sanitizer callback that throws also fails open; Relay records the
 error for `getLastCallbackError()`.
+
+<Warning>
+Event sanitizer callbacks are not re-entrant. Do not call another NeMo Relay
+API that runs middleware, flushes subscribers, waits on an exporter, or clears
+plugins. Scope APIs remain supported: callbacks may create, push, or pop scopes
+at any nesting level and may replace the active scope stack with an arbitrary
+stack. Emitting a new event is the only supported operation that can
+enqueue additional callback work; Relay queues it for later publication.
+</Warning>
+
+## Async Delivery and Ordering
+
+Event sanitizer callbacks may be asynchronous: use an `async def` callback in
+Python, return a Promise in Node.js, or return a future in Rust. Scope and mark
+emission remains synchronous. Relay snapshots the event, sanitizers, and
+subscribers and queues them on one serial publication dispatcher; that
+dispatcher awaits sanitizers before delivering the event to subscribers and
+exporters.
+
+This preserves FIFO start/end/mark delivery without making `push_scope`,
+`pop_scope`, or `event` awaitable. A scope-local sanitizer removed after an
+event is emitted still applies to its queued snapshot. An asynchronous
+sanitizer rejection fails open and preserves the last valid event fields.
+
+When Python code emits events from an `asyncio` task, await
+`nemo_relay.subscribers.flush_async()` to drain queued publication without
+blocking the event loop that runs async sanitizers. The synchronous
+`subscribers.flush()` barrier raises when called from a running event loop.
 
 ## Publication Semantics
 
@@ -140,9 +170,11 @@ register_mark_sanitize_guardrail(
     "safe-marks",
     100,
     Arc::new(|event, mut fields| {
-        fields.data = Some(json!({"checkpoint": event.name()}));
-        fields.metadata = None;
-        fields
+        Box::pin(async move {
+            fields.data = Some(json!({"checkpoint": event.name()}));
+            fields.metadata = None;
+            Ok(fields)
+        })
     }),
 )?;
 
@@ -198,14 +230,17 @@ activation fails.
 The source-first C API uses `NemoRelayEventSanitizeCb`. It provides global,
 scope-local, and plugin-context registration functions for all three surfaces.
 Global names start with `nemo_relay_register_`, and scope-local names start
-with `nemo_relay_scope_register_`.
+with `nemo_relay_scope_register_`. These callbacks are synchronous: Relay
+waits on a native thread until the callback returns, and no completion-based
+registration variant is provided.
 
 The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, global
 `Register*SanitizeGuardrail` helpers, scope-local
 `ScopeRegister*SanitizeGuardrail` helpers, and the same methods on
 `PluginContext`. The `guardrails` package provides shorter aliases. Because a
 returned `EventSanitizeFields` replaces all three fields, copy the supplied
-value and modify only the fields that should change.
+value and modify only the fields that should change. Go middleware callbacks
+are also synchronous; blocking work occupies the native callback thread.
 
 ## Related Topics
 

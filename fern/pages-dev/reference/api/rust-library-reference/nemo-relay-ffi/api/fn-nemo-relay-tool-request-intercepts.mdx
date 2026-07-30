@@ -15,6 +15,8 @@ Run the registered tool request intercept chain on the given arguments.
 
 This helper applies only the request-intercept middleware and does not emit lifecycle events or execute the tool callback.
 
+This legacy helper blocks its caller. If called from a Tokio runtime, middleware must not depend on work driven exclusively by that caller thread.
+
 ## Parameters
 
 - `name`: Tool name (null-terminated C string).

@@ -36,4 +36,4 @@ Returns an error when the runtime owner check fails or when internal state canno
 
 ## Notes
 
-The event and its visible middleware/subscriber chains are snapshotted before this function returns. Sanitization and subscriber delivery happen later on the serial publication dispatcher.
+The start event is queued with subscriber and sanitizer snapshots captured while the new scope is active.

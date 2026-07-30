@@ -27,6 +27,8 @@ Continuation handle for LLM execution intercepts.
 
 Calls the remaining LLM execution chain.
 
+Calls may be repeated or concurrent while the owning interceptor is active. Each call receives an isolated snapshot of the scope stack visible here. Calls still unfinished when the interceptor settles fail.
+
 ## Trait Implementations
 
 ### `impl Clone for LlmNext`

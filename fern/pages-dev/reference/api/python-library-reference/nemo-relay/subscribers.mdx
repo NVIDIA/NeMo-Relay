@@ -37,5 +37,13 @@ Remove a previously registered global subscriber.
 def flush() -> None
 ```
 
-Wait for subscriber callbacks already queued by native event emission.
+Wait for queued subscriber callbacks and their transitive publications.
+
+### `flush_async`
+
+```python
+async def flush_async() -> None
+```
+
+Wait asynchronously for queued callbacks and transitive publications.
 

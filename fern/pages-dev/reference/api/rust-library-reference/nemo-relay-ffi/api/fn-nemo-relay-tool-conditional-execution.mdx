@@ -13,6 +13,8 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Run the registered tool conditional execution guardrail chain.
 
+This legacy helper blocks its caller. If called from a Tokio runtime, middleware must not depend on work driven exclusively by that caller thread.
+
 Returns `NemoRelayStatus::Ok` if all guardrails pass, or `NemoRelayStatus::GuardrailRejected` if blocked.
 
 ## Parameters
