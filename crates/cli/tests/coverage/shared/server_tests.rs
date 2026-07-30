@@ -3119,7 +3119,7 @@ async fn gateway_upstream_transport_error_url_is_opaque_in_events() {
     let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
 
     let mut config = test_config();
-    config.openai_base_url = format!("http://{SECRET_USERNAME}:password@127.0.0.1:1").into();
+    config.openai_base_url = format!("http://{SECRET_USERNAME}:password@127.0.0.1:1");
     let app = router(config);
     let response = app
         .oneshot(
