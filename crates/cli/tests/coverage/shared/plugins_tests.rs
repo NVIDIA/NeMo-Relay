@@ -2199,6 +2199,24 @@ fn validate_config_accepts_pii_redaction_component() {
 }
 
 #[test]
+fn validate_config_rejects_removed_switchyard_component_with_migration_guidance() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: "switchyard".to_string(),
+            enabled: true,
+            config: serde_json::Map::new(),
+        }],
+        ..PluginConfig::default()
+    };
+
+    let error = validate_config(&config).unwrap_err().to_string();
+
+    assert!(error.contains("built-in Switchyard service integration was removed"));
+    assert!(error.contains("nvidia.switchyard"));
+    assert!(error.contains("[[plugins.dynamic]]"));
+}
+
+#[test]
 fn validate_config_rejects_local_nemo_guardrails_request_defaults() {
     let config = PluginConfig {
         components: vec![PluginComponentSpec {

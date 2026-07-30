@@ -42,6 +42,8 @@ compatibility information applies to the current 0.7 prerelease.
 - Native and worker plugins can resolve invocation-scoped codec capabilities.
   Request sanitizers can decode and encode requests, and response sanitizers
   can decode responses.
+- Switchyard is distributed as an external native dynamic plugin. The built-in
+  service-backed crate and CLI feature are no longer included.
 - The Observability plugin now uses one typed, multi-endpoint OpenTelemetry
   section for `full`, `gen_ai`, and `openinference` trace projections.
 - The `gen_ai` projection implements the pinned
@@ -117,9 +119,6 @@ their values cannot be isolated between endpoints.
 - Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
   delegated-task payloads that Relay cannot decrypt or reliably link.
 - The Node.js binding and package workflows require Node.js 24 or later.
-- Switchyard is experimental, excluded from default CLI builds, and requires a
-  separately managed compatible service and a named authenticated ATOF HTTP
-  stream sink.
 - OpenClaw has public hook-backed telemetry. Its security and optimization
   coverage is partial because it does not own a managed execution path.
 - The NeMo Guardrails remote backend inherits its configured service's
