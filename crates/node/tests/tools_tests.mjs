@@ -754,7 +754,11 @@ describe('Tool guardrails', () => {
     try {
       const handle = toolCall('node_manual_tool_flush', { original: true });
       toolCallEnd(handle, { ok: true });
-      await flushSubscribers();
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start') &&
+          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'end'),
+      );
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_manual_tool_flush_request');
       deregisterToolSanitizeResponseGuardrail('node_manual_tool_flush_response');
