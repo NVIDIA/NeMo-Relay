@@ -355,6 +355,7 @@ jobs:
           python scripts/package-cli-bin.py "${args[@]}"
 
       - name: Install and run CLI wheel
+        if: ${{ !endsWith(matrix.target, '-musl') }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
@@ -369,6 +370,24 @@ jobs:
           fi
           "$venv_python" -m pip install --force-reinstall --no-deps "${wheels[0]}"
           "$venv_cli" --version
+
+      - name: Install and run CLI wheel on musllinux
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env NEMO_RELAY_CI_WORKSPACE_TMP \
+            "${{ matrix.runtime_image }}" \
+            /bin/sh -ec '
+              wheel="$(find "$NEMO_RELAY_CI_WORKSPACE_TMP/cli-packages" -maxdepth 1 -name "*.whl" -print -quit)"
+              test -n "$wheel"
+              /opt/python/cp311-cp311/bin/python -m venv /tmp/nemo-relay-cli-wheel-venv
+              /tmp/nemo-relay-cli-wheel-venv/bin/python -m pip install --force-reinstall --no-deps "$wheel"
+              /tmp/nemo-relay-cli-wheel-venv/bin/nemo-relay --version
+            '
 
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
