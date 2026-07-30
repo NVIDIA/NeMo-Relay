@@ -1,7 +1,7 @@
 ---
 title: "Adaptive Configuration"
 sidebar-title: "Configuration"
-description: "Configure the built-in Adaptive component, including state, telemetry, hints, ACG, and response caching."
+description: "Configure the built-in Adaptive component, including state, telemetry, hints, and ACG."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -32,7 +32,6 @@ The top-level adaptive object contains:
 | `adaptive_hints` | Request hint-injection behavior. |
 | `tool_parallelism` | Tool scheduling observation or scheduling behavior. |
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
-| `response_cache` | Exact-match LLM response caching. Requires a non-empty trust-domain `namespace`. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
 The requested area pages cover [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg) and
@@ -46,30 +45,6 @@ policy remain whole-plugin settings:
 - Keep `tool_parallelism.mode = "observe_only"` until scheduling behavior has
   been validated.
 - Keep `policy.unsupported_value = "error"` for rollout safety.
-
-Treat `response_cache.namespace` as a security boundary, not only a key prefix.
-One response-cache configuration must not span mutually untrusted tenants or
-upstreams. Use separate Relay gateway/cache deployments for those trust domains,
-or leave response caching disabled. Validation rejects an empty or whitespace-only
-namespace for both in-memory and Redis backends.
-
-When Switchyard and response caching are enabled together, keep
-`switchyard.priority` lower than `response_cache.priority` (the defaults are
-`0` and `50`). Relay rejects equal or inverted priorities because the selected
-backend must be part of the cache key.
-
-<Note>
-Rust 0.7 adds `response_cache` to the public `AdaptiveConfig` struct. Existing
-exhaustive struct literals must add `response_cache: None`. Prefer setting the
-fields you need and ending the literal with `..AdaptiveConfig::default()` so
-future optional fields keep their defaults.
-</Note>
-
-Streaming cache publication is write-behind. Relay reports stream completion
-without waiting for the cache backend to confirm the write, so an identical
-request issued immediately after completion can still run live. A later request
-can reuse the entry after publication finishes. This keeps Redis latency or an
-unavailable cache backend from delaying the streamed response.
 
 ## `plugins.toml` Example
 
