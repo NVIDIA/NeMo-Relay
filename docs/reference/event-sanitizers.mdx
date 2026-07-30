@@ -65,9 +65,9 @@ sanitization and publication on a serial background dispatcher. Subscribers
 and exporters therefore receive the sanitized event after the emission call
 returns.
 
-Event sanitizers run only for events captured for delivery to one or more
-subscribers or exporters. With no subscribers visible at emission, Relay does
-not invoke the sanitizer chain or start the dispatcher.
+Event sanitizers run only for events captured for delivery to a direct
+subscriber or an exporter-backed subscriber. With neither visible at emission,
+Relay does not invoke the sanitizer chain or start the dispatcher.
 
 The dispatcher processes snapshots in FIFO order, preserving scope start/end
 and mark ordering. Closing a scope or deregistering middleware after emission
