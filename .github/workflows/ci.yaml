@@ -315,7 +315,7 @@ jobs:
             expect_count 7 "CLI binary" "${cli_binaries[@]}"
             expect_count 7 "CLI wheel" "${cli_wheels[@]}"
             expect_count 7 "Python API wheel" "${python_api_wheels[@]}"
-            expect_count 7 "CLI npm" "${cli_npm[@]}"
+            expect_count 8 "CLI npm" "${cli_npm[@]}"
             expect_count 8 "Node npm" "${node_npm[@]}"
 
             mapfile -t distribution_assets < <(
