@@ -96,10 +96,12 @@ class TestObservabilityConfigHelpers:
             "enabled": False,
             "endpoints": [],
         }
+        assert "max_queue_size" not in OpenTelemetryEndpointConfig("full", "http://localhost:4318/v1/traces").to_dict()
         assert OpenTelemetryEndpointConfig(
             "gen_ai",
             "http://localhost:4318/v1/traces",
             header_env={"authorization": "OTEL_AUTHORIZATION"},
+            max_queue_size=8192,
         ).to_dict() == {
             "type": "gen_ai",
             "endpoint": "http://localhost:4318/v1/traces",
@@ -110,6 +112,7 @@ class TestObservabilityConfigHelpers:
             "service_name": "unknown_service",
             "instrumentation_scope": "opentelemetry",
             "timeout_millis": 3000,
+            "max_queue_size": 8192,
             "headers": {},
             "header_env": {"authorization": "OTEL_AUTHORIZATION"},
             "resource_attributes": {},

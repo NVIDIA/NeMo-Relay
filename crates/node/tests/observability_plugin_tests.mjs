@@ -31,11 +31,22 @@ describe('observability plugin helpers', () => {
       enabled: false,
       endpoints: [],
     });
+    assert.equal(
+      Object.hasOwn(
+        observability.openTelemetryEndpoint({
+          type: 'full',
+          endpoint: 'http://localhost:4318/v1/traces',
+        }),
+        'max_queue_size',
+      ),
+      false,
+    );
     assert.deepEqual(
       observability.openTelemetryEndpoint({
         type: 'gen_ai',
         endpoint: 'http://localhost:4318/v1/traces',
         header_env: { authorization: 'OTEL_AUTHORIZATION' },
+        max_queue_size: 8192,
       }),
       {
         type: 'gen_ai',
@@ -47,6 +58,7 @@ describe('observability plugin helpers', () => {
         service_name: 'unknown_service',
         instrumentation_scope: 'opentelemetry',
         timeout_millis: 3000,
+        max_queue_size: 8192,
       },
     );
 

@@ -204,6 +204,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Export timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
+    /// Maximum completed spans buffered before this endpoint drops new spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_queue_size: Option<usize>,
 }
 
 /// Multi-sink ATOF JSONL exporter config.
@@ -526,6 +529,7 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("service_version", EditorFieldKind::String, &[], true),
                 otel_editor_field("instrumentation_scope", EditorFieldKind::String, &[], false),
                 otel_editor_field("timeout_millis", EditorFieldKind::Integer, &[], false),
+                otel_editor_field("max_queue_size", EditorFieldKind::Integer, &[], false),
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field(
@@ -1798,6 +1802,11 @@ fn build_otel_config(
             "OpenTelemetry endpoint must be a nonblank string".to_string(),
         ));
     }
+    if section.max_queue_size == Some(0) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry endpoints[{index}].max_queue_size must be greater than 0"
+        )));
+    }
     let transport = match section.transport.as_str() {
         "http_binary" => OtlpTransport::HttpBinary,
         "grpc" => OtlpTransport::Grpc,
@@ -1831,6 +1840,9 @@ fn build_otel_config(
         .with_mark_projection(section.mark_projection)
         .with_mark_exclude_names(section.mark_exclude_names)
         .with_attribute_mappings(section.attribute_mappings);
+    if let Some(max_queue_size) = section.max_queue_size {
+        config = config.with_max_queue_size(max_queue_size);
+    }
     if let Some(namespace) = section.service_namespace {
         config = config.with_service_namespace(namespace);
     }
@@ -2053,6 +2065,7 @@ fn validate_opentelemetry_endpoint_fields(
         "service_version",
         "instrumentation_scope",
         "timeout_millis",
+        "max_queue_size",
     ];
     const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
     let Some(endpoints) = opentelemetry.get("endpoints").and_then(Json::as_array) else {
@@ -2219,6 +2232,16 @@ fn validate_opentelemetry_section(
                 Some("opentelemetry".to_string()),
                 Some(format!("endpoints[{index}].transport")),
                 "OpenTelemetry endpoint transport must be 'http_binary' or 'grpc'".to_string(),
+            );
+        }
+        if endpoint.max_queue_size == Some(0) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("endpoints[{index}].max_queue_size")),
+                "OpenTelemetry endpoint max_queue_size must be greater than 0".to_string(),
             );
         }
         if let Err(error) = validate_attribute_mappings(&endpoint.attribute_mappings) {

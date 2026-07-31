@@ -229,6 +229,7 @@ class OpenTelemetryEndpointConfig:
     headers: dict[str, str] = field(default_factory=dict)
     header_env: dict[str, str] = field(default_factory=dict)
     resource_attributes: dict[str, str] = field(default_factory=dict)
+    max_queue_size: int | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -245,6 +246,7 @@ class OpenTelemetryEndpointConfig:
                 "service_version": self.service_version,
                 "instrumentation_scope": self.instrumentation_scope,
                 "timeout_millis": self.timeout_millis,
+                "max_queue_size": self.max_queue_size,
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "resource_attributes": self.resource_attributes,

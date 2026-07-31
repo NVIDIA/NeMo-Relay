@@ -82,6 +82,8 @@ exporters. During teardown, NeMo Relay attempts to shut down every endpoint and
 returns the first teardown error after all attempts finish. Clear the plugin
 during graceful shutdown so queued subscriber work can drain and every
 exporter receives a teardown attempt.
+Endpoints shut down sequentially, so a slow or unavailable endpoint can extend
+the total shutdown time.
 
 Top-level component `config` lists concatenate across configuration layers,
 with higher-precedence entries first. The observability destination lists

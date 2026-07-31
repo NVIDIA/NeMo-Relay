@@ -18,8 +18,10 @@ Each endpoint selects one fixed semantic projection:
 | `gen_ai` | OpenTelemetry GenAI semantic conventions only. |
 | `openinference` | OpenInference-compatible spans with the existing default mark handling. |
 
-You can repeat a type or combine types. Each endpoint owns an independent exporter
-and can use a different endpoint.
+You can repeat a type or combine types. Each endpoint owns an independent
+exporter, tracer provider, batch queue, and runtime. NeMo Relay has no hard
+endpoint limit; resource use and egress scale with endpoint count, so validate
+large fan-outs against deployment limits.
 
 The `gen_ai` projection targets the
 [OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
@@ -79,6 +81,7 @@ work or delivery to the other exporters.
 | `service_version` | Omitted | Optional `service.version`. |
 | `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
 | `timeout_millis` | `3000` | Export timeout. |
+| `max_queue_size` | Omitted | Positive per-endpoint span queue capacity. When omitted, the OpenTelemetry SDK default or `OTEL_BSP_MAX_QUEUE_SIZE` applies. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |
