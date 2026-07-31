@@ -1,0 +1,34 @@
+---
+title: "Module streaming"
+sidebar-title: "streaming"
+description: "Streaming response codecs for the managed LLM execution pipeline."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Streaming response codecs for the managed LLM execution pipeline.
+
+[`crate::codec::traits::LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec) decodes a complete provider response into a normalized [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse). For streaming providers, the analogous job is to:
+
+1. consume per-chunk events as they arrive on a streaming HTTP response, and
+2. assemble a single non-streaming-shape JSON payload at end of stream.
+
+Once assembled, the payload can be fed back through the matching [`crate::codec::traits::LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec) to produce an [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse) - meaning streaming and non-streaming requests converge on the same observability output without per-route shape duplication.
+
+[`StreamingCodec`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec) is the trait that bundles the two functions ([`LlmCollectorFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmcollectorfn), [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmfinalizerfn)) used by [`crate::api::llm::llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute). Each provider supplies one impl whose internal state holds whatever incremental information is needed to materialize the final payload.
+
+## Structs
+
+- [SseEvent](/reference/api/rust-library-reference/nemo-relay/codec/streaming/struct-sseevent): One decoded SSE frame, paired with the parsed `data:` payload.
+- [SseEventDecoder](/reference/api/rust-library-reference/nemo-relay/codec/streaming/struct-sseeventdecoder): Incremental decoder for `text/event-stream` byte streams that yields one JSON object per complete `data:` payload.
+
+## Enums
+
+- [NormalizedStreamEvent](/reference/api/rust-library-reference/nemo-relay/codec/streaming/enum-normalizedstreamevent): Provider-neutral incremental stream item used by cross-protocol transcoders.
+
+## Traits
+
+- [StreamingCodec](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec): Per-provider streaming codec used with [`crate::api::llm::llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute).

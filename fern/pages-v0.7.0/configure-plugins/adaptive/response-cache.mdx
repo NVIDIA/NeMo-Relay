@@ -1,0 +1,427 @@
+---
+title: "Response Cache"
+description: "Configure exact-match response caching for managed LLM calls."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the response cache when the same LLM request is made more than once and the
+repeat should be served from a store instead of calling the provider again. An
+eligible request that matches an unexpired cache entry can be served from the
+store without calling the provider. Buffered hits preserve the stored response
+shape and usage fields; streaming hits replay an equivalent provider-native
+stream.
+
+The cache is an optional `response_cache` section of the
+[Adaptive plugin](/configure-plugins/adaptive/configuration), not a standalone plugin
+kind. It is off until the section is present, applies to
+[managed LLM calls](/instrument-applications/instrument-llm-call) without
+changing the execution API. By default, only requests with an explicit numeric
+`temperature = 0` are eligible; set `cache_nondeterministic = true` to opt
+sampled requests into caching. Runtime backend errors fail open to a normal
+live call, while invalid configuration is rejected during validation.
+
+`namespace` is required and defines one trusted cache-sharing domain. Do not
+use one namespace across mutually untrusted tenants or upstreams.
+`header_allowlist` does not replace this trust boundary.
+
+## When to Use It
+
+- Development and test loops that replay the same prompts — eligible repeats
+  can reuse stored responses.
+- CI suites that exercise real models — cached repeats can avoid additional
+  provider calls.
+- Demos and workshops — reuse stable stored answers while reducing provider
+  calls.
+- A shared team cache — callers in one trusted sharing domain can use the same
+  Redis store, namespace, and key prefix across processes and machines.
+- Gateway deployments — enable caching for an agent without touching its code.
+
+Reuse requires the request to match exactly after normalization, so prompts
+that embed volatile content (timestamps, random IDs) will not repeat. The TTL
+is the maximum entry age, not guaranteed residency; a backend can evict or
+delete an entry sooner. Use `bypass_rate` to re-run a sample of cacheable calls
+live and refresh an entry when the new response is stored.
+
+## `plugins.toml` Example
+
+```toml
+version = 1
+
+[[components]]
+kind = "adaptive"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.response_cache]
+ttl_seconds = 3600        # maximum reuse age
+namespace = "dev-harness" # identifies one trusted cache-sharing domain
+bypass_rate = 0.0         # 0.1 would re-run 10% of cacheable calls live
+cache_nondeterministic = false # set true to cache nondeterministic requests
+
+[components.config.response_cache.backend]
+kind = "in_memory"        # or "redis" for a shared cache
+```
+
+With this configuration the first eligible occurrence of a request runs the
+provider and attempts to store a complete answer. A later eligible, identical
+request within the TTL can be served from the store when that write succeeds
+and the entry remains present. The request's provider surface is auto-detected
+from its shape, so there is nothing else to configure. For file discovery and
+precedence rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Relay own the
+cache lifecycle.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
+    response_cache=nemo_relay.adaptive.ResponseCacheConfig(
+        ttl_seconds=3600,
+        namespace="dev-harness",
+    ),
+)
+
+plugin_config = nemo_relay.plugin.PluginConfig(
+    components=[nemo_relay.adaptive.ComponentSpec(adaptive_config)]
+)
+
+report = nemo_relay.plugin.validate(plugin_config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+def call_model(_request):
+    return {
+        "model": "gpt-4o",
+        "choices": [{
+            "message": {"role": "assistant", "content": "NeMo Relay instruments agent calls."},
+            "finish_reason": "stop",
+        }],
+    }
+
+async def main():
+    await nemo_relay.plugin.initialize(plugin_config)
+    try:
+        # Managed calls need no changes. The first call runs the provider;
+        # an identical repeat can be served from the cache.
+        request = nemo_relay.LLMRequest(
+            {},
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "What is NeMo Relay?"}],
+                "temperature": 0,
+            },
+        )
+        await nemo_relay.llm.execute("openai", request, call_model)
+        await nemo_relay.llm.execute("openai", request, call_model)
+    finally:
+        nemo_relay.plugin.clear()
+
+asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const adaptive = require("nemo-relay-node/adaptive");
+const plugin = require("nemo-relay-node/plugin");
+
+const adaptiveConfig = adaptive.defaultConfig();
+adaptiveConfig.responseCache = adaptive.responseCacheConfig({
+  ttlSeconds: 3600,
+  namespace: "dev-harness",
+});
+
+const pluginConfig = plugin.defaultConfig();
+pluginConfig.components = [adaptive.ComponentSpec(adaptiveConfig)];
+
+const report = plugin.validate(pluginConfig);
+if (report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+  throw new Error(JSON.stringify(report.diagnostics));
+}
+
+void (async () => {
+  await plugin.initialize(pluginConfig);
+  try {
+    // Eligible deterministic repeats can be served from the cache.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+};
+use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
+use nemo_relay_adaptive::{AdaptiveConfig, ResponseCacheConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut adaptive = AdaptiveConfig::default();
+    adaptive.response_cache = Some(ResponseCacheConfig {
+        ttl_seconds: 3600,
+        namespace: "dev-harness".into(),
+        ..ResponseCacheConfig::default()
+    });
+
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(ComponentSpec::new(adaptive).into());
+
+    register_adaptive_component()?;
+    let report = validate_plugin_config(&plugin_config);
+    assert!(!report.has_errors());
+
+    let _active = initialize_plugins(plugin_config).await?;
+    // Eligible deterministic repeats can now be served from the cache.
+
+    clear_plugin_configuration()?;
+    Ok(())
+}
+```
+</Tab>
+
+</Tabs>
+
+<Note>
+Canonical plugin documents and `plugins.toml` use `snake_case`. Python
+response-cache fields follow that convention, while Node.js uses `camelCase` at
+its response-cache helper surface. `ComponentSpec` and `AdaptiveRuntime`
+serialize those fields to canonical keys. Python uses
+`BackendSpec.redis(url, key_prefix=...)`; Node.js uses
+`adaptive.redisBackend(url, keyPrefix)`. Both Redis helpers default the prefix
+to `"nemo_relay:"`, overriding the value in the fields table. Configure the
+same `key_prefix` in every process and binding that should share entries.
+</Note>
+
+## Manual API
+
+Use the manual runtime API when an integration needs to own the adaptive
+lifecycle directly instead of activating the top-level plugin component.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
+    response_cache=nemo_relay.adaptive.ResponseCacheConfig(namespace="dev-harness"),
+)
+
+async def main():
+    runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+    await runtime.register()
+    try:
+        # Run instrumented application work here.
+        runtime.wait_for_idle()
+    finally:
+        await runtime.shutdown()
+
+asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const adaptive = require("nemo-relay-node/adaptive");
+
+const adaptiveConfig = adaptive.defaultConfig();
+adaptiveConfig.responseCache = adaptive.responseCacheConfig({
+  namespace: "dev-harness",
+});
+
+const runtime = new adaptive.AdaptiveRuntime(adaptiveConfig);
+void (async () => {
+  await runtime.register();
+  try {
+    // Run instrumented application work here.
+    runtime.waitForIdle();
+  } finally {
+    await runtime.shutdown();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime, ResponseCacheConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut adaptive = AdaptiveConfig::default();
+    adaptive.response_cache = Some(ResponseCacheConfig {
+        namespace: "dev-harness".into(),
+        ..ResponseCacheConfig::default()
+    });
+
+    let mut runtime = AdaptiveRuntime::new(adaptive).await?;
+    runtime.register().await?;
+
+    // Run instrumented application work here.
+
+    runtime.wait_for_idle();
+    runtime.shutdown().await?;
+    Ok(())
+}
+```
+</Tab>
+
+</Tabs>
+
+## What Gets Cached
+
+Only complete, replayable answers are stored:
+
+- A response with a non-null `error` or a `status` such as `failed`,
+  `cancelled`, `incomplete`, or `in_progress` is never stored.
+- Stateful requests bypass the cache entirely: a request that opts into
+  server-side persistence (a non-null `store` value other than `false`, or an
+  OpenAI Responses call without an explicit `store = false`), continues a
+  stored interaction (`previous_response_id`), or references server-side state
+  (`conversation`, `container`). Their answers depend on state the cache key
+  cannot see.
+- Streaming calls are cached too. On a miss the live chunks are forwarded to
+  the consumer while being assembled into one aggregate response — the same
+  shape a buffered call stores, so buffered and streaming calls share one
+  keyspace. On a hit the stored answer is replayed as provider-native chunks
+  (OpenAI Chat deltas, OpenAI Responses lifecycle events, or Anthropic
+  Messages events), so strict streaming clients parse it like a live stream.
+  Provider-terminal token-limited Chat (`finish_reason = "length"`) and
+  Anthropic (`stop_reason = "max_tokens"`) answers can be stored. OpenAI
+  Responses answers with `status = "incomplete"`, streams without a terminal
+  event, and streams whose content cannot be replayed faithfully (for example
+  thinking blocks) are never stored. A streaming request whose surface cannot
+  be inferred runs live, uncached.
+
+Streaming publication is write-behind: Relay can report end-of-stream before
+the backend write finishes. `wait_for_idle()` does not wait for cache writes.
+An immediate repeat can therefore run live, and concurrent identical misses
+can each call the provider because the cache does not coalesce them.
+
+A buffered hit returns the stored response unchanged. A streaming hit replays
+an equivalent provider-native stream. Available saved-token and estimated-cost
+values are reported on the `response_cache` mark, never by editing a buffered
+response body.
+
+## Cache Keys
+
+Two requests hit the same entry when they are the same request after
+normalization, under the default `key_strategy = "exact_request"`:
+
+- The request is decoded to its normalized form and fingerprinted with
+  SHA-256, so provider-shaped differences that mean the same thing collapse to
+  one key. When a request cannot be decoded faithfully, the raw body is
+  fingerprinted instead — that fallback can only cost a miss, never a wrong
+  hit.
+- Field order and whitespace never matter (RFC 8785 canonicalization).
+- Only the built-in noise fields `stream`, `user`, `metadata`, and `store` are
+  dropped. All other normalized or raw provider controls remain in the key,
+  including `service_tier`; there is no configurable skip list.
+- OpenAI Chat requests preserve whether the caller used `max_tokens` or
+  `max_completion_tokens`, because providers can treat the two fields
+  differently.
+- Tool-call IDs are normalized, so randomly generated per-call IDs do not
+  fragment the keyspace.
+- Request headers stay out of the key unless named in `header_allowlist`.
+  Allowlist every trusted, non-secret response-affecting header; an omitted
+  header does not partition the key. Known auth headers are rejected, but
+  validation cannot recognize every custom credential name, so never allowlist
+  credentials.
+- The provider name and required namespace partition every key. A
+  Switchyard-selected backend ID is also partitioned automatically. Without
+  Switchyard, a provider name cannot distinguish upstreams that reuse that
+  name, so use separate configurations and namespaces for different trusted
+  upstream domains.
+- Requests containing integers outside the exactly representable RFC 8785
+  range (less than `-2^53` or greater than `2^53`) bypass the cache.
+
+## Observability
+
+Every cache decision emits a `response_cache` mark with
+`data.status` set to one of:
+
+| Status | Meaning |
+|---|---|
+| `hit` | Served the stored answer; the provider was skipped. |
+| `miss` | No entry was served; the call ran live. After an ordinary lookup miss, Relay attempts to store a cacheable result. |
+| `bypass` | The request is not cacheable, or the `bypass_rate` sampler chose to run live. |
+
+Mark attributes use `nemo_relay.response_cache.*`: `backend`, `surface`,
+`key_hash` (the `sha256:…` fingerprint), `ttl_ms`, and `age_ms` as applicable;
+`saved_tokens` and `saved_cost_usd` appear on hits when they can be derived. A
+`reason` appears on bypasses and store-error misses (for example `sampled`,
+`stateful_store`, `store_error`, or `stream_no_codec`). Cache marks never
+include prompts, answers, or credentials.
+
+`nemo-relay doctor` reports the cache state: `not configured` when the section
+is absent, `configured but disabled (adaptive plugin disabled)` when the
+adaptive component is off, `on; backend '<kind>' reachable` when healthy, and
+a failure when the config is invalid or the backend is unreachable.
+
+## Fields
+
+| Field | Default | Notes |
+|---|---|---|
+| `ttl_seconds` | `3600` | Maximum entry age in seconds; a backend can evict an entry sooner. |
+| `namespace` | `""` (unconfigured) | Required non-empty trust-domain partition folded into every key. Empty or whitespace-only values are rejected. |
+| `priority` | `50` | LLM execution intercept priority. Lower values run earlier. |
+| `bypass_rate` | `0.0` | Probability in `[0.0, 1.0]` of running a cacheable call live. A sampled call attempts to refresh the entry when its result is cacheable and the write succeeds. |
+| `cache_nondeterministic` | `false` | Only requests with an explicit numeric `temperature = 0` are eligible. Set `true` to cache and reuse sampled responses. |
+| `key_strategy` | `"exact_request"` | The only supported strategy: reuse requires the same normalized request. |
+| `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). Known auth headers are rejected. |
+| `backend.kind` | `"in_memory"` | `"in_memory"`, or `"redis"` (requires building with the `redis-backend` feature). |
+| `backend.config.max_bytes` | 256 MiB | In-memory size budget; the oldest entries are evicted first. |
+| `backend.config.url` | — | Redis connection URL. Required for the `redis` backend. |
+| `backend.config.key_prefix` | `"nemo-relay:llm-cache:"` | Prefix for keys in Redis. |
+
+For a gateway that uses Switchyard, `switchyard.priority` must be lower than
+`response_cache.priority`. To derive keys before ACG rewrites requests, set
+`response_cache.priority` lower than `acg.priority`. With all three components,
+priorities of `0`, `40`, and `50`, respectively, satisfy both orderings.
+
+<Warning>
+Cached responses are stored unredacted. PII sanitize guardrails rewrite emitted
+telemetry, never payloads, so the store holds full response bodies. Cache
+entries can also store provider and model diagnostics plus the key fingerprint;
+they do not store full request bodies or headers. A shared Redis backend must be
+trusted and access-controlled. Use a separate configuration and namespace for
+each mutually untrusted tenant or upstream domain.
+</Warning>
+
+## Common Validation Failures
+
+- `namespace` is empty or whitespace-only, `ttl_seconds` is `0`, or
+  `bypass_rate` is outside `[0.0, 1.0]`.
+- `key_strategy` is not `"exact_request"`.
+- `header_allowlist` names an auth header such as `authorization` or
+  `x-api-key`.
+- `in_memory` `max_bytes` is zero or is not an integer.
+- `backend.kind` is unknown; or `redis` has a missing, non-string, or
+  whitespace-only `backend.config.url`, uses a non-string `key_prefix`, or is
+  unavailable because Relay was built without the `redis-backend` feature.
+- Gateway Switchyard priority is equal to or greater than
+  `response_cache.priority`.

@@ -1,0 +1,16 @@
+---
+title: "Function apply_global_config_policy"
+sidebar-title: "apply_global_config_policy"
+description: "Applies non-default global policy fields to a component policy."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn apply_global_config_policy(\n    component_policy: <a href=\"struct-configpolicy\">ConfigPolicy</a>,\n    global_policy: &amp;<a href=\"struct-configpolicy\">ConfigPolicy</a>,\n) -&gt; <a href=\"struct-configpolicy\">ConfigPolicy</a>"}} /></pre>
+
+Applies non-default global policy fields to a component policy.
+
+Component-specific policy remains in effect when the corresponding global setting is left at its default value.

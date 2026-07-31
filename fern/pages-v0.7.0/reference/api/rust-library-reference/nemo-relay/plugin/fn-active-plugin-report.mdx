@@ -1,0 +1,24 @@
+---
+title: "Function active_plugin_report"
+sidebar-title: "active_plugin_report"
+description: "Returns the last successfully configured plugin report."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn active_plugin_report() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-configreport\">ConfigReport</a>&gt;"}} /></pre>
+
+Returns the last successfully configured plugin report.
+
+`None` indicates that no plugin configuration is currently active.
+
+## Returns
+
+The last successful [`ConfigReport`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport), or `None` when no configuration is active.
+
+## Notes
+
+This is a snapshot of the last successful activation and does not re-run validation.

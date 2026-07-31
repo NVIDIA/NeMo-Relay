@@ -1,0 +1,370 @@
+---
+title: "nemo_relay.plugin"
+sidebar-title: "plugin"
+description: "Generic plugin configuration and registration helpers."
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/plugin.pyi`.
+
+Module `nemo_relay.plugin`.
+
+Generic plugin configuration and registration helpers.
+
+## Classes
+
+### `ConfigDiagnostic(_ConfigDiagnosticRequired)`
+
+One plugin validation diagnostic.
+
+### `ConfigReport(TypedDict)`
+
+Validation or activation report for a plugin config.
+
+### `PluginContext(Protocol)`
+
+Component-scoped registration context passed to custom plugin handlers.
+
+#### Methods
+
+##### `register_subscriber`
+
+```python
+def register_subscriber(name: str, callback: Callable[[Event], None]) -> None
+```
+
+Register an infallible event subscriber for this component.
+
+##### `register_mark_sanitize_guardrail`
+
+```python
+def register_mark_sanitize_guardrail(name: str, priority: int, callback: EventSanitizeGuardrail) -> None
+```
+
+Register a mark event sanitizer for this component.
+
+##### `register_scope_sanitize_start_guardrail`
+
+```python
+def register_scope_sanitize_start_guardrail(name: str, priority: int, callback: EventSanitizeGuardrail) -> None
+```
+
+Register a scope-start event sanitizer for this component.
+
+##### `register_scope_sanitize_end_guardrail`
+
+```python
+def register_scope_sanitize_end_guardrail(name: str, priority: int, callback: EventSanitizeGuardrail) -> None
+```
+
+Register a scope-end event sanitizer for this component.
+
+##### `register_tool_sanitize_request_guardrail`
+
+```python
+def register_tool_sanitize_request_guardrail(name: str, priority: int, callback: ToolSanitizeGuardrail) -> None
+```
+
+Register a tool sanitize-request guardrail for this component.
+
+##### `register_tool_sanitize_response_guardrail`
+
+```python
+def register_tool_sanitize_response_guardrail(name: str, priority: int, callback: ToolSanitizeGuardrail) -> None
+```
+
+Register a tool sanitize-response guardrail for this component.
+
+##### `register_tool_conditional_execution_guardrail`
+
+```python
+def register_tool_conditional_execution_guardrail(name: str, priority: int, callback: ToolConditionalExecutionGuardrail) -> None
+```
+
+Register a tool conditional-execution guardrail for this component.
+
+##### `register_llm_sanitize_request_guardrail`
+
+```python
+def register_llm_sanitize_request_guardrail(name: str, priority: int, callback: LlmSanitizeRequestGuardrail) -> None
+```
+
+Register an LLM sanitize-request guardrail for this component.
+
+##### `register_llm_sanitize_response_guardrail`
+
+```python
+def register_llm_sanitize_response_guardrail(name: str, priority: int, callback: LlmSanitizeResponseGuardrail) -> None
+```
+
+Register an LLM sanitize-response guardrail for this component.
+
+##### `register_llm_conditional_execution_guardrail`
+
+```python
+def register_llm_conditional_execution_guardrail(name: str, priority: int, callback: LlmConditionalExecutionGuardrail) -> None
+```
+
+Register an LLM conditional-execution guardrail for this component.
+
+##### `register_llm_request_intercept`
+
+```python
+def register_llm_request_intercept(name: str, priority: int, break_chain: bool, callback: LlmRequestIntercept) -> None
+```
+
+Register an LLM request intercept for this component.
+
+##### `register_llm_execution_intercept`
+
+```python
+def register_llm_execution_intercept(name: str, priority: int, callback: LlmExecutionIntercept) -> None
+```
+
+Register an LLM execution intercept for this component.
+
+##### `register_llm_stream_execution_intercept`
+
+```python
+def register_llm_stream_execution_intercept(name: str, priority: int, callback: LlmStreamExecutionIntercept) -> None
+```
+
+Register an LLM streaming execution intercept for this component.
+
+##### `register_tool_request_intercept`
+
+```python
+def register_tool_request_intercept(name: str, priority: int, break_chain: bool, callback: ToolRequestIntercept) -> None
+```
+
+Register a tool request intercept for this component.
+
+##### `register_tool_execution_intercept`
+
+```python
+def register_tool_execution_intercept(name: str, priority: int, callback: ToolExecutionIntercept) -> None
+```
+
+Register a tool execution intercept for this component.
+
+### `Plugin(Protocol)`
+
+Custom plugin callback contract.
+
+#### Methods
+
+##### `validate`
+
+```python
+def validate(plugin_config: JsonObject) -> list[ConfigDiagnostic] | None
+```
+
+Validate one component-local config object.
+
+##### `register`
+
+```python
+def register(plugin_config: JsonObject, context: PluginContext) -> None
+```
+
+Install middleware and subscribers for one component instance.
+
+### `ConfigPolicy`
+
+Policy for unsupported plugin configuration.
+
+#### Methods
+
+##### `ConfigPolicy`
+
+```python
+def ConfigPolicy(unknown_component: UnsupportedBehavior = 'warn', unknown_field: UnsupportedBehavior = 'warn', unsupported_value: UnsupportedBehavior = 'error') -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this policy to the canonical JSON object shape.
+
+### `ComponentSpec`
+
+One top-level custom plugin component.
+
+#### Methods
+
+##### `ComponentSpec`
+
+```python
+def ComponentSpec(kind: str, enabled: bool = True, config: JsonObject = ...) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this component to the canonical JSON object shape.
+
+### `PluginConfig`
+
+Canonical plugin configuration document.
+
+#### Methods
+
+##### `PluginConfig`
+
+```python
+def PluginConfig(version: int = 1, components: list[object] = ..., policy: ConfigPolicy = ...) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this config to the canonical JSON document shape.
+
+### `DynamicPluginActivationSpec`
+
+One dynamic plugin component to load and activate.
+
+#### Methods
+
+##### `DynamicPluginActivationSpec`
+
+```python
+def DynamicPluginActivationSpec(plugin_id: str, kind: DynamicPluginKind, manifest_ref: str, environment_ref: str | None = None, config: JsonObject = ...) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this activation specification to its canonical JSON shape.
+
+### `PluginHostActivation`
+
+Owned lifetime for one process-wide dynamic plugin host.
+
+#### Methods
+
+##### `report`
+
+```python
+def report() -> ConfigReport
+```
+
+Return the validation report captured during activation.
+
+##### `is_active`
+
+```python
+def is_active() -> bool
+```
+
+Return whether this activation handle has not begun teardown.
+
+##### `close`
+
+```python
+async def close() -> None
+```
+
+Clear callbacks and unload plugins; repeated calls are safe.
+
+## Functions
+
+### `validate`
+
+```python
+def validate(config: PluginConfig | JsonObject) -> ConfigReport
+```
+
+Validate a plugin configuration without changing runtime state.
+
+### `initialize`
+
+```python
+async def initialize(config: PluginConfig | JsonObject) -> ConfigReport
+```
+
+Validate and activate a plugin configuration.
+
+### `initialize_with_dynamic_plugins`
+
+```python
+async def initialize_with_dynamic_plugins(config: PluginConfig | JsonObject, dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject]) -> PluginHostActivation
+```
+
+Initialize registered components with dynamic plugins as one owned host.
+
+### `clear`
+
+```python
+def clear() -> None
+```
+
+Clear the active plugin configuration.
+
+### `plugin`
+
+```python
+def plugin(config: PluginConfig | JsonObject) -> AsyncContextManager[ConfigReport]
+```
+
+Context manager for plugin initialization and cleanup.
+
+### `report`
+
+```python
+def report() -> ConfigReport | None
+```
+
+Return the last successful plugin report.
+
+### `list_kinds`
+
+```python
+def list_kinds() -> list[str]
+```
+
+List registered custom plugin kinds.
+
+### `register`
+
+```python
+def register(plugin_kind: str, plugin: Plugin) -> None
+```
+
+Register a custom plugin implementation.
+
+### `deregister`
+
+```python
+def deregister(plugin_kind: str) -> bool
+```
+
+Deregister a custom plugin kind.
+
+## Type Aliases And Constants
+
+- `DynamicPluginKind`
+- `UnsupportedBehavior`
+

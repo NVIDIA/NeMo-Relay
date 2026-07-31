@@ -1,0 +1,36 @@
+---
+title: "Struct Plugin Output"
+sidebar-title: "PluginOutput"
+description: "Output produced by a plugin after translation."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PluginOutput &#123;\n    pub translated_request: <a href=\"../../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    pub translation_report: <a href=\"../types/struct-translationreport\">TranslationReport</a>,\n&#125;"}} /></pre>
+
+Output produced by a plugin after translation.
+
+Contains the translated request in the backend's native API format and a [`TranslationReport`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-translationreport) describing what happened to each intent.
+
+## Fields
+
+### `translated_request: LlmRequest`
+
+The final request in the backend's native API format.
+
+### `translation_report: TranslationReport`
+
+Report describing what happened to each intent.
+
+## Trait Implementations
+
+### `impl Debug for PluginOutput`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-pluginoutput\">PluginOutput</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>

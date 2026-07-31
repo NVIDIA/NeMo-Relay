@@ -1,0 +1,29 @@
+---
+title: "Function scope_register_tool_conditional_execution_guardrail"
+sidebar-title: "scope_register_tool_conditional_execution_guardrail"
+description: "Register a scope-local tool conditional-execution guardrail. The guardrail can block tool execution inside the owning scope."
+position: 52
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_register_tool_conditional_execution_guardrail(\n    scope_uuid: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    guardrail: <a href=\"../runtime/callbacks/type-toolconditionalfn\">ToolConditionalFn</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register a scope-local tool conditional-execution guardrail. The guardrail can block tool execution inside the owning scope.
+
+## Parameters
+
+- `scope_uuid`: UUID of the active scope that owns the middleware.
+- `name`: Unique middleware name within that scope.
+- `priority`: Lower values run earlier in the chain.
+- `guardrail`: Guardrail callback stored under `name`.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the guardrail was registered.
+
+## Errors
+
+Returns [`FlowError::NotFound`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the scope is not active, [`FlowError::AlreadyExists`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the name is already in use on that scope, or an internal error if the runtime owner check fails.

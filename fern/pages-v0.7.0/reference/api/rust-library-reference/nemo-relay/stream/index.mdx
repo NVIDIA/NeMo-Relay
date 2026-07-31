@@ -1,0 +1,29 @@
+---
+title: "Module stream"
+sidebar-title: "stream"
+description: "Streaming LLM response wrapper."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Streaming LLM response wrapper.
+
+This module provides [`LlmStreamWrapper`](/reference/api/rust-library-reference/nemo-relay/stream/struct-llmstreamwrapper), a [`Stream`] adapter that sits between the raw stream from an LLM API and the consumer. It feeds chunks to a user-supplied collector, and automatically emits lifecycle events when the stream ends.
+
+### Pipeline
+
+```rust
+raw chunk (Json) -> collector(chunk) -> Ok(()) -> yield chunk
+                                     -> Err(e) -> terminate stream with error
+upstream error -> terminate stream with error -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
+stream ends -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
+```
+
+The **collector** receives each chunk (Json) and can accumulate state (e.g., concatenating tokens). If the collector returns `Err`, the stream terminates immediately with that error. Upstream stream errors also terminate the stream immediately. The **finalizer** is called once when the stream terminates and returns the aggregated response as [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json). That aggregated response then flows through sanitize response guardrails before being included in the END event.
+
+## Structs
+
+- [LlmStreamWrapper](/reference/api/rust-library-reference/nemo-relay/stream/struct-llmstreamwrapper): Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:

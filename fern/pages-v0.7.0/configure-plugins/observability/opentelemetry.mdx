@@ -1,0 +1,184 @@
+---
+title: "OpenTelemetry"
+description: "Export NeMo Relay traces through typed OpenTelemetry endpoints."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the `opentelemetry` section to export traces to one or more OpenTelemetry
+Protocol (OTLP) destinations. OpenTelemetry support is always included; no
+Cargo feature enables or disables it.
+
+Each endpoint selects one fixed semantic projection:
+
+| Type | Projection |
+|---|---|
+| `full` | Complete NeMo Relay projection, including `nemo_relay.*` attributes and native mark handling. |
+| `gen_ai` | OpenTelemetry GenAI semantic conventions only. |
+| `openinference` | OpenInference-compatible spans with the existing default mark handling. |
+
+You can repeat a type or combine types. Each endpoint owns an independent exporter
+and can use a different endpoint.
+
+The `gen_ai` projection targets the
+[OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
+Use that pinned snapshot when comparing emitted operation and attribute names
+with collector or backend schemas.
+
+NeMo Relay uses OpenTelemetry Rust `0.32`. It deterministically derives
+compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
+receive the same event stream use the same identifiers and parentage.
+
+## `plugins.toml` Example
+
+The following configuration exports the `gen_ai` projection through OTLP/HTTP.
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 3
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+transport = "http_binary"
+service_name = "agent-service"
+
+[components.config.opentelemetry.endpoints.header_env]
+authorization = "OTEL_AUTHORIZATION"
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "http://localhost:6006/v1/traces"
+service_name = "agent-service"
+```
+
+When `enabled = true`, configure at least one endpoint. NeMo Relay constructs every
+endpoint before registering the fan-out subscriber. An invalid endpoint prevents
+activation, and a delivery failure from one exporter does not stop application
+work or delivery to the other exporters.
+
+## Endpoint Fields
+
+| Field | Default | Notes |
+|---|---|---|
+| `type` | Required | `full`, `gen_ai`, or `openinference`. |
+| `endpoint` | Required | Nonblank OTLP endpoint. |
+| `transport` | `http_binary` | `http_binary` or `grpc`. |
+| `service_name` | `unknown_service` | `service.name` resource attribute. |
+| `service_namespace` | Omitted | Optional `service.namespace`. |
+| `service_version` | Omitted | Optional `service.version`. |
+| `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
+| `timeout_millis` | `3000` | Export timeout. |
+| `headers` | `{}` | String-to-string exporter headers. |
+| `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
+| `resource_attributes` | `{}` | String-to-string resource attributes. |
+| `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+
+Use `header_env` for secrets so configuration files contain only environment
+variable names. Each variable contains the complete header value. NeMo Relay
+validates variable names without reading their values, then resolves and
+snapshots the values when the plugin activates. Every referenced variable name
+must be nonblank and have no surrounding whitespace. Its value must be set and
+nonblank, with no surrounding whitespace, when the component activates. A header name
+cannot appear in both `headers` and `header_env`, including names that differ
+only by ASCII case. Reactivate the plugin to pick up a changed environment
+value.
+
+Process-global `OTEL_EXPORTER_OTLP_HEADERS` and
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` are rejected because they cannot be
+isolated between endpoints. Put non-secret values in each endpoint's `headers`
+map and secret variable references in `header_env`.
+
+`full` and `openinference` endpoints retain the legacy mark and attribute-alias
+controls shown above. `gen_ai` is standards-only: it ignores those controls and
+does not emit Relay-private attributes. `semantic_selector` and
+`capture_content` are unsupported.
+
+## GenAI Projection
+
+The `gen_ai` endpoint uses these operation names:
+
+| Relay scope | OpenTelemetry operation |
+|---|---|
+| Agent | `invoke_agent` |
+| LLM | `chat`, `generate_content`, or `text_completion` |
+| Tool | `execute_tool` |
+| Embedder | `embeddings` |
+| Retriever | `retrieval` |
+
+Rerankers, marks, and unsupported scope types are omitted. Supported
+descendants remain attached to their nearest exported ancestor. This
+projection never emits `nemo_relay.*` fields and does not export message
+content, tool payloads, or retrieval content.
+
+## Direct Subscriber
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
+
+config = OpenTelemetryConfig(
+    "gen_ai",
+    "http://localhost:4318/v1/traces",
+)
+config.service_name = "agent-service"
+subscriber = OpenTelemetrySubscriber(config)
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const { OpenTelemetrySubscriber } = require("nemo-relay-node");
+
+const subscriber = new OpenTelemetrySubscriber({
+  type: "gen_ai",
+  endpoint: "http://localhost:4318/v1/traces",
+  serviceName: "agent-service",
+});
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::OpenTelemetryType;
+use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+
+let config = OpenTelemetryConfig::new(
+    OpenTelemetryType::GenAi,
+    "http://localhost:4318/v1/traces",
+)
+.with_service_name("agent-service");
+let subscriber = OpenTelemetrySubscriber::new(config)?;
+```
+</Tab>
+</Tabs>
+
+Direct construction creates one independently managed exporter. Register the
+subscriber before instrumented work. During graceful teardown, deregister it,
+call the binding's force-flush method (`force_flush()` or `forceFlush()`), and
+then call `shutdown()`.
+
+## Version 2 to Version 3
+
+Version 3 replaces the separate version-2 sections:
+
+- Move the old `opentelemetry` fields into one endpoint with `type = "full"`.
+- Move the old `openinference` fields into the same section with
+  `type = "openinference"`.
+- Use `type = "gen_ai"` for standardized GenAI-only output.
+
+Version-2 OTLP section shapes are rejected when `version = 3`; NeMo Relay does
+not silently normalize them. For complete before-and-after configuration and
+binding API changes, refer to
+[Migration Guides](/reference/migration-guides#observability-configuration-version-3).
