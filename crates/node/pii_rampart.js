@@ -43,6 +43,7 @@ function defaultConfig(modelPath, config) {
     max_windows_per_payload: 128,
     inference_batch_size: 16,
     ...config,
+    model_path: modelPath,
   };
 }
 

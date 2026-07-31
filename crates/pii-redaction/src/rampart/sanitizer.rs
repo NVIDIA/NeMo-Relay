@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
@@ -21,6 +21,7 @@ use nemo_relay::plugin::{PluginError, Result as PluginResult};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::builtin::escape_json_pointer_segment;
 use crate::overlay::BuiltinCodecName;
@@ -31,6 +32,12 @@ use super::model::{Detection, RampartDetector};
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 const MAX_TEXTS_PER_PAYLOAD: usize = 256;
 const MAX_PAYLOAD_TEXT_BYTES: usize = 256 * 1024;
+// Two model runs balance fan-out throughput against full-window tensor memory.
+const MAX_CONCURRENT_INFERENCE: usize = 2;
+// Bound admitted work and its wait so large payloads cannot build a long queue.
+const MAX_ADMITTED_INFERENCE: usize = 8;
+const MAX_ADMISSION_WAIT: Duration = Duration::from_millis(250);
+
 pub(super) trait DetectionModel: Send + Sync {
     fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>>;
 }
@@ -50,7 +57,8 @@ pub(super) struct RampartSanitizer {
     excluded_labels: Arc<HashSet<String>>,
     replacement: Arc<str>,
     legacy_surface: Option<ProviderSurface>,
-    admission: Arc<AtomicBool>,
+    admission_capacity: Arc<Semaphore>,
+    execution_admission: Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -87,13 +95,8 @@ enum EventField {
 }
 
 struct SanitizerPermit {
-    admission: Arc<AtomicBool>,
-}
-
-impl Drop for SanitizerPermit {
-    fn drop(&mut self) {
-        self.admission.store(false, Ordering::Release);
-    }
+    _admission: OwnedSemaphorePermit,
+    _execution: OwnedSemaphorePermit,
 }
 
 impl RampartSanitizer {
@@ -127,29 +130,50 @@ impl RampartSanitizer {
             excluded_labels: Arc::new(config.excluded_labels.into_iter().collect()),
             replacement: config.replacement.into(),
             legacy_surface,
-            admission: Arc::new(AtomicBool::new(false)),
+            admission_capacity: Arc::new(Semaphore::new(MAX_ADMITTED_INFERENCE)),
+            execution_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_INFERENCE)),
         })
     }
 
-    fn try_admit(&self, surface: &'static str) -> Option<SanitizerPermit> {
-        if self
-            .admission
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
+    async fn admit(&self, surface: &'static str) -> Option<SanitizerPermit> {
+        let admission = match Arc::clone(&self.admission_capacity).try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                self.log_admission_failure(surface, "queue_full");
+                return None;
+            }
+        };
+        let execution = match tokio::time::timeout(
+            MAX_ADMISSION_WAIT,
+            Arc::clone(&self.execution_admission).acquire_owned(),
+        )
+        .await
         {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                event = "rampart_pii_inference_failed",
-                plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
-                reason = "contention",
-                surface;
-                "Rampart PII sanitization failed closed before blocking admission"
-            );
-            return None;
-        }
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => {
+                self.log_admission_failure(surface, "closed");
+                return None;
+            }
+            Err(_) => {
+                self.log_admission_failure(surface, "timeout");
+                return None;
+            }
+        };
         Some(SanitizerPermit {
-            admission: Arc::clone(&self.admission),
+            _admission: admission,
+            _execution: execution,
         })
+    }
+
+    fn log_admission_failure(&self, surface: &'static str, reason: &'static str) {
+        log::warn!(
+            target: "nemo_relay.plugin",
+            event = "rampart_pii_inference_failed",
+            plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
+            reason,
+            surface;
+            "Rampart PII sanitization failed closed during bounded admission"
+        );
     }
 
     fn fail_closed_payload(&self) -> Json {
@@ -245,6 +269,29 @@ impl RampartSanitizer {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn has_selected_string(&self, value: &Json) -> bool {
+        self.has_selected_string_at(value, &mut Vec::new())
+    }
+
+    fn has_selected_string_at(&self, value: &Json, path: &mut Vec<String>) -> bool {
+        match value {
+            Json::String(_) => self.matches_path(path),
+            Json::Array(items) => items.iter().enumerate().any(|(index, item)| {
+                path.push(index.to_string());
+                let selected = self.has_selected_string_at(item, path);
+                path.pop();
+                selected
+            }),
+            Json::Object(fields) => fields.iter().any(|(key, value)| {
+                path.push(escape_json_pointer_segment(key));
+                let selected = self.has_selected_string_at(value, path);
+                path.pop();
+                selected
+            }),
+            _ => false,
         }
     }
 
@@ -484,12 +531,14 @@ impl RampartSanitizer {
 pub(super) fn tool_sanitize_callback(backend: RampartSanitizer) -> ToolSanitizeFn {
     Arc::new(move |_name, payload| {
         let backend = backend.clone();
-        let Some(permit) = backend.try_admit("tool") else {
-            let payload = backend.fail_closed_payload();
+        if !backend.has_selected_string(&payload) {
             return Box::pin(async move { Ok(payload) });
-        };
+        }
         let fallback = backend.fail_closed_payload();
         Box::pin(async move {
+            let Some(permit) = backend.admit("tool").await else {
+                return Ok(fallback);
+            };
             run_blocking("tool payload", permit, fallback, move || {
                 backend.sanitize_json(payload)
             })
@@ -510,12 +559,14 @@ pub(super) fn event_sanitize_callback(
         if !event_has_candidate_fields(event.as_ref(), &fields) {
             return Box::pin(async move { Ok(fields) });
         }
-        let Some(permit) = backend.try_admit("event") else {
-            let fields = fail_closed_event_fields(event.as_ref(), fields);
+        if !event_fields_have_selected_strings(&backend, event.as_ref(), &fields) {
             return Box::pin(async move { Ok(fields) });
-        };
+        }
         let fallback = fail_closed_event_fields(event.as_ref(), fields.clone());
         Box::pin(async move {
+            let Some(permit) = backend.admit("event").await else {
+                return Ok(fallback);
+            };
             run_blocking("event fields", permit, fallback, move || {
                 let specialized_scope = is_specialized_scope(event.as_ref());
 
@@ -559,10 +610,10 @@ pub(super) fn event_sanitize_callback(
 pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSanitizeRequestFn {
     Arc::new(move |request, context| {
         let backend = backend.clone();
-        let Some(permit) = backend.try_admit("llm_request") else {
-            return Box::pin(async move { Ok(None) });
-        };
         Box::pin(async move {
+            let Some(permit) = backend.admit("llm_request").await else {
+                return Ok(None);
+            };
             run_blocking("LLM request", permit, None, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
@@ -598,10 +649,10 @@ pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSan
 pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSanitizeResponseFn {
     Arc::new(move |payload, context| {
         let backend = backend.clone();
-        let Some(permit) = backend.try_admit("llm_response") else {
-            return Box::pin(async move { Ok(None) });
-        };
         Box::pin(async move {
+            let Some(permit) = backend.admit("llm_response").await else {
+                return Ok(None);
+            };
             run_blocking("LLM response", permit, None, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
@@ -705,6 +756,32 @@ fn event_has_candidate_fields(event: &Event, fields: &EventSanitizeFields) -> bo
     }
 }
 
+fn event_fields_have_selected_strings(
+    backend: &RampartSanitizer,
+    event: &Event,
+    fields: &EventSanitizeFields,
+) -> bool {
+    if is_specialized_scope(event) {
+        return fields
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| backend.has_selected_string(metadata));
+    }
+    fields
+        .data
+        .as_ref()
+        .is_some_and(|data| backend.has_selected_string(data))
+        || fields
+            .category_profile
+            .as_ref()
+            .and_then(|profile| serde_json::to_value(profile).ok())
+            .is_some_and(|profile| backend.has_selected_string(&profile))
+        || fields
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| backend.has_selected_string(metadata))
+}
+
 fn is_specialized_scope(event: &Event) -> bool {
     matches!(event, Event::Scope(_))
         && event
@@ -791,6 +868,21 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
             self.finished.store(true, Ordering::Release);
+            Ok(Vec::new())
+        }
+    }
+
+    struct CountingBlockingDetector {
+        started: Arc<AtomicUsize>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl DetectionModel for CountingBlockingDetector {
+        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
+            self.started.fetch_add(1, Ordering::Release);
+            while !self.release.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
             Ok(Vec::new())
         }
     }
@@ -926,6 +1018,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bounded_fanout_does_not_block_the_runtime_thread() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(MAX_CONCURRENT_INFERENCE)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let started = Arc::new(AtomicUsize::new(0));
+            let release = Arc::new(AtomicBool::new(false));
+            let backend = sanitizer(
+                Arc::new(CountingBlockingDetector {
+                    started: Arc::clone(&started),
+                    release: Arc::clone(&release),
+                }),
+                vec!["/message"],
+            );
+            let callback = tool_sanitize_callback(backend);
+            let mut tasks = Vec::new();
+            for index in 0..MAX_ADMITTED_INFERENCE {
+                tasks.push(tokio::spawn(callback(
+                    format!("tool-{index}"),
+                    serde_json::json!({"message": "private"}),
+                )));
+            }
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while started.load(Ordering::Acquire) != MAX_CONCURRENT_INFERENCE {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the bounded model slots should start");
+
+            let heartbeat = tokio::spawn(async {
+                for _ in 0..4 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            });
+            heartbeat
+                .await
+                .expect("the runtime should remain responsive during fanout");
+
+            release.store(true, Ordering::Release);
+            for task in tasks {
+                assert_eq!(
+                    task.await.unwrap().unwrap(),
+                    serde_json::json!({"message": "private"})
+                );
+            }
+            assert_eq!(started.load(Ordering::Acquire), MAX_ADMITTED_INFERENCE);
+        });
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn blocking_task_panics_fail_closed_for_every_surface() {
         use nemo_relay::api::event::{BaseEvent, MarkEvent};
@@ -985,10 +1130,10 @@ mod tests {
     }
 
     #[test]
-    fn contention_does_not_queue_behind_the_blocking_pool() {
+    fn bounded_admission_times_out_before_spawning_more_blocking_work() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
-            .max_blocking_threads(1)
+            .max_blocking_threads(MAX_CONCURRENT_INFERENCE)
             .build()
             .unwrap();
         runtime.block_on(async {
@@ -1003,13 +1148,17 @@ mod tests {
                 }),
                 vec!["/message"],
             );
+            let execution = Arc::clone(&backend.execution_admission);
             let callback = tool_sanitize_callback(backend);
-            let active = tokio::spawn(callback(
-                "active".into(),
-                serde_json::json!({"message": "private"}),
-            ));
+            let mut active = Vec::new();
+            for index in 0..MAX_CONCURRENT_INFERENCE {
+                active.push(tokio::spawn(callback(
+                    format!("active-{index}"),
+                    serde_json::json!({"message": "private"}),
+                )));
+            }
             tokio::time::timeout(Duration::from_secs(1), async {
-                while !started.load(Ordering::Acquire) {
+                while !started.load(Ordering::Acquire) || execution.available_permits() != 0 {
                     tokio::task::yield_now().await;
                 }
             })
@@ -1017,22 +1166,24 @@ mod tests {
             .expect("blocking detector should start");
 
             let contending = tokio::time::timeout(
-                Duration::from_millis(100),
+                MAX_ADMISSION_WAIT + Duration::from_millis(100),
                 callback(
                     "contending".into(),
                     serde_json::json!({"message": "private", "metadata": "visible"}),
                 ),
             )
             .await
-            .expect("contending sanitizer should not enter the blocking pool")
+            .expect("contending sanitizer should respect the admission deadline")
             .unwrap();
             assert_eq!(contending, Json::String("[REDACTED]".into()));
 
             release.store(true, Ordering::Release);
-            assert_eq!(
-                active.await.unwrap().unwrap(),
-                serde_json::json!({"message": "private"})
-            );
+            for task in active {
+                assert_eq!(
+                    task.await.unwrap().unwrap(),
+                    serde_json::json!({"message": "private"})
+                );
+            }
         });
     }
 
@@ -1049,7 +1200,7 @@ mod tests {
             }),
             vec!["/message"],
         );
-        let admission = Arc::clone(&backend.admission);
+        let execution = Arc::clone(&backend.execution_admission);
         let callback = tool_sanitize_callback(backend);
         let active = tokio::spawn(callback(
             "active".into(),
@@ -1062,22 +1213,21 @@ mod tests {
         })
         .await
         .expect("blocking detector should start");
+        assert_eq!(execution.available_permits(), MAX_CONCURRENT_INFERENCE - 1);
 
         active.abort();
         assert!(active.await.unwrap_err().is_cancelled());
         assert_eq!(
-            callback(
-                "contending".into(),
-                serde_json::json!({"message": "private"}),
-            )
-            .await
-            .unwrap(),
-            Json::String("[REDACTED]".into())
+            execution.available_permits(),
+            MAX_CONCURRENT_INFERENCE - 1,
+            "cancelling the async caller must not release an in-flight model slot"
         );
 
         release.store(true, Ordering::Release);
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !finished.load(Ordering::Acquire) || admission.load(Ordering::Acquire) {
+            while !finished.load(Ordering::Acquire)
+                || execution.available_permits() != MAX_CONCURRENT_INFERENCE
+            {
                 tokio::task::yield_now().await;
             }
         })
@@ -1092,6 +1242,150 @@ mod tests {
             .unwrap(),
             serde_json::json!({"message": "private"})
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_queued_callback_releases_capacity_without_running() {
+        let started = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        let backend = sanitizer(
+            Arc::new(CountingBlockingDetector {
+                started: Arc::clone(&started),
+                release: Arc::clone(&release),
+            }),
+            vec!["/message"],
+        );
+        let admission = Arc::clone(&backend.admission_capacity);
+        let execution = Arc::clone(&backend.execution_admission);
+        let callback = tool_sanitize_callback(backend);
+        let mut active = Vec::new();
+        for index in 0..MAX_CONCURRENT_INFERENCE {
+            active.push(tokio::spawn(callback(
+                format!("active-{index}"),
+                serde_json::json!({"message": "private"}),
+            )));
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while started.load(Ordering::Acquire) != MAX_CONCURRENT_INFERENCE
+                || execution.available_permits() != 0
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both model slots should start");
+
+        let queued = tokio::spawn(callback(
+            "queued".into(),
+            serde_json::json!({"message": "private"}),
+        ));
+        tokio::time::timeout(Duration::from_millis(50), async {
+            while admission.available_permits() != MAX_ADMITTED_INFERENCE - 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the queued callback should reserve bounded capacity");
+        queued.abort();
+        assert!(queued.await.unwrap_err().is_cancelled());
+        assert_eq!(admission.available_permits(), MAX_ADMITTED_INFERENCE - 2);
+        assert_eq!(started.load(Ordering::Acquire), MAX_CONCURRENT_INFERENCE);
+
+        release.store(true, Ordering::Release);
+        for task in active {
+            task.await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn full_admission_queue_fails_closed_without_running() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend = sanitizer(
+            Arc::new(CountingDetector(Arc::clone(&calls))),
+            vec!["/message"],
+        );
+        let mut permits = Vec::new();
+        for _ in 0..MAX_ADMITTED_INFERENCE {
+            permits.push(
+                Arc::clone(&backend.admission_capacity)
+                    .try_acquire_owned()
+                    .unwrap(),
+            );
+        }
+        let output = tool_sanitize_callback(backend)(
+            "queue-full".into(),
+            serde_json::json!({"message": "private"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output, Json::String("[REDACTED]".into()));
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        drop(permits);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unselected_tool_payload_bypasses_full_admission_queue() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend = sanitizer(
+            Arc::new(CountingDetector(Arc::clone(&calls))),
+            vec!["/message"],
+        );
+        let mut permits = Vec::new();
+        for _ in 0..MAX_ADMITTED_INFERENCE {
+            permits.push(
+                Arc::clone(&backend.admission_capacity)
+                    .try_acquire_owned()
+                    .unwrap(),
+            );
+        }
+        let payload = serde_json::json!({"trace_id": "visible"});
+        let output = tool_sanitize_callback(backend)("unselected".into(), payload.clone())
+            .await
+            .unwrap();
+        assert_eq!(output, payload);
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        drop(permits);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unselected_specialized_metadata_bypasses_full_admission_queue() {
+        use nemo_relay::api::event::{
+            BaseEvent, CategoryProfile, EventCategory, ScopeCategory, ScopeEvent,
+        };
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend = sanitizer(
+            Arc::new(CountingDetector(Arc::clone(&calls))),
+            vec!["/message"],
+        );
+        let mut permits = Vec::new();
+        for _ in 0..MAX_ADMITTED_INFERENCE {
+            permits.push(
+                Arc::clone(&backend.admission_capacity)
+                    .try_acquire_owned()
+                    .unwrap(),
+            );
+        }
+        let event = Arc::new(Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .name("tool")
+                .metadata(serde_json::json!({"trace_id": "visible"}))
+                .build(),
+            ScopeCategory::Start,
+            Default::default(),
+            EventCategory::tool(),
+            Some(CategoryProfile::default()),
+        )));
+        let fields = event.sanitize_fields();
+        let output = event_sanitize_callback(backend, Some((false, true)))(
+            Arc::clone(&event),
+            fields.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output, fields);
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        drop(permits);
     }
 
     #[test]

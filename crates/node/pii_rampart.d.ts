@@ -27,8 +27,16 @@ export interface Config {
   policy?: ConfigPolicy;
 }
 
-export type ConfigWithSelectors = Partial<Config> &
-  ({ target_paths: string[] } | { target_path_patterns: string[] });
+type NonEmptyStringArray = [string, ...string[]];
+
+export type ConfigWithSelectors = Omit<
+  Partial<Config>,
+  'model_path' | 'target_paths' | 'target_path_patterns'
+> &
+  (
+    | { target_paths: NonEmptyStringArray; target_path_patterns?: string[] }
+    | { target_paths?: string[]; target_path_patterns: NonEmptyStringArray }
+  );
 
 export declare const RAMPART_PII_PLUGIN_KIND: 'pii_rampart';
 export declare const RAMPART_MODEL_ID: 'nationaldesignstudio/rampart';

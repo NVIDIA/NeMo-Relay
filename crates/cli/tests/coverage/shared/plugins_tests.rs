@@ -1253,6 +1253,12 @@ fn editor_save_preserves_unknown_rampart_pii_fields_and_prunes_version() {
         json!("/srv/models/rampart"),
     )
     .unwrap();
+    set_struct_field(
+        &mut rampart.config,
+        "target_paths",
+        json!(["/message", "/metadata/note"]),
+    )
+    .unwrap();
     rampart.set_enabled(false);
     store_rampart_pii_state(&mut config, &rampart).unwrap();
 
@@ -1270,6 +1276,10 @@ fn editor_save_preserves_unknown_rampart_pii_fields_and_prunes_version() {
     assert_eq!(
         component.config.get("future_top_level"),
         Some(&json!("preserve"))
+    );
+    assert_eq!(
+        component.config.get("target_paths"),
+        Some(&json!(["/message", "/metadata/note"]))
     );
 }
 

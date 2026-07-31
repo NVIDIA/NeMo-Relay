@@ -21,6 +21,7 @@ describe('pii_rampart plugin helpers', () => {
     const component = rampart.ComponentSpec(config);
     assert.equal(component.kind, rampart.RAMPART_PII_PLUGIN_KIND);
     assert.equal(component.enabled, true);
+    assert.equal(rampart.ComponentSpec(config, { enabled: false }).enabled, false);
     assert.deepEqual(rampart.validateConfig(config).diagnostics, []);
   });
 
@@ -45,6 +46,13 @@ describe('pii_rampart plugin helpers', () => {
           target_path_patterns: [],
         }),
       /requires target_paths or target_path_patterns/,
+    );
+    assert.equal(
+      rampart.defaultConfig('/models/rampart', {
+        model_path: '/unapproved/model',
+        target_paths: ['/message'],
+      }).model_path,
+      '/models/rampart',
     );
   });
 

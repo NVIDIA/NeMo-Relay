@@ -185,12 +185,10 @@ fn normalize(text: &str, base_offset: usize) -> Vec<MappedChar> {
     for (relative_start, original) in text.char_indices() {
         let original_start = base_offset + relative_start;
         let original_end = original_start + original.len_utf8();
-        // Rampart's model card recommends splitting hyphenated identifiers.
-        // Replacing one ASCII byte preserves the original byte offsets.
         if original == '\0' || original == '\u{fffd}' || is_control(original) {
             continue;
         }
-        let cleaned = if original == '-' || is_whitespace(original) {
+        let cleaned = if is_whitespace(original) {
             ' '
         } else {
             original
@@ -288,6 +286,7 @@ mod tests {
             "##ph",
             "野",
             "alice",
+            "-",
             "rivera",
             "alicerivera",
         ];
@@ -313,10 +312,10 @@ mod tests {
     }
 
     #[test]
-    fn splits_hyphens_without_shifting_offsets() {
+    fn preserves_hyphen_token_and_original_offsets() {
         let encoded = tokenizer().encode("Alice-Rivera").unwrap();
-        assert_eq!(encoded.ids, [10, 11]);
-        assert_eq!(encoded.offsets, [(0, 5), (6, 12)]);
+        assert_eq!(encoded.ids, [10, 11, 12]);
+        assert_eq!(encoded.offsets, [(0, 5), (5, 6), (6, 12)]);
     }
 
     #[test]
@@ -336,7 +335,7 @@ mod tests {
     #[test]
     fn removes_controls_and_combining_marks_without_shifting_original_offsets() {
         let encoded = tokenizer().encode("Alice\0Cafe\u{301} Rivera").unwrap();
-        assert_eq!(encoded.ids, [1, 11]);
+        assert_eq!(encoded.ids, [1, 12]);
         assert_eq!(encoded.offsets, [(0, 10), (13, 19)]);
     }
 
@@ -345,7 +344,7 @@ mod tests {
         for control in ['\u{000b}', '\u{000c}', '\u{0085}'] {
             let text = format!("Alice{control}Rivera");
             let encoded = tokenizer().encode(&text).unwrap();
-            assert_eq!(encoded.ids, [12], "control U+{:04X}", control as u32);
+            assert_eq!(encoded.ids, [13], "control U+{:04X}", control as u32);
             assert_eq!(
                 encoded.offsets,
                 [(0, text.len())],
@@ -363,7 +362,7 @@ mod tests {
             let encoded = tokenizer().encode(&text).unwrap();
             assert_eq!(
                 encoded.ids,
-                [10, 11],
+                [10, 12],
                 "whitespace U+{:04X}",
                 whitespace as u32
             );
