@@ -3,13 +3,103 @@
 
 //! Unit tests for response-cache streaming commit behavior.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
+use nemo_relay::codec::resolve::{ProviderSurface, streaming_codec};
+use nemo_relay::error::FlowError;
 use serde_json::json;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::StreamExt;
 
 use super::*;
+
+#[derive(Default)]
+struct FailingGetStore {
+    get_calls: AtomicUsize,
+    set_calls: AtomicUsize,
+}
+
+impl CacheStore for FailingGetStore {
+    fn get<'a>(
+        &'a self,
+        _key: &'a str,
+    ) -> crate::response_cache::store::BoxCacheFuture<'a, Option<Arc<CacheEntry>>> {
+        self.get_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Err(crate::error::AdaptiveError::Storage(
+                "cache read unavailable".to_string(),
+            ))
+        })
+    }
+
+    fn set<'a>(
+        &'a self,
+        _key: &'a str,
+        _entry: CacheEntry,
+        _ttl: Duration,
+    ) -> crate::response_cache::store::BoxCacheFuture<'a, ()> {
+        self.set_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn health<'a>(&'a self) -> crate::response_cache::store::BoxCacheFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn backend_kind(&self) -> &'static str {
+        "failing_test"
+    }
+}
+
+fn cache_config() -> Arc<ResponseCacheConfig> {
+    Arc::new(ResponseCacheConfig {
+        namespace: "response-cache-unit-tests".to_string(),
+        cache_nondeterministic: true,
+        ..ResponseCacheConfig::default()
+    })
+}
+
+fn chat_request(prompt: &str) -> LlmRequest {
+    LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+        }),
+    }
+}
+
+fn terminal_chat_stream() -> LlmJsonStream {
+    LlmJsonStream::new(tokio_stream::iter(vec![
+        Ok::<_, FlowError>(json!({
+            "id": "chatcmpl-unit-test",
+            "object": "chat.completion.chunk",
+            "created": 1_700_000_000_u64,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": "cached"},
+                "finish_reason": null,
+            }],
+        })),
+        Ok(json!({
+            "id": "chatcmpl-unit-test",
+            "object": "chat.completion.chunk",
+            "created": 1_700_000_000_u64,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }],
+        })),
+    ]))
+}
 
 #[test]
 fn chat_stream_fidelity_gate_rejects_every_uncollected_non_null_shape() {
@@ -53,6 +143,213 @@ fn chat_stream_fidelity_gate_rejects_every_uncollected_non_null_shape() {
     }
 }
 
+#[test]
+fn malformed_stream_shapes_are_not_aggregated() {
+    for malformed in [
+        json!(null),
+        json!({"choices": {}}),
+        json!({"choices": [null]}),
+        json!({"choices": [{"index": "first"}]}),
+        json!({"choices": [{"finish_reason": 1}]}),
+        json!({"choices": [{"unsupported": true}]}),
+        json!({"choices": [{"delta": "not-an-object"}]}),
+        json!({"choices": [{"delta": {"tool_calls": [null]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"id": 1}]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"unsupported": true}]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"function": "not-an-object"}]}}]}),
+    ] {
+        assert!(
+            chunk_has_uncollected_response_fields(&malformed),
+            "malformed stream chunk must not be cached: {malformed}"
+        );
+    }
+
+    assert!(!chunk_has_uncollected_response_fields(&json!({
+        "type": "message_delta"
+    })));
+    assert!(!chunk_has_uncollected_response_fields(&json!({
+        "choices": null
+    })));
+    assert!(
+        !chunk_has_uncollected_response_fields(&json!({
+            "choices": [{"delta": {"tool_calls": [{"id": null}]}}]
+        })),
+        "null tool-call metadata is harmless when no uncollectable fields are present"
+    );
+}
+
+#[test]
+fn replay_and_error_guards_reject_unfaithful_or_failed_responses() {
+    assert!(aggregate_replay_lossy(&json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": null, "tool_calls": []}
+        }]
+    })));
+    assert!(chunk_is_inband_error(&json!({"type": "response.failed"})));
+    assert!(chunk_is_inband_error(
+        &json!({"error": {"message": "upstream failed"}})
+    ));
+    assert!(!chunk_is_inband_error(&json!({"error": null})));
+    assert!(!is_error_response(&json!("not-an-object")));
+}
+
+#[test]
+fn sampled_bypass_uses_a_unit_interval_rng() {
+    assert_eq!(rng_seed() & 1, 1, "xorshift state must never be zero");
+
+    RNG_STATE.with(|state| state.set(1));
+    let expected = next_unit_f64() < 0.5;
+    RNG_STATE.with(|state| state.set(1));
+    assert_eq!(should_bypass(0.5), expected);
+}
+
+#[tokio::test]
+async fn cache_read_errors_fail_open_for_buffered_and_streaming_calls() {
+    let store = Arc::new(FailingGetStore::default());
+    let buffered_calls = Arc::new(AtomicUsize::new(0));
+    let next: LlmExecutionNextFn = {
+        let buffered_calls = Arc::clone(&buffered_calls);
+        Arc::new(move |_request| {
+            let buffered_calls = Arc::clone(&buffered_calls);
+            Box::pin(async move {
+                buffered_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"answer": "live"}))
+            })
+        })
+    };
+
+    let response = run_cache(
+        "openai".to_string(),
+        chat_request("buffered cache failure"),
+        next,
+        store.clone(),
+        cache_config(),
+    )
+    .await
+    .expect("a cache read error must not fail a buffered call");
+    assert_eq!(response, json!({"answer": "live"}));
+    assert_eq!(buffered_calls.load(Ordering::SeqCst), 1);
+
+    let streaming_calls = Arc::new(AtomicUsize::new(0));
+    let next: LlmStreamExecutionNextFn = {
+        let streaming_calls = Arc::clone(&streaming_calls);
+        Arc::new(move |_request| {
+            let streaming_calls = Arc::clone(&streaming_calls);
+            Box::pin(async move {
+                streaming_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(terminal_chat_stream())
+            })
+        })
+    };
+    let mut stream = run_cache_stream(
+        "openai".to_string(),
+        chat_request("streaming cache failure"),
+        next,
+        store.clone(),
+        cache_config(),
+    )
+    .await
+    .expect("a cache read error must not fail a streaming call");
+    assert_eq!(
+        stream
+            .next()
+            .await
+            .expect("stream must yield a live chunk")
+            .expect("live chunk must succeed")["choices"][0]["delta"]["content"],
+        json!("cached")
+    );
+    stream
+        .close()
+        .await
+        .expect("live stream cleanup must succeed");
+    assert_eq!(streaming_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(store.get_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(store.set_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn streaming_cache_bypasses_stateful_and_sampled_calls_before_reading() {
+    let store = Arc::new(FailingGetStore::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let next: LlmStreamExecutionNextFn = {
+        let calls = Arc::clone(&calls);
+        Arc::new(move |_request| {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(terminal_chat_stream())
+            })
+        })
+    };
+
+    let mut stateful_request = chat_request("stateful cache bypass");
+    stateful_request
+        .content
+        .as_object_mut()
+        .expect("chat request is an object")
+        .insert("store".to_string(), json!(true));
+    let mut stateful = run_cache_stream(
+        "openai".to_string(),
+        stateful_request,
+        Arc::clone(&next),
+        store.clone(),
+        cache_config(),
+    )
+    .await
+    .expect("stateful request must run live");
+    assert!(stateful.next().await.is_some());
+    stateful.close().await.expect("stateful stream cleanup");
+
+    let sampled_config = Arc::new(ResponseCacheConfig {
+        bypass_rate: 1.0,
+        ..(*cache_config()).clone()
+    });
+    let mut sampled = run_cache_stream(
+        "openai".to_string(),
+        chat_request("sampled cache bypass"),
+        next,
+        store.clone(),
+        sampled_config,
+    )
+    .await
+    .expect("sampled request must run live");
+    while sampled.next().await.is_some() {}
+    sampled.close().await.expect("sampled stream cleanup");
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(store.get_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn upstream_stream_errors_reach_the_consumer_without_a_cache_write() {
+    let store = Arc::new(FailingGetStore::default());
+    let live = LlmJsonStream::new(tokio_stream::iter(vec![Err::<_, FlowError>(
+        FlowError::Internal("upstream stream failed".into()),
+    )]));
+    let mut stream = tee_and_aggregate(
+        live,
+        streaming_codec(ProviderSurface::OpenAIChat),
+        store.clone(),
+        cache_config(),
+        "stream-error-key".to_string(),
+        "openai".to_string(),
+        Some("gpt-4o".to_string()),
+    );
+
+    let error = stream
+        .next()
+        .await
+        .expect("the upstream error must be forwarded")
+        .expect_err("the upstream error must remain a stream error");
+    assert!(error.to_string().contains("upstream stream failed"));
+    assert!(stream.next().await.is_none(), "the errored stream must end");
+    stream
+        .close()
+        .await
+        .expect("upstream cleanup must complete");
+    assert_eq!(store.set_calls.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn write_behind_returns_eof_before_cache_commit_completes() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -77,6 +374,10 @@ async fn write_behind_returns_eof_before_cache_commit_completes() {
             .await
             .expect("write-behind cache publication must not delay stream completion")
             .is_none()
+    );
+    assert!(
+        stream.next().await.is_none(),
+        "finished streams stay finished"
     );
     release
         .send(())
@@ -172,4 +473,29 @@ fn assert_error_response_and_bypass_detection() {
     assert!(should_bypass(1.0));
     let unit = next_unit_f64();
     assert!((0.0..1.0).contains(&unit), "{unit}");
+}
+
+#[tokio::test]
+async fn stream_close_reports_when_the_cleanup_task_ends_early() {
+    let (cancel, _) = watch::channel(false);
+    let (closed_tx, closed) = watch::channel(None::<FlowResult<()>>);
+    drop(closed_tx);
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(tx);
+    let mut stream = LlmJsonStream::from_closeable(ResponseCacheReceiver {
+        receiver: ReceiverStream::new(rx),
+        cancel,
+        closed,
+        finished: false,
+    });
+
+    let error = stream
+        .close()
+        .await
+        .expect_err("an unavailable cleanup result must be reported");
+    assert!(
+        error
+            .to_string()
+            .contains("response-cache stream cleanup task ended early")
+    );
 }

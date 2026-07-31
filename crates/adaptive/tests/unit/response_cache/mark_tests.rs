@@ -89,3 +89,68 @@ fn savings_from_counts_anthropic_input_output_tokens() {
         "anthropic input+output tokens must be counted for savings"
     );
 }
+
+#[test]
+fn normalized_savings_uses_entry_model_and_derives_missing_total_tokens() {
+    // Providers can omit a model in the payload while the cache knows the
+    // request model. A Chat response with prompt/completion tokens but no
+    // total must still report its complete saved-token count.
+    let entry = CacheEntry::new(
+        json!({
+            "id": "chatcmpl_1",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 5}
+        }),
+        Duration::from_secs(60),
+        "sha256:chat".to_string(),
+        Some("model-recorded-with-request".to_string()),
+        Some("openai".to_string()),
+    );
+
+    assert_eq!(savings_from(&entry).0, Some(12));
+}
+
+#[test]
+fn normalized_empty_usage_falls_back_to_no_savings() {
+    // A recognized response with an empty usage object is not a zero-token
+    // hit: it is missing accounting, so diagnostics must leave savings unset.
+    let entry = CacheEntry::new(
+        json!({
+            "id": "chatcmpl_2",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {}
+        }),
+        Duration::from_secs(60),
+        "sha256:empty-usage".to_string(),
+        None,
+        None,
+    );
+
+    assert_eq!(normalized_savings(&entry), None);
+    assert_eq!(savings_from(&entry), (None, None));
+}
+
+#[test]
+fn raw_usage_probe_derives_total_from_prompt_and_completion_tokens() {
+    // Unknown provider shapes still expose standard OpenAI-style usage fields;
+    // raw fallback must preserve their useful savings diagnostics.
+    let entry = CacheEntry::new(
+        json!({"usage": {"prompt_tokens": 11, "completion_tokens": 4}}),
+        Duration::from_secs(60),
+        "sha256:raw".to_string(),
+        None,
+        None,
+    );
+
+    assert_eq!(savings_from(&entry), (Some(15), None));
+}

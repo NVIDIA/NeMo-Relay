@@ -5,6 +5,8 @@
 
 use super::*;
 use crate::acg::canonicalize::{canonicalize_value, sha256_hex};
+use sha2::{Digest, Sha256};
+use std::io::Write;
 
 #[test]
 fn fingerprint_matches_canonicalize_then_hash() {
@@ -1026,4 +1028,150 @@ fn tool_keys_are_disjoint_from_llm_keys() {
     );
     let tool = tool_key("", "t", None, json!({"messages": []}), &[]);
     assert_ne!(llm, tool);
+}
+
+#[test]
+fn non_object_request_bodies_stay_raw_and_cacheable() {
+    // Non-object requests have no stateful controls or normalized fields. They
+    // must still receive a deterministic raw-body key instead of being treated
+    // as an unparseable request.
+    let raw = request(json!(["opaque", {"request": "body"}]));
+    assert_eq!(
+        resolved_body("custom-provider", &raw),
+        (raw.content.clone(), None)
+    );
+    assert!(matches!(
+        build_cache_key("custom-provider", &raw, &cache_all_config()),
+        KeyOutcome::Key(_)
+    ));
+}
+
+#[test]
+fn negative_integers_beyond_the_safe_json_range_bypass_tool_keys() {
+    // RFC 8785 canonicalization rounds integers through f64. Negative values
+    // need the same protection as the positive IDs covered above.
+    let too_large = -9_007_199_254_740_993_i64;
+    assert_eq!(
+        build_tool_cache_key("key-test", "lookup", None, &json!(too_large), &[]),
+        KeyOutcome::Bypass("unrepresentable_number")
+    );
+}
+
+#[test]
+fn hash_writer_flushes_after_streaming_canonical_bytes() {
+    let mut hasher = Sha256::new();
+    {
+        let mut writer = HashWriter(&mut hasher);
+        writer.write_all(b"response-cache-key").unwrap();
+        writer.flush().unwrap();
+    }
+
+    assert_eq!(hasher.finalize(), Sha256::digest(b"response-cache-key"));
+}
+
+#[test]
+fn key_headers_match_case_insensitively_and_exclude_unlisted_values() {
+    let mut headers = Map::new();
+    headers.insert("X-Tenant".to_string(), json!("tenant-a"));
+    headers.insert("Authorization".to_string(), json!("secret"));
+
+    let kept = allowlisted_headers(&headers, &["x-tenant".to_string()]);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept.get("x-tenant"), Some(&json!("tenant-a")));
+}
+
+#[test]
+fn tool_id_normalization_skips_nonobjects_and_nonstring_ids() {
+    let mut body = json!({
+        "messages": [
+            null,
+            {"role": "assistant", "tool_calls": [{"id": "call-raw"}, {"id": 7}]},
+            {"role": "tool", "tool_call_id": "call-raw"},
+            {"role": "tool", "tool_call_id": 42}
+        ]
+    });
+
+    normalize_tool_call_ids(body.as_object_mut().unwrap());
+    assert_eq!(
+        body.pointer("/messages/1/tool_calls/0/id"),
+        Some(&json!("tcid_0"))
+    );
+    assert_eq!(body.pointer("/messages/1/tool_calls/1/id"), Some(&json!(7)));
+    assert_eq!(
+        body.pointer("/messages/2/tool_call_id"),
+        Some(&json!("tcid_0"))
+    );
+    assert_eq!(body.pointer("/messages/3/tool_call_id"), Some(&json!(42)));
+}
+
+#[test]
+fn lossy_shape_guards_handle_nonobjects_and_unmodeled_tool_choices() {
+    assert!(
+        !lossy_request_shape(ProviderSurface::OpenAIChat, &json!("opaque body")),
+        "a non-object has no normalized fields to lose"
+    );
+    assert!(
+        lossy_system_block(&json!("not a system block")),
+        "a non-object system block cannot be faithfully normalized"
+    );
+
+    let request = request(json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "look it up"}],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "lookup", "strict": true}
+        }
+    }));
+    assert_eq!(
+        resolved_body("openai", &request).1,
+        None,
+        "a lossy tool_choice must use the raw request body for its key"
+    );
+}
+
+#[test]
+fn decode_round_trip_guards_fall_back_to_raw_tool_and_message_shapes() {
+    // Anthropic client-tool wire objects serialize differently from the shared
+    // normalized tool representation. Keeping their raw shape in the key is
+    // safer than silently treating a future schema variation as equivalent.
+    let anthropic_tool_request = request(json!({
+        "model": "claude-test",
+        "max_tokens": 16,
+        "system": "Follow the tool contract.",
+        "messages": [{"role": "user", "content": "Look this up."}],
+        "tools": [{
+            "name": "lookup",
+            "description": "Look up a document.",
+            "input_schema": {"type": "object", "properties": {}}
+        }]
+    }));
+    assert!(
+        decode_surface(ProviderSurface::AnthropicMessages, &anthropic_tool_request).is_none(),
+        "a non-round-tripping tool shape must use raw keying"
+    );
+    assert_eq!(
+        resolved_body("anthropic", &anthropic_tool_request),
+        (anthropic_tool_request.content.clone(), None)
+    );
+
+    // Closed message types carry a provider-native value for legacy
+    // `function_call`; its normalized representation is intentionally not a
+    // wire-equivalent message, so it too must keep the raw key shape.
+    let legacy_message_request = request(json!({
+        "model": "gpt-4o",
+        "messages": [{
+            "role": "assistant",
+            "content": null,
+            "function_call": {"name": "lookup", "arguments": "{\"q\":\"docs\"}"}
+        }]
+    }));
+    assert!(
+        decode_surface(ProviderSurface::OpenAIChat, &legacy_message_request).is_none(),
+        "a non-round-tripping message shape must use raw keying"
+    );
+    assert_eq!(
+        resolved_body("openai", &legacy_message_request),
+        (legacy_message_request.content.clone(), None)
+    );
 }

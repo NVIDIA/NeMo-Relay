@@ -230,6 +230,24 @@ fn response_sanitizer_context_preserves_all_codec_identity_states() {
     );
 }
 
+#[test]
+fn sanitizer_context_debug_includes_identity_without_codec_handles() {
+    let request = crate::api::runtime::LlmSanitizeRequestContext::for_request_codec(Some(
+        Arc::new(OpenAIChatCodec),
+    ));
+    let response = crate::api::runtime::LlmSanitizeResponseContext::for_response_codec(Some(
+        Arc::new(OpenAIChatCodec),
+    ));
+
+    let request_debug = format!("{request:?}");
+    assert!(request_debug.contains("BuiltIn(OpenAiChat)"));
+    assert!(!request_debug.contains("request_codec"));
+
+    let response_debug = format!("{response:?}");
+    assert!(response_debug.contains("BuiltIn(OpenAiChat)"));
+    assert!(!response_debug.contains("response_codec"));
+}
+
 impl LlmCodec for ProjectionFailingCodec {
     fn decode(&self, request: &LlmRequest) -> crate::error::Result<AnnotatedLlmRequest> {
         OpenAIChatCodec.decode(request)

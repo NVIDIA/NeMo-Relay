@@ -39,6 +39,36 @@ fn test_backend_spec_in_memory_helper_uses_empty_config() {
     let backend = BackendSpec::in_memory();
     assert_eq!(backend.kind, "in_memory");
     assert!(backend.config.is_empty());
+
+    let default_backend = BackendSpec::default();
+    assert_eq!(default_backend.kind, "in_memory");
+    assert!(default_backend.config.is_empty());
+}
+
+#[cfg(not(feature = "redis-backend"))]
+#[test]
+fn test_response_cache_redis_backend_requires_the_redis_feature() {
+    let mut response_cache = ResponseCacheConfig {
+        namespace: "cache-tests".to_string(),
+        ..ResponseCacheConfig::default()
+    };
+    response_cache.backend.kind = "redis".to_string();
+    response_cache
+        .backend
+        .config
+        .insert("url".to_string(), json!("redis://127.0.0.1/"));
+
+    let report = crate::runtime::features::AdaptiveRuntime::validate_config(&AdaptiveConfig {
+        response_cache: Some(response_cache),
+        ..AdaptiveConfig::default()
+    });
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.backend_unavailable")
+    );
 }
 
 #[cfg(feature = "redis-backend")]
