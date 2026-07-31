@@ -4,7 +4,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { waitForSubscriberCallbacks } from './test_support.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -98,7 +97,7 @@ describe('Scope operations', () => {
     try {
       const scope = pushScope('pop_metadata_scope', ScopeType.Agent, null, null, null, { a: 1, b: 2, c: 3 });
       popScope(scope, null, null, { c: 3.5, d: 4 });
-      await waitForSubscriberCallbacks(() => events.some((e) => e.name === 'pop_metadata_scope' && e.scope_category === 'end'));
+      await flushSubscribers();
 
       const end = events.find(
         (e) => e.name === 'pop_metadata_scope' && e.kind === 'scope' && e.scope_category === 'end',
@@ -202,7 +201,7 @@ describe('withScope', () => {
       await withScope('with_scope_ok_status', ScopeType.Function, () => ({ ok: true }), null, null, null, {
         caller: 'node',
       });
-      await waitForSubscriberCallbacks(() => events.some((e) => e.name === 'with_scope_ok_status' && e.scope_category === 'end'));
+      await flushSubscribers();
 
       const end = events.find(
         (e) => e.name === 'with_scope_ok_status' && e.kind === 'scope' && e.scope_category === 'end',
@@ -254,7 +253,7 @@ describe('withScope', () => {
           }),
         /node status failure/,
       );
-      await waitForSubscriberCallbacks(() => events.some((e) => e.name === 'with_scope_error_status' && e.scope_category === 'end'));
+      await flushSubscribers();
 
       const end = events.find(
         (e) => e.name === 'with_scope_error_status' && e.kind === 'scope' && e.scope_category === 'end',
@@ -349,7 +348,7 @@ describe('Subscribers', () => {
     try {
       const scope = pushScope('sub_test', ScopeType.Agent, null, null);
       popScope(scope);
-      await waitForSubscriberCallbacks(() => events.length > 0);
+      await flushSubscribers();
     } finally {
       deregisterSubscriber('node_event_collector');
     }
@@ -360,10 +359,25 @@ describe('Subscribers', () => {
     registerSubscriber('node_flush_collector', (e) => events.push(e));
     try {
       event('node_flush_mark', null, null, null);
-      await waitForSubscriberCallbacks(() => events.some((e) => e.kind === 'mark' && e.name === 'node_flush_mark'));
+      await flushSubscribers();
       assert.ok(events.some((e) => e.kind === 'mark' && e.name === 'node_flush_mark'));
     } finally {
       deregisterSubscriber('node_flush_collector');
+    }
+  });
+
+  it('flushSubscribers waits for JavaScript callbacks without inspecting their return values', async () => {
+    let called = false;
+    registerSubscriber('node_flush_js_callback', () => {
+      called = true;
+      return 1n;
+    });
+    try {
+      event('node_flush_js_callback_mark', null, null, null);
+      await flushSubscribers();
+      assert.equal(called, true);
+    } finally {
+      deregisterSubscriber('node_flush_js_callback');
     }
   });
 
@@ -375,7 +389,7 @@ describe('Subscribers', () => {
     try {
       const scope = pushScope('prop_test', ScopeType.Function, null, null);
       popScope(scope);
-      await waitForSubscriberCallbacks(() => captured !== null);
+      await flushSubscribers();
       assert.ok(captured, 'Expected an event');
       assert.ok(typeof captured.uuid === 'string');
       assert.ok(typeof captured.timestamp === 'string');
@@ -398,7 +412,7 @@ describe('Subscribers', () => {
         },
         null,
       );
-      await waitForSubscriberCallbacks(() => events.some((e) => e.kind === 'mark'));
+      await flushSubscribers();
       const found = events.some((e) => e.kind === 'mark');
       assert.ok(found, 'Expected a Mark event');
     } finally {

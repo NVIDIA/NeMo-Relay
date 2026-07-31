@@ -82,6 +82,32 @@ use serde_json::json;
 // All tests share the global context, so we serialize them.
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
+fn assert_flush_waits_for_pending_completion(complete: impl FnOnce()) {
+    let (flush_started_tx, flush_started_rx) = std::sync::mpsc::channel();
+    let (flush_done_tx, flush_done_rx) = std::sync::mpsc::channel();
+    let flush_thread = std::thread::spawn(move || {
+        flush_started_tx.send(()).unwrap();
+        flush_done_tx.send(flush_subscribers()).unwrap();
+    });
+    flush_started_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("subscriber flush thread did not start");
+    assert!(
+        matches!(
+            flush_done_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "flush must wait for pending managed completion"
+    );
+
+    complete();
+    flush_done_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("subscriber flush did not complete after cancellation")
+        .unwrap();
+    flush_thread.join().unwrap();
+}
+
 struct CloseCallsStreamNext {
     next: Option<LlmStreamExecutionNextFn>,
     request: Option<LlmRequest>,
@@ -1944,8 +1970,8 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
         result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
         result = entered_rx => result.unwrap(),
     }
-    drop(execution);
-    flush_subscribers().unwrap();
+
+    assert_flush_waits_for_pending_completion(|| drop(execution));
 
     let lifecycle = events
         .lock()
@@ -2085,8 +2111,7 @@ async fn dropping_pending_conditional_closes_the_guardrail_scope() {
         result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
         result = entered_rx => result.unwrap(),
     }
-    drop(execution);
-    flush_subscribers().unwrap();
+    assert_flush_waits_for_pending_completion(|| drop(execution));
 
     let lifecycle = events
         .lock()
@@ -2230,8 +2255,7 @@ async fn dropping_pending_llm_execution_closes_the_managed_lifecycle() {
         result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
         result = entered_rx => result.unwrap(),
     }
-    drop(execution);
-    flush_subscribers().unwrap();
+    assert_flush_waits_for_pending_completion(|| drop(execution));
 
     let lifecycle = events
         .lock()

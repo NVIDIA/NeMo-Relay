@@ -103,11 +103,20 @@ user `PATH`; the Unix installer does not edit shell configuration.
 
 | Operating system | Architecture | Release target |
 | --- | --- | --- |
-| Linux | x86_64 | `x86_64-unknown-linux-musl` |
-| Linux | ARM64 | `aarch64-unknown-linux-musl` |
+| Linux (glibc) | x86_64 | `x86_64-unknown-linux-gnu` |
+| Linux (musl) | x86_64 | `x86_64-unknown-linux-musl` |
+| Linux (glibc) | ARM64 | `aarch64-unknown-linux-gnu` |
+| Linux (musl) | ARM64 | `aarch64-unknown-linux-musl` |
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86_64 | `x86_64-pc-windows-msvc` |
 | Windows | ARM64 | `aarch64-pc-windows-msvc` |
+
+Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and
+RHEL. Use the musl target on Alpine Linux and other musl-based systems. The
+Unix shell installer intentionally selects the portable musl target on Linux.
+For package versions that publish the corresponding artifacts, `pip`, `uv`, and
+`npm` automatically select a target compatible with the host CPU and C library
+on supported platforms.
 
 The installer reports the detected operating system and architecture when no
 matching asset exists. Intel macOS is not supported because no matching release
@@ -123,7 +132,7 @@ refer to the [Support Matrix](/reference/support-matrix).
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.7.0 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.8.0 sh
 ```
 
 Install into another directory:
@@ -147,7 +156,7 @@ Set the same environment variable before invoking the installer to install a
 specific version:
 
 ```powershell
-$env:NEMO_RELAY_VERSION = '0.7.0'
+$env:NEMO_RELAY_VERSION = '0.8.0'
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 
@@ -177,9 +186,9 @@ new download before replacing the binary in the selected installation directory.
 
 ### Alternative Installation Methods
 
-The PyPI, npm, and installer methods all install the same release binary on
-supported platforms. Use Cargo on unsupported platforms or when you prefer to
-build from source:
+The PyPI, npm, and installer methods install the same CLI release with a binary
+compatible with the host platform. Use Cargo on unsupported platforms or when
+you prefer to build from source:
 
 ```bash
 cargo install nemo-relay-cli
@@ -201,7 +210,7 @@ Install the Python package when your application uses NeMo Relay through the
 Python wrapper and owns the tool or LLM call boundary.
 
 ```bash
-uv add nemo-relay@0.7.0
+uv add nemo-relay@0.8.0
 ```
 
 Use `uv add` from an application project that has a `pyproject.toml`; it records
@@ -210,22 +219,33 @@ virtual environment and do not have project metadata, use `uv pip install
 nemo-relay` instead. You can also use `pip install nemo-relay` if you are not
 managing the environment with `uv`.
 
+NeMo Relay publishes CPython 3.11 ABI3 wheels for x86_64 and ARM64 Linux
+systems. On supported CPython 3.11 or newer environments, `pip` and `uv` select
+`manylinux_2_17` for glibc 2.17 or newer or `musllinux_1_2` for musl 1.2 or
+newer. Supported Alpine Linux environments do not need a `--platform` override
+or source build. Alpine environments outside this wheel coverage must use a
+supported Python version and
+[build from source](/contribute/development-setup#source-development).
+
 ## Node.js
 
 Install the Node.js package when your application uses NeMo Relay through the
 JavaScript API and owns the tool or LLM call boundary.
 
 ```bash
-npm install nemo-relay-node@0.7.0
+npm install nemo-relay-node@0.8.0
 ```
+
+On supported x64 and ARM64 Linux systems, npm automatically installs the native
+package for the host C library, including the musl package on Alpine Linux.
 
 ## Rust
 
 Add the Rust crates when your application uses NeMo Relay directly from Rust.
 
 ```bash
-cargo add nemo-relay@0.7.0
-cargo add nemo-relay-adaptive@0.7.0
+cargo add nemo-relay@0.8.0
+cargo add nemo-relay-adaptive@0.8.0
 ```
 
 - `nemo-relay` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
@@ -242,7 +262,7 @@ Install the OpenClaw plugin through OpenClaw so OpenClaw can register and manage
 the package:
 
 ```bash
-openclaw plugins install npm:nemo-relay-openclaw@0.7.0
+openclaw plugins install npm:nemo-relay-openclaw@0.8.0
 openclaw gateway restart
 ```
 
@@ -280,7 +300,7 @@ Install the Python package with the supported framework extras when your
 application uses LangChain, LangGraph, or Deep Agents.
 
 ```bash
-uv add "nemo-relay[langchain,langgraph,deepagents]@0.7.0"
+uv add "nemo-relay[langchain,langgraph,deepagents]@0.8.0"
 ```
 
 The extras install the NeMo Relay Python package plus the dependencies needed by

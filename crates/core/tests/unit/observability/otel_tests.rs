@@ -9,9 +9,9 @@ use crate::api::event::{
     tool_attributes_to_strings,
 };
 use crate::api::runtime::{
-    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding, capture_thread_scope_stack,
-    create_scope_stack_from_propagation, global_context, restore_thread_scope_stack,
-    set_thread_scope_stack,
+    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding,
+    capture_propagation_context, capture_thread_scope_stack, create_scope_stack_from_propagation,
+    fork_scope_stack, global_context, restore_thread_scope_stack, set_thread_scope_stack,
 };
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
@@ -371,6 +371,58 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
     assert!(span_context.is_remote());
     assert_eq!(span_context.trace_id(), relay_trace_id(root_uuid));
     assert_eq!(span_context.span_id(), relay_span_id(root_uuid));
+}
+
+#[test]
+fn rootless_propagation_starts_a_new_otel_trace() {
+    let parent_uuid = Uuid::now_v7();
+    let local_uuid = Uuid::now_v7();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    let imported_stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: None,
+        parent_uuid,
+    })
+    .unwrap();
+    set_thread_scope_stack(imported_stack);
+
+    let captured = capture_propagation_context().unwrap();
+    assert_eq!(captured.root_uuid, None);
+    assert_eq!(captured.parent_uuid, parent_uuid);
+
+    let forked_stack = fork_scope_stack().unwrap();
+    {
+        let forked_stack = forked_stack.read().unwrap();
+        assert_eq!(forked_stack.root_uuid(), parent_uuid);
+        assert_eq!(forked_stack.top().uuid, parent_uuid);
+    }
+    set_thread_scope_stack(forked_stack);
+
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider, "test".into());
+    processor.process(&make_start_event(
+        local_uuid,
+        Some(parent_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.process(&make_end_event(
+        local_uuid,
+        Some(parent_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.span_context.trace_id(), relay_trace_id(local_uuid));
+    assert_eq!(span.span_context.span_id(), relay_span_id(local_uuid));
+    assert_eq!(span.parent_span_id, SpanId::INVALID);
+    assert!(!span.parent_span_is_remote);
 }
 
 fn make_start_event_with_metadata(

@@ -488,9 +488,10 @@ pub fn push_stream_chunk(stream_id: f64, chunk: Json) -> bool {
 /// Signal that a stream is complete. Drops the sender so the Rust
 /// receiver sees the channel as closed.
 #[napi]
-pub fn end_stream(stream_id: f64) {
+pub fn end_stream(env: Env, stream_id: f64) -> napi::Result<()> {
     let id = stream_id as u64;
     finish_stream_channel(id, Ok(()));
+    callback_factory::expire_callback_context(&env)
 }
 
 /// # Safety
@@ -1723,10 +1724,13 @@ pub fn create_scope_stack_from_propagation(
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
-/// Run a synchronous callback with an isolated scope stack installed.
+/// Run a callback with an isolated scope stack installed.
 ///
-/// The stack is restored before this function returns. Asynchronous callbacks
-/// must not rely on this installation after their first `await`.
+/// The caller's stack is restored immediately after callback invocation. When
+/// the callback returns a Promise, the requested stack remains active for that
+/// Promise until it settles and is then expired for inherited detached work.
+/// Use this helper instead of `setThreadScopeStack` to isolate concurrent async
+/// branches.
 #[napi]
 pub fn with_scope_stack(
     env: Env,
@@ -1755,7 +1759,10 @@ pub fn current_scope_stack(env: Env) -> napi::Result<ScopeStack> {
     Ok(ScopeStack::from(current_scope_stack_handle()))
 }
 
-/// Binds a scope stack to the current thread.
+/// Binds a scope stack to the current thread or async resource.
+///
+/// This mutates the current execution resource. Use `withScopeStack` when
+/// concurrent asynchronous branches need isolated stack replacements.
 #[napi]
 pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> napi::Result<()> {
     if callback_factory::set_callback_scope_stack(&env, stack)? {
@@ -3315,18 +3322,17 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
     core_subscriber_api::deregister_subscriber(&name).map_err(to_napi_err)
 }
 
-/// Return a Promise that resolves when native subscriber callbacks queued
-/// before this call finish.
+/// Return a Promise that resolves when native and JavaScript subscriber callbacks and
+/// managed terminal publications registered before this call finish.
 ///
 /// Call this function outside subscribers, event sanitizers, conditional
 /// guardrails, and request or execution intercepts. A queued tool or LLM
 /// observability sanitizer may call it, but the Promise resolves without
 /// waiting for its own publication.
 ///
-/// JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this
-/// Promise does not block the Node event loop while Promise-returning event sanitizers settle.
-/// Native events emitted later by a JavaScript subscriber are separate publications and may
-/// require another flush after the JavaScript callback runs.
+/// Awaiting this Promise does not block the Node event loop while Promise-returning event
+/// sanitizers settle or queued JavaScript subscriber callbacks run. Native events emitted by a
+/// JavaScript subscriber are separate publications and may require another flush.
 ///
 /// The Promise rejects if the blocking task fails or the core subscriber flush returns an error.
 /// Callers should handle errors when awaiting it.
@@ -3338,10 +3344,13 @@ pub fn flush_subscribers(env: Env) -> Result<JsObject> {
             if reentrant {
                 return Ok(());
             }
-            tokio::task::spawn_blocking(core_subscriber_api::flush_subscribers)
-                .await
-                .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
-                .map_err(to_napi_err)
+            tokio::task::spawn_blocking(|| {
+                core_subscriber_api::flush_subscribers()?;
+                callable::flush_js_subscriber_callbacks()
+            })
+            .await
+            .map_err(|error| to_napi_err(FlowError::Internal(error.to_string())))?
+            .map_err(to_napi_err)
         },
         |env, _| env.get_undefined(),
     )

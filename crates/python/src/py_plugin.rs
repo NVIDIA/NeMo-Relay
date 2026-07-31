@@ -3,11 +3,11 @@
 
 //! Python-facing generic plugin configuration and registration helpers.
 
+#[cfg(test)]
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-#[cfg(test)]
-use std::{collections::HashSet, sync::LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use pyo3::prelude::*;
 use serde_json::{Map, Value as Json};
@@ -685,6 +685,7 @@ fn initialize_plugins_py<'py>(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let report = initialize_plugins(config).await.map_err(to_py_err)?;
+        reset_plugin_configuration_clear_state();
         Python::attach(|py| {
             let report = serde_json::to_value(&report)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -756,6 +757,35 @@ impl PluginTeardownError {
 
 type PluginTeardownResult = std::result::Result<(), PluginTeardownError>;
 
+struct PluginTeardownCompletion {
+    result: tokio::sync::watch::Sender<Option<PluginTeardownResult>>,
+}
+
+impl PluginTeardownCompletion {
+    fn new() -> Self {
+        let (result, _) = tokio::sync::watch::channel(None);
+        Self { result }
+    }
+
+    fn finish(&self, result: PluginTeardownResult) {
+        self.result.send_replace(Some(result));
+    }
+
+    async fn wait(&self, operation: &'static str) -> PluginTeardownResult {
+        let mut result = self.result.subscribe();
+        loop {
+            if let Some(result) = result.borrow().clone() {
+                return result;
+            }
+            if result.changed().await.is_err() {
+                return Err(PluginTeardownError::runtime(format!(
+                    "{operation} result channel closed unexpectedly"
+                )));
+            }
+        }
+    }
+}
+
 enum PluginHostCloseStatus {
     Active(Option<PluginHostActivation>),
     Closing,
@@ -764,15 +794,14 @@ enum PluginHostCloseStatus {
 
 struct PluginHostCloseState {
     status: Mutex<PluginHostCloseStatus>,
-    completion: tokio::sync::watch::Sender<Option<PluginTeardownResult>>,
+    completion: PluginTeardownCompletion,
 }
 
 impl PluginHostCloseState {
     fn new(activation: PluginHostActivation) -> Self {
-        let (completion, _) = tokio::sync::watch::channel(None);
         Self {
             status: Mutex::new(PluginHostCloseStatus::Active(Some(activation))),
-            completion,
+            completion: PluginTeardownCompletion::new(),
         }
     }
 
@@ -858,22 +887,82 @@ impl PluginHostCloseState {
             .status
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = PluginHostCloseStatus::Closed;
-        self.completion.send_replace(Some(result));
+        reset_plugin_configuration_clear_state();
+        self.completion.finish(result);
     }
 
     async fn wait_for_close(&self) -> PluginTeardownResult {
-        let mut completion = self.completion.subscribe();
-        loop {
-            if let Some(result) = completion.borrow().clone() {
-                return result;
-            }
-            if completion.changed().await.is_err() {
-                return Err(PluginTeardownError::runtime(
-                    "dynamic plugin teardown result channel closed unexpectedly",
-                ));
-            }
+        self.completion.wait("dynamic plugin teardown").await
+    }
+}
+
+struct PluginConfigurationClearState {
+    started: Mutex<bool>,
+    completion: PluginTeardownCompletion,
+}
+
+impl PluginConfigurationClearState {
+    fn new() -> Self {
+        Self {
+            started: Mutex::new(false),
+            completion: PluginTeardownCompletion::new(),
         }
     }
+
+    fn begin_clear(self: &Arc<Self>) {
+        let should_start = {
+            let mut started = self
+                .started
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *started {
+                false
+            } else {
+                *started = true;
+                true
+            }
+        };
+        if !should_start {
+            return;
+        }
+
+        let clear_state = Arc::clone(self);
+        let spawn = std::thread::Builder::new()
+            .name("nemo-relay-python-plugin-clear".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(clear_plugin_configuration)
+                    .map_err(|_| PluginTeardownError::runtime("plugin teardown task panicked"))
+                    .and_then(|result| result.map_err(PluginTeardownError::from_plugin_error));
+                clear_state.completion.finish(result);
+            });
+        if let Err(error) = spawn {
+            self.completion
+                .finish(Err(PluginTeardownError::runtime(format!(
+                    "failed to start plugin teardown task: {error}"
+                ))));
+        }
+    }
+
+    async fn wait_for_clear(&self) -> PluginTeardownResult {
+        self.completion.wait("plugin teardown").await
+    }
+}
+
+static PLUGIN_CONFIGURATION_CLEAR_STATE: LazyLock<Mutex<Arc<PluginConfigurationClearState>>> =
+    LazyLock::new(|| Mutex::new(Arc::new(PluginConfigurationClearState::new())));
+
+fn plugin_configuration_clear_state() -> Arc<PluginConfigurationClearState> {
+    PLUGIN_CONFIGURATION_CLEAR_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn reset_plugin_configuration_clear_state() {
+    *PLUGIN_CONFIGURATION_CLEAR_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+        Arc::new(PluginConfigurationClearState::new());
 }
 
 #[pymethods]
@@ -935,6 +1024,7 @@ fn initialize_with_dynamic_plugins_py<'py>(
             PluginHostActivation::activate_with_discovered_config(config, dynamic_plugins)
                 .await
                 .map_err(plugin_error_to_py_err)?;
+        reset_plugin_configuration_clear_state();
         Python::attach(|py| {
             Py::new(
                 py,
@@ -951,6 +1041,19 @@ fn initialize_with_dynamic_plugins_py<'py>(
 #[pyo3(signature = () -> "None", text_signature = "() -> None")]
 fn clear_plugin_configuration_py(py: Python<'_>) -> PyResult<()> {
     py.detach(clear_plugin_configuration).map_err(to_py_err)
+}
+
+#[pyfunction(name = "clear_plugin_configuration_async")]
+#[pyo3(signature = () -> "object", text_signature = "() -> object")]
+fn clear_plugin_configuration_async_py<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    let clear_state = plugin_configuration_clear_state();
+    clear_state.begin_clear();
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        clear_state
+            .wait_for_clear()
+            .await
+            .map_err(|error| error.to_py_err())
+    })
 }
 
 #[pyfunction(name = "active_plugin_report")]
@@ -997,6 +1100,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_with_dynamic_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;
+    m.add_function(wrap_pyfunction!(clear_plugin_configuration_async_py, m)?)?;
     m.add_function(wrap_pyfunction!(active_plugin_report_py, m)?)?;
     m.add_function(wrap_pyfunction!(list_plugin_kinds_py, m)?)?;
     m.add_function(wrap_pyfunction!(register_plugin_py, m)?)?;

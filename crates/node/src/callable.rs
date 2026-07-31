@@ -9,9 +9,10 @@
 //! handles serialization of arguments to/from JSON and manages cross-thread communication
 //! between the Rust async runtime and the Node.js event loop.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use napi::bindgen_prelude::ToNapiValue;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -43,6 +44,47 @@ use crate::callback_factory;
 use crate::convert::{callback_json, record_callback_error, to_napi_err};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
+
+#[derive(Default)]
+struct JsSubscriberCallbackState {
+    next_id: u64,
+    pending: BTreeSet<u64>,
+}
+
+fn js_subscriber_callbacks() -> &'static (Mutex<JsSubscriberCallbackState>, Condvar) {
+    static CALLBACKS: OnceLock<(Mutex<JsSubscriberCallbackState>, Condvar)> = OnceLock::new();
+    CALLBACKS.get_or_init(Default::default)
+}
+
+fn reserve_js_subscriber_callback() -> u64 {
+    let (state, _) = js_subscriber_callbacks();
+    let mut state = state.lock().unwrap();
+    state.next_id += 1;
+    let id = state.next_id;
+    state.pending.insert(id);
+    id
+}
+
+fn complete_js_subscriber_callback(id: u64) {
+    let (state, completed) = js_subscriber_callbacks();
+    let mut state = state.lock().unwrap();
+    state.pending.remove(&id);
+    completed.notify_all();
+}
+
+pub(crate) fn flush_js_subscriber_callbacks() -> Result<()> {
+    let (state, completed) = js_subscriber_callbacks();
+    let mut state = state
+        .lock()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let watermark = state.next_id;
+    while state.pending.range(..=watermark).next().is_some() {
+        state = completed
+            .wait(state)
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+    }
+    Ok(())
+}
 
 /// Structured codec identity delivered to JavaScript LLM sanitizers.
 #[napi(object)]
@@ -1153,8 +1195,17 @@ pub fn wrap_js_event_subscriber(
                 return;
             }
         };
-        let status = func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
+        let callback_id = reserve_js_subscriber_callback();
+        let status = func.call_with_return_value(
+            event_json,
+            ThreadsafeFunctionCallMode::NonBlocking,
+            move |_value: JsUnknown| {
+                complete_js_subscriber_callback(callback_id);
+                Ok(())
+            },
+        );
         if status != napi::Status::Ok {
+            complete_js_subscriber_callback(callback_id);
             record_callback_error(format!(
                 "nemo_relay: failed to queue JS event subscriber callback: {status:?}"
             ));

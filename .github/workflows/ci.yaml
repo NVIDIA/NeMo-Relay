@@ -523,13 +523,13 @@ jobs:
               echo "${name} ${version} already exists on npm; skipping"
               continue
             fi
-            npm publish "$pkg" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+            npm publish "./$pkg" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           done
           metapackage="node-packages/nemo-relay-node-npm-${version}.tgz"
           if npm view "nemo-relay-node@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
             echo "nemo-relay-node ${version} already exists on npm; skipping"
           else
-            npm publish "$metapackage" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+            npm publish "./$metapackage" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           fi
 
       - name: Publish CLI packages to npm
@@ -542,13 +542,13 @@ jobs:
               echo "${name} ${version} already exists on npm; skipping"
               continue
             fi
-            npm publish "$pkg" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+            npm publish "./$pkg" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           done
           launcher="cli-packages/nemo-relay-bin-npm-${version}.tgz"
           if npm view "nemo-relay-cli-bin@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
             echo "nemo-relay-cli-bin ${version} already exists on npm; skipping"
           else
-            npm publish "$launcher" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
+            npm publish "./$launcher" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           fi
 
       - name: Publish OpenClaw plugin package to npm

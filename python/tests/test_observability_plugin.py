@@ -223,7 +223,7 @@ class TestObservabilityConfigHelpers:
                 with scope.scope("python-header-env-agent", ScopeType.Agent) as handle:
                     scope.event("python-header-env-mark", handle=handle, data={"step": 1})
             finally:
-                plugin.clear()
+                await plugin.clear_async()
             requests = capture.wait_for_requests(3)
 
         assert len(requests) == 3
@@ -295,7 +295,7 @@ class TestObservabilityConfigHelpers:
             try:
                 handle = _inner()
             finally:
-                plugin.clear()
+                await plugin.clear_async()
 
         lines = (tmp_path / "events.jsonl").read_text().strip().splitlines()
         assert len(lines) == 3
@@ -400,7 +400,7 @@ class TestObservabilityConfigHelpers:
             response_thread.start()
             teardown_started.set()
             started_at = time.monotonic()
-            plugin.clear()
+            await plugin.clear_async()
             cleared = True
             assert time.monotonic() - started_at < 2
             response_thread.join(timeout=2)
@@ -419,7 +419,7 @@ class TestObservabilityConfigHelpers:
         finally:
             allow_response.set()
             if not cleared:
-                plugin.clear()
+                await plugin.clear_async()
             server.shutdown()
             server_thread.join(timeout=5)
             server.server_close()
@@ -434,7 +434,7 @@ class TestObservabilityConfigHelpers:
         )
         handle = scope.push("python-open-agent", ScopeType.Agent)
         try:
-            plugin.clear()
+            await plugin.clear_async()
             assert (tmp_path / f"nemo-relay-atif-{handle.uuid}.json").exists()
         finally:
             scope.pop(handle)
@@ -464,7 +464,7 @@ class TestObservabilityConfigHelpers:
             with scope.scope("python-second-agent", ScopeType.Agent) as second:
                 scope.event("python-second-mark", handle=second, data={"agent": "second"})
         finally:
-            plugin.clear()
+            await plugin.clear_async()
 
         files = sorted(tmp_path.glob("trajectory-*.json"))
         assert len(files) == 2

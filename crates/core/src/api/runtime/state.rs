@@ -155,6 +155,7 @@ struct GuardrailScopeCompletion<'a> {
     handle: Option<ScopeHandle>,
     subscribers: &'a [EventSubscriberFn],
     scope_stack: ScopeStackHandle,
+    pending_publication: Option<subscriber_dispatcher::PendingPublication>,
 }
 
 impl GuardrailScopeCompletion<'_> {
@@ -167,6 +168,9 @@ impl GuardrailScopeCompletion<'_> {
             handle: Some(handle),
             subscribers,
             scope_stack,
+            pending_publication: (!subscribers.is_empty())
+                .then(subscriber_dispatcher::register_pending_publication)
+                .flatten(),
         }
     }
 
@@ -178,6 +182,7 @@ impl GuardrailScopeCompletion<'_> {
             self.subscribers,
             self.scope_stack.clone(),
         );
+        drop(self.pending_publication.take());
     }
 }
 
@@ -196,6 +201,7 @@ impl Drop for GuardrailScopeCompletion<'_> {
             self.subscribers,
             self.scope_stack.clone(),
         );
+        drop(self.pending_publication.take());
     }
 }
 

@@ -91,6 +91,29 @@ describe('Context isolation', () => {
     }
   });
 
+  it('keeps withScopeStack active until an async callback settles', async () => {
+    const originalUuid = getHandle().uuid;
+    const stack = createScopeStack();
+    const stackUuid = withScopeStack(stack, () => getHandle().uuid);
+    let resolveDetached;
+    const detached = new Promise((resolve) => {
+      resolveDetached = resolve;
+    });
+
+    const execution = withScopeStack(stack, async () => {
+      assert.equal(getHandle().uuid, stackUuid);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(getHandle().uuid, stackUuid);
+      setImmediate(() => resolveDetached(getHandle().uuid));
+      return 'done';
+    });
+
+    assert.equal(getHandle().uuid, originalUuid);
+    assert.equal(await execution, 'done');
+    assert.equal(getHandle().uuid, originalUuid);
+    assert.equal(await detached, originalUuid);
+  });
+
   it('currentScopeStack returns same in same context', () => {
     const s1 = currentScopeStack();
     const s2 = currentScopeStack();

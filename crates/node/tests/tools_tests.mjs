@@ -4,7 +4,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { waitForSubscriberCallbacks } from './test_support.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -135,10 +134,7 @@ describe('Tool lifecycle', () => {
     try {
       const handle = toolCall('evt_tool', {}, null, null, null, null);
       toolCallEnd(handle, {}, null, null);
-      const deadline = Date.now() + 2000;
-      while (events.length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       assert.ok(events.length >= 2, 'Expected at least 2 events');
     } finally {
       deregisterSubscriber('node_tool_evt_sub');
@@ -180,10 +176,7 @@ describe('Tool lifecycle', () => {
         },
       );
 
-      const deadline = Date.now() + 2000;
-      while (events.filter((e) => e.name === 'field_tool').length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
 
       const start = events.find(
         (e) => e.name === 'field_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'start',
@@ -403,23 +396,7 @@ describe('Tool execute', () => {
         /tool status failure/,
       );
 
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some(
-            (e) =>
-              e.name === 'exec_status_ok_tool' &&
-              e.kind === 'scope' &&
-              e.category === 'tool' &&
-              e.scope_category === 'end',
-          ) &&
-          events.some(
-            (e) =>
-              e.name === 'exec_status_error_tool' &&
-              e.kind === 'scope' &&
-              e.category === 'tool' &&
-              e.scope_category === 'end',
-          ),
-      );
+      await flushSubscribers();
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
@@ -520,19 +497,7 @@ describe('Tool guardrails', () => {
       assert.deepEqual(result, {
         x: 1,
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_req_evt_tool' &&
-            e.kind === 'scope' &&
-            e.category === 'tool' &&
-            e.scope_category === 'start',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const start = events.find(
         (e) =>
           e.name === 'san_req_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'start',
@@ -579,16 +544,7 @@ describe('Tool guardrails', () => {
       assert.deepEqual(result, {
         ok: true,
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_resp_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const end = events.find(
         (e) =>
           e.name === 'san_resp_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
@@ -733,7 +689,7 @@ describe('Tool guardrails', () => {
     });
     try {
       await toolCallExecute('tool_sanitize_throw', { original: true }, (args) => args, null, null, null, null);
-      await waitForSubscriberCallbacks(() => events.some((event) => event.name === 'tool_sanitize_throw'));
+      await flushSubscribers();
       const start = events.find(
         (event) =>
           event.name === 'tool_sanitize_throw' &&
@@ -768,11 +724,7 @@ describe('Tool guardrails', () => {
     try {
       const handle = toolCall('node_manual_tool_flush', { original: true });
       toolCallEnd(handle, { ok: true });
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start') &&
-          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'end'),
-      );
+      await flushSubscribers();
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_manual_tool_flush_request');
       deregisterToolSanitizeResponseGuardrail('node_manual_tool_flush_response');
@@ -982,12 +934,7 @@ describe('Tool intercepts', () => {
       );
       assert.equal(result.original, false);
       assert.equal(result.wrapped, true);
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some(
-            (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
-          ) && events.some((event) => event.name === 'node.tool.execution'),
-      );
+      await flushSubscribers();
       const start = events.find(
         (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'start',
       );
@@ -1005,6 +952,68 @@ describe('Tool intercepts', () => {
       deregisterToolExecutionIntercept('node_tool_exec_repl');
       deregisterSubscriber('node_tool_exec_mark_sub');
     }
+  });
+
+  it('execution callbacks preserve the managed propagation parent across await', async () => {
+    const events = [];
+    const observed = [];
+    registerSubscriber('node_tool_exec_propagation_parent', (event) => events.push(event));
+    registerToolExecutionIntercept('node_tool_exec_propagation_parent', 10, async (args, next) => {
+      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid]);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid]);
+      return { result: await next(args) };
+    });
+    try {
+      const result = await toolCallExecuteAsync('propagation_parent_tool', {}, async () => {
+        observed.push(['provider-before', lib.capturePropagationContext().parentUuid]);
+        await new Promise((resolve) => setImmediate(resolve));
+        observed.push(['provider-after', lib.capturePropagationContext().parentUuid]);
+        return { ok: true };
+      });
+      assert.deepEqual(result, { ok: true });
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'propagation_parent_tool' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed tool start event');
+      assert.deepEqual(observed, [
+        ['intercept-before', start.uuid],
+        ['intercept-after', start.uuid],
+        ['provider-before', start.uuid],
+        ['provider-after', start.uuid],
+      ]);
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_propagation_parent');
+      deregisterSubscriber('node_tool_exec_propagation_parent');
+    }
+  });
+
+  it('execution settlement expires scope replacements inherited by detached work', async () => {
+    const baseline = {
+      active: lib.scopeStackActive(),
+      parentUuid: lib.capturePropagationContext().parentUuid,
+    };
+    const replacementStack = lib.createScopeStack();
+    let releaseLateContext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateContext = resolve;
+    });
+    let lateContext;
+
+    await toolCallExecuteAsync('scope_replacement_expiry_tool', {}, async () => {
+      lib.setThreadScopeStack(replacementStack);
+      lateContext = lateGate.then(() => ({
+        active: lib.scopeStackActive(),
+        parentUuid: lib.capturePropagationContext().parentUuid,
+      }));
+      await new Promise((resolve) => setImmediate(resolve));
+      return { ok: true };
+    });
+
+    releaseLateContext();
+    assert.deepEqual(await lateContext, baseline);
   });
 
   it('execution intercept rejects a detached next call after settlement', async () => {
@@ -1134,21 +1143,24 @@ describe('Tool intercepts', () => {
     const secondInstalled = new Promise((resolve) => {
       secondStackInstalled = resolve;
     });
+    let parentScope;
 
     registerToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements', 10, async (args, next) => {
-      const first = (async () => {
-        lib.setThreadScopeStack(firstStack);
+      parentScope = lib.getHandle().uuid;
+      const first = lib.withScopeStack(firstStack, async () => {
         firstStackInstalled();
         await secondInstalled;
         return next({ ...args, branch: 'first' });
-      })();
-      const second = (async () => {
+      });
+      const second = lib.withScopeStack(secondStack, async () => {
         await firstInstalled;
-        lib.setThreadScopeStack(secondStack);
         secondStackInstalled();
         return next({ ...args, branch: 'second' });
-      })();
-      return { result: await Promise.all([first, second]) };
+      });
+      const branches = await Promise.all([first, second]);
+      assert.equal(lib.getHandle().uuid, parentScope);
+      const parent = await next({ ...args, branch: 'parent' });
+      return { result: [...branches, parent] };
     });
     try {
       const result = await toolCallExecuteAsync('concurrent_scope_replacements_tool', {}, async (args) => ({
@@ -1158,6 +1170,7 @@ describe('Tool intercepts', () => {
       assert.deepEqual(result, [
         { branch: 'first', scope: firstScope },
         { branch: 'second', scope: secondScope },
+        { branch: 'parent', scope: parentScope },
       ]);
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements');

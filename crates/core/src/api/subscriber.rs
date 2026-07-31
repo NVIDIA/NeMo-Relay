@@ -70,8 +70,9 @@ pub fn deregister_subscriber(name: &str) -> Result<bool> {
     Ok(state.event_subscribers.remove(name).is_some())
 }
 
-/// Wait for all subscriber callbacks queued before this call to finish,
-/// including publications emitted transitively by those callbacks.
+/// Wait for all subscriber callbacks and managed terminal publications
+/// registered before this call to finish, including publications emitted
+/// transitively by those callbacks.
 ///
 /// A direct re-entrant call from queued publication middleware returns without
 /// waiting. Publication middleware must not move such a flush into

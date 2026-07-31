@@ -1821,7 +1821,7 @@ pub(crate) struct PluginHostClearOutcome {
 }
 
 fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
-    let flush_error = crate::api::runtime::flush_subscribers()
+    let flush_error = crate::api::runtime::subscriber_dispatcher::flush_queued_subscribers()
         .err()
         .map(|error| error.to_string());
     let previous = {

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::native::{
     DispatcherLoopState, DispatcherMessage, PendingFlush, PublicationLineage, PublicationPermit,
-    dispatcher_sender, enqueue_dispatch_message, flush_subscribers, register_async_publication,
-    sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test, spawn_background_publication,
+    dispatcher_sender, enqueue_dispatch_message, flush_queued_subscribers, flush_subscribers,
+    register_async_publication, register_pending_publication, sanitize_event_snapshot,
+    set_sanitizer_runtime_failure_for_test, spawn_background_publication,
 };
 use super::{EventSubscriberFn, publication_context};
 use crate::api::registry::RegistryRecord;
@@ -50,7 +51,10 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
         .unwrap();
     let (flush_tx, flush_rx) = mpsc::channel();
     sender
-        .send(DispatcherMessage::Flush { done: flush_tx })
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
         .unwrap();
     let later = register_async_publication().expect("later publication barrier");
 
@@ -93,6 +97,61 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
 }
 
 #[test]
+fn pending_publication_defers_flush_without_blocking_unrelated_delivery() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    let pending = register_pending_publication().expect("pending publication");
+    let (delivered_tx, delivered_rx) = mpsc::channel();
+    let subscriber: EventSubscriberFn = Arc::new(move |_event| {
+        delivered_tx.send(()).unwrap();
+    });
+    let event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000004",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "unrelated-while-pending"
+    }))
+    .expect("valid event");
+    enqueue_dispatch_message(DispatcherMessage::Deliver {
+        event: Box::new(event),
+        transform: None,
+        sanitizers: Vec::new(),
+        subscribers: vec![subscriber],
+        scope_stack: current_scope_stack(),
+        publication_context: None,
+        lineage: None,
+    });
+    delivered_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("pending publication must not block unrelated delivery");
+    flush_queued_subscribers().expect("queued-only flush must ignore managed work");
+
+    let (flush_tx, flush_rx) = mpsc::channel();
+    dispatcher_sender()
+        .expect("dispatcher sender")
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            flush_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "flush must wait for work registered before it"
+    );
+
+    drop(pending);
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("flush must complete after pending work");
+}
+
+#[test]
 fn flush_does_not_wait_for_later_delivery() {
     let _lock = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
@@ -102,7 +161,10 @@ fn flush_does_not_wait_for_later_delivery() {
     let sender = dispatcher_sender().expect("dispatcher sender");
     let (flush_tx, flush_rx) = mpsc::channel();
     sender
-        .send(DispatcherMessage::Flush { done: flush_tx })
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
         .unwrap();
 
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -301,6 +363,9 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
     flush_subscribers().unwrap();
     let sender = dispatcher_sender().expect("dispatcher sender");
     let delivered = Arc::new(Mutex::new(Vec::new()));
+    let (outer_started_tx, outer_started_rx) = mpsc::channel();
+    let (release_outer_tx, release_outer_rx) = mpsc::channel();
+    let release_outer_rx = Arc::new(Mutex::new(release_outer_rx));
     let event = |uuid: &str, name: &str| {
         serde_json::from_value(serde_json::json!({
             "kind": "mark",
@@ -352,11 +417,20 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
     let outer_subscriber: EventSubscriberFn = {
         let delivered = Arc::clone(&delivered);
         let child_subscriber = child_subscriber.clone();
+        let release_outer_rx = Arc::clone(&release_outer_rx);
         Arc::new(move |event| {
             delivered
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(event.name().to_string());
+            outer_started_tx
+                .send(())
+                .expect("outer subscriber start receiver was dropped");
+            release_outer_rx
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("outer subscriber was not released within 2 seconds");
             assert!(enqueue_dispatch_message(DispatcherMessage::Deliver {
                 event: Box::new(
                     serde_json::from_value(serde_json::json!({
@@ -398,6 +472,9 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             lineage: None,
         })
         .unwrap();
+    outer_started_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("outer subscriber did not start within 2 seconds");
     sender
         .send(DispatcherMessage::Deliver {
             event: Box::new(event("019c1df6-4a57-7000-8000-000000000011", "later")),
@@ -409,6 +486,9 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             lineage: None,
         })
         .unwrap();
+    release_outer_tx
+        .send(())
+        .expect("outer subscriber release receiver was dropped");
 
     flush_subscribers().unwrap();
     assert_eq!(
@@ -621,7 +701,10 @@ fn detached_sanitizer_tasks_cannot_inherit_a_later_publication_context() {
                     .send(publication_context::<String>().map(|value| value.as_str().to_string()))
                     .unwrap();
                 let (done, _ignored) = mpsc::channel();
-                enqueue_dispatch_message(DispatcherMessage::Flush { done });
+                enqueue_dispatch_message(DispatcherMessage::Flush {
+                    done,
+                    include_pending: true,
+                });
             });
             Ok(fields)
         })

@@ -187,11 +187,13 @@ def deregister(name: str) -> bool:
 
 
 def flush() -> None:
-    """Wait for queued subscriber callbacks and their transitive publications.
+    """Wait for queued callbacks and registered managed terminal publications.
 
     Native NeMo Relay event APIs enqueue subscriber callbacks and return without
     waiting for observer work. Use this barrier in tests and shutdown paths when
-    captured subscriber output must be complete before continuing.
+    captured subscriber output must be complete before continuing. The barrier
+    also waits for tool, LLM, and guardrail-scope terminal events from managed
+    work that started before the flush.
 
     Call this function outside subscribers, event sanitizers, conditional
     guardrails, and request or execution intercepts. A queued tool or LLM
@@ -217,11 +219,12 @@ def flush() -> None:
 
 
 async def flush_async() -> None:
-    """Wait asynchronously for queued callbacks and transitive publications.
+    """Wait asynchronously for queued callbacks and managed terminal events.
 
     Use this barrier from an ``asyncio`` task. A process-local daemon bridge
     thread coalesces concurrent barriers and waits for the native dispatcher
-    without blocking the Python event loop.
+    without blocking the Python event loop. Managed tool, LLM, and guardrail
+    work registered before the flush is included through its terminal event.
     """
     if _publication_callback_active():
         return None

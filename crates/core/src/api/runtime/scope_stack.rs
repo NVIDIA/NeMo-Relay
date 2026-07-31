@@ -40,12 +40,16 @@ pub struct ScopeStack {
 ///
 /// Applications are responsible for serializing, transporting, authenticating,
 /// and trusting this value. It intentionally contains only Relay identifiers;
-/// OpenTelemetry `traceparent` and `tracestate` remain transport sidecars.
+/// OpenTelemetry `traceparent` and `tracestate` remain transport sidecars. A
+/// context without a `root_uuid` preserves Relay event parentage when imported.
+/// The first local OpenTelemetry span created after import starts a new trace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PropagationContext {
     /// Wire-format version. Version 1 is the only currently supported value.
     pub version: u16,
-    /// Stable session root when the sending application knows one.
+    /// Stable session root when the sending application knows one. When this
+    /// root is omitted, the first local OpenTelemetry span after import starts
+    /// a new trace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_uuid: Option<Uuid>,
     /// Immediate Relay event or scope that caused the boundary crossing.
@@ -441,7 +445,9 @@ pub fn create_scope_stack_from_propagation(
 ///
 /// Capture the parent before spawning concurrent work, then install the
 /// returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event
-/// parentage but does not transfer scope-local registrations.
+/// parentage but does not transfer scope-local registrations. Because the fork
+/// does not assert a root UUID, its first local OpenTelemetry span starts a new
+/// trace.
 ///
 /// # Examples
 ///
@@ -462,6 +468,11 @@ pub fn fork_scope_stack() -> Result<ScopeStackHandle> {
 }
 
 /// Capture the current causal parent without asserting a session root.
+///
+/// Importing the returned context preserves Relay event parentage but starts a
+/// new local OpenTelemetry trace. Use [`capture_propagation_context_with_root`]
+/// when the receiver should participate in a Relay-derived trace rooted at a
+/// stable application UUID.
 pub fn capture_propagation_context() -> Result<PropagationContext> {
     capture_propagation_context_with_root(None)
 }

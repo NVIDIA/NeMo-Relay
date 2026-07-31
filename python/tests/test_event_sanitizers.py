@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import subprocess
+import sys
+import textwrap
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import cast
@@ -22,6 +25,95 @@ def capture_events_fixture() -> Iterator[tuple[str, list[nemo_relay.Event]]]:
     subscribers.register(name, events.append)
     yield name, events
     subscribers.deregister(name)
+
+
+def test_plugin_clear_remains_available_without_running_event_loop():
+    plugin.clear()
+
+
+def test_plugin_clear_is_asyncio_safe_with_pending_sanitizer(tmp_path):
+    script = textwrap.dedent(
+        """
+        import asyncio
+
+        from nemo_relay import plugin, scope
+
+        delivered = []
+
+        async def main():
+            teardown_started = asyncio.Event()
+            allow_teardown = asyncio.Event()
+
+            class SanitizedSubscriberPlugin:
+                def validate(self, _config):
+                    return None
+
+                def register(self, _config, context):
+                    async def sanitize(_event, fields):
+                        teardown_started.set()
+                        await allow_teardown.wait()
+                        fields["data"] = {"sanitized": True}
+                        return fields
+
+                    context.register_mark_sanitize_guardrail("sanitize", 0, sanitize)
+                    context.register_subscriber("capture", delivered.append)
+
+            kind = "python.test_async_clear"
+            plugin.register(kind, SanitizedSubscriberPlugin())
+            try:
+                await plugin.initialize(
+                    plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)])
+                )
+                scope.event("pending-clear", data={"raw": True})
+                try:
+                    plugin.clear()
+                except RuntimeError as error:
+                    assert "await plugin.clear_async()" in str(error)
+                else:
+                    raise AssertionError("plugin.clear() did not reject a running event loop")
+
+                first_clear = asyncio.create_task(plugin.clear_async())
+                await asyncio.wait_for(teardown_started.wait(), timeout=2)
+                first_clear.cancel()
+                try:
+                    await first_clear
+                except asyncio.CancelledError:
+                    pass
+                else:
+                    raise AssertionError("plugin.clear_async() did not propagate cancellation")
+
+                second_clear = asyncio.create_task(plugin.clear_async())
+                await asyncio.sleep(0.05)
+                assert not second_clear.done()
+
+                allow_teardown.set()
+                await asyncio.wait_for(second_clear, timeout=2)
+                assert plugin.report() is None
+                assert len(delivered) == 1
+                assert delivered[0].data == {"sanitized": True}
+
+                await plugin.initialize(plugin.PluginConfig())
+                assert plugin.report() is not None
+                await plugin.clear_async()
+                assert plugin.report() is None
+            finally:
+                allow_teardown.set()
+                if plugin.report() is not None:
+                    await plugin.clear_async()
+                plugin.deregister(kind)
+
+        asyncio.run(main())
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        text=True,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_events):
@@ -416,11 +508,11 @@ async def test_in_process_plugin_event_sanitizers_are_removed_on_clear(capture_e
         await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
         scope.event("configured", data={"raw": True})
         await subscribers.flush_async()
-        plugin.clear()
+        await plugin.clear_async()
         scope.event("cleared", data={"raw": True})
         await subscribers.flush_async()
     finally:
-        plugin.clear()
+        await plugin.clear_async()
         plugin.deregister(kind)
 
     marks = {event.name: event for event in events if event.kind == "mark"}
@@ -454,5 +546,5 @@ async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fa
         await subscribers.flush_async()
         assert events[-1].data == {"raw": True}
     finally:
-        plugin.clear()
+        await plugin.clear_async()
         plugin.deregister(kind)

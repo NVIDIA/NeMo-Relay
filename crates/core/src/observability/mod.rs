@@ -246,10 +246,10 @@ pub fn validate_attribute_mappings(
 ) -> std::result::Result<(), String> {
     let mut aliases = std::collections::HashSet::new();
     for mapping in mappings {
-        if mapping.key.trim().is_empty() {
+        if is_blank_attribute_mapping_name(&mapping.key) {
             return Err("attribute mapping key must not be blank".to_string());
         }
-        if mapping.alias.trim().is_empty() {
+        if is_blank_attribute_mapping_name(&mapping.alias) {
             return Err("attribute mapping alias must not be blank".to_string());
         }
         if !aliases.insert(mapping.alias.trim()) {
@@ -260,6 +260,17 @@ pub fn validate_attribute_mappings(
         }
     }
     Ok(())
+}
+
+fn is_blank_attribute_mapping_name(value: &str) -> bool {
+    value.chars().all(|character| {
+        character.is_whitespace()
+            || matches!(
+                unicode_general_category::get_general_category(character),
+                unicode_general_category::GeneralCategory::Control
+                    | unicode_general_category::GeneralCategory::Format
+            )
+    })
 }
 
 /// Projects only top-level JSON fields as OTLP attributes.

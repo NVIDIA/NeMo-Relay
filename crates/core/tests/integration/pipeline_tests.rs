@@ -28,6 +28,7 @@ use nemo_relay::api::registry::{
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
@@ -2087,21 +2088,28 @@ async fn test_dropped_stream_end_keeps_fifo_position_before_later_mark() {
     .unwrap();
 
     let (flush_started_tx, flush_started_rx) = std::sync::mpsc::channel();
+    let (flush_done_tx, flush_done_rx) = std::sync::mpsc::channel();
     let flush_thread = std::thread::spawn(move || {
-        flush_started_tx.send(()).unwrap();
-        flush_subscribers()
+        flush_done_tx
+            .send(flush_subscribers_with_started_signal(flush_started_tx))
+            .unwrap();
     });
     flush_started_rx
         .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("subscriber flush thread did not start");
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    let returned_before_release = flush_thread.is_finished();
-    sanitizer_release.notify_one();
-    flush_thread.join().unwrap().unwrap();
+        .expect("subscriber flush request was not queued before waiting on the pending stream END");
     assert!(
-        !returned_before_release,
+        matches!(
+            flush_done_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
         "flush must wait for the pending stream END"
     );
+    sanitizer_release.notify_one();
+    flush_done_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("subscriber flush did not complete after sanitizer release")
+        .unwrap();
+    flush_thread.join().unwrap();
 
     let events = events.lock().unwrap();
     let end_index = events

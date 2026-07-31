@@ -10,6 +10,7 @@ const {
   ScopeType,
   deregisterSubscriber,
   event,
+  flushSubscribers,
   llmCall,
   llmCallEnd,
   popScope,
@@ -26,13 +27,6 @@ const parseTimestampMicros = (value) => {
   const [, base, fraction = '', zone] = match;
   return Date.parse(`${base}${zone}`) * 1000 + Number(fraction.padEnd(6, '0').slice(0, 6));
 };
-
-async function waitForTimestampEvents(events) {
-  const deadline = Date.now() + 2000;
-  while (events.filter((event) => event.name.startsWith('node_ts_')).length < 7 && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 test('manual lifecycle APIs accept optional timestamp arguments', async () => {
   const events = [];
@@ -63,7 +57,7 @@ test('manual lifecycle APIs accept optional timestamp arguments', async () => {
   );
   llmCallEnd(llm, { ok: true }, null, null, timestamps[5]);
   popScope(scope, null, timestamps[6]);
-  await waitForTimestampEvents(events);
+  await flushSubscribers();
   deregisterSubscriber(subscriberName);
 
   assert.deepEqual(

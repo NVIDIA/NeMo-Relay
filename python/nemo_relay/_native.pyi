@@ -1976,7 +1976,7 @@ def deregister_subscriber(name: str) -> bool:
     ...
 
 def flush_subscribers() -> None:
-    """Wait for queued subscriber callbacks and their transitive publications.
+    """Wait for queued callbacks and registered managed terminal publications.
 
     Call this function outside subscribers, event sanitizers, conditional
     guardrails, and request or execution intercepts. The public Python wrapper
@@ -2382,6 +2382,17 @@ def clear_plugin_configuration() -> None:
 
     Exceptional flow:
         Native cleanup errors propagate unchanged.
+    """
+    ...
+
+def clear_plugin_configuration_async() -> Awaitable[None]:
+    """Clear active plugin configuration without blocking the Python event loop.
+
+    Returns:
+        Awaitable resolving when native teardown completes.
+
+    Exceptional flow:
+        Native cleanup and teardown worker errors propagate through the awaitable.
     """
     ...
 
