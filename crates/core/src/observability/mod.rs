@@ -284,6 +284,37 @@ pub(crate) fn push_top_level_json_attributes(
     }
 }
 
+/// Projects an optional opaque tool-result annotation as one JSON-valued
+/// attribute.
+///
+/// Unlike [`push_top_level_json_attributes`], this helper deliberately does
+/// not inspect or flatten the annotation. Serializing the complete value keeps
+/// its schema application-owned and makes scalar, array, and object annotations
+/// distinguishable to downstream consumers.
+pub(crate) fn push_tool_result_annotation_attribute(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    event: &crate::api::event::Event,
+) {
+    use opentelemetry::KeyValue;
+
+    let Some(annotation) = tool_result_annotation(event) else {
+        return;
+    };
+    if let Ok(value) = serde_json::to_string(annotation) {
+        attributes.push(KeyValue::new("nemo_relay.tool.result.annotation", value));
+    }
+}
+
+/// Returns the opaque result annotation carried on a tool lifecycle event.
+pub(crate) fn tool_result_annotation(
+    event: &crate::api::event::Event,
+) -> Option<&crate::json::Json> {
+    event
+        .category_profile()?
+        .extra
+        .get(crate::api::tool::TOOL_RESULT_ANNOTATION_PROFILE_KEY)
+}
+
 /// Adds canonical session-correlation attributes from event metadata and the
 /// active scope-stack instance.
 pub(crate) fn push_session_identity_attributes(

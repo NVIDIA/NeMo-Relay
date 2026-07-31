@@ -5,6 +5,50 @@
 
 use super::*;
 
+unsafe extern "C" fn tool_exec_frame_cb(
+    _user_data: *mut libc::c_void,
+    args_json: *const c_char,
+) -> *mut c_char {
+    let args: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(args_json) }
+            .to_str()
+            .unwrap_or("null"),
+    )
+    .unwrap();
+    CString::new(
+        json!({
+            "result": args,
+            "annotation": {
+                "producer": "ffi",
+                "status": "failed"
+            }
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
+
+unsafe extern "C" fn tool_exec_frame_intercept_cb(
+    _user_data: *mut libc::c_void,
+    args_json: *const c_char,
+    next_fn: NemoRelayToolExecFrameNextFn,
+    next_ctx: *mut libc::c_void,
+) -> *mut c_char {
+    let frame_ptr = unsafe { next_fn(args_json, next_ctx) };
+    if frame_ptr.is_null() {
+        return ptr::null_mut();
+    }
+    let mut frame: Json =
+        serde_json::from_str(unsafe { CStr::from_ptr(frame_ptr) }.to_str().unwrap()).unwrap();
+    unsafe { nemo_relay_string_free(frame_ptr) };
+    frame["result"]["frame_seen"] = json!(true);
+    frame["annotation"]["observed_by"] = json!("ffi_frame_outer");
+    CString::new(json!({ "frame": frame, "pending_marks": [] }).to_string())
+        .unwrap()
+        .into_raw()
+}
+
 #[test]
 fn test_ffi_tool_execute_parent_data_and_error_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -78,6 +122,90 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
         );
 
         nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_tool_execute_frame_uses_shared_chain_and_deregistration() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let frame_name = cstring(&unique_name("ffi_frame_outer"));
+        let legacy_name = cstring(&unique_name("ffi_frame_legacy"));
+
+        assert_eq!(
+            nemo_relay_register_tool_execution_frame_intercept(
+                frame_name.as_ptr(),
+                1,
+                tool_exec_frame_intercept_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_register_tool_execution_intercept(
+                legacy_name.as_ptr(),
+                2,
+                tool_exec_intercept_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let tool_name = cstring("ffi_frame_tool");
+        let args = cstring(r#"{"value":6}"#);
+        let mut out_json = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_tool_call_execute_frame(
+                tool_name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_frame_cb,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let frame = returned_json(out_json);
+        assert_eq!(frame["result"]["value"], 6);
+        assert_eq!(frame["result"]["frame_seen"], true);
+        assert_eq!(frame["annotation"]["producer"], "ffi");
+        assert_eq!(frame["annotation"]["observed_by"], "ffi_frame_outer");
+
+        assert_eq!(
+            nemo_relay_deregister_tool_execution_intercept(frame_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_deregister_tool_execution_intercept(legacy_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+
+        // The generic deregistration removed the frame callback, so the same
+        // name can be registered again through the frame-aware surface.
+        assert_eq!(
+            nemo_relay_register_tool_execution_frame_intercept(
+                frame_name.as_ptr(),
+                1,
+                tool_exec_frame_intercept_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_deregister_tool_execution_intercept(frame_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
         nemo_relay_scope_stack_free(stack);
     }
 }

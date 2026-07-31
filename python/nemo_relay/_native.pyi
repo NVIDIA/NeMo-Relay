@@ -57,6 +57,10 @@ _ToolExecutionIntercept: TypeAlias = Callable[
     [str, _Json, Callable[[_Json], Awaitable[_Json]]],
     "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
+_ToolExecutionFrameIntercept: TypeAlias = Callable[
+    [str, _Json, Callable[[_Json], Awaitable["ToolExecutionFrame"]]],
+    "ToolExecutionFrameOutcome | Awaitable[ToolExecutionFrameOutcome]",
+]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],
     "LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]",
@@ -470,7 +474,7 @@ class LLMRequestInterceptOutcome:
         ...
 
 class ToolExecutionInterceptOutcome:
-    """Canonical result returned by a tool execution intercept.
+    """Relay-owned wrapper returned by a raw-result tool execution intercept.
 
     ``result`` is passed to the remaining middleware and application.
     ``pending_marks`` are Relay-owned lifecycle metadata emitted after the
@@ -483,6 +487,30 @@ class ToolExecutionInterceptOutcome:
     ) -> None: ...
     @property
     def result(self) -> _Json: ...
+    @property
+    def pending_marks(self) -> list[PendingMarkSpec]: ...
+
+class ToolExecutionFrame:
+    """Raw tool result plus an optional opaque annotation."""
+    def __init__(self, result: _Json, annotation: _Json | None = None) -> None: ...
+    @property
+    def result(self) -> _Json: ...
+    @result.setter
+    def result(self, value: _Json) -> None: ...
+    @property
+    def annotation(self) -> _Json | None: ...
+    @annotation.setter
+    def annotation(self, value: _Json | None) -> None: ...
+
+class ToolExecutionFrameOutcome:
+    """Result returned by an annotation-aware tool execution intercept."""
+    def __init__(
+        self,
+        frame: ToolExecutionFrame,
+        pending_marks: list[PendingMarkSpec] = ...,
+    ) -> None: ...
+    @property
+    def frame(self) -> ToolExecutionFrame: ...
     @property
     def pending_marks(self) -> list[PendingMarkSpec]: ...
 
@@ -1474,6 +1502,17 @@ def tool_call_end(
     """
     ...
 
+def tool_call_end_frame(
+    handle: ToolHandle,
+    frame: ToolExecutionFrame,
+    *,
+    data: _Json | None = None,
+    metadata: _Json | None = None,
+    timestamp: datetime | None = None,
+) -> None:
+    """End a manual tool span with an optional opaque result annotation."""
+    ...
+
 def tool_call_execute(
     name: str,
     args: _Json,
@@ -1495,6 +1534,15 @@ def tool_call_execute(
         Conditional guardrails may reject execution. Callback and native errors
         propagate through the returned awaitable.
     """
+    ...
+
+def tool_call_execute_frame(
+    name: str,
+    args: _Json,
+    func: Callable[[_Json], ToolExecutionFrame | Awaitable[ToolExecutionFrame]],
+    **kwargs: object,
+) -> Awaitable[ToolExecutionFrame]:
+    """Execute a tool through the existing chain with an opaque annotation."""
     ...
 
 def llm_call(
@@ -1877,6 +1925,14 @@ def deregister_tool_execution_intercept(name: str) -> bool:
     """
     ...
 
+def register_tool_execution_frame_intercept(
+    name: str,
+    priority: int,
+    callable: _ToolExecutionFrameIntercept,
+) -> None:
+    """Register annotation-aware middleware in the existing tool chain."""
+    ...
+
 def register_llm_request_intercept(
     name: str,
     priority: int,
@@ -2125,6 +2181,15 @@ def scope_deregister_tool_execution_intercept(scope_uuid: str, name: str) -> boo
     Returns:
         ``True`` if an intercept was removed, otherwise ``False``.
     """
+    ...
+
+def scope_register_tool_execution_frame_intercept(
+    scope_uuid: str,
+    name: str,
+    priority: int,
+    callable: _ToolExecutionFrameIntercept,
+) -> None:
+    """Register annotation-aware scope-local middleware in the existing chain."""
     ...
 
 def scope_register_llm_sanitize_request_guardrail(

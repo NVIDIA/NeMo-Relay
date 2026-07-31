@@ -42,12 +42,13 @@ use nemo_relay::api::registry::{
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
     register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
     register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept, register_tool_request_intercept,
-    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
-    scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
-    scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
-    scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
-    scope_register_mark_sanitize_guardrail, scope_register_scope_sanitize_end_guardrail,
+    register_tool_execution_frame_intercept, register_tool_execution_intercept,
+    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+    register_tool_sanitize_response_guardrail, scope_register_llm_conditional_execution_guardrail,
+    scope_register_llm_execution_intercept, scope_register_llm_request_intercept,
+    scope_register_llm_sanitize_request_guardrail, scope_register_llm_sanitize_response_guardrail,
+    scope_register_llm_stream_execution_intercept, scope_register_mark_sanitize_guardrail,
+    scope_register_scope_sanitize_end_guardrail,
     scope_register_tool_conditional_execution_guardrail, scope_register_tool_execution_intercept,
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
@@ -56,15 +57,16 @@ use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner, TASK_SCOPE_STACK,
-    ToolExecutionNextFn, capture_propagation_context, task_scope_top,
+    ToolExecutionFrameNextFn, ToolExecutionNextFn, capture_propagation_context, task_scope_top,
 };
 use nemo_relay::api::runtime::{create_scope_stack, current_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeHandle, ScopeType, event};
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{
+    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolExecutionFrame, ToolExecutionFrameOutcome,
     ToolExecutionInterceptOutcome, tool_call, tool_call_end, tool_call_execute,
-    tool_conditional_execution, tool_request_intercepts,
+    tool_call_execute_frame, tool_conditional_execution, tool_request_intercepts,
 };
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,
@@ -732,6 +734,567 @@ async fn test_execution_intercept_modifies_args() {
 
     // Cleanup
     deregister_tool_execution_intercept("arg_modifier").unwrap();
+}
+
+#[tokio::test]
+async fn test_frame_and_legacy_intercepts_share_one_chain_and_preserve_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "tool_frame_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let outer_order = order.clone();
+    register_tool_execution_frame_intercept(
+        "frame_outer",
+        1,
+        Arc::new(move |_name, args, next| {
+            let order = outer_order.clone();
+            Box::pin(async move {
+                order.lock().unwrap().push("frame_before");
+                let mut frame = next(args).await?;
+                assert_eq!(
+                    frame.annotation.as_ref().unwrap()["producer_status"],
+                    "failed"
+                );
+                frame.result["frame_seen"] = json!(true);
+                frame.annotation.as_mut().unwrap()["observed_by"] = json!("frame_outer");
+                order.lock().unwrap().push("frame_after");
+                Ok(ToolExecutionFrameOutcome::new(frame))
+            })
+        }),
+    )
+    .unwrap();
+
+    let legacy_order = order.clone();
+    register_tool_execution_intercept(
+        "legacy_middle",
+        2,
+        Arc::new(move |_name, args, next| {
+            let order = legacy_order.clone();
+            Box::pin(async move {
+                order.lock().unwrap().push("legacy_before");
+                let result = next(args).await?;
+                order.lock().unwrap().push("legacy_after");
+                Ok(ToolExecutionInterceptOutcome::new(result))
+            })
+        }),
+    )
+    .unwrap();
+
+    let producer_order = order.clone();
+    let producer: ToolExecutionFrameNextFn = Arc::new(move |_args| {
+        let order = producer_order.clone();
+        Box::pin(async move {
+            order.lock().unwrap().push("producer");
+            Ok(ToolExecutionFrame::annotated(
+                json!({"raw": true}),
+                json!({
+                    "producer_status": "failed",
+                    "representation": {
+                        "media_type": "application/json",
+                        "data_schema": "example.failure@1"
+                    },
+                    "tool_call_id": "producer-call"
+                }),
+            ))
+        })
+    });
+
+    let frame = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("annotated-tool")
+            .args(json!({}))
+            .func(producer)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *order.lock().unwrap(),
+        vec![
+            "frame_before",
+            "legacy_before",
+            "producer",
+            "legacy_after",
+            "frame_after",
+        ]
+    );
+    assert_eq!(frame.result, json!({"raw": true, "frame_seen": true}));
+    let annotation = frame.annotation.as_ref().unwrap();
+    assert_eq!(annotation["observed_by"], "frame_outer");
+
+    let captured = captured_events_snapshot(&events);
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "annotated-tool" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(
+        end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY]["producer_status"],
+        "failed"
+    );
+    assert_eq!(
+        end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY]["representation"]
+            ["data_schema"],
+        "example.failure@1"
+    );
+
+    deregister_tool_execution_intercept("frame_outer").unwrap();
+    deregister_tool_execution_intercept("legacy_middle").unwrap();
+    deregister_subscriber("tool_frame_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_frame_intercept_explicitly_preserves_replaces_and_removes_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let producer = || -> ToolExecutionFrameNextFn {
+        Arc::new(|_args| {
+            Box::pin(async move {
+                Ok(ToolExecutionFrame::annotated(
+                    json!({"raw": true}),
+                    json!({"source": "producer"}),
+                ))
+            })
+        })
+    };
+
+    register_tool_execution_frame_intercept(
+        "frame_preserve",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move { next(args).await.map(ToolExecutionFrameOutcome::new) })
+        }),
+    )
+    .unwrap();
+    let preserved = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("preserved-tool")
+            .args(json!({}))
+            .func(producer())
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(preserved.annotation, Some(json!({"source": "producer"})));
+    deregister_tool_execution_intercept("frame_preserve").unwrap();
+
+    register_tool_execution_frame_intercept(
+        "frame_replace",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let frame = next(args)
+                    .await?
+                    .with_annotation(json!({"source": "middleware"}));
+                Ok(ToolExecutionFrameOutcome::new(frame))
+            })
+        }),
+    )
+    .unwrap();
+    let replaced = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("replaced-tool")
+            .args(json!({}))
+            .func(producer())
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(replaced.annotation, Some(json!({"source": "middleware"})));
+    deregister_tool_execution_intercept("frame_replace").unwrap();
+
+    register_tool_execution_frame_intercept(
+        "frame_remove",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let frame = next(args).await?.without_annotation();
+                Ok(ToolExecutionFrameOutcome::new(frame))
+            })
+        }),
+    )
+    .unwrap();
+    let removed = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("removed-tool")
+            .args(json!({}))
+            .func(producer())
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(removed.annotation.is_none());
+    deregister_tool_execution_intercept("frame_remove").unwrap();
+}
+
+#[tokio::test]
+async fn test_tool_result_annotation_uses_existing_event_sanitizer_chain() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "tool_annotation_sanitizer_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_scope_sanitize_end_guardrail(
+        "tool_annotation_sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            Box::pin(async move {
+                if event.name() == "sanitized-annotation-tool"
+                    && let Some(profile) = fields.category_profile.as_mut()
+                    && let Some(annotation) = profile
+                        .extra
+                        .get_mut(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
+                        .and_then(Json::as_object_mut)
+                {
+                    annotation.insert("secret".into(), json!("[redacted]"));
+                    annotation.remove("future_secret");
+                }
+                Ok(fields)
+            })
+        }),
+    )
+    .unwrap();
+
+    let frame = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("sanitized-annotation-tool")
+            .args(json!({}))
+            .func(Arc::new(|_args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionFrame::annotated(
+                        json!({"raw": true}),
+                        json!({
+                            "secret": "classified",
+                            "future_secret": "classified"
+                        }),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(frame.annotation.as_ref().unwrap()["secret"], "classified");
+    assert_eq!(
+        frame.annotation.as_ref().unwrap()["future_secret"],
+        "classified"
+    );
+    let captured = captured_events_snapshot(&events);
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "sanitized-annotation-tool"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    let annotation = &end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY];
+    assert_eq!(annotation["secret"], "[redacted]");
+    assert!(annotation.get("future_secret").is_none());
+
+    deregister_scope_sanitize_end_guardrail("tool_annotation_sanitizer").unwrap();
+    deregister_subscriber("tool_annotation_sanitizer_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_legacy_result_mutation_invalidates_downstream_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_execution_intercept(
+        "legacy_mutator",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let mut result = next(args).await?;
+                result["mutated"] = json!(true);
+                Ok(ToolExecutionInterceptOutcome::new(result))
+            })
+        }),
+    )
+    .unwrap();
+    let producer: ToolExecutionFrameNextFn = Arc::new(|_args| {
+        Box::pin(async move {
+            Ok(ToolExecutionFrame::annotated(
+                json!({"raw": true}),
+                json!({"producer_status": "succeeded"}),
+            ))
+        })
+    });
+
+    let frame = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("mutated-tool")
+            .args(json!({}))
+            .func(producer)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(frame.result, json!({"raw": true, "mutated": true}));
+    assert!(
+        frame.annotation.is_none(),
+        "legacy mutation must not leave stale producer semantics attached"
+    );
+}
+
+#[tokio::test]
+async fn test_legacy_multiple_next_calls_conservatively_invalidate_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_execution_intercept(
+        "legacy_retry",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let first = next(args.clone()).await?;
+                let _second = next(args).await?;
+                Ok(ToolExecutionInterceptOutcome::new(first))
+            })
+        }),
+    )
+    .unwrap();
+    let producer: ToolExecutionFrameNextFn = Arc::new(|args| {
+        Box::pin(async move {
+            Ok(ToolExecutionFrame::annotated(
+                args,
+                json!({"producer_status": "succeeded"}),
+            ))
+        })
+    });
+
+    let frame = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("retried-tool")
+            .args(json!({"attempt": 1}))
+            .func(producer)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(frame.result, json!({"attempt": 1}));
+    assert!(
+        frame.annotation.is_none(),
+        "legacy middleware cannot unambiguously select annotation after multiple next calls"
+    );
+}
+
+#[tokio::test]
+async fn test_legacy_failed_second_next_call_still_invalidates_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_execution_intercept(
+        "legacy_retry_after_error",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let first = next(args).await?;
+                let second = next(json!({"fail": true})).await;
+                assert!(second.is_err());
+                Ok(ToolExecutionInterceptOutcome::new(first))
+            })
+        }),
+    )
+    .unwrap();
+    let producer: ToolExecutionFrameNextFn = Arc::new(|args| {
+        Box::pin(async move {
+            if args.get("fail").and_then(Json::as_bool) == Some(true) {
+                return Err(FlowError::Internal("producer rejected retry".into()));
+            }
+            Ok(ToolExecutionFrame::annotated(
+                args,
+                json!({"producer_status": "succeeded"}),
+            ))
+        })
+    });
+
+    let frame = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("retry-after-error-tool")
+            .args(json!({"attempt": 1}))
+            .func(producer)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(frame.result, json!({"attempt": 1}));
+    assert!(
+        frame.annotation.is_none(),
+        "every continuation invocation must count, including failed calls"
+    );
+}
+
+#[tokio::test]
+async fn test_frame_continuation_expires_when_callback_returns() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let retained = Arc::new(Mutex::new(None::<ToolExecutionFrameNextFn>));
+    let retained_from_callback = retained.clone();
+    register_tool_execution_frame_intercept(
+        "frame_retained_next",
+        1,
+        Arc::new(move |_name, _args, next| {
+            *retained_from_callback.lock().unwrap() = Some(next);
+            Box::pin(async move {
+                Ok(ToolExecutionFrameOutcome::new(ToolExecutionFrame::new(
+                    json!({"short_circuit": true}),
+                )))
+            })
+        }),
+    )
+    .unwrap();
+
+    let producer_called = Arc::new(AtomicBool::new(false));
+    let producer_called_from_callback = producer_called.clone();
+    let producer: ToolExecutionFrameNextFn = Arc::new(move |args| {
+        let producer_called = producer_called_from_callback.clone();
+        Box::pin(async move {
+            producer_called.store(true, Ordering::SeqCst);
+            Ok(ToolExecutionFrame::new(args))
+        })
+    });
+
+    let frame = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("retained-next-tool")
+            .args(json!({}))
+            .func(producer)
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(frame.result, json!({"short_circuit": true}));
+    assert!(!producer_called.load(Ordering::SeqCst));
+
+    let retained = retained.lock().unwrap().take().unwrap();
+    let error = retained(json!({"late": true})).await.unwrap_err();
+    assert!(error.to_string().contains("no longer active"));
+    assert!(
+        !producer_called.load(Ordering::SeqCst),
+        "a retained continuation must not run the downstream tool"
+    );
+}
+
+#[tokio::test]
+async fn test_legacy_continuation_is_revoked_after_callback_settles() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let retained = Arc::new(Mutex::new(None::<ToolExecutionNextFn>));
+    let retained_from_callback = retained.clone();
+    register_tool_execution_intercept(
+        "legacy_retained_next",
+        1,
+        Arc::new(move |_name, _args, next| {
+            *retained_from_callback.lock().unwrap() = Some(next);
+            Box::pin(async move {
+                Ok(ToolExecutionInterceptOutcome::new(
+                    json!({"short_circuit": true}),
+                ))
+            })
+        }),
+    )
+    .unwrap();
+
+    let producer_called = Arc::new(AtomicBool::new(false));
+    let producer_called_from_callback = producer_called.clone();
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("legacy-retained-next-tool")
+            .args(json!({}))
+            .func(Arc::new(move |args| {
+                let producer_called = producer_called_from_callback.clone();
+                Box::pin(async move {
+                    producer_called.store(true, Ordering::SeqCst);
+                    Ok(args)
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"short_circuit": true}));
+    assert!(!producer_called.load(Ordering::SeqCst));
+
+    let retained = retained.lock().unwrap().take().unwrap();
+    let error = retained(json!({"late": true})).await.unwrap_err();
+    assert!(error.to_string().contains("no longer active"));
+    assert!(
+        !producer_called.load(Ordering::SeqCst),
+        "a retained continuation must not run the downstream tool"
+    );
+    deregister_tool_execution_intercept("legacy_retained_next").unwrap();
+}
+
+#[tokio::test]
+async fn test_legacy_short_circuit_has_no_implicit_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_execution_intercept(
+        "legacy_short_circuit",
+        1,
+        Arc::new(|_name, _args, _next| {
+            Box::pin(async move {
+                Ok(ToolExecutionInterceptOutcome::new(
+                    json!({"short_circuit": true}),
+                ))
+            })
+        }),
+    )
+    .unwrap();
+    let producer: ToolExecutionFrameNextFn = Arc::new(|_args| {
+        Box::pin(async move {
+            Ok(ToolExecutionFrame::annotated(
+                json!({"producer": true}),
+                json!({"producer_status": "succeeded"}),
+            ))
+        })
+    });
+
+    let frame = tool_call_execute_frame(
+        nemo_relay::api::tool::ToolCallExecuteFrameParams::builder()
+            .name("short-circuited-tool")
+            .args(json!({}))
+            .func(producer)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(frame.result, json!({"short_circuit": true}));
+    assert!(frame.annotation.is_none());
 }
 
 #[tokio::test]
@@ -4000,6 +4563,43 @@ async fn test_duplicate_intercept_registration_returns_error() {
 
     // Cleanup
     deregister_tool_request_intercept("dup_intercept").unwrap();
+}
+
+/// Raw-result and frame-aware callbacks share one name namespace and
+/// deregistration operation.
+#[test]
+fn test_tool_execution_callback_forms_share_namespace_and_deregistration() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    register_tool_execution_intercept(
+        "shared_exec_name",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move { next(args).await.map(ToolExecutionInterceptOutcome::new) })
+        }),
+    )
+    .unwrap();
+
+    let duplicate = register_tool_execution_frame_intercept(
+        "shared_exec_name",
+        2,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move { next(args).await.map(ToolExecutionFrameOutcome::new) })
+        }),
+    );
+    assert!(matches!(duplicate, Err(FlowError::AlreadyExists(_))));
+    assert!(deregister_tool_execution_intercept("shared_exec_name").unwrap());
+
+    register_tool_execution_frame_intercept(
+        "shared_exec_name",
+        2,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move { next(args).await.map(ToolExecutionFrameOutcome::new) })
+        }),
+    )
+    .unwrap();
+    assert!(deregister_tool_execution_intercept("shared_exec_name").unwrap());
 }
 
 // =========================================================================

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use serde_json::json;
+use std::sync::Arc;
 
 use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::runtime::NemoRelayContextState;
@@ -12,7 +13,8 @@ use crate::api::runtime::subscriber_dispatcher::{
     register_pending_publication,
 };
 use crate::api::runtime::{
-    EventSubscriberFn, ScopeStackHandle, ToolExecutionNextFn, with_active_event_uuid,
+    EventSubscriberFn, ScopeStackHandle, ToolExecutionFrameNextFn, ToolExecutionNextFn,
+    with_active_event_uuid,
 };
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
@@ -28,7 +30,11 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
+pub use nemo_relay_types::api::tool::{
+    TOOL_EXECUTION_FRAME_OUTCOME_SCHEMA, TOOL_EXECUTION_FRAME_SCHEMA,
+    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes, ToolExecutionFrame,
+    ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 
 fn queue_sanitized_event(event: Event, subscribers: &[EventSubscriberFn]) -> bool {
     let scope_stack = current_scope_stack();
@@ -195,6 +201,31 @@ pub struct ToolCallExecuteParams {
     pub metadata: Option<Json>,
 }
 
+/// Builder parameters for [`tool_call_execute_frame`].
+#[derive(TypedBuilder)]
+#[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
+pub struct ToolCallExecuteFrameParams {
+    /// Tool name recorded on emitted lifecycle events.
+    #[builder(setter(into))]
+    pub name: String,
+    /// Raw tool arguments passed into the managed pipeline.
+    pub args: Json,
+    /// Annotation-aware tool callback or execution continuation.
+    pub func: ToolExecutionFrameNextFn,
+    /// Optional explicit parent scope for the emitted tool span.
+    #[builder(default)]
+    pub parent: Option<ScopeHandle>,
+    /// Tool attribute bitflags applied to the managed span.
+    #[builder(default = ToolAttributes::empty())]
+    pub attributes: ToolAttributes,
+    /// Optional application payload stored on the managed tool handle.
+    #[builder(default)]
+    pub data: Option<Json>,
+    /// Optional JSON metadata recorded on emitted events.
+    #[builder(default)]
+    pub metadata: Option<Json>,
+}
+
 /// Builder parameters for [`tool_call_end`].
 #[derive(TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
@@ -213,6 +244,25 @@ pub struct ToolCallEndParams<'a> {
     /// Optional timestamp recorded on the emitted end event. When omitted, the
     /// runtime records the current UTC time, or one microsecond after the
     /// handle start time if the current time is not later.
+    #[builder(default)]
+    pub timestamp: Option<DateTime<Utc>>,
+}
+
+/// Builder parameters for [`tool_call_end_frame`].
+#[derive(TypedBuilder)]
+#[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
+pub struct ToolCallEndFrameParams<'a> {
+    /// Tool handle to close.
+    pub handle: &'a ToolHandle,
+    /// Raw tool result and optional opaque annotation.
+    pub frame: ToolExecutionFrame,
+    /// Optional application payload retained for compatibility.
+    #[builder(default)]
+    pub data: Option<Json>,
+    /// Optional JSON metadata recorded on the end event.
+    #[builder(default)]
+    pub metadata: Option<Json>,
+    /// Optional timestamp recorded on the emitted end event.
     #[builder(default)]
     pub timestamp: Option<DateTime<Utc>>,
 }
@@ -434,6 +484,35 @@ async fn tool_call_with_subscriber_snapshot(
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
 /// the caller-owned `result` value.
 pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
+    queue_tool_call_end(params, None)
+}
+
+/// Finish a manual tool lifecycle span with an opaque result annotation.
+///
+/// The raw frame result is sanitized and emitted exactly like
+/// [`tool_call_end`]. The optional annotation is attached to the tool
+/// category profile and remains subject to the existing event sanitizer chain.
+pub fn tool_call_end_frame(params: ToolCallEndFrameParams<'_>) -> Result<()> {
+    let ToolCallEndFrameParams {
+        handle,
+        frame,
+        data,
+        metadata,
+        timestamp,
+    } = params;
+    queue_tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(handle)
+            .result(frame.result)
+            .data_opt(data)
+            .metadata_opt(metadata)
+            .timestamp_opt(timestamp)
+            .build(),
+        frame.annotation,
+    )
+}
+
+fn queue_tool_call_end(params: ToolCallEndParams<'_>, annotation: Option<Json>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
     let (entries, subscribers) = {
@@ -471,6 +550,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         )
     };
     let tool_name = params.handle.name.clone();
+    let annotation = annotation.filter(|value| !value.is_null());
     let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     dispatch_transformed_event(
         event,
@@ -487,6 +567,13 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
                     Some(sanitized)
                 };
                 event.apply_sanitize_fields(fields);
+                if let Some(annotation) = annotation
+                    && let Some(profile) = event.category_profile_mut()
+                {
+                    profile
+                        .extra
+                        .insert(TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(), annotation);
+                }
                 event
             })
         }),
@@ -499,6 +586,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
 
 async fn tool_call_end_with_pending_marks(
     params: ToolCallEndParams<'_>,
+    annotation: Option<Json>,
     pending_marks: Vec<PendingMarkSpec>,
     lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
@@ -533,7 +621,7 @@ async fn tool_call_end_with_pending_marks(
     } else {
         Some(sanitized_result)
     };
-    let event = {
+    let mut event = {
         let context = global_context();
         let state = context
             .read()
@@ -547,6 +635,13 @@ async fn tool_call_end_with_pending_marks(
                 .build(),
         )
     };
+    if let Some(annotation) = annotation.filter(|value| !value.is_null())
+        && let Some(profile) = event.category_profile_mut()
+    {
+        profile
+            .extra
+            .insert(TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(), annotation);
+    }
     let marks = pending_marks
         .into_iter()
         .enumerate()
@@ -682,6 +777,42 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         data,
         metadata,
     } = params;
+    let frame_func: ToolExecutionFrameNextFn = Arc::new(move |args| {
+        let func = func.clone();
+        Box::pin(async move { func(args).await.map(ToolExecutionFrame::new) })
+    });
+    let frame = tool_call_execute_frame(
+        ToolCallExecuteFrameParams::builder()
+            .name(name)
+            .args(args)
+            .func(frame_func)
+            .parent_opt(parent)
+            .attributes(attributes)
+            .data_opt(data)
+            .metadata_opt(metadata)
+            .build(),
+    )
+    .await?;
+    Ok(frame.result)
+}
+
+/// Execute a tool call while carrying an opaque result annotation.
+///
+/// This uses the same guardrail and intercept registries as
+/// [`tool_call_execute`]. Annotation-aware and raw-JSON execution intercepts
+/// are resolved in one priority order.
+pub async fn tool_call_execute_frame(
+    params: ToolCallExecuteFrameParams,
+) -> Result<ToolExecutionFrame> {
+    let ToolCallExecuteFrameParams {
+        name,
+        args,
+        func,
+        parent,
+        attributes,
+        data,
+        metadata,
+    } = params;
     ensure_runtime_owner()?;
     {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
@@ -786,24 +917,25 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
     .await;
     match execution {
         Ok(outcome) => {
-            let ToolExecutionInterceptOutcome {
-                result,
+            let ToolExecutionFrameOutcome {
+                frame,
                 pending_marks,
             } = outcome;
             let end_metadata = metadata_with_otel_status(metadata, "OK", None);
             tool_call_end_with_pending_marks(
                 ToolCallEndParams::builder()
                     .handle(&handle)
-                    .result(result.clone())
+                    .result(frame.result.clone())
                     .data_opt(data)
                     .metadata_opt(end_metadata)
                     .build(),
+                frame.annotation.clone(),
                 pending_marks,
                 Some(&lifecycle_subscribers),
             )
             .await?;
             completion.disarm();
-            Ok(result)
+            Ok(frame)
         }
         Err(error) => {
             let end_metadata =

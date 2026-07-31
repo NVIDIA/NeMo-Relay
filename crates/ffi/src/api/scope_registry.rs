@@ -5,12 +5,13 @@ use super::{
     NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb,
     NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb,
     NemoRelayLlmSanitizeResponseCb, NemoRelayStatus, NemoRelayToolConditionalCb,
-    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, c_char, c_str_to_string,
-    clear_last_error, core_registry_api, core_subscriber_api, set_last_error, status_from_error,
-    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
-    wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn,
-    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
-    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayToolExecFrameInterceptCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb,
+    c_char, c_str_to_string, clear_last_error, core_registry_api, core_subscriber_api,
+    set_last_error, status_from_error, wrap_event_subscriber, wrap_llm_conditional_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
+    wrap_tool_exec_frame_intercept_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
+    wrap_tool_sanitize_fn,
 };
 
 // ---------------------------------------------------------------------------
@@ -315,6 +316,38 @@ pub unsafe extern "C" fn nemo_relay_scope_register_tool_execution_intercept(
     match core_registry_api::scope_register_tool_execution_intercept(&uuid, &name, priority, exec) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
+    }
+}
+
+/// Register a scope-local annotation-aware tool execution intercept in the
+/// existing tool execution chain.
+///
+/// # Safety
+/// `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_scope_register_tool_execution_frame_intercept(
+    scope_uuid: *const c_char,
+    name: *const c_char,
+    priority: i32,
+    exec_cb: NemoRelayToolExecFrameInterceptCb,
+    exec_user_data: *mut libc::c_void,
+    exec_free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let uuid = match parse_scope_uuid(scope_uuid) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let exec = wrap_tool_exec_frame_intercept_fn(exec_cb, exec_user_data, exec_free);
+    match core_registry_api::scope_register_tool_execution_frame_intercept(
+        &uuid, &name, priority, exec,
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
     }
 }
 

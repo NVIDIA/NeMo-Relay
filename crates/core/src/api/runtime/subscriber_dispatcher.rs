@@ -496,7 +496,7 @@ mod native {
         subscribers: &[EventSubscriberFn],
         scope_stack: ScopeStackHandle,
     ) -> bool {
-        if subscribers.is_empty() {
+        if subscribers.is_empty() && sanitizers.is_empty() {
             return true;
         }
         let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
@@ -520,7 +520,7 @@ mod native {
         subscribers: &[EventSubscriberFn],
         scope_stack: ScopeStackHandle,
     ) -> bool {
-        if subscribers.is_empty() {
+        if subscribers.is_empty() && sanitizers.is_empty() {
             return true;
         }
         let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {

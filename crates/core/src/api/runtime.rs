@@ -16,7 +16,8 @@ pub use callbacks::{
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFrameFn, ToolExecutionFrameNextFn, ToolExecutionNextFn, ToolInterceptFn,
+    ToolSanitizeFn,
 };
 #[doc(hidden)]
 pub use continuation_context::MiddlewareContinuationContext;

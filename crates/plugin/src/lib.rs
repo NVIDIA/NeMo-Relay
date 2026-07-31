@@ -22,7 +22,9 @@ pub use nemo_relay_types::api::event::{
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
-pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
+pub use nemo_relay_types::api::tool::{
+    ToolAttributes, ToolExecutionFrame, ToolExecutionFrameOutcome, ToolExecutionInterceptOutcome,
+};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
     LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationPayload,
@@ -334,6 +336,17 @@ pub type NemoRelayNativeToolNextFn = unsafe extern "C" fn(
     out_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
+/// Runtime-provided continuation for annotation-aware tool execution intercepts.
+///
+/// The returned JSON serializes a [`ToolExecutionFrame`].
+/// The function and context are borrowed for one callback invocation and must
+/// not be retained or used after that callback returns.
+pub type NemoRelayNativeToolFrameNextFn = unsafe extern "C" fn(
+    args_json: *const NemoRelayNativeString,
+    next_ctx: *mut c_void,
+    out_frame_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus;
+
 /// Runtime-provided continuation for LLM execution intercepts.
 pub type NemoRelayNativeLlmNextFn = unsafe extern "C" fn(
     request_json: *const NemoRelayNativeString,
@@ -428,6 +441,19 @@ pub type NemoRelayNativeToolExecutionCb = unsafe extern "C" fn(
     name: *const NemoRelayNativeString,
     args_json: *const NemoRelayNativeString,
     next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus;
+
+/// Native annotation-aware tool execution intercept callback.
+///
+/// `next_fn` returns serialized [`ToolExecutionFrame`] JSON and the callback
+/// returns serialized [`ToolExecutionFrameOutcome`] JSON.
+pub type NemoRelayNativeToolExecutionFrameCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    name: *const NemoRelayNativeString,
+    args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolFrameNextFn,
     next_ctx: *mut c_void,
     out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
@@ -1065,6 +1091,34 @@ pub struct NemoRelayNativeHostApiV3 {
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
 
+/// Optional tool-frame capabilities appended after the frozen ABI-v3 host
+/// table.
+///
+/// Hosts advertise this extension by setting
+/// [`NemoRelayNativeHostApiV1::struct_size`] to at least the size of this
+/// structure. Its prefix remains a complete [`NemoRelayNativeHostApiV3`], so
+/// plugins compiled against the original ABI-v3 table remain compatible.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV3ToolFrames {
+    /// Compatibility prefix for ABI-v3 plugins.
+    pub v3: NemoRelayNativeHostApiV3,
+    /// Registers an annotation-aware tool execution intercept through the
+    /// plugin context.
+    pub plugin_context_register_tool_execution_frame_intercept:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            priority: i32,
+            cb: NemoRelayNativeToolExecutionFrameCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus,
+}
+
+unsafe impl Send for NemoRelayNativeHostApiV3ToolFrames {}
+unsafe impl Sync for NemoRelayNativeHostApiV3ToolFrames {}
+
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
 unsafe impl Send for NemoRelayNativeHostApiV1 {}
@@ -1318,6 +1372,35 @@ impl ToolNext<'_> {
         let result = read_json_value(self.host, out, "tool next result");
         unsafe { (self.host.string_free)(out) };
         result.map_err(|status| format!("tool next returned invalid JSON: {status:?}"))
+    }
+}
+
+/// Typed continuation passed to annotation-aware tool execution intercepts.
+///
+/// Its lifetime is bounded by the intercept callback, preventing safe native
+/// plugins from retaining the host continuation after the callback returns.
+pub struct ToolFrameNext<'a> {
+    host: &'a NemoRelayNativeHostApiV1,
+    next_fn: NemoRelayNativeToolFrameNextFn,
+    next_ctx: *mut c_void,
+}
+
+impl ToolFrameNext<'_> {
+    /// Continues the mixed tool execution chain with replacement arguments.
+    pub fn call(&self, args: Json) -> Result<ToolExecutionFrame> {
+        let args = HostString::from_json(self.host, &args)
+            .ok_or_else(|| "failed to allocate tool frame next args".to_string())?;
+        let mut out = ptr::null_mut();
+        let status = unsafe { (self.next_fn)(args.as_ptr(), self.next_ctx, &mut out) };
+        if status != NemoRelayStatus::Ok {
+            return Err(format!("tool frame next failed: {status:?}"));
+        }
+        if out.is_null() {
+            return Err("tool frame next returned null output".into());
+        }
+        let result = read_json_value(self.host, out, "tool frame next result");
+        unsafe { (self.host.string_free)(out) };
+        result.map_err(|status| format!("tool frame next returned invalid JSON: {status:?}"))
     }
 }
 
@@ -2041,6 +2124,38 @@ impl<'a> PluginContext<'a> {
         finish_typed_registration::<F>(self.host, status, user_data, "tool execution intercept")
     }
 
+    /// Registers an annotation-aware tool execution intercept in the same host
+    /// chain as legacy tool execution intercepts.
+    pub fn register_tool_execution_frame_intercept<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: for<'next> Fn(&str, Json, ToolFrameNext<'next>) -> Result<ToolExecutionFrameOutcome>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let user_data = typed_callback_user_data(self.host, callback);
+        let status = unsafe {
+            self.register_tool_execution_frame_intercept_raw(
+                name,
+                priority,
+                typed_tool_execution_frame_trampoline::<F>,
+                user_data,
+                Some(drop_typed_callback::<F>),
+            )
+        };
+        finish_typed_registration::<F>(
+            self.host,
+            status,
+            user_data,
+            "tool execution frame intercept",
+        )
+    }
+
     /// Registers a typed LLM sanitize-request guardrail.
     pub fn register_llm_sanitize_request_guardrail<F>(
         &mut self,
@@ -2404,6 +2519,34 @@ impl<'a> PluginContext<'a> {
     ) -> NemoRelayStatus {
         self.with_name(name, |host, name| unsafe {
             (host.plugin_context_register_tool_execution_intercept)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
+    /// Registers a raw annotation-aware tool execution intercept callback.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid for every host
+    /// callback invocation until the host deregisters the callback or calls
+    /// `free_fn`. `free_fn` must match the allocation behind `user_data`.
+    pub unsafe fn register_tool_execution_frame_intercept_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeToolExecutionFrameCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3ToolFrames>()
+        {
+            return NemoRelayStatus::InvalidArg;
+        }
+        let host =
+            unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3ToolFrames) };
+        self.with_name(name, |_, name| unsafe {
+            (host.plugin_context_register_tool_execution_frame_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
         })
@@ -2875,6 +3018,56 @@ where
     }
 }
 
+unsafe extern "C" fn typed_tool_execution_frame_trampoline<F>(
+    user_data: *mut c_void,
+    name: *const NemoRelayNativeString,
+    args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolFrameNextFn,
+    next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus
+where
+    F: for<'next> Fn(&str, Json, ToolFrameNext<'next>) -> Result<ToolExecutionFrameOutcome>
+        + Send
+        + Sync
+        + 'static,
+{
+    if user_data.is_null() || out_outcome_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_outcome_json = ptr::null_mut() };
+    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let name = read_required_host_string(&state.host, name, "tool name")?;
+        let args: Json = read_json_value(&state.host, args_json, "tool args")?;
+        let next = ToolFrameNext {
+            host: &state.host,
+            next_fn,
+            next_ctx,
+        };
+        match (state.callback)(&name, args, next) {
+            Ok(outcome) => {
+                let Some(outcome) = HostString::from_json(&state.host, &outcome) else {
+                    set_last_error(
+                        &state.host,
+                        "failed to allocate tool execution frame outcome",
+                    );
+                    return Ok(NemoRelayStatus::Internal);
+                };
+                unsafe { *out_outcome_json = outcome.ptr };
+                std::mem::forget(outcome);
+                Ok(NemoRelayStatus::Ok)
+            }
+            Err(message) => Ok(callback_error(&state.host, message)),
+        }
+    }));
+    match result {
+        Ok(Ok(status)) => status,
+        Ok(Err(status)) => status,
+        Err(_) => callback_panic(&state.host, "tool execution frame callback"),
+    }
+}
+
 unsafe extern "C" fn typed_llm_sanitize_request_trampoline<F>(
     user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
@@ -3288,10 +3481,18 @@ impl<'a> OptionalHostJson<'a> {
 enum OwnedHostApi {
     V1(NemoRelayNativeHostApiV1),
     V3(NemoRelayNativeHostApiV3),
+    V3ToolFrames(NemoRelayNativeHostApiV3ToolFrames),
 }
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV3ToolFrames>()
+        {
+            return Self::V3ToolFrames(unsafe {
+                *(host as *const _ as *const NemoRelayNativeHostApiV3ToolFrames)
+            });
+        }
         if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
@@ -3305,6 +3506,7 @@ impl OwnedHostApi {
         match self {
             Self::V1(host) => host,
             Self::V3(host) => &host.v1,
+            Self::V3ToolFrames(host) => &host.v3.v1,
         }
     }
 }

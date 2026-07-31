@@ -3,10 +3,11 @@
 
 use super::{
     Arc, FfiScopeHandle, FfiToolHandle, NemoRelayFreeFn, NemoRelayStatus, NemoRelayToolExecCb,
-    TASK_SCOPE_STACK, ToolAttributes, ToolExecutionNextFn, c_char, c_str_to_json,
-    c_str_to_opt_json, c_str_to_string, clear_last_error, core_tool_api, current_scope_stack,
-    json_to_c_string, set_last_error, status_from_error, tokio_runtime,
-    unix_micros_to_opt_timestamp, wrap_tool_exec_fn,
+    NemoRelayToolExecFrameCb, TASK_SCOPE_STACK, ToolAttributes, ToolExecutionFrameNextFn,
+    ToolExecutionNextFn, c_char, c_str_to_json, c_str_to_opt_json, c_str_to_string,
+    clear_last_error, core_tool_api, current_scope_stack, json_to_c_string, set_last_error,
+    status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_tool_exec_fn,
+    wrap_tool_exec_frame_fn,
 };
 
 // ---------------------------------------------------------------------------
@@ -187,6 +188,66 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
     }
 }
 
+/// End a manual tool call with a serialized `ToolExecutionFrame`.
+///
+/// The frame's raw result follows the existing response-sanitization path. Its
+/// optional producer annotation is carried in the emitted tool category
+/// profile.
+///
+/// # Safety
+/// `handle` and `frame_json` must be valid, non-null pointers. Optional pointer
+/// arguments follow [`nemo_relay_tool_call_end`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_call_end_frame(
+    handle: *const FfiToolHandle,
+    frame_json: *const c_char,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let frame_json = match c_str_to_json(frame_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let frame = match serde_json::from_value::<core_tool_api::ToolExecutionFrame>(frame_json) {
+        Ok(frame) => frame,
+        Err(error) => {
+            set_last_error(&format!("invalid tool execution frame JSON: {error}"));
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    let data = match c_str_to_opt_json(data_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let metadata = match c_str_to_opt_json(metadata_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidArg,
+    };
+
+    match core_tool_api::tool_call_end_frame(
+        core_tool_api::ToolCallEndFrameParams::builder()
+            .handle(&unsafe { &*handle }.0)
+            .frame(frame)
+            .data_opt(data)
+            .metadata_opt(metadata)
+            .timestamp_opt(timestamp)
+            .build(),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
 /// Execute a tool call end-to-end: run conditional-execution guardrails (on raw
 /// args), then request intercepts, sanitize-request guardrails, execution
 /// intercepts, the callback, and sanitize-response
@@ -275,5 +336,87 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
             NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
+    }
+}
+
+/// Execute a tool call with an annotation-aware producer callback.
+///
+/// The callback and output use serialized `ToolExecutionFrame` values. This
+/// function participates in the same execution-intercept chain as
+/// [`nemo_relay_tool_call_execute`].
+///
+/// # Safety
+/// `name`, `args_json`, and `out` must be valid, non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_call_execute_frame(
+    name: *const c_char,
+    args_json: *const c_char,
+    func: NemoRelayToolExecFrameCb,
+    func_user_data: *mut libc::c_void,
+    func_free: NemoRelayFreeFn,
+    parent: *const FfiScopeHandle,
+    attributes: u32,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let args = match c_str_to_json(args_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let parent_handle = if parent.is_null() {
+        None
+    } else {
+        Some(unsafe { &*parent }.0.clone())
+    };
+    let attributes = ToolAttributes::from_bits_truncate(attributes);
+    let data = match c_str_to_opt_json(data_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let metadata = match c_str_to_opt_json(metadata_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+
+    let exec_fn = wrap_tool_exec_frame_fn(func, func_user_data, func_free);
+    let default_fn: ToolExecutionFrameNextFn = Arc::new(move |args| exec_fn(args));
+    let scope_stack = current_scope_stack();
+    let result = tokio_runtime().block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+        core_tool_api::tool_call_execute_frame(
+            core_tool_api::ToolCallExecuteFrameParams::builder()
+                .name(name)
+                .args(args)
+                .func(default_fn)
+                .parent_opt(parent_handle)
+                .attributes(attributes)
+                .data_opt(data)
+                .metadata_opt(metadata)
+                .build(),
+        )
+        .await
+    }));
+
+    match result {
+        Ok(frame) => match serde_json::to_value(frame) {
+            Ok(frame) => {
+                unsafe { *out = json_to_c_string(&frame) };
+                NemoRelayStatus::Ok
+            }
+            Err(error) => {
+                set_last_error(&error.to_string());
+                NemoRelayStatus::Internal
+            }
+        },
+        Err(error) => status_from_error(&error),
     }
 }

@@ -12,7 +12,7 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
-use crate::api::tool::ToolAttributes;
+use crate::api::tool::{TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes};
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, FunctionDefinition, GenerationParams, Message,
@@ -53,6 +53,43 @@ fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
+}
+
+#[test]
+fn tool_result_annotation_is_exported_as_one_opaque_json_attribute() {
+    let annotation = json!({
+        "status": "failed",
+        "nested": {"code": 17},
+        "items": [true, null, "opaque"],
+    });
+    let mut profile = CategoryProfile::builder()
+        .tool_call_id("call-annotation")
+        .build();
+    profile.extra.insert(
+        TOOL_RESULT_ANNOTATION_PROFILE_KEY.to_string(),
+        annotation.clone(),
+    );
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("annotated-tool")
+            .data(json!({"raw": "result"}))
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::tool(),
+        Some(profile),
+    ));
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert_eq!(
+        attributes.get("nemo_relay.tool.result.annotation"),
+        Some(&serde_json::to_string(&annotation).unwrap())
+    );
+    assert!(
+        attributes
+            .keys()
+            .all(|key| !key.starts_with("nemo_relay.tool.result.annotation."))
+    );
 }
 
 fn make_provider() -> (

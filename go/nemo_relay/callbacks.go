@@ -54,11 +54,18 @@ typedef struct FfiPluginContext FfiPluginContext;
 // Middleware chain next function types
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayToolExecFrameNextFn)(const char* args_json, void* next_ctx);
+typedef char* (*NemoRelayToolExecFrameInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecFrameNextFn next_fn, void* next_ctx);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 
 // Helper to call the tool exec next function pointer from Go
 static inline char* callToolExecNext(NemoRelayToolExecNextFn next_fn, const char* args_json, void* next_ctx) {
+	return next_fn(args_json, next_ctx);
+}
+
+// Helper to call the annotation-aware tool exec next function pointer from Go
+static inline char* callToolExecFrameNext(NemoRelayToolExecFrameNextFn next_fn, const char* args_json, void* next_ctx) {
 	return next_fn(args_json, next_ctx);
 }
 
@@ -171,13 +178,25 @@ type ToolConditionalFunc func(name string, args json.RawMessage) *string
 // arguments as JSON and returning the result JSON or an error.
 type ToolExecutionFunc func(args json.RawMessage) (json.RawMessage, error)
 
+// ToolExecutionFrameFunc executes a tool and returns its raw result together
+// with an optional opaque annotation.
+type ToolExecutionFrameFunc func(args json.RawMessage) (ToolExecutionFrame, error)
+
 // ToolExecutionInterceptFunc is a callback for tool execution intercepts
 // following the middleware chain pattern. It receives the tool arguments and
 // a `next` function. Call `next` to invoke the next intercept in the chain
 // (or the original tool implementation if this is the innermost intercept).
 // Skip calling `next` to short-circuit the chain entirely. The callback returns
-// the canonical outcome containing the tool result and any pending marks.
+// Relay's outcome wrapper containing the tool result and any pending marks.
+// The `next` function is invocation-scoped and must not be retained after the
+// callback returns.
 type ToolExecutionInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error)
+
+// ToolExecutionFrameInterceptFunc is the annotation-aware form of a tool
+// execution intercept. It participates in the same priority-ordered chain as
+// ToolExecutionInterceptFunc. The `next` function is invocation-scoped and
+// must not be retained after the callback returns.
+type ToolExecutionFrameInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionFrame, error)) (ToolExecutionFrameOutcome, error)
 
 // LLMCodecKind identifies the active codec state supplied to a sanitizer.
 type LLMCodecKind string
@@ -226,28 +245,48 @@ func (context LLMSanitizeResponseContext) ResolveCodec() *LLMResponseSanitizeCod
 // capability is used after its sanitizer callback has returned.
 var ErrLLMSanitizeCodecExpired = errors.New("LLM sanitizer codec capability is no longer active")
 
-type llmSanitizeCodecInvocation struct {
+// ErrToolExecutionContinuationExpired is returned when an execution-intercept
+// continuation is retained and called after its callback has returned.
+var ErrToolExecutionContinuationExpired = errors.New("tool execution continuation is no longer active")
+
+type callbackLifetime struct {
 	mu     sync.RWMutex
 	active bool
 }
 
+func newCallbackLifetime() *callbackLifetime {
+	return &callbackLifetime{active: true}
+}
+
+func (lifetime *callbackLifetime) acquire(expired error) (func(), error) {
+	lifetime.mu.RLock()
+	if !lifetime.active {
+		lifetime.mu.RUnlock()
+		return nil, expired
+	}
+	return lifetime.mu.RUnlock, nil
+}
+
+func (lifetime *callbackLifetime) invalidate() {
+	lifetime.mu.Lock()
+	lifetime.active = false
+	lifetime.mu.Unlock()
+}
+
+type llmSanitizeCodecInvocation struct {
+	lifetime *callbackLifetime
+}
+
 func newLLMSanitizeCodecInvocation() *llmSanitizeCodecInvocation {
-	return &llmSanitizeCodecInvocation{active: true}
+	return &llmSanitizeCodecInvocation{lifetime: newCallbackLifetime()}
 }
 
 func (invocation *llmSanitizeCodecInvocation) acquire() (func(), error) {
-	invocation.mu.RLock()
-	if !invocation.active {
-		invocation.mu.RUnlock()
-		return nil, ErrLLMSanitizeCodecExpired
-	}
-	return invocation.mu.RUnlock, nil
+	return invocation.lifetime.acquire(ErrLLMSanitizeCodecExpired)
 }
 
 func (invocation *llmSanitizeCodecInvocation) invalidate() {
-	invocation.mu.Lock()
-	invocation.active = false
-	invocation.mu.Unlock()
+	invocation.lifetime.invalidate()
 }
 
 // LLMRequestSanitizeCodec is a callback-scoped request codec capability.
@@ -444,13 +483,27 @@ type LLMRequestInterceptOutcome struct {
 	OptimizationContributions []LLMOptimizationContribution `json:"optimization_contributions"`
 }
 
-// ToolExecutionInterceptOutcome is the canonical result of a tool execution
-// intercept. Result is passed to the remaining middleware and application;
+// ToolExecutionInterceptOutcome is Relay's wrapper for a tool execution
+// intercept result. Result is passed to the remaining middleware and application;
 // PendingMarks are Relay-owned lifecycle metadata emitted after the tool-end
 // event and are not included in the application-visible result.
 type ToolExecutionInterceptOutcome struct {
 	Result       json.RawMessage   `json:"result"`
 	PendingMarks []PendingMarkSpec `json:"pending_marks"`
+}
+
+// ToolExecutionFrame carries a raw application result and an optional opaque
+// annotation. Relay does not interpret Annotation.
+type ToolExecutionFrame struct {
+	Result     json.RawMessage `json:"result"`
+	Annotation json.RawMessage `json:"annotation,omitempty"`
+}
+
+// ToolExecutionFrameOutcome is returned by annotation-aware execution
+// intercepts. Pending marks retain their existing Relay-owned semantics.
+type ToolExecutionFrameOutcome struct {
+	Frame        ToolExecutionFrame `json:"frame"`
+	PendingMarks []PendingMarkSpec  `json:"pending_marks"`
 }
 
 // LLMRequestInterceptFunc is a callback for LLM request intercepts. When
@@ -614,6 +667,22 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 	return C.CString(string(result))
 }
 
+//export goToolExecFrameTrampoline
+func goToolExecFrameTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
+	fn := lookupClosure(userData).(ToolExecutionFrameFunc)
+	frame, err := fn(json.RawMessage(C.GoString(argsJSON)))
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	value, err := json.Marshal(frame)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(value))
+}
+
 //export goEventSubscriberTrampoline
 func goEventSubscriberTrampoline(userData unsafe.Pointer, event *C.FfiEvent) {
 	fn := lookupClosure(userData).(EventSubscriberFunc)
@@ -772,7 +841,14 @@ func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
 func goToolExecInterceptTrampoline(userData unsafe.Pointer, argsJSON *C.char, nextFn C.NemoRelayToolExecNextFn, nextCtx unsafe.Pointer) *C.char {
 	fn := lookupClosure(userData).(ToolExecutionInterceptFunc)
 	goArgs := json.RawMessage(C.GoString(argsJSON))
+	invocation := newCallbackLifetime()
+	defer invocation.invalidate()
 	goNext := func(args json.RawMessage) (json.RawMessage, error) {
+		release, err := invocation.acquire(ErrToolExecutionContinuationExpired)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		cArgs := C.CString(string(args))
 		defer C.free(unsafe.Pointer(cArgs))
 		result := C.callToolExecNext(nextFn, cArgs, nextCtx)
@@ -791,6 +867,46 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, argsJSON *C.char, ne
 		outcome.PendingMarks = []PendingMarkSpec{}
 	}
 	outcomeJSON, err := jsonMarshal(outcome)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(outcomeJSON))
+}
+
+//export goToolExecFrameInterceptTrampoline
+func goToolExecFrameInterceptTrampoline(userData unsafe.Pointer, argsJSON *C.char, nextFn C.NemoRelayToolExecFrameNextFn, nextCtx unsafe.Pointer) *C.char {
+	fn := lookupClosure(userData).(ToolExecutionFrameInterceptFunc)
+	invocation := newCallbackLifetime()
+	defer invocation.invalidate()
+	goNext := func(args json.RawMessage) (ToolExecutionFrame, error) {
+		release, err := invocation.acquire(ErrToolExecutionContinuationExpired)
+		if err != nil {
+			return ToolExecutionFrame{}, err
+		}
+		defer release()
+		cArgs := C.CString(string(args))
+		defer C.free(unsafe.Pointer(cArgs))
+		result := C.callToolExecFrameNext(nextFn, cArgs, nextCtx)
+		if result == nil {
+			return ToolExecutionFrame{}, lastError()
+		}
+		defer C.nemo_relay_string_free(result)
+		var frame ToolExecutionFrame
+		if err := json.Unmarshal([]byte(C.GoString(result)), &frame); err != nil {
+			return ToolExecutionFrame{}, err
+		}
+		return frame, nil
+	}
+	outcome, err := fn(json.RawMessage(C.GoString(argsJSON)), goNext)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	if outcome.PendingMarks == nil {
+		outcome.PendingMarks = []PendingMarkSpec{}
+	}
+	outcomeJSON, err := json.Marshal(outcome)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil

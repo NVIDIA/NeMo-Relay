@@ -7,7 +7,7 @@
 use crate::api::runtime::{
     EventSanitizeFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFrameFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
@@ -203,12 +203,10 @@ macro_rules! global_intercept_registry_api {
     };
 }
 
-macro_rules! global_execution_registry_api {
+macro_rules! global_execution_registry_register_api {
     (
         $(#[$register_meta:meta])*
         $register_name:ident,
-        $(#[$deregister_meta:meta])*
-        $deregister_name:ident,
         $field:ident,
         $fn_type:ty
     ) => {
@@ -233,10 +231,18 @@ macro_rules! global_execution_registry_api {
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
             state
                 .$field
-                .register(ExecutionIntercept::new(name, priority, callable))
+                .register(ExecutionIntercept::new(name, priority, callable.into()))
                 .map_err(FlowError::AlreadyExists)
         }
+    };
+}
 
+macro_rules! global_execution_registry_deregister_api {
+    (
+        $(#[$deregister_meta:meta])*
+        $deregister_name:ident,
+        $field:ident
+    ) => {
         $(#[$deregister_meta])*
         ///
         /// # Parameters
@@ -256,6 +262,29 @@ macro_rules! global_execution_registry_api {
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
             Ok(state.$field.deregister(name))
         }
+    };
+}
+
+macro_rules! global_execution_registry_api {
+    (
+        $(#[$register_meta:meta])*
+        $register_name:ident,
+        $(#[$deregister_meta:meta])*
+        $deregister_name:ident,
+        $field:ident,
+        $fn_type:ty
+    ) => {
+        global_execution_registry_register_api!(
+            $(#[$register_meta])*
+            $register_name,
+            $field,
+            $fn_type
+        );
+        global_execution_registry_deregister_api!(
+            $(#[$deregister_meta])*
+            $deregister_name,
+            $field
+        );
     };
 }
 
@@ -400,12 +429,10 @@ macro_rules! scope_intercept_registry_api {
     };
 }
 
-macro_rules! scope_execution_registry_api {
+macro_rules! scope_execution_registry_register_api {
     (
         $(#[$register_meta:meta])*
         $register_name:ident,
-        $(#[$deregister_meta:meta])*
-        $deregister_name:ident,
         $field:ident,
         $fn_type:ty
     ) => {
@@ -438,10 +465,18 @@ macro_rules! scope_execution_registry_api {
                 .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             registries
                 .$field
-                .register(ExecutionIntercept::new(name, priority, callable))
+                .register(ExecutionIntercept::new(name, priority, callable.into()))
                 .map_err(FlowError::AlreadyExists)
         }
+    };
+}
 
+macro_rules! scope_execution_registry_deregister_api {
+    (
+        $(#[$deregister_meta:meta])*
+        $deregister_name:ident,
+        $field:ident
+    ) => {
         $(#[$deregister_meta])*
         ///
         /// # Parameters
@@ -464,6 +499,29 @@ macro_rules! scope_execution_registry_api {
                 .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             Ok(registries.$field.deregister(name))
         }
+    };
+}
+
+macro_rules! scope_execution_registry_api {
+    (
+        $(#[$register_meta:meta])*
+        $register_name:ident,
+        $(#[$deregister_meta:meta])*
+        $deregister_name:ident,
+        $field:ident,
+        $fn_type:ty
+    ) => {
+        scope_execution_registry_register_api!(
+            $(#[$register_meta])*
+            $register_name,
+            $field,
+            $fn_type
+        );
+        scope_execution_registry_deregister_api!(
+            $(#[$deregister_meta])*
+            $deregister_name,
+            $field
+        );
     };
 }
 
@@ -535,13 +593,21 @@ global_intercept_registry_api!(
 global_execution_registry_api!(
     /// Register a global tool execution intercept.
     /// Execution intercepts can wrap or replace the tool callback. Each
-    /// callback returns a canonical tool execution outcome, while its
+    /// callback returns Relay's tool execution outcome wrapper, while its
     /// continuation resolves to the raw downstream result JSON.
     register_tool_execution_intercept,
     /// Deregister a global tool execution intercept.
     deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionFn
+);
+global_execution_registry_register_api!(
+    /// Register a global annotation-aware tool execution intercept.
+    /// Frame intercepts share the existing tool execution registry, namespace,
+    /// and priority order with raw-JSON intercepts.
+    register_tool_execution_frame_intercept,
+    tool_execution_intercepts,
+    ToolExecutionFrameFn
 );
 
 global_guardrail_registry_api!(
@@ -669,13 +735,21 @@ scope_intercept_registry_api!(
 scope_execution_registry_api!(
     /// Register a scope-local tool execution intercept.
     /// Execution intercepts can wrap or replace the tool callback inside the
-    /// owning scope. Each callback returns a canonical tool execution outcome,
+    /// owning scope. Each callback returns Relay's tool execution outcome wrapper,
     /// while its continuation resolves to the raw downstream result JSON.
     scope_register_tool_execution_intercept,
     /// Deregister a scope-local tool execution intercept.
     scope_deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionFn
+);
+scope_execution_registry_register_api!(
+    /// Register a scope-local annotation-aware tool execution intercept.
+    /// Frame intercepts share the existing tool execution registry, namespace,
+    /// and priority order with raw-JSON intercepts.
+    scope_register_tool_execution_frame_intercept,
+    tool_execution_intercepts,
+    ToolExecutionFrameFn
 );
 
 scope_guardrail_registry_api!(

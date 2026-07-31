@@ -20,6 +20,8 @@ from nemo_relay import (
     ScopeEvent,
     ScopeType,
     ToolAttributes,
+    ToolExecutionFrame,
+    ToolExecutionFrameOutcome,
     ToolExecutionInterceptOutcome,
     ToolHandle,
     create_scope_stack,
@@ -98,6 +100,75 @@ class TestToolsAsync:
 
         result = await tools.execute("double", {"x": 5}, my_func)
         assert result == {"result": 10}
+
+    async def test_execute_frame_round_trips_annotation_through_mixed_chain(self):
+        events = []
+
+        async def frame_middleware(name, args, next_fn):
+            assert name == "python_frame_tool"
+            frame = await next_fn(args)
+            assert frame.annotation == {"producer": "python", "status": "failed"}
+            result = frame.result
+            result["frame_seen"] = True
+            frame.result = result
+            annotation = frame.annotation
+            assert isinstance(annotation, dict)
+            annotation["observed_by"] = "frame_middleware"
+            frame.annotation = annotation
+            return ToolExecutionFrameOutcome(frame)
+
+        async def legacy_passthrough(name, args, next_fn):
+            assert name == "python_frame_tool"
+            return ToolExecutionInterceptOutcome(await next_fn(args))
+
+        intercepts.register_tool_execution_frame("python_frame", 1, frame_middleware)
+        intercepts.register_tool_execution("python_legacy_passthrough", 2, legacy_passthrough)
+        subscribers.register("python_frame_subscriber", lambda event: events.append(event))
+        try:
+            frame = await tools.execute_frame(
+                "python_frame_tool",
+                {"value": 3},
+                lambda args: ToolExecutionFrame(
+                    {"value": args["value"] * 2},
+                    {"producer": "python", "status": "failed"},
+                ),
+            )
+            assert frame.result == {"value": 6, "frame_seen": True}
+            assert frame.annotation == {
+                "producer": "python",
+                "status": "failed",
+                "observed_by": "frame_middleware",
+            }
+
+            await subscribers.flush_async()
+            end = _tool_event(events, "python_frame_tool", "end")
+            assert end.category_profile is not None
+            assert end.category_profile["tool_result_annotation"] == frame.annotation
+        finally:
+            assert intercepts.deregister_tool_execution("python_frame")
+            assert intercepts.deregister_tool_execution("python_legacy_passthrough")
+            subscribers.deregister("python_frame_subscriber")
+
+    async def test_legacy_mutation_drops_frame_annotation(self):
+        async def legacy_mutator(name, args, next_fn):
+            result = await next_fn(args)
+            result["mutated"] = True
+            return ToolExecutionInterceptOutcome(result)
+
+        intercepts.register_tool_execution("python_frame_legacy_mutator", 1, legacy_mutator)
+        try:
+            frame = await tools.execute_frame(
+                "python_frame_mutated",
+                {},
+                lambda _args: ToolExecutionFrame(
+                    {"original": True},
+                    {"producer": "python"},
+                ),
+            )
+            assert frame.result == {"original": True, "mutated": True}
+            assert frame.annotation is None
+        finally:
+            intercepts.deregister_tool_execution("python_frame_legacy_mutator")
 
     async def test_execute_rejects_cyclic_results_and_remains_usable(self):
         def cyclic_result(_args):
