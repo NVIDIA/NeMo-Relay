@@ -271,4 +271,3 @@ fn responses_replay_omits_item_events_for_a_nonarray_output() {
     assert_eq!(chunks[0]["type"], json!("response.created"));
     assert_eq!(chunks[1]["type"], json!("response.completed"));
     assert_eq!(chunks[1]["sequence_number"], json!(1));
-}

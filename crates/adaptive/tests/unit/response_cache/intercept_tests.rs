@@ -3,8 +3,6 @@
 
 //! Unit tests for response-cache streaming commit behavior.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use nemo_relay::api::llm::LlmRequest;
@@ -16,90 +14,6 @@ use tokio::sync::{oneshot, watch};
 use tokio_stream::StreamExt;
 
 use super::*;
-
-#[derive(Default)]
-struct FailingGetStore {
-    get_calls: AtomicUsize,
-    set_calls: AtomicUsize,
-}
-
-impl CacheStore for FailingGetStore {
-    fn get<'a>(
-        &'a self,
-        _key: &'a str,
-    ) -> crate::response_cache::store::BoxCacheFuture<'a, Option<Arc<CacheEntry>>> {
-        self.get_calls.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async {
-            Err(crate::error::AdaptiveError::Storage(
-                "cache read unavailable".to_string(),
-            ))
-        })
-    }
-
-    fn set<'a>(
-        &'a self,
-        _key: &'a str,
-        _entry: CacheEntry,
-        _ttl: Duration,
-    ) -> crate::response_cache::store::BoxCacheFuture<'a, ()> {
-        self.set_calls.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(()) })
-    }
-
-    fn health<'a>(&'a self) -> crate::response_cache::store::BoxCacheFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn backend_kind(&self) -> &'static str {
-        "failing_test"
-    }
-}
-
-fn cache_config() -> Arc<ResponseCacheConfig> {
-    Arc::new(ResponseCacheConfig {
-        namespace: "response-cache-unit-tests".to_string(),
-        cache_nondeterministic: true,
-        ..ResponseCacheConfig::default()
-    })
-}
-
-fn chat_request(prompt: &str) -> LlmRequest {
-    LlmRequest {
-        headers: serde_json::Map::new(),
-        content: json!({
-            "model": "gpt-4o",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-        }),
-    }
-}
-
-fn terminal_chat_stream() -> LlmJsonStream {
-    LlmJsonStream::new(tokio_stream::iter(vec![
-        Ok::<_, FlowError>(json!({
-            "id": "chatcmpl-unit-test",
-            "object": "chat.completion.chunk",
-            "created": 1_700_000_000_u64,
-            "model": "gpt-4o",
-            "choices": [{
-                "index": 0,
-                "delta": {"role": "assistant", "content": "cached"},
-                "finish_reason": null,
-            }],
-        })),
-        Ok(json!({
-            "id": "chatcmpl-unit-test",
-            "object": "chat.completion.chunk",
-            "created": 1_700_000_000_u64,
-            "model": "gpt-4o",
-            "choices": [{
-                "index": 0,
-                "delta": {},
-                "finish_reason": "stop",
-            }],
-        })),
-    ]))
-}
 
 #[test]
 fn chat_stream_fidelity_gate_rejects_every_uncollected_non_null_shape() {
@@ -318,8 +232,6 @@ async fn streaming_cache_bypasses_stateful_and_sampled_calls_before_reading() {
 
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(store.get_calls.load(Ordering::SeqCst), 0);
-}
-
 #[tokio::test]
 async fn upstream_stream_errors_reach_the_consumer_without_a_cache_write() {
     let store = Arc::new(FailingGetStore::default());

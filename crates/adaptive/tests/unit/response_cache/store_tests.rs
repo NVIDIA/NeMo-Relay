@@ -400,4 +400,3 @@ async fn configured_redis_backend_pings_and_reports_its_kind() {
 
     let command = server.join().expect("test Redis server");
     assert!(command.windows(4).any(|window| window == b"PING"));
-}

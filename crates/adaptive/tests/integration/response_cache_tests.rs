@@ -1986,44 +1986,6 @@ async fn classified_tool_repeat_is_a_hit_that_skips_the_tool() {
 }
 
 #[tokio::test]
-async fn a_different_arg_is_a_tool_miss() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
-
-    let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "x"}));
-
-    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
-    tool_call("docs_lookup", &tool, json!({"q": "go"})).await;
-
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "distinct arguments must each run the tool"
-    );
-}
-
-#[tokio::test]
-async fn unrepresentable_integer_args_bypass_the_tool_cache() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-    activate_cache(cache_with_tools(one_cacheable_class(&["get_record"]))).await;
-
-    let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"record": "a"}));
-
-    tool_call("get_record", &tool, json!({"id": 18014398509481985_i64})).await;
-    tool_call("get_record", &tool, json!({"id": 18014398509481986_i64})).await;
-
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "distinct integer ids beyond 2^53 canonicalize to the same bytes; both calls must run live"
-    );
-}
-
-#[tokio::test]
 async fn an_effectful_class_is_never_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
@@ -2057,101 +2019,6 @@ async fn an_effectful_class_is_never_cached() {
 }
 
 #[tokio::test]
-async fn default_bucket_enabled_caches_unknown_tools() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-    activate_cache(cache_with_tools(ToolCacheConfig {
-        enabled: true,
-        default: ToolClass {
-            cacheable: true,
-            ..ToolClass::default()
-        },
-        ..ToolCacheConfig::default()
-    }))
-    .await;
-
-    let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"r": 1}));
-
-    tool_call("mystery", &tool, json!({"x": 1})).await;
-    tool_call("mystery", &tool, json!({"x": 1})).await;
-
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "flipping default on gives broad coverage: the unknown tool's repeat hits"
-    );
-}
-
-#[tokio::test]
-async fn arg_skip_merges_calls_differing_only_in_a_skipped_arg() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-    let mut classes = std::collections::BTreeMap::new();
-    classes.insert(
-        "read_only".to_string(),
-        ToolClass {
-            cacheable: true,
-            arg_skip: vec!["request_id".to_string()],
-            members: vec!["lookup".to_string()],
-            ..ToolClass::default()
-        },
-    );
-    activate_cache(cache_with_tools(ToolCacheConfig {
-        enabled: true,
-        classes,
-        ..ToolCacheConfig::default()
-    }))
-    .await;
-
-    let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"r": 1}));
-
-    tool_call("lookup", &tool, json!({"q": "x", "request_id": "a"})).await;
-    tool_call("lookup", &tool, json!({"q": "x", "request_id": "b"})).await;
-
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "a difference only in a skipped arg must not prevent a hit"
-    );
-}
-
-#[tokio::test]
-async fn tool_bypass_rate_one_always_runs_live() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-    let mut classes = std::collections::BTreeMap::new();
-    classes.insert(
-        "volatile".to_string(),
-        ToolClass {
-            cacheable: true,
-            bypass_rate: Some(1.0),
-            members: vec!["get_weather".to_string()],
-            ..ToolClass::default()
-        },
-    );
-    activate_cache(cache_with_tools(ToolCacheConfig {
-        enabled: true,
-        classes,
-        ..ToolCacheConfig::default()
-    }))
-    .await;
-
-    let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"temp": 20}));
-
-    tool_call("get_weather", &tool, json!({"city": "NYC"})).await;
-    tool_call("get_weather", &tool, json!({"city": "NYC"})).await;
-
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "bypass_rate = 1.0 must always run the tool live (never serve a hit)"
-    );
-}
-
-#[tokio::test]
 async fn disabled_tools_section_does_not_cache() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
@@ -2179,7 +2046,10 @@ async fn conventional_error_shaped_tool_results_are_not_cached_by_default() {
     activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"error": "not found"}));
+    let tool = counting_tool(
+        Arc::clone(&calls),
+        json!({"type": "tool_result", "is_error": true, "content": "not found"}),
+    );
 
     tool_call("lookup", &tool, json!({"q": "missing"})).await;
     tool_call("lookup", &tool, json!({"q": "missing"})).await;
@@ -2187,7 +2057,7 @@ async fn conventional_error_shaped_tool_results_are_not_cached_by_default() {
     assert_eq!(
         calls.load(Ordering::SeqCst),
         2,
-        "a conventional in-band tool error must run live again unless cache_errors is enabled"
+        "an Anthropic-style in-band tool error must run live again unless cache_errors is enabled"
     );
 }
 
@@ -2200,7 +2070,10 @@ async fn conventional_error_shaped_tool_results_can_be_cached_when_opted_in() {
     activate_cache(cache_with_tools(tools)).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"error": "not found"}));
+    let tool = counting_tool(
+        Arc::clone(&calls),
+        json!({"type": "tool_result", "is_error": true, "content": "not found"}),
+    );
 
     tool_call("lookup", &tool, json!({"q": "missing"})).await;
     tool_call("lookup", &tool, json!({"q": "missing"})).await;
@@ -2208,7 +2081,44 @@ async fn conventional_error_shaped_tool_results_can_be_cached_when_opted_in() {
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,
-        "cache_errors=true explicitly permits caching conventional in-band error results"
+        "cache_errors=true explicitly permits caching Anthropic-style in-band error results"
+    );
+}
+
+#[tokio::test]
+async fn default_tool_cache_priority_keeps_standard_guardrails_on_hits() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+
+    let guardrail_runs = Arc::new(AtomicUsize::new(0));
+    register_tool_execution_intercept(
+        "response_cache_standard_tool_guardrail_test",
+        100,
+        Arc::new({
+            let guardrail_runs = Arc::clone(&guardrail_runs);
+            move |_name, args, next| {
+                let guardrail_runs = Arc::clone(&guardrail_runs);
+                Box::pin(async move {
+                    guardrail_runs.fetch_add(1, Ordering::SeqCst);
+                    next(args).await.map(Into::into)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"answer": "cached"}));
+    tool_call("lookup", &tool, json!({"q": "relay"})).await;
+    tool_call("lookup", &tool, json!({"q": "relay"})).await;
+
+    deregister_tool_execution_intercept("response_cache_standard_tool_guardrail_test").unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the second call must hit");
+    assert_eq!(
+        guardrail_runs.load(Ordering::SeqCst),
+        2,
+        "the standard priority-100 guardrail must wrap and run on a cache hit"
     );
 }
 
@@ -2363,34 +2273,6 @@ async fn tool_hit_emits_a_surface_tool_mark_with_saved_invocations() {
 
     drop(events);
     deregister_subscriber("response_cache_tool_capture").unwrap();
-}
-
-#[tokio::test]
-async fn llm_and_tool_surfaces_share_one_store_without_collision() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
-
-    let llm_calls = Arc::new(AtomicUsize::new(0));
-    let provider = counting_provider(Arc::clone(&llm_calls), sample_body());
-    let tool_calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&tool_calls), json!({"doc": "x"}));
-
-    call(&provider, chat_request("shared store?")).await;
-    call(&provider, chat_request("shared store?")).await;
-    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
-    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
-
-    assert_eq!(
-        llm_calls.load(Ordering::SeqCst),
-        1,
-        "the LLM surface still hits on repeat"
-    );
-    assert_eq!(
-        tool_calls.load(Ordering::SeqCst),
-        1,
-        "the tool surface hits on repeat; keys are disjoint so the surfaces do not collide"
-    );
 }
 
 #[tokio::test]

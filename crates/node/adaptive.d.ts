@@ -104,6 +104,10 @@ export interface ToolOverride {
 /** Opt-in caching for tools that are read-only and stable for their TTL. */
 export interface ToolCacheConfig {
   enabled?: boolean;
+  /**
+   * Tool execution-intercept priority; omit for Rust's default (150), which
+   * keeps standard priority-100 guardrails outside cache hits.
+   */
   priority?: number;
   /** Whether error-shaped tool results may be cached; defaults to false. */
   cacheErrors?: boolean;

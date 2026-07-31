@@ -275,6 +275,20 @@ async fn run_tool_cache(
     }
 
     match store.get(&key).await {
+        Ok(Some(entry)) if !tools.cache_errors && is_error_shaped_tool_result(&entry.response) => {
+            // A prior Relay version could have stored a snake_case `is_error`
+            // result under this same policy. Never replay it after error
+            // caching is disabled; a successful live result replaces it.
+            emit_cache_mark(
+                CacheMark::new("bypass", backend)
+                    .surface(TOOL_SURFACE)
+                    .reason("cached_error")
+                    .key_hash(&key),
+            );
+            let result = next(args).await?;
+            store_tool_result(&store, &key, policy.ttl, &result, tools.cache_errors).await;
+            Ok(result.into())
+        }
         Ok(Some(entry)) => {
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             emit_cache_mark(
@@ -333,6 +347,7 @@ fn is_error_shaped_tool_result(result: &Json) -> bool {
     };
     object.get("error").is_some_and(|error| !error.is_null())
         || object.get("isError").and_then(Json::as_bool) == Some(true)
+        || object.get("is_error").and_then(Json::as_bool) == Some(true)
 }
 
 #[cfg(test)]
@@ -701,6 +716,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/response_cache/tool_policy_tests.rs"]
+mod policy_tests;
 
 #[cfg(test)]
 #[path = "../../tests/unit/response_cache/tool_tests.rs"]

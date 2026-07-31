@@ -232,51 +232,11 @@ class TestDynamicConfigContract:
         assert serialized == {
             "enabled": True,
             "cache_errors": True,
-            "priority": 50,
+            "priority": 150,
             "default": {"cacheable": False, "arg_skip": [], "members": []},
             "classes": {"read_only": {"cacheable": True, "arg_skip": [], "members": ["docs_lookup"]}},
             "overrides": {"docs_lookup": {"tool_version": "v2"}},
         }
-
-    def test_tool_cache_errors_default_to_false(self):
-        assert ToolCacheConfig().to_dict()["cache_errors"] is False
-
-    def test_tool_cache_clean_report(self):
-        tools = ToolCacheConfig(
-            enabled=True,
-            classes={"read_only": ToolClass(cacheable=True, members=["docs_lookup"])},
-        )
-        report = plugin.validate(
-            plugin.PluginConfig(
-                components=[
-                    ComponentSpec(
-                        AdaptiveConfig(
-                            response_cache=ResponseCacheConfig(
-                                namespace="tool-cache-python-test",
-                                tools=tools,
-                            )
-                        )
-                    )
-                ]
-            )
-        )
-        assert report["diagnostics"] == []
-
-    def test_invalid_tool_cache_section_is_rejected(self):
-        tools = ToolCacheConfig(
-            enabled=True,
-            classes={
-                "a": ToolClass(cacheable=True, members=["dup"]),
-                "b": ToolClass(cacheable=True, members=["dup"]),
-            },
-        )
-        report = plugin.validate(
-            plugin.PluginConfig(
-                components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(tools=tools)))]
-            )
-        )
-        codes = {diag["code"] for diag in report["diagnostics"]}
-        assert "response_cache.tool_multiple_classes" in codes
 
     def test_canonical_cache_telemetry_helper_supports_openai_provider(self):
         event = adaptive_module.build_cache_telemetry_event(

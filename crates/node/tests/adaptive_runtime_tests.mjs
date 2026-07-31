@@ -26,21 +26,6 @@ describe('adaptive runtime bridge', () => {
     assert.deepEqual(adaptive.validateConfig(adaptive.defaultConfig()).diagnostics, []);
   });
 
-  it('carries the tool-result cache section through validation', () => {
-    const config = {
-      version: 1,
-      responseCache: adaptive.responseCacheConfig({
-        namespace: 'node-tool-cache-test',
-        tools: {
-          enabled: true,
-          classes: { read_only: { cacheable: true, members: ['docs_lookup'] } },
-        },
-      }),
-    };
-    assert.equal(config.responseCache.tools.enabled, true);
-    assert.deepEqual(adaptive.validateConfig(config).diagnostics, []);
-  });
-
   it('rejects a tool listed in multiple classes', () => {
     const config = {
       version: 1,

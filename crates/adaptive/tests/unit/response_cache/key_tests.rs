@@ -1018,6 +1018,21 @@ fn tool_name_args_namespace_and_version_each_separate_keys() {
 }
 
 #[test]
+fn tool_keys_bypass_unrepresentable_integers() {
+    assert_eq!(
+        build_tool_cache_key(
+            "key-test",
+            "lookup",
+            None,
+            &json!({"id": 18014398509481985_i64}),
+            &[],
+            false,
+        ),
+        KeyOutcome::Bypass("unrepresentable_number")
+    );
+}
+
+#[test]
 fn arg_skip_drops_only_the_listed_keys() {
     let skip = vec!["request_id".to_string()];
     assert_eq!(

@@ -102,7 +102,8 @@ type ResponseCacheConfig struct {
 type ResponseCacheToolsConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// Priority is the execution-intercept priority. Nil delegates to Rust's
-	// default (50); a pointer to 0 selects outermost.
+	// default (150), which keeps standard priority-100 guardrails outside
+	// cache hits; a pointer to 0 selects outermost.
 	Priority *int32 `json:"priority,omitempty"`
 	// CacheErrors lets error-shaped tool results be cached (default false).
 	CacheErrors bool                                 `json:"cache_errors"`
@@ -247,7 +248,7 @@ func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendCon
 
 // NewResponseCacheToolsConfig returns a disabled tool-result cache config.
 func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
-	priority := int32(50)
+	priority := int32(150)
 	return ResponseCacheToolsConfig{
 		CacheErrors: false,
 		Priority:    &priority,
