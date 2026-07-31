@@ -811,13 +811,13 @@ impl NemoRelayContextState {
             event = Arc::try_unwrap(context).unwrap_or_else(|context| (*context).clone());
             match outcome {
                 Ok(Ok(fields)) => event.apply_sanitize_fields(fields),
-                Ok(Err(error)) => {
+                Ok(Err(_error)) => {
                     log::error!(
                         target: "nemo_relay.runtime",
                         event = "event_sanitizer_failed",
                         sanitizer = entry.name.as_str(),
                         event_name = event.name();
-                        "Event sanitizer failed; clearing observability fields: {error}"
+                        "Event sanitizer failed; clearing observability fields"
                     );
                     event.apply_sanitize_fields(EventSanitizeFields::default());
                     break;
@@ -882,12 +882,12 @@ impl NemoRelayContextState {
                     .await
                 {
                     Ok(Ok(next)) => value = Some(next),
-                    Ok(Err(error)) => log::error!(
+                    Ok(Err(_error)) => log::error!(
                         target: "nemo_relay.runtime",
                         event = "tool_request_sanitizer_failed",
                         sanitizer = entry.name.as_str(),
                         tool_name = name;
-                        "Tool request sanitizer failed; omitting the observability payload: {error}"
+                        "Tool request sanitizer failed; omitting the observability payload"
                     ),
                     Err(_) => log::error!(
                         target: "nemo_relay.runtime",
@@ -946,12 +946,12 @@ impl NemoRelayContextState {
                     .await
                 {
                     Ok(Ok(next)) => value = Some(next),
-                    Ok(Err(error)) => log::error!(
+                    Ok(Err(_error)) => log::error!(
                         target: "nemo_relay.runtime",
                         event = "tool_response_sanitizer_failed",
                         sanitizer = entry.name.as_str(),
                         tool_name = name;
-                        "Tool response sanitizer failed; omitting the observability payload: {error}"
+                        "Tool response sanitizer failed; omitting the observability payload"
                     ),
                     Err(_) => log::error!(
                         target: "nemo_relay.runtime",
@@ -1259,12 +1259,12 @@ impl NemoRelayContextState {
                 .await
                 {
                     Ok(Ok(next)) => value = next,
-                    Ok(Err(error)) => {
+                    Ok(Err(_error)) => {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "llm_request_sanitizer_failed",
                             sanitizer = entry.name.as_str();
-                            "LLM request sanitizer failed; omitting the observability payload: {error}"
+                            "LLM request sanitizer failed; omitting the observability payload"
                         );
                     }
                     Err(_) => {
@@ -1327,12 +1327,12 @@ impl NemoRelayContextState {
                 .await
                 {
                     Ok(Ok(next)) => value = next,
-                    Ok(Err(error)) => {
+                    Ok(Err(_error)) => {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "llm_response_sanitizer_failed",
                             sanitizer = entry.name.as_str();
-                            "LLM response sanitizer failed; omitting the observability payload: {error}"
+                            "LLM response sanitizer failed; omitting the observability payload"
                         );
                     }
                     Err(_) => {
