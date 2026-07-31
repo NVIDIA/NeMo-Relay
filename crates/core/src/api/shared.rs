@@ -232,10 +232,9 @@ fn metadata_with_otel_error_type(
 ) -> Option<Json> {
     let mut metadata = metadata_with_otel_status(metadata, "ERROR", Some(status_message));
     if let Some(Json::Object(metadata)) = metadata.as_mut() {
-        metadata.insert(
-            "error.type".to_string(),
-            Json::String(error_type.to_string()),
-        );
+        metadata
+            .entry("error.type".to_string())
+            .or_insert_with(|| Json::String(error_type.to_string()));
     }
     metadata
 }

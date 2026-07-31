@@ -134,6 +134,14 @@ fn test_metadata_with_otel_error_adds_structured_error_type() {
         metadata["otel.status_description"],
         json!("internal error: TimeoutError: provider timed out")
     );
+
+    let explicit_metadata = metadata_with_otel_error(
+        Some(json!({"error.type": "provider_timeout"})),
+        &FlowError::Internal("TimeoutError: provider timed out".into()),
+    )
+    .unwrap();
+
+    assert_eq!(explicit_metadata["error.type"], json!("provider_timeout"));
 }
 
 #[test]
