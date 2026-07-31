@@ -171,7 +171,8 @@ Return:
     JSON payload recorded on the emitted lifecycle event.
 
 Exceptional flow:
-    Exceptions fail closed and omit the observability payload.
+    Exceptions fail closed, omit the observability payload, and stop the
+    remaining sanitizer chain.
 """
 EventSanitizeGuardrail: TypeAlias = Callable[
     [Event, EventSanitizeFields],

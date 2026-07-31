@@ -1239,7 +1239,8 @@ impl NemoRelayContextState {
     /// - `entries`: Sanitizer snapshots to evaluate.
     ///
     /// # Returns
-    /// The sanitized [`LlmRequest`] after every provided guardrail has run.
+    /// The sanitized [`LlmRequest`] after every provided guardrail has run, or
+    /// `None` when a sanitizer errors or panics.
     pub(crate) async fn llm_sanitize_request_snapshot_chain(
         request: LlmRequest,
         context: LlmSanitizeRequestContext,
@@ -1306,7 +1307,8 @@ impl NemoRelayContextState {
     /// - `entries`: Sanitizer snapshots to evaluate.
     ///
     /// # Returns
-    /// The sanitized response payload after every provided guardrail has run.
+    /// The sanitized response payload after every provided guardrail has run,
+    /// or `None` when a sanitizer errors or panics.
     pub(crate) async fn llm_sanitize_response_snapshot_chain(
         response: Json,
         context: LlmSanitizeResponseContext,

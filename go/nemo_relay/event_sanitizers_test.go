@@ -31,6 +31,14 @@ func TestEventSanitizerMarshalFailureClearsObservabilityFields(t *testing.T) {
 		var events []Event
 		registerEventSanitizerSubscriber(t, &mu, &events)
 
+		if err := RegisterMarkSanitizeGuardrail("go-mark-sanitize-category-profile", 1, func(_ Event, fields EventSanitizeFields) EventSanitizeFields {
+			fields.CategoryProfile = json.RawMessage(`{"subtype":"seeded"}`)
+			return fields
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = DeregisterMarkSanitizeGuardrail("go-mark-sanitize-category-profile") })
+
 		if err := RegisterMarkSanitizeGuardrail("go-mark-sanitize-invalid", 0, func(_ Event, _ EventSanitizeFields) EventSanitizeFields {
 			return EventSanitizeFields{Data: json.RawMessage("{")}
 		}); err != nil {

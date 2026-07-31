@@ -2823,7 +2823,8 @@ macro_rules! napi_event_guardrail_api {
         /// calls queue the event and return synchronously; publication resumes after
         /// the Promise settles. Callback, serialization, conversion, or invalid-result
         /// failures clear the emitted event fields and record the error for
-        /// `getLastCallbackError()`.
+        /// `getLastCallbackError()`. Await `flushSubscribers()` before inspecting
+        /// either the delivered event or that error.
         #[napi]
         pub fn $register_name(
             env: Env,
@@ -3365,7 +3366,8 @@ macro_rules! napi_scope_event_guardrail_api {
         /// calls queue the event and return synchronously; publication resumes after
         /// the Promise settles. Callback, serialization, conversion, or invalid-result
         /// failures clear the emitted event fields and record the error for
-        /// `getLastCallbackError()`.
+        /// `getLastCallbackError()`. Await `flushSubscribers()` before inspecting
+        /// either the delivered event or that error.
         #[napi]
         pub fn $register_name(
             env: Env,
