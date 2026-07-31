@@ -44,11 +44,10 @@ observability is required.
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 
-The gateway routes supported provider payloads through managed middleware. It
-does not implicitly convert between OpenAI and Anthropic schemas, but configured
-middleware such as Switchyard can translate them. Managed calls emit LLM start
-and end events under the active session scope, and successful streams remain
-streams. Model-list requests and startup probes use unmanaged passthrough.
+The gateway forwards raw provider JSON without rewriting OpenAI or Anthropic
+payload schemas. It removes only hop-by-hop transport headers, forwards
+streaming responses as streams, and emits NeMo Relay LLM start and end events
+under the active session scope.
 
 ## Transparent Run
 
@@ -242,22 +241,6 @@ follows:
 | `/chat/completions`, `/v1/chat/completions` | `openai_base_url` |
 | `/models`, `/v1/models` | `openai_base_url` |
 | `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
-
-For managed LLM routes, the middleware-selected result determines the client
-response:
-
-- A successful buffered result becomes HTTP `200` `application/json`.
-- A successful stream becomes HTTP `200` `text/event-stream` and Relay
-  re-encodes its parsed events as SSE.
-- For an ordinary managed request, an upstream HTTP error or undecodable
-  buffered response preserves the selected attempt's status, bytes, and
-  forwardable response headers.
-- A transport failure before Relay starts the downstream response uses Relay's
-  JSON error envelope with HTTP `502`.
-
-Successful responses do not preserve the upstream status, headers, or original
-JSON formatting. Retry-aware routing receives structured failures so it can
-select another target.
 
 For ordinary provider requests, Relay resolves credentials in this order:
 

@@ -138,7 +138,7 @@ The following table describes the Decision API and rollout settings:
 | --- | --- | --- |
 | `version` | `1` | Component configuration version. |
 | `mode` | `"enforce"` | `enforce` applies valid decisions. `observe_only` records the hypothetical decision but dispatches the trusted same-protocol default once. |
-| `priority` | `0` | Component execution priority. When response caching is enabled in the gateway, this value must be lower than `response_cache.priority` so Switchyard selects the backend before Relay derives the cache key. |
+| `priority` | `0` | Component execution priority. |
 | `decision_api_url` | Required | HTTP or HTTPS URL for the Switchyard Decision API. |
 | `decision_profile_id` | Required | Non-empty Switchyard profile identifier sent with each routing request. |
 | `decision_timeout_millis` | `25` | Decision API timeout in milliseconds; must be greater than zero. |
