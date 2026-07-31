@@ -95,6 +95,27 @@ export interface AcgConfig {
 }
 ```
 
+### `ResponseCacheConfig`
+
+Opt-in LLM response cache (exact-match) settings.
+
+```ts
+export interface ResponseCacheConfig {
+  ttlSeconds?: number;
+  /**
+   * Required non-empty cache trust domain. One configured cache must not span
+   * mutually untrusted tenants or upstreams.
+   */
+  namespace?: string;
+  priority?: number;
+  bypassRate?: number;
+  cacheNondeterministic?: boolean;
+  keyStrategy?: string;
+  headerAllowlist?: string[];
+  backend?: BackendSpec;
+}
+```
+
 ### `Config`
 
 Canonical config object for the top-level adaptive component.
@@ -108,6 +129,7 @@ export interface Config {
   adaptive_hints?: AdaptiveHintsConfig;
   tool_parallelism?: ToolParallelismConfig;
   acg?: AcgConfig;
+  responseCache?: ResponseCacheConfig;
   policy?: ConfigPolicy;
 }
 ```
@@ -120,7 +142,7 @@ Top-level adaptive component wrapper with fixed kind `adaptive`.
 export interface ComponentSpec {
   kind: 'adaptive';
   enabled?: boolean;
-  config: Config;
+  config: AdaptivePluginConfig;
 }
 ```
 
@@ -398,6 +420,28 @@ Nested `stability_thresholds` values are defaulted individually so callers can o
 
 ```ts
 export declare function acgConfig(config?: AcgConfig): AcgConfig;
+```
+
+### `responseCacheConfig`
+
+Create response-cache settings with defaults applied.
+
+Merges caller-supplied overrides onto the opt-in LLM response-cache config shape (exact-match) used by the adaptive plugin. This is a section of the adaptive component, not a standalone plugin kind.
+
+**Parameters**
+
+- `config`: Partial response-cache settings to override.
+
+**Returns**
+
+A normalized response-cache config object.
+
+**Remarks**
+
+The default backend is in-memory; pass a `backend` (e.g. `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`, while caching nondeterministic requests is opt-in.
+
+```ts
+export declare function responseCacheConfig(config?: ResponseCacheConfig): ResponseCacheConfig;
 ```
 
 ### `ComponentSpec` function

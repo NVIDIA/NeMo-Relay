@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AdaptiveConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub agent_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub state: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-stateconfig\">StateConfig</a>&gt;,\n    pub telemetry: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-telemetrycomponentconfig\">TelemetryComponentConfig</a>&gt;,\n    pub adaptive_hints: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-adaptivehintscomponentconfig\">AdaptiveHintsComponentConfig</a>&gt;,\n    pub tool_parallelism: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-toolparallelismcomponentconfig\">ToolParallelismComponentConfig</a>&gt;,\n    pub acg: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-acgcomponentconfig\">AcgComponentConfig</a>&gt;,\n    pub policy: <a href=\"../../nemo-relay/plugin/struct-configpolicy\">ConfigPolicy</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AdaptiveConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub agent_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub state: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-stateconfig\">StateConfig</a>&gt;,\n    pub telemetry: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-telemetrycomponentconfig\">TelemetryComponentConfig</a>&gt;,\n    pub adaptive_hints: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-adaptivehintscomponentconfig\">AdaptiveHintsComponentConfig</a>&gt;,\n    pub tool_parallelism: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-toolparallelismcomponentconfig\">ToolParallelismComponentConfig</a>&gt;,\n    pub acg: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-acgcomponentconfig\">AcgComponentConfig</a>&gt;,\n    pub response_cache: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>&gt;,\n    pub policy: <a href=\"../../nemo-relay/plugin/struct-configpolicy\">ConfigPolicy</a>,\n&#125;"}} /></pre>
 
 Canonical config document for the adaptive plugin component.
 
@@ -42,6 +42,10 @@ Built-in tool scheduling settings.
 ### `acg: Option<AcgComponentConfig>`
 
 Adaptive Cache Governor settings.
+
+### `response_cache: Option<ResponseCacheConfig>`
+
+Opt-in LLM response cache (exact-match). When present, the adaptive plugin installs the response-cache execution intercept(s).
 
 ### `policy: ConfigPolicy`
 
