@@ -279,7 +279,7 @@ async def test_empty_dynamic_specs_preserve_static_initialization_path():
     assert plugin.report() is None
     report = await plugin.initialize(plugin.PluginConfig())
     assert report == {"diagnostics": []}
-    plugin.clear()
+    await plugin.clear_async()
 
 
 async def test_native_activation_context_owns_callbacks_and_close_is_idempotent(
@@ -417,7 +417,7 @@ async def test_activation_reports_conflicts_and_rolls_back_partial_loads(
         with pytest.raises(RuntimeError, match="active dynamic plugin host"):
             await plugin.initialize({})
         with pytest.raises(RuntimeError, match="active dynamic plugin host"):
-            plugin.clear()
+            await plugin.clear_async()
     finally:
         await activation.close()
 

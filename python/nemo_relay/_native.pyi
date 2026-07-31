@@ -2385,6 +2385,17 @@ def clear_plugin_configuration() -> None:
     """
     ...
 
+def clear_plugin_configuration_async() -> Awaitable[None]:
+    """Clear active plugin configuration without blocking the Python event loop.
+
+    Returns:
+        Awaitable resolving when native teardown completes.
+
+    Exceptional flow:
+        Native cleanup and teardown worker errors propagate through the awaitable.
+    """
+    ...
+
 def active_plugin_report() -> Optional[_JsonObject]:
     """Return the active plugin report.
 

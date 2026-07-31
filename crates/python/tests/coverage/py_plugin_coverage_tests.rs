@@ -112,6 +112,7 @@ fn register_adds_plugin_management_bindings() {
             "initialize_plugins",
             "initialize_with_dynamic_plugins",
             "clear_plugin_configuration",
+            "clear_plugin_configuration_async",
             "active_plugin_report",
             "list_plugin_kinds",
             "register_plugin",
@@ -156,6 +157,30 @@ fn register_adds_plugin_management_bindings() {
             plugin_error_to_py_err(PluginError::RegistrationFailed("teardown".into()))
                 .is_instance_of::<pyo3::exceptions::PyRuntimeError>(py)
         );
+    });
+}
+
+#[test]
+fn async_clear_binding_completes_on_python_event_loop() {
+    let _python = crate::test_support::init_python_test();
+    let _plugin_test_state = lock_plugin_test_state_for_tests();
+    Python::attach(|py| {
+        let module = PyModule::new(py, "_plugin_async_clear").unwrap();
+        register(&module).unwrap();
+        let helpers = load_module(
+            py,
+            r#"
+async def clear(module):
+    await module.clear_plugin_configuration_async()
+"#,
+        );
+        with_event_loop(py, |event_loop| {
+            let clear = helpers.getattr("clear").unwrap().call1((module,)).unwrap();
+            event_loop
+                .call_method1("run_until_complete", (clear,))
+                .unwrap();
+        });
+        assert!(active_plugin_report_py(py).unwrap().bind(py).is_none());
     });
 }
 

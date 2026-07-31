@@ -953,6 +953,21 @@ fn clear_plugin_configuration_py(py: Python<'_>) -> PyResult<()> {
     py.detach(clear_plugin_configuration).map_err(to_py_err)
 }
 
+#[pyfunction(name = "clear_plugin_configuration_async")]
+#[pyo3(signature = () -> "object", text_signature = "() -> object")]
+fn clear_plugin_configuration_async_py<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        tokio::task::spawn_blocking(clear_plugin_configuration)
+            .await
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "plugin teardown task failed: {error}"
+                ))
+            })?
+            .map_err(to_py_err)
+    })
+}
+
 #[pyfunction(name = "active_plugin_report")]
 #[pyo3(signature = () -> "object", text_signature = "() -> object")]
 fn active_plugin_report_py(py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -997,6 +1012,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_with_dynamic_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;
+    m.add_function(wrap_pyfunction!(clear_plugin_configuration_async_py, m)?)?;
     m.add_function(wrap_pyfunction!(active_plugin_report_py, m)?)?;
     m.add_function(wrap_pyfunction!(list_plugin_kinds_py, m)?)?;
     m.add_function(wrap_pyfunction!(register_plugin_py, m)?)?;

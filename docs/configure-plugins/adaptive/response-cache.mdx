@@ -127,7 +127,7 @@ async def main():
         await nemo_relay.llm.execute("openai", request, call_model)
         await nemo_relay.llm.execute("openai", request, call_model)
     finally:
-        nemo_relay.plugin.clear()
+        await nemo_relay.plugin.clear_async()
 
 asyncio.run(main())
 ```

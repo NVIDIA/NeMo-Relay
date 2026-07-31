@@ -323,7 +323,7 @@ async def main():
         # Run instrumented application work here.
         pass
     finally:
-        plugin.clear()
+        await plugin.clear_async()
 
 asyncio.run(main())
 ```
