@@ -10,13 +10,54 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v10";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v11";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
   const eventSanitizerContext = new AsyncLocalStorage();
   const publicationStates = new Map();
   let nextPublicationContextId = 0;
+
+  function callbackStore(publicationState, publicationContextId, scopeStack, propagationParentUuid) {
+    const lifecycle = { expired: false, stores: new Set() };
+    const store = {
+      lifecycle,
+      publicationState,
+      publicationContextId,
+      scopeStack,
+      propagationParentUuid,
+    };
+    lifecycle.stores.add(store);
+    return store;
+  }
+
+  function replacementCallbackStore(current, scopeStack) {
+    const store = {
+      lifecycle: current.lifecycle,
+      publicationState: current.publicationState,
+      publicationContextId: current.publicationContextId,
+      scopeStack,
+      propagationParentUuid: current.propagationParentUuid,
+    };
+    current.lifecycle.stores.add(store);
+    if (current.lifecycle.expired) {
+      store.scopeStack = null;
+      store.propagationParentUuid = undefined;
+    }
+    return store;
+  }
+
+  function expireCallbackStore(store) {
+    if (store === undefined) {
+      return;
+    }
+    store.lifecycle.expired = true;
+    for (const current of store.lifecycle.stores) {
+      current.scopeStack = null;
+      current.propagationParentUuid = undefined;
+    }
+    store.lifecycle.stores.clear();
+  }
 
   function jsonValue(value, seen = new Set()) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') {
@@ -94,19 +135,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     } else {
       publicationState = { active: false };
     }
-    const token = {
+    const token = callbackStore(
       publicationState,
       publicationContextId,
       scopeStack,
       propagationParentUuid,
-    };
+    );
     const settlePublication = () => {
       if (ownsPublicationState) {
         publicationState.active = false;
         publicationStates.delete(publicationContextId);
       }
-      token.scopeStack = null;
-      token.propagationParentUuid = undefined;
+      expireCallbackStore(token);
     };
     const safeNext = next === undefined
       ? undefined
@@ -199,12 +239,12 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     scopedStream(fn) {
       return function __nemo_relay_scoped_stream_wrapper(arg, scopeStack, propagationParentUuid) {
         const current = eventSanitizerContext.getStore();
-        const token = {
-          publicationState: current?.publicationState ?? { active: false },
-          publicationContextId: current?.publicationContextId,
+        const token = callbackStore(
+          current?.publicationState ?? { active: false },
+          current?.publicationContextId,
           scopeStack,
           propagationParentUuid,
-        };
+        );
         return eventSanitizerContext.run(token, () => fn(arg));
       };
     },
@@ -230,16 +270,13 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
 
     withCallbackScopeStack(scopeStack, fn) {
       const current = eventSanitizerContext.getStore();
-      const token = {
-        publicationState: current?.publicationState ?? { active: false },
-        publicationContextId: current?.publicationContextId,
+      const token = callbackStore(
+        current?.publicationState ?? { active: false },
+        current?.publicationContextId,
         scopeStack,
-        propagationParentUuid: current?.propagationParentUuid,
-      };
-      const expire = () => {
-        token.scopeStack = null;
-        token.propagationParentUuid = undefined;
-      };
+        current?.propagationParentUuid,
+      );
+      const expire = () => expireCallbackStore(token);
       let value;
       try {
         value = eventSanitizerContext.run(token, fn);
@@ -263,12 +300,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       if (current === undefined) {
         return false;
       }
-      eventSanitizerContext.enterWith({
-        publicationState: current.publicationState,
-        publicationContextId: current.publicationContextId,
-        scopeStack,
-        propagationParentUuid: current.propagationParentUuid,
-      });
+      eventSanitizerContext.enterWith(replacementCallbackStore(current, scopeStack));
       return true;
     },
 
@@ -277,8 +309,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       if (current === undefined) {
         return;
       }
-      current.scopeStack = null;
-      current.propagationParentUuid = undefined;
+      expireCallbackStore(current);
     },
   };
 })()"#;

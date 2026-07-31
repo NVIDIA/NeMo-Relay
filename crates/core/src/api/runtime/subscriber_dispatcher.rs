@@ -595,7 +595,7 @@ mod native {
         })
     }
 
-    fn flush_subscribers_inner(include_pending: bool) -> Result<()> {
+    fn flush_subscribers_inner(include_pending: bool, started: Option<Sender<()>>) -> Result<()> {
         if in_dispatcher_callback() {
             return Ok(());
         }
@@ -621,6 +621,9 @@ mod native {
             .map_err(|error| {
                 FlowError::Internal(format!("failed to queue subscriber flush: {error}"))
             })?;
+        if let Some(started) = started {
+            let _ = started.send(());
+        }
         done_rx
             .recv()
             .map_err(|error| FlowError::Internal(format!("subscriber flush failed: {error}")))?;
@@ -628,11 +631,15 @@ mod native {
     }
 
     pub(super) fn flush_subscribers() -> Result<()> {
-        flush_subscribers_inner(true)
+        flush_subscribers_inner(true, None)
+    }
+
+    pub(super) fn flush_subscribers_with_started_signal(started: Sender<()>) -> Result<()> {
+        flush_subscribers_inner(true, Some(started))
     }
 
     pub(super) fn flush_queued_subscribers() -> Result<()> {
-        flush_subscribers_inner(false)
+        flush_subscribers_inner(false, None)
     }
 
     pub(super) fn in_dispatcher_callback() -> bool {
@@ -1240,6 +1247,13 @@ where
 /// those callbacks.
 pub fn flush_subscribers() -> Result<()> {
     native::flush_subscribers()
+}
+
+/// Wait for subscriber completion and signal once the flush request has been
+/// queued, immediately before waiting for the dispatcher to acknowledge it.
+#[doc(hidden)]
+pub fn flush_subscribers_with_started_signal(started: std::sync::mpsc::Sender<()>) -> Result<()> {
+    native::flush_subscribers_with_started_signal(started)
 }
 
 /// Wait only for subscriber publications already queued on the dispatcher.

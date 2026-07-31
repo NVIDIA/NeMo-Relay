@@ -990,6 +990,32 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution settlement expires scope replacements inherited by detached work', async () => {
+    const baseline = {
+      active: lib.scopeStackActive(),
+      parentUuid: lib.capturePropagationContext().parentUuid,
+    };
+    const replacementStack = lib.createScopeStack();
+    let releaseLateContext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateContext = resolve;
+    });
+    let lateContext;
+
+    await toolCallExecuteAsync('scope_replacement_expiry_tool', {}, async () => {
+      lib.setThreadScopeStack(replacementStack);
+      lateContext = lateGate.then(() => ({
+        active: lib.scopeStackActive(),
+        parentUuid: lib.capturePropagationContext().parentUuid,
+      }));
+      await new Promise((resolve) => setImmediate(resolve));
+      return { ok: true };
+    });
+
+    releaseLateContext();
+    assert.deepEqual(await lateContext, baseline);
+  });
+
   it('execution intercept rejects a detached next call after settlement', async () => {
     let releaseLateNext;
     const lateGate = new Promise((resolve) => {
