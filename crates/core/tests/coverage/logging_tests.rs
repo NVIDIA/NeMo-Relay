@@ -563,6 +563,7 @@ fn logging_rotation_retains_newest_backups_and_complete_records() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("relay.log.jsonl");
     let config = LoggingConfig {
+        level: LogLevel::Info,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
             path: path.clone(),
             rotation: Some(FileLogRotationConfig::new(1, 2).unwrap()),
@@ -595,6 +596,7 @@ fn logging_rotation_rotates_existing_file_at_boundary() {
     let existing_record = "x".repeat(64);
     std::fs::write(&path, &existing_record).unwrap();
     let config = LoggingConfig {
+        level: LogLevel::Info,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
             path: path.clone(),
             rotation: Some(FileLogRotationConfig::new(64, 2).unwrap()),
@@ -900,7 +902,7 @@ fn logging_runtime_emits_initialized_and_shutdown_lifecycle_events() {
 #[test]
 fn default_logging_config_has_stderr_defaults_and_no_sinks() {
     let config = LoggingConfig::default();
-    assert_eq!(config.level, LogLevel::Info);
+    assert_eq!(config.level, LogLevel::Error);
     assert_eq!(config.stderr_format, LogFormat::Human);
     assert!(config.sinks.is_empty());
 }
@@ -1156,6 +1158,7 @@ fn periodic_flush_applies_to_all_file_sinks() {
     let path_b = temp.path().join("flush-b.log.jsonl");
     // Small global interval; rely solely on the periodic timer (no explicit flush/shutdown).
     let config = LoggingConfig {
+        level: LogLevel::Info,
         flush_interval_millis: 20,
         sinks: vec![
             LogSinkConfig::File(FileLogSinkConfig {
@@ -1277,6 +1280,7 @@ fn non_string_fields_are_coerced_to_json_strings() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("typed-fields.log.jsonl");
     let config = LoggingConfig {
+        level: LogLevel::Info,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
             path: path.clone(),
             ..FileLogSinkConfig::default()
@@ -1325,6 +1329,7 @@ fn shutdown_flushes_file_sink_when_periodic_flush_disabled() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("no-periodic-flush.log.jsonl");
     let config = LoggingConfig {
+        level: LogLevel::Info,
         // Periodic flush disabled: only the shutdown drain should reach disk.
         flush_interval_millis: 0,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig {

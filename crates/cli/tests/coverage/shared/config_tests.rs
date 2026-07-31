@@ -3783,7 +3783,7 @@ fn logging_defaults_when_section_absent() {
     let resolved = resolve_server_config(&args).unwrap();
 
     assert_eq!(resolved.logging, LoggingConfig::default());
-    assert_eq!(resolved.logging.level, LogLevel::Info);
+    assert_eq!(resolved.logging.level, LogLevel::Error);
     assert_eq!(resolved.logging.stderr_format, LogFormat::Human);
     assert!(resolved.logging.sinks.is_empty());
 }
