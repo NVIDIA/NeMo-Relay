@@ -49,9 +49,9 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **Raw async middleware**: Completion-based raw registrations for plugins
   that need asynchronous guardrails, intercepts, or event sanitizers. Typed
   Rust callbacks remain synchronous convenience APIs.
-- **Native API v2 LLM dispatch**: Register v2-only execution callbacks that
-  send an explicit provider target through Relay and receive buffered JSON,
-  structured failures, or a bounded host-owned provider stream.
+- **Native API v2 targeted LLM continuations**: Register v2-only execution
+  callbacks that send an explicit provider target through Relay and receive
+  buffered JSON, structured failures, or a bounded host-owned provider stream.
 
 ## Installation
 
@@ -111,8 +111,8 @@ nemo_relay_plugin::nemo_relay_plugin_v2!(
 ```
 
 Set `compat.native_api = "2"` in `relay-plugin.toml`. During registration,
-`PluginContext::host_api_v4` exposes the C-safe typed LLM dispatch table and
-the raw v2 registration helpers.
+`PluginContext::host_api_v4` exposes the C-safe targeted LLM continuation table
+and the raw v2 registration helpers.
 
 The plugin provides JSON plus an HTTP method, absolute target URL, protocol
 route, and explicit target headers. Relay binds that transport target to the

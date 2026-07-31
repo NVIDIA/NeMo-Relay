@@ -43,8 +43,8 @@ use serde_json::Map;
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 3;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
-/// ABI version that introduced typed LLM target dispatch and outcomes.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH: u32 = 4;
+/// ABI version that introduced targeted LLM continuations and structured outcomes.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS: u32 = 4;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
@@ -874,7 +874,7 @@ pub struct NemoRelayNativeAsyncStream {
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
-/// Opaque host-owned provider stream returned by native API v2 dispatch.
+/// Opaque host-owned provider stream returned by a native API v2 LLM continuation.
 ///
 /// The plugin requests one item at a time with the v2 host table, then cancels
 /// or releases the handle exactly once. Relay pumps provider output into a
@@ -912,10 +912,10 @@ pub type NemoRelayNativeAsyncNextResultCb = unsafe extern "C" fn(
     error: *const NemoRelayNativeString,
 );
 
-/// Provider protocol selected for one typed LLM dispatch.
+/// Provider protocol selected for one targeted LLM continuation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LlmDispatchRouteV2 {
+pub enum LlmContinuationRouteV2 {
     /// OpenAI Chat Completions.
     OpenaiChat,
     /// OpenAI Responses.
@@ -924,7 +924,7 @@ pub enum LlmDispatchRouteV2 {
     AnthropicMessages,
 }
 
-impl LlmDispatchRouteV2 {
+impl LlmContinuationRouteV2 {
     /// Returns the stable Relay gateway route identifier.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -935,15 +935,15 @@ impl LlmDispatchRouteV2 {
     }
 }
 
-/// Explicit provider target supplied to Relay through native API v2.
+/// Explicit provider target for one native API v2 LLM continuation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-pub struct LlmDispatchTargetV2 {
+pub struct LlmContinuationTargetV2 {
     /// HTTP method used for the provider call.
     pub method: String,
     /// Absolute HTTP(S) provider URL including the selected endpoint.
     pub url: String,
     /// Provider protocol used by the selected endpoint.
-    pub route: LlmDispatchRouteV2,
+    pub route: LlmContinuationRouteV2,
     /// Explicit outbound provider headers, including target credentials.
     ///
     /// Relay validates and transports these headers but never records their
@@ -953,11 +953,11 @@ pub struct LlmDispatchTargetV2 {
 
 /// Typed LLM continuation invocation supplied through native API v2.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
-pub struct LlmDispatchRequestV2 {
+pub struct LlmContinuationInvocationV2 {
     /// Replacement request passed to the Relay execution continuation.
     pub request: LlmRequest,
     /// Explicit provider target selected by the plugin.
-    pub target: LlmDispatchTargetV2,
+    pub target: LlmContinuationTargetV2,
 }
 
 /// Bounded HTTP failure returned by a provider.
@@ -981,7 +981,7 @@ pub enum LlmNonHttpFailureKindV2 {
     Timeout,
     /// The caller cancelled the operation.
     Cancelled,
-    /// Relay rejected an invalid dispatch request.
+    /// Relay rejected an invalid continuation invocation.
     InvalidRequest,
     /// A guardrail rejected the provider call.
     Guardrail,
@@ -1001,7 +1001,7 @@ pub struct LlmNonHttpFailureV2 {
 /// Structured LLM continuation failure exposed through native API v2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LlmCallFailureV2 {
+pub enum LlmContinuationFailureV2 {
     /// A provider returned a non-success HTTP response.
     Http {
         /// Bounded HTTP failure details.
@@ -1014,7 +1014,7 @@ pub enum LlmCallFailureV2 {
     },
 }
 
-impl LlmCallFailureV2 {
+impl LlmContinuationFailureV2 {
     /// Return Relay's provider-neutral retry disposition.
     ///
     /// The disposition is derived rather than serialized so the wire contract
@@ -1039,7 +1039,7 @@ pub const fn is_retryable_http_status_v2(status: u16) -> bool {
 /// Unary LLM continuation outcome delivered through native API v2.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LlmCallOutcomeV2 {
+pub enum LlmContinuationOutcomeV2 {
     /// Provider call completed successfully.
     Success {
         /// Provider response JSON.
@@ -1048,14 +1048,14 @@ pub enum LlmCallOutcomeV2 {
     /// Provider call failed before producing a response.
     Failure {
         /// Structured Relay/provider failure.
-        error: LlmCallFailureV2,
+        error: LlmContinuationFailureV2,
     },
 }
 
 /// Streaming LLM continuation event delivered through native API v2.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LlmStreamEventV2 {
+pub enum LlmContinuationStreamEventV2 {
     /// One provider stream event.
     Chunk {
         /// Provider event JSON.
@@ -1066,13 +1066,13 @@ pub enum LlmStreamEventV2 {
     /// Provider stream failed before clean completion.
     Failure {
         /// Structured Relay/provider failure.
-        error: LlmCallFailureV2,
+        error: LlmContinuationFailureV2,
     },
 }
 
 /// Receives one typed unary LLM continuation outcome.
 ///
-/// `outcome_json` contains one serialized [`LlmCallOutcomeV2`] and is borrowed
+/// `outcome_json` contains one serialized [`LlmContinuationOutcomeV2`] and is borrowed
 /// for the callback.
 pub type NemoRelayNativeAsyncLlmResultCbV2 =
     unsafe extern "C" fn(user_data: *mut c_void, outcome_json: *const NemoRelayNativeString);
@@ -1089,7 +1089,7 @@ pub type NemoRelayNativeAsyncLlmStreamOpenCbV2 = unsafe extern "C" fn(
 
 /// Receives one item from a native API v2 provider stream.
 ///
-/// `event_json` contains one serialized [`LlmStreamEventV2`] and is borrowed
+/// `event_json` contains one serialized [`LlmContinuationStreamEventV2`] and is borrowed
 /// for the callback. Only one `next` operation may be active per stream.
 pub type NemoRelayNativeAsyncLlmStreamNextCbV2 =
     unsafe extern "C" fn(user_data: *mut c_void, event_json: *const NemoRelayNativeString);
@@ -1259,7 +1259,7 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
 }
 
-/// ABI-v4 host extension implementing native API v2 typed LLM dispatch.
+/// ABI-v4 host extension implementing native API v2 targeted LLM continuations.
 ///
 /// Its first field is the complete ABI-v3 table. Native API v1 plugins
 /// continue to receive ABI-v3 or ABI-v2 tables during entry-point negotiation.
@@ -1272,7 +1272,7 @@ pub struct NemoRelayNativeHostApiV4 {
     /// outcome.
     pub async_llm_next_invoke_result_v2: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
-        dispatch_json: *const NemoRelayNativeString,
+        invocation_json: *const NemoRelayNativeString,
         cb: NemoRelayNativeAsyncLlmResultCbV2,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
@@ -1282,7 +1282,7 @@ pub struct NemoRelayNativeHostApiV4 {
     /// items are read with `async_llm_stream_next_v2`.
     pub async_llm_next_open_stream_v2: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
-        dispatch_json: *const NemoRelayNativeString,
+        invocation_json: *const NemoRelayNativeString,
         output_stream: *const NemoRelayNativeAsyncStream,
         cb: NemoRelayNativeAsyncLlmStreamOpenCbV2,
         user_data: *mut c_void,
@@ -2061,7 +2061,7 @@ impl<'a> PluginContext<'a> {
     /// Returns the native API v2 host extension when the plugin was loaded
     /// through ABI v4.
     pub fn host_api_v4(&self) -> Option<&'a NemoRelayNativeHostApiV4> {
-        (self.host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH
+        (self.host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS
             && self.host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>())
         .then(|| unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV4) })
     }
@@ -3618,7 +3618,7 @@ enum OwnedHostApi {
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             Self::V4(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) })
@@ -3941,7 +3941,7 @@ pub unsafe fn export_plugin_v2<P: NativePlugin>(
     export_plugin_checked(
         host_ref,
         out,
-        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH,
+        NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS,
         std::mem::size_of::<NemoRelayNativeHostApiV4>(),
         || plugin,
     )
@@ -3999,7 +3999,7 @@ where
     export_plugin_checked(
         host_ref,
         out,
-        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH,
+        NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS,
         std::mem::size_of::<NemoRelayNativeHostApiV4>(),
         constructor,
     )
@@ -4079,7 +4079,7 @@ macro_rules! nemo_relay_plugin {
 /// Exports a native API v2-only plugin entry symbol.
 ///
 /// The generated entry rejects native API v1 host tables. Use this macro when
-/// the plugin requires typed LLM dispatch from [`NemoRelayNativeHostApiV4`].
+/// the plugin requires targeted LLM continuations from [`NemoRelayNativeHostApiV4`].
 #[macro_export]
 macro_rules! nemo_relay_plugin_v2 {
     ($symbol:ident, $constructor:expr) => {

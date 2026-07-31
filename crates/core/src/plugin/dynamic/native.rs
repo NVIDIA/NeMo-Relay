@@ -51,14 +51,14 @@ use crate::plugin::{
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
-    LlmCallFailureV2, LlmCallOutcomeV2, LlmDispatchRequestV2, LlmHttpFailureV2,
-    LlmNonHttpFailureKindV2, LlmNonHttpFailureV2, LlmStreamEventV2, NEMO_RELAY_NATIVE_ABI_VERSION,
-    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
-    NemoRelayNativeAsyncLlmResultCbV2, NemoRelayNativeAsyncLlmStreamNextCbV2,
-    NemoRelayNativeAsyncLlmStreamOpenCbV2, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
-    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    LlmContinuationFailureV2, LlmContinuationInvocationV2, LlmContinuationOutcomeV2,
+    LlmContinuationStreamEventV2, LlmHttpFailureV2, LlmNonHttpFailureKindV2, LlmNonHttpFailureV2,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+    NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmResultCbV2,
+    NemoRelayNativeAsyncLlmStreamNextCbV2, NemoRelayNativeAsyncLlmStreamOpenCbV2,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmCodecKind,
@@ -915,7 +915,7 @@ fn build_native_host_api_v3() -> NemoRelayNativeHostApiV3 {
 
 fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
     let mut v3 = build_native_host_api_v3();
-    v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH;
+    v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS;
     v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV4>();
     NemoRelayNativeHostApiV4 {
         v3,
@@ -1535,7 +1535,7 @@ struct NativeAsyncStreamCallbackGuard {
 }
 
 struct NativeLlmProviderStreamV2 {
-    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<LlmStreamEventV2>>,
+    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<LlmContinuationStreamEventV2>>,
     producer_abort: Mutex<Option<tokio::task::AbortHandle>>,
     runtime: tokio::runtime::Handle,
     next_in_flight: AtomicBool,
@@ -1574,7 +1574,7 @@ impl NativeLlmStreamOpenCallbackGuardV2 {
         self.active = false;
     }
 
-    fn failure(&mut self, error: &LlmCallFailureV2) {
+    fn failure(&mut self, error: &LlmContinuationFailureV2) {
         if !self.active {
             return;
         }
@@ -2299,10 +2299,10 @@ const NATIVE_API_V2_MAX_FAILURE_BODY_BYTES: usize = 16 * 1024;
 const NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES: usize = 1024;
 const NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES: usize = 4 * 1024;
 
-fn prepare_typed_llm_dispatch(
-    dispatch: LlmDispatchRequestV2,
+fn prepare_llm_continuation_invocation(
+    invocation: LlmContinuationInvocationV2,
 ) -> std::result::Result<(LlmRequest, LlmDispatchTargetContext), NemoRelayStatus> {
-    let url = match reqwest::Url::parse(&dispatch.target.url) {
+    let url = match reqwest::Url::parse(&invocation.target.url) {
         Ok(url)
             if matches!(url.scheme(), "http" | "https")
                 && url.has_host()
@@ -2313,34 +2313,34 @@ fn prepare_typed_llm_dispatch(
         }
         _ => {
             set_native_last_error(
-                "typed LLM dispatch target must be an absolute HTTP(S) URL without user info",
+                "LLM continuation target must be an absolute HTTP(S) URL without user info",
             );
             return Err(NemoRelayStatus::InvalidArg);
         }
     };
-    let method = match reqwest::Method::from_bytes(dispatch.target.method.as_bytes()) {
+    let method = match reqwest::Method::from_bytes(invocation.target.method.as_bytes()) {
         Ok(method) if method != reqwest::Method::CONNECT && method != reqwest::Method::TRACE => {
             method
         }
         _ => {
-            set_native_last_error("typed LLM dispatch method was invalid or prohibited");
+            set_native_last_error("LLM continuation method was invalid or prohibited");
             return Err(NemoRelayStatus::InvalidArg);
         }
     };
-    for (name, value) in &dispatch.target.headers {
+    for (name, value) in &invocation.target.headers {
         let Ok(parsed_name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
-            set_native_last_error("typed LLM dispatch contained an invalid target header name");
+            set_native_last_error("LLM continuation contained an invalid target header name");
             return Err(NemoRelayStatus::InvalidArg);
         };
         if prohibited_target_header(&parsed_name) {
             set_native_last_error(format!(
-                "typed LLM dispatch target header {parsed_name} is host-owned or prohibited"
+                "LLM continuation target header {parsed_name} is host-owned or prohibited"
             ));
             return Err(NemoRelayStatus::InvalidArg);
         }
         if reqwest::header::HeaderValue::from_str(value).is_err() {
             set_native_last_error(format!(
-                "typed LLM dispatch target header {parsed_name} had an invalid value"
+                "LLM continuation target header {parsed_name} had an invalid value"
             ));
             return Err(NemoRelayStatus::InvalidArg);
         }
@@ -2348,10 +2348,10 @@ fn prepare_typed_llm_dispatch(
     let target = LlmDispatchTargetContext::new(
         method.as_str().to_owned(),
         url.to_string(),
-        dispatch.target.route.as_str().into(),
-        dispatch.target.headers,
+        invocation.target.route.as_str().into(),
+        invocation.target.headers,
     );
-    Ok((dispatch.request, target))
+    Ok((invocation.request, target))
 }
 
 fn prohibited_target_header(name: &reqwest::header::HeaderName) -> bool {
@@ -2371,8 +2371,11 @@ fn prohibited_target_header(name: &reqwest::header::HeaderName) -> bool {
         )
 }
 
-fn non_http_llm_failure(kind: LlmNonHttpFailureKindV2, message: String) -> LlmCallFailureV2 {
-    LlmCallFailureV2::NonHttp {
+fn non_http_llm_failure(
+    kind: LlmNonHttpFailureKindV2,
+    message: String,
+) -> LlmContinuationFailureV2 {
+    LlmContinuationFailureV2::NonHttp {
         failure: LlmNonHttpFailureV2 {
             kind,
             message: bounded_utf8(message, NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES),
@@ -2380,10 +2383,10 @@ fn non_http_llm_failure(kind: LlmNonHttpFailureKindV2, message: String) -> LlmCa
     }
 }
 
-fn typed_llm_failure(error: FlowError) -> LlmCallFailureV2 {
+fn typed_llm_failure(error: FlowError) -> LlmContinuationFailureV2 {
     match error {
         FlowError::Upstream(failure) => match failure.status {
-            Some(status) => LlmCallFailureV2::Http {
+            Some(status) => LlmContinuationFailureV2::Http {
                 failure: LlmHttpFailureV2 {
                     status,
                     body: bounded_utf8(failure.body, NATIVE_API_V2_MAX_FAILURE_BODY_BYTES),
@@ -2453,7 +2456,7 @@ fn bounded_utf8(value: String, max_bytes: usize) -> String {
 unsafe fn invoke_typed_llm_result_callback(
     cb: NemoRelayNativeAsyncLlmResultCbV2,
     user_data: *mut c_void,
-    outcome: &LlmCallOutcomeV2,
+    outcome: &LlmContinuationOutcomeV2,
 ) {
     if let Some(outcome) = native_string_from_json(
         &serde_json::to_value(outcome)
@@ -2469,7 +2472,7 @@ unsafe fn invoke_typed_llm_result_callback(
 /// Invokes a unary LLM continuation through native API v2.
 unsafe extern "C" fn native_async_llm_next_invoke_result_v2(
     next: *const NemoRelayNativeAsyncNext,
-    dispatch_json: *const NemoRelayNativeString,
+    invocation_json: *const NemoRelayNativeString,
     cb: NemoRelayNativeAsyncLlmResultCbV2,
     user_data: *mut c_void,
 ) -> NemoRelayStatus {
@@ -2477,19 +2480,20 @@ unsafe extern "C" fn native_async_llm_next_invoke_result_v2(
         return NemoRelayStatus::NullPointer;
     };
     let NativeAsyncNextInner::Llm(next_fn) = &next.inner else {
-        set_native_last_error("typed unary LLM dispatch requires an LLM execution continuation");
+        set_native_last_error("targeted LLM continuation requires an LLM execution continuation");
         return NemoRelayStatus::InvalidArg;
     };
-    let dispatch = match parse_json_arg(dispatch_json, "typed LLM dispatch").and_then(|value| {
-        serde_json::from_value(value).map_err(|error| {
-            set_native_last_error(error.to_string());
-            NemoRelayStatus::InvalidJson
-        })
-    }) {
-        Ok(dispatch) => dispatch,
-        Err(status) => return status,
-    };
-    let (request, target) = match prepare_typed_llm_dispatch(dispatch) {
+    let invocation =
+        match parse_json_arg(invocation_json, "targeted LLM continuation").and_then(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                set_native_last_error(error.to_string());
+                NemoRelayStatus::InvalidJson
+            })
+        }) {
+            Ok(invocation) => invocation,
+            Err(status) => return status,
+        };
+    let (request, target) = match prepare_llm_continuation_invocation(invocation) {
         Ok(prepared) => prepared,
         Err(status) => return status,
     };
@@ -2513,8 +2517,8 @@ unsafe extern "C" fn native_async_llm_next_invoke_result_v2(
             )))
         });
         let outcome = match result {
-            Ok(response) => LlmCallOutcomeV2::Success { response },
-            Err(error) => LlmCallOutcomeV2::Failure {
+            Ok(response) => LlmContinuationOutcomeV2::Success { response },
+            Err(error) => LlmContinuationOutcomeV2::Failure {
                 error: typed_llm_failure(error),
             },
         };
@@ -2687,7 +2691,7 @@ async fn forward_native_async_next_stream_with(
 /// Opens a streaming LLM continuation through native API v2.
 unsafe extern "C" fn native_async_llm_next_open_stream_v2(
     next: *const NemoRelayNativeAsyncNext,
-    dispatch_json: *const NemoRelayNativeString,
+    invocation_json: *const NemoRelayNativeString,
     output_stream: *const NemoRelayNativeAsyncStream,
     cb: NemoRelayNativeAsyncLlmStreamOpenCbV2,
     user_data: *mut c_void,
@@ -2702,21 +2706,21 @@ unsafe extern "C" fn native_async_llm_next_open_stream_v2(
     let output_stream = unsafe { Arc::from_raw(output_stream as *const NativeAsyncStream) };
     let NativeAsyncNextInner::LlmStream(next_fn) = &next.inner else {
         set_native_last_error(
-            "typed streaming LLM dispatch requires an LLM stream execution continuation",
+            "targeted LLM continuation requires an LLM stream execution continuation",
         );
         return NemoRelayStatus::InvalidArg;
     };
-    let dispatch =
-        match parse_json_arg(dispatch_json, "typed streaming LLM dispatch").and_then(|value| {
+    let invocation = match parse_json_arg(invocation_json, "targeted streaming LLM continuation")
+        .and_then(|value| {
             serde_json::from_value(value).map_err(|error| {
                 set_native_last_error(error.to_string());
                 NemoRelayStatus::InvalidJson
             })
         }) {
-            Ok(dispatch) => dispatch,
-            Err(status) => return status,
-        };
-    let (request, target) = match prepare_typed_llm_dispatch(dispatch) {
+        Ok(invocation) => invocation,
+        Err(status) => return status,
+    };
+    let (request, target) = match prepare_llm_continuation_invocation(invocation) {
         Ok(prepared) => prepared,
         Err(status) => return status,
     };
@@ -2781,8 +2785,8 @@ unsafe extern "C" fn native_async_llm_next_open_stream_v2(
                                 while let Some(item) = provider_stream.next().await {
                                     let terminal = item.is_err();
                                     let event = match item {
-                                        Ok(chunk) => LlmStreamEventV2::Chunk { chunk },
-                                        Err(error) => LlmStreamEventV2::Failure {
+                                        Ok(chunk) => LlmContinuationStreamEventV2::Chunk { chunk },
+                                        Err(error) => LlmContinuationStreamEventV2::Failure {
                                             error: typed_llm_failure(error),
                                         },
                                     };
@@ -2795,7 +2799,7 @@ unsafe extern "C" fn native_async_llm_next_open_stream_v2(
                                     && !output_for_producer.cancelled.load(Ordering::Acquire)
                                     && !output_for_producer.settled.load(Ordering::Acquire)
                                 {
-                                    let _ = sender.send(LlmStreamEventV2::Done).await;
+                                    let _ = sender.send(LlmContinuationStreamEventV2::Done).await;
                                 }
                                 output_for_producer
                                     .downstream_aborts
@@ -2893,7 +2897,7 @@ unsafe extern "C" fn native_async_llm_stream_next_v2(
             .await
             .recv()
             .await
-            .unwrap_or_else(|| LlmStreamEventV2::Failure {
+            .unwrap_or_else(|| LlmContinuationStreamEventV2::Failure {
                 error: non_http_llm_failure(
                     LlmNonHttpFailureKindV2::Cancelled,
                     "native API v2 provider stream closed without a terminal event".into(),

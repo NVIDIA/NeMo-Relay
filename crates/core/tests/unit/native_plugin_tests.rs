@@ -115,8 +115,9 @@ unsafe extern "C" fn complete_typed_llm_result(
     user_data: *mut c_void,
     outcome_json: *const NemoRelayNativeString,
 ) {
-    let sender =
-        unsafe { Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<LlmCallOutcomeV2>) };
+    let sender = unsafe {
+        Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<LlmContinuationOutcomeV2>)
+    };
     let outcome = parse_json_arg(outcome_json, "typed LLM result")
         .and_then(|value| serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson))
         .expect("host emitted a valid typed LLM outcome");
@@ -137,7 +138,7 @@ unsafe extern "C" fn record_typed_llm_stream_open(
 ) {
     let sender = unsafe {
         Box::from_raw(
-            user_data as *mut tokio::sync::oneshot::Sender<Result<usize, LlmCallFailureV2>>,
+            user_data as *mut tokio::sync::oneshot::Sender<Result<usize, LlmContinuationFailureV2>>,
         )
     };
     let result = if error_json.is_null() {
@@ -159,9 +160,9 @@ unsafe extern "C" fn record_typed_llm_stream_open(
 
 fn test_dispatch_target(
     url: &str,
-    route: nemo_relay_plugin::LlmDispatchRouteV2,
-) -> nemo_relay_plugin::LlmDispatchTargetV2 {
-    nemo_relay_plugin::LlmDispatchTargetV2 {
+    route: nemo_relay_plugin::LlmContinuationRouteV2,
+) -> nemo_relay_plugin::LlmContinuationTargetV2 {
+    nemo_relay_plugin::LlmContinuationTargetV2 {
         method: "POST".into(),
         url: url.into(),
         route,
@@ -173,9 +174,10 @@ unsafe extern "C" fn record_typed_llm_stream_next(
     user_data: *mut c_void,
     event_json: *const NemoRelayNativeString,
 ) {
-    let sender =
-        unsafe { Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<LlmStreamEventV2>) };
-    let event: LlmStreamEventV2 = parse_json_arg(event_json, "typed LLM stream result")
+    let sender = unsafe {
+        Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<LlmContinuationStreamEventV2>)
+    };
+    let event: LlmContinuationStreamEventV2 = parse_json_arg(event_json, "typed LLM stream result")
         .and_then(|value| serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson))
         .expect("host emitted a valid typed LLM stream event");
     let _ = sender.send(event);
@@ -1279,7 +1281,7 @@ fn assert_native_json_output_and_host_api() {
     let host_api = unsafe { &*native_host_api() };
     assert_eq!(
         host_api.abi_version,
-        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH
+        NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS
     );
     assert_eq!(
         host_api.struct_size,
@@ -1571,23 +1573,23 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let dispatch = native_string_from_json(
-        &serde_json::to_value(LlmDispatchRequestV2 {
+        &serde_json::to_value(LlmContinuationInvocationV2 {
             request: LlmRequest {
                 headers: Map::new(),
                 content: json!({"model": "provider/model"}),
             },
-            target: nemo_relay_plugin::LlmDispatchTargetV2 {
+            target: nemo_relay_plugin::LlmContinuationTargetV2 {
                 headers: BTreeMap::from([("authorization".into(), "Bearer target-secret".into())]),
                 ..test_dispatch_target(
                     "https://provider.example/v1/chat/completions",
-                    nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+                    nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
                 )
             },
         })
         .unwrap(),
     )
     .unwrap();
-    let (sender, receiver) = tokio::sync::oneshot::channel::<LlmCallOutcomeV2>();
+    let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
     assert_eq!(
         unsafe {
             native_async_llm_next_invoke_result_v2(
@@ -1602,8 +1604,8 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
     let outcome = runtime.block_on(receiver).unwrap();
     assert_eq!(
         outcome,
-        LlmCallOutcomeV2::Failure {
-            error: LlmCallFailureV2::Http {
+        LlmContinuationOutcomeV2::Failure {
+            error: LlmContinuationFailureV2::Http {
                 failure: LlmHttpFailureV2 {
                     status: 429,
                     body: "rate limited".into(),
@@ -1639,14 +1641,14 @@ fn native_api_v2_rejects_non_absolute_dispatch_targets_before_continuation() {
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let dispatch = native_string_from_json(
-        &serde_json::to_value(LlmDispatchRequestV2 {
+        &serde_json::to_value(LlmContinuationInvocationV2 {
             request: LlmRequest {
                 headers: Map::new(),
                 content: json!({}),
             },
             target: test_dispatch_target(
                 "/v1/chat/completions",
-                nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
             ),
         })
         .unwrap(),
@@ -1680,11 +1682,11 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
     };
     let mut target = test_dispatch_target(
         "https://provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
     );
     target.method = "CONNECT".into();
     assert_eq!(
-        prepare_typed_llm_dispatch(LlmDispatchRequestV2 {
+        prepare_llm_continuation_invocation(LlmContinuationInvocationV2 {
             request: request.clone(),
             target,
         })
@@ -1694,13 +1696,13 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
 
     let mut target = test_dispatch_target(
         "https://provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
     );
     target
         .headers
         .insert("x-nemo-relay-internal-dispatch-url".into(), "secret".into());
     assert_eq!(
-        prepare_typed_llm_dispatch(LlmDispatchRequestV2 {
+        prepare_llm_continuation_invocation(LlmContinuationInvocationV2 {
             request: request.clone(),
             target,
         })
@@ -1710,13 +1712,14 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
 
     let mut target = test_dispatch_target(
         "https://provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
     );
     target
         .headers
         .insert("host".into(), "attacker.invalid".into());
     assert_eq!(
-        prepare_typed_llm_dispatch(LlmDispatchRequestV2 { request, target }).unwrap_err(),
+        prepare_llm_continuation_invocation(LlmContinuationInvocationV2 { request, target })
+            .unwrap_err(),
         NemoRelayStatus::InvalidArg
     );
 }
@@ -1725,10 +1728,10 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
 fn native_api_v2_rejects_target_url_credentials() {
     let target = test_dispatch_target(
         "https://user:secret@provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
     );
     assert_eq!(
-        prepare_typed_llm_dispatch(LlmDispatchRequestV2 {
+        prepare_llm_continuation_invocation(LlmContinuationInvocationV2 {
             request: LlmRequest {
                 headers: Map::new(),
                 content: json!({}),
@@ -1757,7 +1760,7 @@ fn native_api_v2_bounds_failure_data_and_removes_sensitive_headers() {
         class: UpstreamFailureClass::RetryableStatus,
     }));
 
-    let LlmCallFailureV2::Http { failure } = error else {
+    let LlmContinuationFailureV2::Http { failure } = error else {
         panic!("expected an upstream failure");
     };
     let LlmHttpFailureV2 { body, headers, .. } = failure;
@@ -1877,14 +1880,14 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     let output_stream_ref =
         Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
     let dispatch = native_string_from_json(
-        &serde_json::to_value(LlmDispatchRequestV2 {
+        &serde_json::to_value(LlmContinuationInvocationV2 {
             request: LlmRequest {
                 headers: Map::new(),
                 content: json!({"model": "provider/model", "stream": true}),
             },
             target: test_dispatch_target(
                 "https://provider.example/v1/messages",
-                nemo_relay_plugin::LlmDispatchRouteV2::AnthropicMessages,
+                nemo_relay_plugin::LlmContinuationRouteV2::AnthropicMessages,
             ),
         })
         .unwrap(),
@@ -1892,7 +1895,7 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     .unwrap();
 
     let (open_sender, open_receiver) =
-        tokio::sync::oneshot::channel::<std::result::Result<usize, LlmCallFailureV2>>();
+        tokio::sync::oneshot::channel::<std::result::Result<usize, LlmContinuationFailureV2>>();
     assert_eq!(
         unsafe {
             native_async_llm_next_open_stream_v2(
@@ -1933,7 +1936,7 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
         });
         let terminal = matches!(
             event,
-            LlmStreamEventV2::Done | LlmStreamEventV2::Failure { .. }
+            LlmContinuationStreamEventV2::Done | LlmContinuationStreamEventV2::Failure { .. }
         );
         events.push(event);
         if terminal {
@@ -1943,14 +1946,14 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     assert_eq!(
         events,
         vec![
-            LlmStreamEventV2::Chunk {
+            LlmContinuationStreamEventV2::Chunk {
                 chunk: json!({
                     "type": "content_block_delta",
                     "delta": {"text": "hi"},
                 }),
             },
-            LlmStreamEventV2::Failure {
-                error: LlmCallFailureV2::Http {
+            LlmContinuationStreamEventV2::Failure {
+                error: LlmContinuationFailureV2::Http {
                     failure: LlmHttpFailureV2 {
                         status: 503,
                         body: "unavailable".into(),
@@ -2003,7 +2006,8 @@ fn native_api_v2_provider_stream_rejects_overlapping_next_and_releases_in_flight
         NemoRelayStatus::Ok
     );
 
-    let (overlap_sender, _overlap_receiver) = tokio::sync::oneshot::channel::<LlmStreamEventV2>();
+    let (overlap_sender, _overlap_receiver) =
+        tokio::sync::oneshot::channel::<LlmContinuationStreamEventV2>();
     let overlap_state = Box::into_raw(Box::new(overlap_sender));
     assert_eq!(
         unsafe {
@@ -2037,8 +2041,8 @@ fn native_api_v2_provider_stream_rejects_overlapping_next_and_releases_in_flight
         .expect("provider next callback should be delivered");
     assert!(matches!(
         event,
-        LlmStreamEventV2::Failure {
-            error: LlmCallFailureV2::NonHttp {
+        LlmContinuationStreamEventV2::Failure {
+            error: LlmContinuationFailureV2::NonHttp {
                 failure: LlmNonHttpFailureV2 {
                     kind: LlmNonHttpFailureKindV2::Cancelled,
                     ..
@@ -2073,14 +2077,14 @@ fn native_api_v2_handles_256_concurrent_buffered_dispatches() {
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let dispatch = native_string_from_json(
-        &serde_json::to_value(LlmDispatchRequestV2 {
+        &serde_json::to_value(LlmContinuationInvocationV2 {
             request: LlmRequest {
                 headers: Map::new(),
                 content: json!({"model": "provider/model"}),
             },
             target: test_dispatch_target(
                 "https://provider.example/v1/chat/completions",
-                nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
             ),
         })
         .unwrap(),
@@ -2089,7 +2093,7 @@ fn native_api_v2_handles_256_concurrent_buffered_dispatches() {
 
     let mut receivers = Vec::with_capacity(DISPATCH_COUNT);
     for _ in 0..DISPATCH_COUNT {
-        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmCallOutcomeV2>();
+        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
         assert_eq!(
             unsafe {
                 native_async_llm_next_invoke_result_v2(
@@ -2115,7 +2119,7 @@ fn native_api_v2_handles_256_concurrent_buffered_dispatches() {
     assert_eq!(outcomes.len(), DISPATCH_COUNT);
     assert!(outcomes.into_iter().all(|outcome| {
         outcome
-            == Ok(LlmCallOutcomeV2::Success {
+            == Ok(LlmContinuationOutcomeV2::Success {
                 response: json!({"ok": true}),
             })
     }));
@@ -2155,26 +2159,26 @@ fn native_api_v2_isolates_concurrent_dispatch_targets() {
 
     for index in 0..DISPATCH_COUNT {
         let dispatch = native_string_from_json(
-            &serde_json::to_value(LlmDispatchRequestV2 {
+            &serde_json::to_value(LlmContinuationInvocationV2 {
                 request: LlmRequest {
                     headers: Map::new(),
                     content: json!({"index": index}),
                 },
-                target: nemo_relay_plugin::LlmDispatchTargetV2 {
+                target: nemo_relay_plugin::LlmContinuationTargetV2 {
                     headers: BTreeMap::from([(
                         "authorization".into(),
                         format!("Bearer target-{index}"),
                     )]),
                     ..test_dispatch_target(
                         &format!("https://provider-{index}.example/v1/chat/completions"),
-                        nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+                        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
                     )
                 },
             })
             .unwrap(),
         )
         .unwrap();
-        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmCallOutcomeV2>();
+        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
         assert_eq!(
             unsafe {
                 native_async_llm_next_invoke_result_v2(
@@ -2196,7 +2200,7 @@ fn native_api_v2_isolates_concurrent_dispatch_targets() {
                 receiver
                     .await
                     .expect("dispatch callback should be delivered"),
-                LlmCallOutcomeV2::Success {
+                LlmContinuationOutcomeV2::Success {
                     response: json!({
                         "request": {"index": index},
                         "url": format!("https://provider-{index}.example/v1/chat/completions"),
@@ -2247,14 +2251,14 @@ fn native_api_v2_handles_64_concurrent_100_event_provider_streams() {
     let output_stream_ref =
         Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
     let dispatch = native_string_from_json(
-        &serde_json::to_value(LlmDispatchRequestV2 {
+        &serde_json::to_value(LlmContinuationInvocationV2 {
             request: LlmRequest {
                 headers: Map::new(),
                 content: json!({"model": "provider/model", "stream": true}),
             },
             target: test_dispatch_target(
                 "https://provider.example/v1/chat/completions",
-                nemo_relay_plugin::LlmDispatchRouteV2::OpenaiChat,
+                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
             ),
         })
         .unwrap(),
@@ -2264,7 +2268,7 @@ fn native_api_v2_handles_64_concurrent_100_event_provider_streams() {
     let mut open_receivers = Vec::with_capacity(STREAM_COUNT);
     for _ in 0..STREAM_COUNT {
         let (sender, receiver) =
-            tokio::sync::oneshot::channel::<std::result::Result<usize, LlmCallFailureV2>>();
+            tokio::sync::oneshot::channel::<std::result::Result<usize, LlmContinuationFailureV2>>();
         assert_eq!(
             unsafe {
                 native_async_llm_next_open_stream_v2(
@@ -2310,9 +2314,9 @@ fn native_api_v2_handles_64_concurrent_100_event_provider_streams() {
                     NemoRelayStatus::Ok
                 );
                 match receiver.await.expect("next callback should be delivered") {
-                    LlmStreamEventV2::Chunk { .. } => chunks += 1,
-                    LlmStreamEventV2::Done => break,
-                    LlmStreamEventV2::Failure { error } => {
+                    LlmContinuationStreamEventV2::Chunk { .. } => chunks += 1,
+                    LlmContinuationStreamEventV2::Done => break,
+                    LlmContinuationStreamEventV2::Failure { error } => {
                         panic!("provider stream failed during stress test: {error:?}")
                     }
                 }

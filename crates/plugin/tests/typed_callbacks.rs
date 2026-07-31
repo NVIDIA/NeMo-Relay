@@ -14,11 +14,11 @@ use std::sync::{
 
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
-    Event, EventCategory, EventSanitizeFields, Json, LlmCallFailureV2, LlmCodecIdentity,
+    Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmContinuationFailureV2,
     LlmHttpFailureV2, LlmJsonStream, LlmNext, LlmNonHttpFailureKindV2, LlmNonHttpFailureV2,
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH, NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareKind,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS,
+    NativePlugin, NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareKind,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
     NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
@@ -39,7 +39,7 @@ use serde_json::{Map, json};
 fn native_api_v2_retry_policy_is_derived_from_http_semantics() {
     for status in [408, 425, 429, 500, 502, 503, 504] {
         assert!(
-            LlmCallFailureV2::Http {
+            LlmContinuationFailureV2::Http {
                 failure: LlmHttpFailureV2 {
                     status,
                     body: String::new(),
@@ -52,7 +52,7 @@ fn native_api_v2_retry_policy_is_derived_from_http_semantics() {
     }
     for status in [400, 401, 404, 409, 422, 501] {
         assert!(
-            !LlmCallFailureV2::Http {
+            !LlmContinuationFailureV2::Http {
                 failure: LlmHttpFailureV2 {
                     status,
                     body: String::new(),
@@ -68,7 +68,7 @@ fn native_api_v2_retry_policy_is_derived_from_http_semantics() {
         LlmNonHttpFailureKindV2::Timeout,
     ] {
         assert!(
-            LlmCallFailureV2::NonHttp {
+            LlmContinuationFailureV2::NonHttp {
                 failure: LlmNonHttpFailureV2 {
                     kind,
                     message: String::new(),
@@ -85,7 +85,7 @@ fn native_api_v2_retry_policy_is_derived_from_http_semantics() {
         LlmNonHttpFailureKindV2::Internal,
     ] {
         assert!(
-            !LlmCallFailureV2::NonHttp {
+            !LlmContinuationFailureV2::NonHttp {
                 failure: LlmNonHttpFailureV2 {
                     kind,
                     message: String::new(),
@@ -399,7 +399,7 @@ static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestInte
 #[test]
 fn native_abi_v3_struct_sizes_are_self_describing() {
     assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 3);
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH, 4);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS, 4);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
