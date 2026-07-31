@@ -26,6 +26,42 @@ describe('adaptive runtime bridge', () => {
     assert.deepEqual(adaptive.validateConfig(adaptive.defaultConfig()).diagnostics, []);
   });
 
+  it('carries the tool-result cache section through validation', () => {
+    const config = {
+      version: 1,
+      responseCache: adaptive.responseCacheConfig({
+        namespace: 'node-tool-cache-test',
+        tools: {
+          enabled: true,
+          classes: { read_only: { cacheable: true, members: ['docs_lookup'] } },
+        },
+      }),
+    };
+    assert.equal(config.responseCache.tools.enabled, true);
+    assert.deepEqual(adaptive.validateConfig(config).diagnostics, []);
+  });
+
+  it('rejects a tool listed in multiple classes', () => {
+    const config = {
+      version: 1,
+      responseCache: adaptive.responseCacheConfig({
+        namespace: 'node-tool-cache-test',
+        tools: {
+          enabled: true,
+          classes: {
+            a: { cacheable: true, members: ['dup'] },
+            b: { cacheable: true, members: ['dup'] },
+          },
+        },
+      }),
+    };
+    const codes = adaptive.validateConfig(config).diagnostics.map((diag) => diag.code);
+    assert.ok(
+      codes.includes('response_cache.tool_multiple_classes'),
+      `expected tool_multiple_classes, got ${JSON.stringify(codes)}`,
+    );
+  });
+
   it('builds cache telemetry events from one options object', () => {
     const event = adaptive.buildCacheTelemetryEvent({
       provider: 'openai',

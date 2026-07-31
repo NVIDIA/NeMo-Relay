@@ -331,6 +331,26 @@ describe('adaptive helpers', () => {
     });
   });
 
+  it('serializes nested tool-cache config', () => {
+    const spec = adaptive.ComponentSpec({
+      version: 1,
+      responseCache: {
+        tools: {
+          enabled: true,
+          default: { ttlSeconds: 30, bypassRate: 0.1, argSkip: ['trace'] },
+          classes: { readOnly: { cacheable: true, members: ['search'] } },
+          overrides: { search: { toolVersion: 'v2', argSkip: ['requestId'] } },
+        },
+      },
+    });
+    assert.deepEqual(spec.config.response_cache.tools, {
+      enabled: true,
+      default: { ttl_seconds: 30, bypass_rate: 0.1, arg_skip: ['trace'] },
+      classes: { readOnly: { cacheable: true, members: ['search'] } },
+      overrides: { search: { tool_version: 'v2', arg_skip: ['requestId'] } },
+    });
+  });
+
   it('serializes response-cache config at both native boundaries', () => {
     const unscoped = adaptive.validateConfig({ version: 1, responseCache: {} });
     assert.ok(unscoped.diagnostics.some(({ code }) => code === 'response_cache.missing_namespace'));

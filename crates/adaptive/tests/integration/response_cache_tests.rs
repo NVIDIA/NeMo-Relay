@@ -18,10 +18,11 @@ use nemo_relay::api::llm::{
 };
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    NemoRelayContextState, global_context,
+    NemoRelayContextState, ToolExecutionNextFn, global_context,
 };
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{
     PluginConfig, clear_plugin_configuration, initialize_plugins_exact, validate_plugin_config,
@@ -29,6 +30,7 @@ use nemo_relay::plugin::{
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, StateConfig,
+    ToolCacheConfig, ToolClass, ToolOverride,
 };
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
@@ -1826,4 +1828,570 @@ async fn redis_backend_shares_entries_across_store_instances() {
 
     writer.delete(key).await.expect("delete");
     assert!(reader.get(key).await.expect("get").is_none());
+}
+
+fn counting_tool(calls: Arc<AtomicUsize>, result: Json) -> ToolExecutionNextFn {
+    Arc::new(move |_args: Json| {
+        let calls = Arc::clone(&calls);
+        let result = result.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(result)
+        })
+    })
+}
+
+async fn tool_call(name: &str, tool: &ToolExecutionNextFn, args: Json) -> Json {
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name(name)
+            .args(args)
+            .func(tool.clone())
+            .build(),
+    )
+    .await
+    .unwrap()
+}
+
+fn one_cacheable_class(members: &[&str]) -> ToolCacheConfig {
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "read_only".to_string(),
+        ToolClass {
+            cacheable: true,
+            members: members.iter().map(|member| member.to_string()).collect(),
+            ..ToolClass::default()
+        },
+    );
+    ToolCacheConfig {
+        enabled: true,
+        classes,
+        ..ToolCacheConfig::default()
+    }
+}
+
+fn cache_with_tools(tools: ToolCacheConfig) -> ResponseCacheConfig {
+    ResponseCacheConfig {
+        namespace: "tool-cache-integration-test".to_string(),
+        tools: Some(tools),
+        ..ResponseCacheConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn classified_tool_repeat_is_a_hit_that_skips_the_tool() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "the answer is 42"}));
+
+    let first = tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+    let second = tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a classified-cacheable tool must run once; the repeat is served from cache"
+    );
+    assert_eq!(first, second, "a hit returns the stored result unchanged");
+}
+
+#[tokio::test]
+async fn a_different_arg_is_a_tool_miss() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "x"}));
+
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+    tool_call("docs_lookup", &tool, json!({"q": "go"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "distinct arguments must each run the tool"
+    );
+}
+
+#[tokio::test]
+async fn unrepresentable_integer_args_bypass_the_tool_cache() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["get_record"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"record": "a"}));
+
+    tool_call("get_record", &tool, json!({"id": 18014398509481985_i64})).await;
+    tool_call("get_record", &tool, json!({"id": 18014398509481986_i64})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "distinct integer ids beyond 2^53 canonicalize to the same bytes; both calls must run live"
+    );
+}
+
+#[tokio::test]
+async fn an_effectful_class_is_never_cached() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "effectful".to_string(),
+        ToolClass {
+            cacheable: false,
+            members: vec!["send_email".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    activate_cache(cache_with_tools(ToolCacheConfig {
+        enabled: true,
+        classes,
+        ..ToolCacheConfig::default()
+    }))
+    .await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"sent": true}));
+
+    tool_call("send_email", &tool, json!({"to": "a@b.c"})).await;
+    tool_call("send_email", &tool, json!({"to": "a@b.c"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "an effectful (cacheable=false) tool must run every time — a hit would skip the side effect"
+    );
+}
+
+#[tokio::test]
+async fn default_bucket_enabled_caches_unknown_tools() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(ToolCacheConfig {
+        enabled: true,
+        default: ToolClass {
+            cacheable: true,
+            ..ToolClass::default()
+        },
+        ..ToolCacheConfig::default()
+    }))
+    .await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"r": 1}));
+
+    tool_call("mystery", &tool, json!({"x": 1})).await;
+    tool_call("mystery", &tool, json!({"x": 1})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "flipping default on gives broad coverage: the unknown tool's repeat hits"
+    );
+}
+
+#[tokio::test]
+async fn arg_skip_merges_calls_differing_only_in_a_skipped_arg() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "read_only".to_string(),
+        ToolClass {
+            cacheable: true,
+            arg_skip: vec!["request_id".to_string()],
+            members: vec!["lookup".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    activate_cache(cache_with_tools(ToolCacheConfig {
+        enabled: true,
+        classes,
+        ..ToolCacheConfig::default()
+    }))
+    .await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"r": 1}));
+
+    tool_call("lookup", &tool, json!({"q": "x", "request_id": "a"})).await;
+    tool_call("lookup", &tool, json!({"q": "x", "request_id": "b"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a difference only in a skipped arg must not prevent a hit"
+    );
+}
+
+#[tokio::test]
+async fn tool_bypass_rate_one_always_runs_live() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "volatile".to_string(),
+        ToolClass {
+            cacheable: true,
+            bypass_rate: Some(1.0),
+            members: vec!["get_weather".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    activate_cache(cache_with_tools(ToolCacheConfig {
+        enabled: true,
+        classes,
+        ..ToolCacheConfig::default()
+    }))
+    .await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"temp": 20}));
+
+    tool_call("get_weather", &tool, json!({"city": "NYC"})).await;
+    tool_call("get_weather", &tool, json!({"city": "NYC"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "bypass_rate = 1.0 must always run the tool live (never serve a hit)"
+    );
+}
+
+#[tokio::test]
+async fn disabled_tools_section_does_not_cache() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut tools = one_cacheable_class(&["docs_lookup"]);
+    tools.enabled = false;
+    activate_cache(cache_with_tools(tools)).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "x"}));
+
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "with tools.enabled = false the tool intercept is not installed"
+    );
+}
+
+#[tokio::test]
+async fn error_shaped_tool_results_are_still_cached() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"error": "not found"}));
+
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a successful tool result is cached regardless of an `error` key in its body"
+    );
+}
+
+#[tokio::test]
+async fn tool_hit_emits_a_surface_tool_mark_with_saved_invocations() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
+
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let sink = Arc::clone(&captured);
+    register_subscriber(
+        "response_cache_tool_capture",
+        Arc::new(move |event: &Event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "x"}));
+
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await; // miss
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await; // hit
+    flush_subscribers().unwrap();
+
+    let events = captured.lock().unwrap();
+    let hit_mark = events
+        .iter()
+        .find(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("hit")
+        })
+        .expect("a response_cache tool hit mark should be emitted");
+    let metadata = hit_mark.metadata().expect("hit mark has metadata");
+    assert_eq!(
+        metadata
+            .get("nemo_relay.response_cache.surface")
+            .and_then(Json::as_str),
+        Some("tool"),
+        "the tool hit mark must be tagged surface = tool"
+    );
+    assert_eq!(
+        metadata
+            .get("nemo_relay.response_cache.saved_invocations")
+            .and_then(Json::as_u64),
+        Some(1),
+        "a tool hit reports one saved invocation"
+    );
+
+    drop(events);
+    deregister_subscriber("response_cache_tool_capture").unwrap();
+}
+
+#[tokio::test]
+async fn llm_and_tool_surfaces_share_one_store_without_collision() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
+
+    let llm_calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_provider(Arc::clone(&llm_calls), sample_body());
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&tool_calls), json!({"doc": "x"}));
+
+    call(&provider, chat_request("shared store?")).await;
+    call(&provider, chat_request("shared store?")).await;
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+
+    assert_eq!(
+        llm_calls.load(Ordering::SeqCst),
+        1,
+        "the LLM surface still hits on repeat"
+    );
+    assert_eq!(
+        tool_calls.load(Ordering::SeqCst),
+        1,
+        "the tool surface hits on repeat; keys are disjoint so the surfaces do not collide"
+    );
+}
+
+#[tokio::test]
+async fn invalid_tool_config_is_rejected_by_validation() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "class_a".to_string(),
+        ToolClass {
+            cacheable: true,
+            members: vec!["dup".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    classes.insert(
+        "class_b".to_string(),
+        ToolClass {
+            cacheable: true,
+            ttl_seconds: Some(0),
+            members: vec!["dup".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            default: ToolClass {
+                members: vec!["safe_lookup".to_string()],
+                ..ToolClass::default()
+            },
+            classes,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_multiple_classes"),
+        "a tool in multiple classes must be rejected: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_ttl"),
+        "a zero class TTL must be rejected: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_default_members"),
+        "members on the default bucket must be rejected: {:?}",
+        report.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn wildcard_member_validation_rules() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    let validate = |classes: std::collections::BTreeMap<String, ToolClass>| {
+        let adaptive = AdaptiveConfig {
+            response_cache: Some(cache_with_tools(ToolCacheConfig {
+                enabled: true,
+                classes,
+                ..ToolCacheConfig::default()
+            })),
+            ..AdaptiveConfig::default()
+        };
+        validate_plugin_config(&PluginConfig {
+            components: vec![ComponentSpec::new(adaptive).into()],
+            ..PluginConfig::default()
+        })
+    };
+    let cacheable_class = |members: &[&str]| ToolClass {
+        cacheable: true,
+        members: members.iter().map(|member| member.to_string()).collect(),
+        ..ToolClass::default()
+    };
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("class_a".to_string(), cacheable_class(&["docs_*"]));
+    classes.insert("class_b".to_string(), cacheable_class(&["docs_*"]));
+    let report = validate(classes);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_multiple_classes"),
+        "an identical pattern in two classes must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("class_a".to_string(), cacheable_class(&["docs_*"]));
+    classes.insert("class_b".to_string(), cacheable_class(&["*_lookup"]));
+    let report = validate(classes);
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code.starts_with("response_cache.tool")),
+        "distinct overlapping patterns must validate cleanly: {:?}",
+        report.diagnostics
+    );
+
+    for catch_all in ["*", "**"] {
+        let mut classes = std::collections::BTreeMap::new();
+        classes.insert("everything".to_string(), cacheable_class(&[catch_all]));
+        let report = validate(classes);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_member"),
+            "a cacheable '{catch_all}' member must warn: {:?}",
+            report.diagnostics
+        );
+    }
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "*".to_string(),
+        ToolOverride {
+            cacheable: Some(true),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_override"),
+        "a cacheable '*' override must warn: {:?}",
+        report.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    let adaptive_json = json!({
+        "response_cache": {
+            "tools": {
+                "enabled": true,
+                "classes": {
+                    "read_only": {
+                        "cacheable": true,
+                        "members": ["docs_lookup"],
+                        "not_a_field": 7
+                    }
+                }
+            }
+        }
+    });
+    let component = nemo_relay::plugin::PluginComponentSpec {
+        kind: "adaptive".to_string(),
+        enabled: true,
+        config: adaptive_json.as_object().unwrap().clone(),
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![component],
+        ..PluginConfig::default()
+    });
+
+    let unknown_field_diags: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "adaptive.unknown_field")
+        .collect();
+    assert_eq!(
+        unknown_field_diags.len(),
+        1,
+        "exactly one unknown-field warning (the bogus field), not the class name: {:?}",
+        report.diagnostics
+    );
+    assert_eq!(
+        unknown_field_diags[0].field.as_deref(),
+        Some("not_a_field"),
+        "the warning must point at the bogus field, never the class name"
+    );
 }

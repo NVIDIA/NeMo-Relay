@@ -66,6 +66,8 @@ export interface ResponseCacheConfig {
   keyStrategy?: string;
   headerAllowlist?: string[];
   backend?: BackendSpec;
+  /** Opt-in tool-result cache; omit to leave the tool surface off. */
+  tools?: ToolCacheConfig;
 }
 
 interface ResponseCachePluginConfig {
@@ -78,7 +80,54 @@ interface ResponseCachePluginConfig {
   key_strategy?: string;
   header_allowlist?: string[];
   backend?: BackendSpec;
+  tools?: ToolCachePluginConfig;
 }
+
+/** Shared policy; omitted TTL and bypass rate inherit response-cache defaults. */
+export interface ToolClass {
+  cacheable?: boolean;
+  ttlSeconds?: number;
+  bypassRate?: number;
+  argSkip?: string[];
+  members?: string[];
+}
+
+/** Per-tool refinement; an explicit `argSkip: []` clears the class list. */
+export interface ToolOverride {
+  cacheable?: boolean;
+  ttlSeconds?: number;
+  bypassRate?: number;
+  toolVersion?: string;
+  argSkip?: string[];
+}
+
+/** Opt-in caching for tools that are read-only and stable for their TTL. */
+export interface ToolCacheConfig {
+  enabled?: boolean;
+  priority?: number;
+  default?: ToolClass;
+  classes?: Record<string, ToolClass>;
+  overrides?: Record<string, ToolOverride>;
+}
+
+type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'argSkip'> & {
+  ttl_seconds?: number;
+  bypass_rate?: number;
+  arg_skip?: string[];
+};
+
+type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+  ttl_seconds?: number;
+  bypass_rate?: number;
+  tool_version?: string;
+  arg_skip?: string[];
+};
+
+type ToolCachePluginConfig = Omit<ToolCacheConfig, 'default' | 'classes' | 'overrides'> & {
+  default?: ToolClassPluginConfig;
+  classes?: Record<string, ToolClassPluginConfig>;
+  overrides?: Record<string, ToolOverridePluginConfig>;
+};
 
 /** Canonical config object for the top-level adaptive component. */
 export interface Config {

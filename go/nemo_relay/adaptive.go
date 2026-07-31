@@ -94,6 +94,35 @@ type ResponseCacheConfig struct {
 	// Backend selects the cache's own storage backend (distinct from the adaptive
 	// state backend). Defaults to in-memory when nil.
 	Backend *ResponseCacheBackendConfig `json:"backend,omitempty"`
+	// Tools configures the optional tool-result cache.
+	Tools *ResponseCacheToolsConfig `json:"tools,omitempty"`
+}
+
+// ResponseCacheToolsConfig configures caching for read-only, stable tools.
+type ResponseCacheToolsConfig struct {
+	Enabled   bool                                 `json:"enabled,omitempty"`
+	Priority  int32                                `json:"priority"`
+	Default   *ResponseCacheToolClass              `json:"default,omitempty"`
+	Classes   map[string]ResponseCacheToolClass    `json:"classes,omitempty"`
+	Overrides map[string]ResponseCacheToolOverride `json:"overrides,omitempty"`
+}
+
+// ResponseCacheToolClass defines a shared tool-cache policy.
+type ResponseCacheToolClass struct {
+	Cacheable  bool     `json:"cacheable,omitempty"`
+	TTLSeconds *uint64  `json:"ttl_seconds,omitempty"`
+	BypassRate *float64 `json:"bypass_rate,omitempty"`
+	ArgSkip    []string `json:"arg_skip,omitempty"`
+	Members    []string `json:"members,omitempty"`
+}
+
+// ResponseCacheToolOverride refines a resolved tool-cache policy.
+type ResponseCacheToolOverride struct {
+	Cacheable   *bool     `json:"cacheable,omitempty"`
+	TTLSeconds  *uint64   `json:"ttl_seconds,omitempty"`
+	BypassRate  *float64  `json:"bypass_rate,omitempty"`
+	ToolVersion *string   `json:"tool_version,omitempty"`
+	ArgSkip     *[]string `json:"arg_skip,omitempty"`
 }
 
 // ResponseCacheBackendConfig selects the response-cache backend kind and options.
@@ -209,6 +238,13 @@ func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendCon
 			"url":        url,
 			"key_prefix": keyPrefix,
 		},
+	}
+}
+
+// NewResponseCacheToolsConfig returns a disabled tool-result cache config.
+func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
+	return ResponseCacheToolsConfig{
+		Priority: 50,
 	}
 }
 

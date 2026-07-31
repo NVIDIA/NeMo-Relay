@@ -24,10 +24,13 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, NemoRelayContextState, global_context};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, NemoRelayContextState, ToolExecutionNextFn, global_context,
+};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use nemo_relay::plugin::clear_plugin_configuration;
-use nemo_relay_adaptive::ResponseCacheConfig;
+use nemo_relay_adaptive::{ResponseCacheConfig, ToolCacheConfig, ToolClass};
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
 
@@ -325,6 +328,190 @@ async fn reinitialized_cache_starts_empty() {
         "entries must not leak across plugin re-initialization: a leaked store \
          would let the second run hit on the first run's distinct prompts"
     );
+}
+
+fn counting_tool(runs: Arc<AtomicUsize>, result: Json) -> ToolExecutionNextFn {
+    Arc::new(move |_args: Json| {
+        let runs = Arc::clone(&runs);
+        let result = result.clone();
+        Box::pin(async move {
+            runs.fetch_add(1, Ordering::SeqCst);
+            Ok(result)
+        })
+    })
+}
+
+async fn tool_call(name: &str, tool: &ToolExecutionNextFn, args: Json) -> Json {
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name(name)
+            .args(args)
+            .func(tool.clone())
+            .build(),
+    )
+    .await
+    .unwrap()
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ToolStats {
+    hits: usize,
+    misses: usize,
+    saved_invocations: u64,
+}
+
+fn register_tool_stats_subscriber(name: &str, stats: Arc<StdMutex<ToolStats>>) {
+    register_subscriber(
+        name,
+        Arc::new(move |event: &Event| {
+            if event.name() != "response_cache" {
+                return;
+            }
+            let status = event
+                .data()
+                .and_then(|data| data.get("status"))
+                .and_then(Json::as_str);
+            let mut stats = stats.lock().unwrap();
+            match status {
+                Some("hit") => {
+                    stats.hits += 1;
+                    stats.saved_invocations += event
+                        .metadata()
+                        .and_then(|m| m.get("nemo_relay.response_cache.saved_invocations"))
+                        .and_then(Json::as_u64)
+                        .unwrap_or(0);
+                }
+                Some("miss") => stats.misses += 1,
+                _ => {}
+            }
+        }),
+    )
+    .unwrap();
+}
+
+fn tool_cache_config(cacheable_tools: &[&str], effectful_tools: &[&str]) -> ResponseCacheConfig {
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "read_only".to_string(),
+        ToolClass {
+            cacheable: true,
+            members: cacheable_tools.iter().map(|t| t.to_string()).collect(),
+            ..ToolClass::default()
+        },
+    );
+    classes.insert(
+        "effectful".to_string(),
+        ToolClass {
+            cacheable: false,
+            members: effectful_tools.iter().map(|t| t.to_string()).collect(),
+            ..ToolClass::default()
+        },
+    );
+    ResponseCacheConfig {
+        namespace: "bench_tool".into(),
+        tools: Some(ToolCacheConfig {
+            enabled: true,
+            classes,
+            ..ToolCacheConfig::default()
+        }),
+        ..ResponseCacheConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn tool_cache_benchmark_saves_invocations_for_cacheable_tools_only() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(tool_cache_config(
+        &["docs_lookup", "unit_convert"],
+        &["send_email"],
+    ))
+    .await;
+
+    let stats = Arc::new(StdMutex::new(ToolStats::default()));
+    register_tool_stats_subscriber("bench_tool_stats", Arc::clone(&stats));
+
+    let docs_runs = Arc::new(AtomicUsize::new(0));
+    let unit_runs = Arc::new(AtomicUsize::new(0));
+    let email_runs = Arc::new(AtomicUsize::new(0));
+    let adhoc_runs = Arc::new(AtomicUsize::new(0));
+    let docs = counting_tool(Arc::clone(&docs_runs), json!({"doc": "the answer is 42"}));
+    let unit = counting_tool(Arc::clone(&unit_runs), json!({"value": 3.1}));
+    let email = counting_tool(Arc::clone(&email_runs), json!({"sent": true}));
+    let adhoc = counting_tool(
+        Arc::clone(&adhoc_runs),
+        json!({"fact": "octopuses have three hearts"}),
+    );
+
+    tool_call("docs_lookup", &docs, json!({"q": "rust"})).await;
+    tool_call("docs_lookup", &docs, json!({"q": "rust"})).await;
+    tool_call("docs_lookup", &docs, json!({"q": "rust"})).await;
+    tool_call("docs_lookup", &docs, json!({"q": "go"})).await;
+    tool_call(
+        "unit_convert",
+        &unit,
+        json!({"from": "km", "to": "mi", "v": 5}),
+    )
+    .await;
+    tool_call(
+        "unit_convert",
+        &unit,
+        json!({"from": "km", "to": "mi", "v": 5}),
+    )
+    .await;
+    tool_call("send_email", &email, json!({"to": "a@b.c"})).await;
+    tool_call("send_email", &email, json!({"to": "a@b.c"})).await;
+    tool_call("random_fact", &adhoc, json!({"topic": "space"})).await;
+    tool_call("random_fact", &adhoc, json!({"topic": "space"})).await;
+    flush_subscribers().unwrap();
+
+    let stats = *stats.lock().unwrap();
+    let baseline_invocations: u64 = 10;
+    let served_invocations = (docs_runs.load(Ordering::SeqCst)
+        + unit_runs.load(Ordering::SeqCst)
+        + email_runs.load(Ordering::SeqCst)
+        + adhoc_runs.load(Ordering::SeqCst)) as u64;
+
+    eprintln!(
+        "[tool-cache] saved_invocations={}/{}  runs: docs={}, unit={}, email(effectful)={}, \
+         random_fact(default)={}",
+        stats.saved_invocations,
+        baseline_invocations,
+        docs_runs.load(Ordering::SeqCst),
+        unit_runs.load(Ordering::SeqCst),
+        email_runs.load(Ordering::SeqCst),
+        adhoc_runs.load(Ordering::SeqCst),
+    );
+
+    assert_eq!(
+        docs_runs.load(Ordering::SeqCst),
+        2,
+        "docs_lookup runs twice: once for q=rust (2 repeats hit) and once for the distinct q=go"
+    );
+    assert_eq!(
+        unit_runs.load(Ordering::SeqCst),
+        1,
+        "unit_convert runs once; the identical repeat is a hit"
+    );
+    assert_eq!(
+        email_runs.load(Ordering::SeqCst),
+        2,
+        "an effectful tool must never be cached (a hit would skip the side effect)"
+    );
+    assert_eq!(
+        adhoc_runs.load(Ordering::SeqCst),
+        2,
+        "an unclassified (default) tool is not cached by default"
+    );
+    assert_eq!(stats.hits, 3, "exactly three tool-cache hits");
+    assert_eq!(stats.saved_invocations, 3, "three saved invocations");
+    assert_eq!(
+        served_invocations + stats.saved_invocations,
+        baseline_invocations,
+        "baseline_invocations == served_invocations + saved_invocations"
+    );
+
+    deregister_subscriber("bench_tool_stats").unwrap();
 }
 
 #[tokio::test]

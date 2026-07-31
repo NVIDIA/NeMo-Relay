@@ -7,7 +7,7 @@ use nemo_relay::plugin::ConfigPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
-use crate::response_cache::config::{BackendConfig, KEY_STRATEGY_EXACT_REQUEST};
+use crate::response_cache::config::{BackendConfig, KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
 
 /// Canonical config document for the adaptive plugin component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +217,9 @@ pub struct ResponseCacheConfig {
     pub header_allowlist: Vec<String>,
     /// Storage backend selection.
     pub backend: BackendConfig,
+    /// Opt-in tool-result cache configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolCacheConfig>,
 }
 
 impl Default for ResponseCacheConfig {
@@ -230,6 +233,7 @@ impl Default for ResponseCacheConfig {
             key_strategy: KEY_STRATEGY_EXACT_REQUEST.to_string(),
             header_allowlist: Vec::new(),
             backend: BackendConfig::default(),
+            tools: None,
         }
     }
 }
@@ -405,6 +409,7 @@ nemo_relay::editor_config! {
             nested: BackendConfig,
             default: BackendConfig,
         },
+        tools => { label: "tools", kind: Json, optional: true },
     }
 }
 

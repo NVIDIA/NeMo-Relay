@@ -9,6 +9,8 @@
 //! response-cache-specific backend config and the key-strategy constant next to
 //! the key/store code that consumes them.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
@@ -62,4 +64,73 @@ nemo_relay::editor_config! {
         kind => { label: "kind", kind: Enum, values: ["in_memory", "redis"] },
         config => { label: "config", kind: Json },
     }
+}
+
+/// Opt-in tool-result cache configuration.
+///
+/// Cache only tools that are read-only and stable for their TTL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolCacheConfig {
+    /// Master switch; off by default.
+    pub enabled: bool,
+    /// Tool execution-intercept priority.
+    pub priority: i32,
+    /// Policy for unclassified tools; not cacheable by default.
+    pub default: ToolClass,
+    /// Named tool classes.
+    pub classes: BTreeMap<String, ToolClass>,
+    /// Per-tool refinements keyed by exact name or wildcard.
+    pub overrides: BTreeMap<String, ToolOverride>,
+}
+
+impl Default for ToolCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            priority: 50,
+            default: ToolClass::default(),
+            classes: BTreeMap::new(),
+            overrides: BTreeMap::new(),
+        }
+    }
+}
+
+/// Policy shared by a class of tools.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolClass {
+    /// Whether class members may be served from cache.
+    pub cacheable: bool,
+    /// TTL in seconds; inherits the response-cache TTL when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+    /// Live-rerun probability; inherits the response-cache rate when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bypass_rate: Option<f64>,
+    /// Top-level argument keys dropped before keying.
+    pub arg_skip: Vec<String>,
+    /// Exact tool names or `*` wildcard patterns in this class.
+    pub members: Vec<String>,
+}
+
+/// Per-tool refinement applied after class resolution.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolOverride {
+    /// Overrides the class cacheability.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cacheable: Option<bool>,
+    /// Overrides the class TTL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+    /// Overrides the class bypass rate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bypass_rate: Option<f64>,
+    /// Version string folded into the cache key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_version: Option<String>,
+    /// Replaces the class argument skip list when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arg_skip: Option<Vec<String>>,
 }

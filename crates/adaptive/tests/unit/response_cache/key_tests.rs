@@ -965,3 +965,65 @@ fn null_text_system_block_does_not_collide_with_no_system() {
         "a null-text system block must not key like an absent system"
     );
 }
+
+fn tool_key(
+    namespace: &str,
+    tool: &str,
+    version: Option<&str>,
+    args: Json,
+    arg_skip: &[String],
+) -> String {
+    match build_tool_cache_key(namespace, tool, version, &args, arg_skip) {
+        KeyOutcome::Key(key) => key,
+        other => panic!("expected a tool key, got {other:?}"),
+    }
+}
+
+#[test]
+fn same_tool_and_args_yield_the_same_key() {
+    let args = json!({"q": "weather", "units": "metric"});
+    assert_eq!(
+        tool_key("", "get_weather", None, args.clone(), &[]),
+        tool_key(
+            "",
+            "get_weather",
+            None,
+            json!({"units": "metric", "q": "weather"}),
+            &[]
+        )
+    );
+}
+
+#[test]
+fn tool_name_args_namespace_and_version_each_separate_keys() {
+    let base = || json!({"q": "x"});
+    let key = tool_key("", "t", None, base(), &[]);
+    assert_ne!(key, tool_key("", "t", None, json!({"q": "y"}), &[]), "args");
+    assert_ne!(key, tool_key("", "other", None, base(), &[]), "tool name");
+    assert_ne!(key, tool_key("ns", "t", None, base(), &[]), "namespace");
+    assert_ne!(key, tool_key("", "t", Some("v2"), base(), &[]), "version");
+}
+
+#[test]
+fn arg_skip_drops_only_the_listed_keys() {
+    let skip = vec!["request_id".to_string()];
+    assert_eq!(
+        tool_key("", "t", None, json!({"q": "x", "request_id": "a"}), &skip),
+        tool_key("", "t", None, json!({"q": "x", "request_id": "b"}), &skip)
+    );
+    assert_ne!(
+        tool_key("", "t", None, json!({"q": "x", "request_id": "a"}), &skip),
+        tool_key("", "t", None, json!({"q": "y", "request_id": "a"}), &skip)
+    );
+}
+
+#[test]
+fn tool_keys_are_disjoint_from_llm_keys() {
+    let llm = key_of(
+        "openai",
+        &request(json!({"model": "t", "messages": []})),
+        &cache_all_config(),
+    );
+    let tool = tool_key("", "t", None, json!({"messages": []}), &[]);
+    assert_ne!(llm, tool);
+}

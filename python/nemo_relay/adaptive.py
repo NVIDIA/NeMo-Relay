@@ -252,6 +252,113 @@ class AcgConfig:
 
 
 @dataclass(slots=True)
+class ToolClass:
+    """One tool caching class (also the shape of the ``default`` default bucket).
+
+    Args:
+        cacheable: Whether tools in this class may be served from cache. Off by
+            default — a hit suppresses the real call, so caching must be opted in.
+        ttl_seconds: TTL for this class; inherits ``response_cache.ttl_seconds``
+            when ``None``.
+        bypass_rate: Live-rerun probability for this class; inherits
+            ``response_cache.bypass_rate`` when ``None``.
+        arg_skip: Argument keys dropped before keying (default empty: key on all args).
+        members: Tool names in this class (unused for the ``default`` bucket).
+            Names may use ``*`` wildcards; an exact member wins over any
+            wildcard match, the most-specific pattern wins among wildcards, and
+            unmatched tools fall to ``default``.
+    """
+
+    cacheable: bool = False
+    ttl_seconds: int | None = None
+    bypass_rate: float | None = None
+    arg_skip: list[str] = field(default_factory=list)
+    members: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this tool class to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "cacheable": self.cacheable,
+                "ttl_seconds": self.ttl_seconds,
+                "bypass_rate": self.bypass_rate,
+                "arg_skip": self.arg_skip,
+                "members": self.members,
+            }
+        )
+
+
+@dataclass(slots=True)
+class ToolOverride:
+    """Per-tool refinement applied on top of the tool's resolved class.
+
+    Args:
+        cacheable: Overrides the class ``cacheable`` for just this tool.
+        ttl_seconds: Overrides the class TTL for just this tool.
+        bypass_rate: Overrides the class bypass rate for just this tool.
+        tool_version: Version string folded into the key so a deployment can bust
+            stale entries before their TTL.
+        arg_skip: Replaces the class ``arg_skip`` when not ``None`` (``None``
+            inherits the class list; ``[]`` clears it).
+    """
+
+    cacheable: bool | None = None
+    ttl_seconds: int | None = None
+    bypass_rate: float | None = None
+    tool_version: str | None = None
+    arg_skip: list[str] | None = None
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this tool override to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "cacheable": self.cacheable,
+                "ttl_seconds": self.ttl_seconds,
+                "bypass_rate": self.bypass_rate,
+                "tool_version": self.tool_version,
+                "arg_skip": self.arg_skip,
+            }
+        )
+
+
+@dataclass(slots=True)
+class ToolCacheConfig:
+    """Opt-in tool-result cache settings.
+
+    A separate surface under ``response_cache`` keyed on tool name + arguments and
+    gated by user-declared safety classes. Off until ``enabled`` is set; any tool
+    not listed in a class falls into ``default``, which defaults to not cached.
+
+    Args:
+        enabled: Master switch for the tool surface. Off by default.
+        priority: Tool execution-intercept priority. Lower runs first/outermost.
+        default: Policy for tools not listed in any class (defaults to not cached).
+        classes: Named tool classes, each with its own policy and member list.
+        overrides: Per-tool refinements applied on top of the resolved class.
+            Keys may be exact tool names or ``*`` patterns; an exact key wins
+            outright, then the most-specific matching pattern applies.
+    """
+
+    enabled: bool = False
+    priority: int = 50
+    default: ToolClass = field(default_factory=ToolClass)
+    classes: dict[str, ToolClass] = field(default_factory=dict)
+    overrides: dict[str, ToolOverride] = field(default_factory=dict)
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this tool-cache config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "enabled": self.enabled,
+                "priority": self.priority,
+                "default": _normalize(self.default),
+                "classes": {name: _normalize(cls) for name, cls in self.classes.items()},
+                "overrides": {name: _normalize(ov) for name, ov in self.overrides.items()},
+            }
+        )
+
+
+@dataclass(slots=True)
 class ResponseCacheConfig:
     """Opt-in LLM response cache (exact-match) settings.
 
@@ -271,6 +378,7 @@ class ResponseCacheConfig:
         key_strategy: Key strategy. Only ``"exact_request"`` is supported.
         header_allowlist: Request headers folded into the key; never auth headers.
         backend: Cache storage backend (``in_memory`` or ``redis``).
+        tools: Opt-in tool-result cache; ``None`` leaves it off.
     """
 
     ttl_seconds: int = 3600
@@ -281,6 +389,7 @@ class ResponseCacheConfig:
     key_strategy: str = "exact_request"
     header_allowlist: list[str] = field(default_factory=list)
     backend: BackendSpec = field(default_factory=BackendSpec.in_memory)
+    tools: ToolCacheConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this response-cache config to the canonical JSON object shape."""
@@ -294,6 +403,7 @@ class ResponseCacheConfig:
                 "key_strategy": self.key_strategy,
                 "header_allowlist": self.header_allowlist,
                 "backend": _normalize(self.backend),
+                "tools": _normalize(self.tools),
             }
         )
 
@@ -438,6 +548,9 @@ __all__ = [
     "ResponseCacheConfig",
     "StateConfig",
     "TelemetryConfig",
+    "ToolCacheConfig",
+    "ToolClass",
+    "ToolOverride",
     "ToolParallelismConfig",
     "set_latency_sensitivity",
     "UnsupportedBehavior",

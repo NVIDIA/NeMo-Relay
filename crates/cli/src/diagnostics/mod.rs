@@ -765,6 +765,30 @@ async fn collect_response_cache_component_checks(
         return;
     }
     checks.push(response_cache_backend_check(response_cache::check_backend_health(&config)).await);
+    if let Some(tools) = config.tools.as_ref() {
+        let details = if tools.enabled {
+            let cacheable_classes = tools
+                .classes
+                .values()
+                .filter(|class| class.cacheable)
+                .count();
+            format!(
+                "on; {cacheable_classes} cacheable class(es); default {}",
+                if tools.default.cacheable {
+                    "cacheable"
+                } else {
+                    "uncached"
+                }
+            )
+        } else {
+            "configured but disabled".to_string()
+        };
+        checks.push(Check {
+            name: "Response cache (tools)",
+            status: Status::Info,
+            details,
+        });
+    }
 }
 
 async fn response_cache_backend_check(

@@ -211,6 +211,42 @@ impl std::io::Write for HashWriter<'_> {
     }
 }
 
+/// Builds a tool-result key from its name, version, and canonicalized arguments.
+pub fn build_tool_cache_key(
+    namespace: &str,
+    tool_name: &str,
+    tool_version: Option<&str>,
+    args: &Json,
+    arg_skip: &[String],
+) -> KeyOutcome {
+    let mut args = args.clone();
+    if !arg_skip.is_empty()
+        && let Some(object) = args.as_object_mut()
+    {
+        for key in arg_skip {
+            object.remove(key);
+        }
+    }
+
+    if contains_unrepresentable_int(&args) {
+        return KeyOutcome::Bypass("unrepresentable_number");
+    }
+
+    let key_doc = json!({
+        "v": CACHE_SCHEMA_VERSION,
+        "surface": "tool_result",
+        "ns": namespace,
+        "tool": tool_name,
+        "tool_version": tool_version,
+        "args": args,
+    });
+
+    match fingerprint(&key_doc) {
+        Some(key) => KeyOutcome::Key(key),
+        None => KeyOutcome::Bypass("canonicalization_failed"),
+    }
+}
+
 /// The body to fingerprint plus the codec that actually produced it.
 ///
 /// The surface is auto-detected from the request shape, hinted by the provider

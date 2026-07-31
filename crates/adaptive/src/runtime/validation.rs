@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
+
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, ConfigReport, DiagnosticLevel, UnsupportedBehavior,
 };
 use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
-use crate::response_cache::config::KEY_STRATEGY_EXACT_REQUEST;
+use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
     let mut report = ConfigReport::default();
@@ -199,10 +201,120 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
             format!("unknown backend kind '{other}'"),
         )),
     }
+
+    if let Some(tools) = &config.tools {
+        validate_tool_cache(report, tools);
+    }
+}
+
+fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
+    validate_tool_policy(
+        report,
+        "default",
+        tools.default.ttl_seconds,
+        tools.default.bypass_rate,
+    );
+    if !tools.default.members.is_empty() {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_default_members",
+            Some("tools.default"),
+            "tools.default.members is never matched (the default bucket applies to every \
+             unclassified tool); move these names into a named class"
+                .to_string(),
+        ));
+    }
+
+    let mut owning_class: HashMap<&str, &str> = HashMap::new();
+    for (class_name, class) in &tools.classes {
+        validate_tool_policy(
+            report,
+            &format!("classes.{class_name}"),
+            class.ttl_seconds,
+            class.bypass_rate,
+        );
+        for member in &class.members {
+            match owning_class.get(member.as_str()) {
+                Some(previous) => report.diagnostics.push(response_cache_error(
+                    "response_cache.tool_multiple_classes",
+                    Some("tools.classes"),
+                    format!(
+                        "tool member '{member}' appears in multiple classes ('{previous}' and \
+                         '{class_name}'); a member — exact name or pattern — may appear in at \
+                         most one class"
+                    ),
+                )),
+                None => {
+                    owning_class.insert(member.as_str(), class_name.as_str());
+                }
+            }
+            if class.cacheable && !member.is_empty() && member.chars().all(|c| c == '*') {
+                report.diagnostics.push(response_cache_warning(
+                    "response_cache.tool_catch_all_member",
+                    Some("tools.classes"),
+                    format!(
+                        "class '{class_name}' lists the catch-all member '{member}' with \
+                         cacheable = true, which caches every tool no other class claims; \
+                         prefer flipping default.cacheable on explicitly if broad coverage is \
+                         intended"
+                    ),
+                ));
+            }
+        }
+    }
+
+    for (tool_name, over) in &tools.overrides {
+        validate_tool_policy(
+            report,
+            &format!("overrides.{tool_name}"),
+            over.ttl_seconds,
+            over.bypass_rate,
+        );
+        if over.cacheable == Some(true)
+            && !tool_name.is_empty()
+            && tool_name.chars().all(|c| c == '*')
+        {
+            report.diagnostics.push(response_cache_warning(
+                "response_cache.tool_catch_all_override",
+                Some("tools.overrides"),
+                format!(
+                    "override '{tool_name}' sets cacheable = true for every tool; prefer \
+                     flipping default.cacheable on explicitly if broad coverage is intended"
+                ),
+            ));
+        }
+    }
+}
+
+fn validate_tool_policy(
+    report: &mut ConfigReport,
+    location: &str,
+    ttl_seconds: Option<u64>,
+    bypass_rate: Option<f64>,
+) {
+    if ttl_seconds == Some(0) {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_invalid_ttl",
+            Some("tools"),
+            format!("tools.{location}.ttl_seconds must be greater than 0 when set"),
+        ));
+    }
+    if let Some(rate) = bypass_rate
+        && !(0.0..=1.0).contains(&rate)
+    {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_invalid_bypass_rate",
+            Some("tools"),
+            format!("tools.{location}.bypass_rate must be in [0.0, 1.0] when set"),
+        ));
+    }
 }
 
 fn response_cache_error(code: &str, field: Option<&str>, message: String) -> ConfigDiagnostic {
     response_cache_diag(DiagnosticLevel::Error, code, field, message)
+}
+
+fn response_cache_warning(code: &str, field: Option<&str>, message: String) -> ConfigDiagnostic {
+    response_cache_diag(DiagnosticLevel::Warning, code, field, message)
 }
 
 fn response_cache_diag(

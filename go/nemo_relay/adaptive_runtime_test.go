@@ -253,6 +253,81 @@ func assertResponseCacheValidation(t *testing.T, responseCache ResponseCacheConf
 	}
 }
 
+func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
+	rc := NewResponseCacheConfig()
+	rc.Namespace = "tool-cache-go-test"
+	tools := NewResponseCacheToolsConfig()
+	tools.Enabled = true
+	tools.Priority = 0
+	tools.Classes = map[string]ResponseCacheToolClass{
+		"read_only": {Cacheable: true, Members: []string{"docs_lookup"}},
+	}
+	rc.Tools = &tools
+
+	config := NewAdaptiveConfig()
+	config.ResponseCache = &rc
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	rcSection, ok := decoded["response_cache"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_cache missing from marshaled config: %s", payload)
+	}
+	toolsSection, ok := rcSection["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools missing from marshaled response_cache: %#v", rcSection)
+	}
+	if enabled, _ := toolsSection["enabled"].(bool); !enabled {
+		t.Fatalf("tools.enabled not preserved: %#v", toolsSection)
+	}
+	if priority, ok := toolsSection["priority"].(float64); !ok || priority != 0 {
+		t.Fatalf("explicit tools.priority = 0 must survive marshal: %#v", toolsSection)
+	}
+	classes, ok := toolsSection["classes"].(map[string]any)
+	if !ok || classes["read_only"] == nil {
+		t.Fatalf("tools.classes not preserved: %#v", toolsSection)
+	}
+
+	report, err := ValidateAdaptiveConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+	}
+
+	bad := NewResponseCacheConfig()
+	bad.Namespace = "tool-cache-go-test"
+	badTools := NewResponseCacheToolsConfig()
+	badTools.Enabled = true
+	badTools.Classes = map[string]ResponseCacheToolClass{
+		"a": {Cacheable: true, Members: []string{"dup"}},
+		"b": {Cacheable: true, Members: []string{"dup"}},
+	}
+	bad.Tools = &badTools
+	badConfig := NewAdaptiveConfig()
+	badConfig.ResponseCache = &bad
+	badReport, err := ValidateAdaptiveConfig(badConfig)
+	if err != nil {
+		t.Fatalf("ValidateAdaptiveConfig (bad tools) returned error: %v", err)
+	}
+	foundTool := false
+	for _, d := range badReport.Diagnostics {
+		if d.Code == "response_cache.tool_multiple_classes" {
+			foundTool = true
+		}
+	}
+	if !foundTool {
+		t.Fatalf("expected response_cache.tool_multiple_classes diagnostic, got %#v", badReport.Diagnostics)
+	}
+}
+
 func TestResponseCacheConfigPreservesOmissionAndExplicitZero(t *testing.T) {
 	t.Run("partial config delegates to Rust defaults", testPartialResponseCacheConfig)
 	t.Run("missing namespace remains invalid", testMissingResponseCacheNamespace)

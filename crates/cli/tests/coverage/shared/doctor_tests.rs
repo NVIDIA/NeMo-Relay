@@ -1592,6 +1592,48 @@ async fn collect_observability_reports_response_cache_fail_when_config_invalid()
 }
 
 #[tokio::test]
+async fn collect_observability_reports_tool_cache_surface_when_enabled() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "response_cache": {
+                            "ttl_seconds": 3600,
+                            "namespace": "doctor-tool-cache-test",
+                            "backend": { "kind": "in_memory" },
+                            "tools": {
+                                "enabled": true,
+                                "classes": {
+                                    "read_only": { "cacheable": true, "members": ["docs_lookup"] }
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let tools = checks
+        .iter()
+        .find(|check| check.name == "Response cache (tools)")
+        .expect("a tool-surface check should be present when tools.enabled");
+    assert_eq!(tools.status, Status::Info, "checks: {checks:?}");
+    assert!(
+        tools.details.contains("on") && tools.details.contains("1 cacheable class"),
+        "details: {}",
+        tools.details
+    );
+}
+
+#[tokio::test]
 async fn collect_observability_registers_pii_redaction_before_validation() {
     let gateway = GatewayConfig {
         plugin_config: Some(serde_json::json!({
