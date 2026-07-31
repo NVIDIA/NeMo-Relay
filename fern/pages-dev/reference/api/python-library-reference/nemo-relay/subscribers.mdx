@@ -37,7 +37,7 @@ Remove a previously registered global subscriber.
 def flush() -> None
 ```
 
-Wait for queued subscriber callbacks and their transitive publications.
+Wait for queued callbacks and registered managed terminal publications.
 
 ### `flush_async`
 
@@ -45,5 +45,5 @@ Wait for queued subscriber callbacks and their transitive publications.
 async def flush_async() -> None
 ```
 
-Wait asynchronously for queued callbacks and transitive publications.
+Wait asynchronously for queued callbacks and managed terminal events.
 

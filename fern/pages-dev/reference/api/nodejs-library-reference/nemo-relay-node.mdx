@@ -541,9 +541,9 @@ export declare function createScopeStackFromPropagation(context: PropagationCont
 
 ### `withScopeStack`
 
-Run a synchronous callback with an isolated scope stack installed.
+Run a callback with an isolated scope stack installed.
 
-The stack is restored before this function returns. Asynchronous callbacks must not rely on this installation after their first `await`.
+The caller's stack is restored immediately after callback invocation. When the callback returns a Promise, the requested stack remains active for that Promise until it settles and is then expired for inherited detached work. Use this helper instead of `setThreadScopeStack` to isolate concurrent async branches.
 
 ```ts
 export declare function withScopeStack(stack: ScopeStack, callback: (...args: any[]) => any): unknown
@@ -559,7 +559,9 @@ export declare function currentScopeStack(): ScopeStack
 
 ### `setThreadScopeStack`
 
-Binds a scope stack to the current thread.
+Binds a scope stack to the current thread or async resource.
+
+This mutates the current execution resource. Use `withScopeStack` when concurrent asynchronous branches need isolated stack replacements.
 
 ```ts
 export declare function setThreadScopeStack(stack: ScopeStack): void
@@ -1031,11 +1033,11 @@ export declare function deregisterSubscriber(name: string): boolean
 
 ### `flushSubscribers`
 
-Return a Promise that resolves when native subscriber callbacks queued before this call finish.
+Return a Promise that resolves when native and JavaScript subscriber callbacks and managed terminal publications registered before this call finish.
 
 Call this function outside subscribers, event sanitizers, conditional guardrails, and request or execution intercepts. A queued tool or LLM observability sanitizer may call it, but the Promise resolves without waiting for its own publication.
 
-JavaScript subscribers are queued through Node's `ThreadsafeFunction`. Awaiting this Promise does not block the Node event loop while Promise-returning event sanitizers settle. Native events emitted later by a JavaScript subscriber are separate publications and may require another flush after the JavaScript callback runs.
+Awaiting this Promise does not block the Node event loop while Promise-returning event sanitizers settle or queued JavaScript subscriber callbacks run. Native events emitted by a JavaScript subscriber are separate publications and may require another flush.
 
 The Promise rejects if the blocking task fails or the core subscriber flush returns an error. Callers should handle errors when awaiting it.
 
