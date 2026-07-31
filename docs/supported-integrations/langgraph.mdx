@@ -74,7 +74,7 @@ from langchain_core.runnables import RunnableConfig
 from nemo_relay.integrations.langgraph import NemoRelayMiddleware
 
 agent = create_agent(
-    model="nvidia:nvidia/nemotron-3-nano-30b-a3b",
+    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     tools=[],
     middleware=[NemoRelayMiddleware()],
 )
