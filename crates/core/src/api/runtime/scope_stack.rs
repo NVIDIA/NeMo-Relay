@@ -41,14 +41,15 @@ pub struct ScopeStack {
 /// Applications are responsible for serializing, transporting, authenticating,
 /// and trusting this value. It intentionally contains only Relay identifiers;
 /// OpenTelemetry `traceparent` and `tracestate` remain transport sidecars. A
-/// context without a `root_uuid` preserves Relay event parentage but starts a
-/// new local OpenTelemetry trace when imported.
+/// context without a `root_uuid` preserves Relay event parentage when imported.
+/// The first local OpenTelemetry span created after import starts a new trace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PropagationContext {
     /// Wire-format version. Version 1 is the only currently supported value.
     pub version: u16,
-    /// Stable session root when the sending application knows one. Omitting
-    /// this root starts a new OpenTelemetry trace at the receiving boundary.
+    /// Stable session root when the sending application knows one. When this
+    /// root is omitted, the first local OpenTelemetry span after import starts
+    /// a new trace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_uuid: Option<Uuid>,
     /// Immediate Relay event or scope that caused the boundary crossing.
