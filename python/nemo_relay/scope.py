@@ -16,6 +16,7 @@ Example::
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator
@@ -249,6 +250,10 @@ def scope(
         )
         yield pushed_handle
         status_code = "OK"
+    except asyncio.CancelledError as e:
+        status_code = "ERROR"
+        status_message = str(e) or "cancelled"
+        raise
     except Exception as e:
         status_code = "ERROR"
         status_message = str(e)
