@@ -63,6 +63,7 @@ pub(crate) struct AppState {
     pub(crate) transparent_proxy_credential:
         Option<crate::provider_auth::TransparentProxyCredential>,
     pub(crate) http: Client,
+    pub(crate) targeted_http: Client,
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
@@ -512,6 +513,13 @@ impl AppState {
             .read_timeout(HTTP_READ_TIMEOUT)
             .build()
             .expect("gateway HTTP client configuration is valid");
+        let targeted_http = Client::builder()
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .timeout(HTTP_REQUEST_TIMEOUT)
+            .read_timeout(HTTP_READ_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("targeted gateway HTTP client configuration is valid");
         Self {
             config,
             bootstrap_fingerprint,
@@ -519,6 +527,7 @@ impl AppState {
             require_provider_client_token,
             transparent_proxy_credential,
             http,
+            targeted_http,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             bootstrap_shutdown,

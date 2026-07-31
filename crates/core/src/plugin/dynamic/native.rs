@@ -24,9 +24,10 @@ use futures_util::FutureExt;
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
-    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn,
+    LlmDispatchTargetContext, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
@@ -50,13 +51,14 @@ use crate::plugin::{
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
-    LlmCallErrorV2, LlmCallOutcomeV2, LlmDispatchRequestV2, LlmStreamEventV2,
-    LlmUpstreamFailureClassV2, NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH, NemoRelayNativeAsyncCallbackState,
-    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmResultCbV2,
-    NemoRelayNativeAsyncLlmStreamNextCbV2, NemoRelayNativeAsyncLlmStreamOpenCbV2,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
-    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    LlmCallFailureV2, LlmCallOutcomeV2, LlmDispatchRequestV2, LlmHttpFailureV2,
+    LlmNonHttpFailureKindV2, LlmNonHttpFailureV2, LlmStreamEventV2, NEMO_RELAY_NATIVE_ABI_VERSION,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
+    NemoRelayNativeAsyncLlmResultCbV2, NemoRelayNativeAsyncLlmStreamNextCbV2,
+    NemoRelayNativeAsyncLlmStreamOpenCbV2, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
+    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmCodecKind,
@@ -1572,7 +1574,7 @@ impl NativeLlmStreamOpenCallbackGuardV2 {
         self.active = false;
     }
 
-    fn failure(&mut self, error: &LlmCallErrorV2) {
+    fn failure(&mut self, error: &LlmCallFailureV2) {
         if !self.active {
             return;
         }
@@ -1592,9 +1594,10 @@ impl NativeLlmStreamOpenCallbackGuardV2 {
 impl Drop for NativeLlmStreamOpenCallbackGuardV2 {
     fn drop(&mut self) {
         if self.active {
-            self.failure(&LlmCallErrorV2::Cancelled {
-                message: "typed native LLM stream setup was cancelled".into(),
-            });
+            self.failure(&non_http_llm_failure(
+                LlmNonHttpFailureKindV2::Cancelled,
+                "typed native LLM stream setup was cancelled".into(),
+            ));
         }
     }
 }
@@ -2292,65 +2295,117 @@ unsafe extern "C" fn native_async_next_invoke_result(
     NemoRelayStatus::Ok
 }
 
-const NATIVE_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
-const NATIVE_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
-const NATIVE_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 const NATIVE_API_V2_MAX_FAILURE_BODY_BYTES: usize = 16 * 1024;
 const NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES: usize = 1024;
+const NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES: usize = 4 * 1024;
 
 fn prepare_typed_llm_dispatch(
-    mut dispatch: LlmDispatchRequestV2,
-) -> std::result::Result<LlmRequest, NemoRelayStatus> {
+    dispatch: LlmDispatchRequestV2,
+) -> std::result::Result<(LlmRequest, LlmDispatchTargetContext), NemoRelayStatus> {
     let url = match reqwest::Url::parse(&dispatch.target.url) {
-        Ok(url) if matches!(url.scheme(), "http" | "https") && url.has_host() => url,
+        Ok(url)
+            if matches!(url.scheme(), "http" | "https")
+                && url.has_host()
+                && url.username().is_empty()
+                && url.password().is_none() =>
+        {
+            url
+        }
         _ => {
-            set_native_last_error("typed LLM dispatch target must be an absolute HTTP(S) URL");
+            set_native_last_error(
+                "typed LLM dispatch target must be an absolute HTTP(S) URL without user info",
+            );
             return Err(NemoRelayStatus::InvalidArg);
         }
     };
-    dispatch.request.headers.insert(
-        NATIVE_DISPATCH_URL_HEADER.into(),
-        Json::String(url.to_string()),
+    let method = match reqwest::Method::from_bytes(dispatch.target.method.as_bytes()) {
+        Ok(method) if method != reqwest::Method::CONNECT && method != reqwest::Method::TRACE => {
+            method
+        }
+        _ => {
+            set_native_last_error("typed LLM dispatch method was invalid or prohibited");
+            return Err(NemoRelayStatus::InvalidArg);
+        }
+    };
+    for (name, value) in &dispatch.target.headers {
+        let Ok(parsed_name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
+            set_native_last_error("typed LLM dispatch contained an invalid target header name");
+            return Err(NemoRelayStatus::InvalidArg);
+        };
+        if prohibited_target_header(&parsed_name) {
+            set_native_last_error(format!(
+                "typed LLM dispatch target header {parsed_name} is host-owned or prohibited"
+            ));
+            return Err(NemoRelayStatus::InvalidArg);
+        }
+        if reqwest::header::HeaderValue::from_str(value).is_err() {
+            set_native_last_error(format!(
+                "typed LLM dispatch target header {parsed_name} had an invalid value"
+            ));
+            return Err(NemoRelayStatus::InvalidArg);
+        }
+    }
+    let target = LlmDispatchTargetContext::new(
+        method.as_str().to_owned(),
+        url.to_string(),
+        dispatch.target.route.as_str().into(),
+        dispatch.target.headers,
     );
-    dispatch.request.headers.insert(
-        NATIVE_DISPATCH_ROUTE_HEADER.into(),
-        Json::String(dispatch.target.route.as_str().into()),
-    );
-    dispatch.request.headers.insert(
-        NATIVE_RETRY_AWARE_HEADER.into(),
-        Json::String("true".into()),
-    );
-    Ok(dispatch.request)
+    Ok((dispatch.request, target))
 }
 
-fn typed_llm_failure(error: FlowError) -> LlmCallErrorV2 {
-    match error {
-        FlowError::Upstream(failure) => {
-            let class = match failure.class {
-                UpstreamFailureClass::Connection => LlmUpstreamFailureClassV2::Connection,
-                UpstreamFailureClass::Timeout => LlmUpstreamFailureClassV2::Timeout,
-                UpstreamFailureClass::RetryableStatus => LlmUpstreamFailureClassV2::RetryableStatus,
-                UpstreamFailureClass::ContextWindow => LlmUpstreamFailureClassV2::ContextWindow,
-                UpstreamFailureClass::ModelUnavailable => {
-                    LlmUpstreamFailureClassV2::ModelUnavailable
-                }
-                UpstreamFailureClass::Authentication => LlmUpstreamFailureClassV2::Authentication,
-                UpstreamFailureClass::InvalidRequest => LlmUpstreamFailureClassV2::InvalidRequest,
-                UpstreamFailureClass::Other => LlmUpstreamFailureClassV2::Other,
-            };
-            LlmCallErrorV2::Upstream {
-                class,
-                retryable: failure.is_retryable(),
-                status: failure.status,
-                body: bounded_utf8(failure.body, NATIVE_API_V2_MAX_FAILURE_BODY_BYTES),
-                headers: safe_native_api_v2_failure_headers(failure.headers),
-            }
-        }
-        FlowError::GuardrailRejected(message) => LlmCallErrorV2::GuardrailRejected { message },
-        FlowError::InvalidArgument(message) => LlmCallErrorV2::InvalidRequest { message },
-        other => LlmCallErrorV2::Internal {
-            message: other.to_string(),
+fn prohibited_target_header(name: &reqwest::header::HeaderName) -> bool {
+    let name = name.as_str();
+    name.starts_with("x-nemo-relay-internal-")
+        || matches!(
+            name,
+            "host"
+                | "content-length"
+                | "connection"
+                | "transfer-encoding"
+                | "upgrade"
+                | "proxy-connection"
+                | "keep-alive"
+                | "trailer"
+                | "te"
+        )
+}
+
+fn non_http_llm_failure(kind: LlmNonHttpFailureKindV2, message: String) -> LlmCallFailureV2 {
+    LlmCallFailureV2::NonHttp {
+        failure: LlmNonHttpFailureV2 {
+            kind,
+            message: bounded_utf8(message, NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES),
         },
+    }
+}
+
+fn typed_llm_failure(error: FlowError) -> LlmCallFailureV2 {
+    match error {
+        FlowError::Upstream(failure) => match failure.status {
+            Some(status) => LlmCallFailureV2::Http {
+                failure: LlmHttpFailureV2 {
+                    status,
+                    body: bounded_utf8(failure.body, NATIVE_API_V2_MAX_FAILURE_BODY_BYTES),
+                    headers: safe_native_api_v2_failure_headers(failure.headers),
+                },
+            },
+            None => {
+                let kind = if failure.class == UpstreamFailureClass::Timeout {
+                    LlmNonHttpFailureKindV2::Timeout
+                } else {
+                    LlmNonHttpFailureKindV2::Transport
+                };
+                non_http_llm_failure(kind, failure.body)
+            }
+        },
+        FlowError::GuardrailRejected(message) => {
+            non_http_llm_failure(LlmNonHttpFailureKindV2::Guardrail, message)
+        }
+        FlowError::InvalidArgument(message) => {
+            non_http_llm_failure(LlmNonHttpFailureKindV2::InvalidRequest, message)
+        }
+        other => non_http_llm_failure(LlmNonHttpFailureKindV2::Internal, other.to_string()),
     }
 }
 
@@ -2434,8 +2489,8 @@ unsafe extern "C" fn native_async_llm_next_invoke_result_v2(
         Ok(dispatch) => dispatch,
         Err(status) => return status,
     };
-    let request = match prepare_typed_llm_dispatch(dispatch) {
-        Ok(request) => request,
+    let (request, target) = match prepare_typed_llm_dispatch(dispatch) {
+        Ok(prepared) => prepared,
         Err(status) => return status,
     };
     let continuation_context = match next.context.isolated_for_current_invocation() {
@@ -2446,15 +2501,17 @@ unsafe extern "C" fn native_async_llm_next_invoke_result_v2(
     let user_data = user_data as usize;
     let library_guard = next._callback_user_data.clone();
     next.runtime.spawn(async move {
-        let result = AssertUnwindSafe(continuation_context.run(next_fn(request)))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|payload| {
-                Err(FlowError::Internal(format!(
-                    "typed native LLM continuation panicked: {}",
-                    panic_payload_message(payload.as_ref())
-                )))
-            });
+        let result = AssertUnwindSafe(
+            continuation_context.invoke_with_llm_dispatch_target(target, move || next_fn(request)),
+        )
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|payload| {
+            Err(FlowError::Internal(format!(
+                "typed native LLM continuation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            )))
+        });
         let outcome = match result {
             Ok(response) => LlmCallOutcomeV2::Success { response },
             Err(error) => LlmCallOutcomeV2::Failure {
@@ -2659,8 +2716,8 @@ unsafe extern "C" fn native_async_llm_next_open_stream_v2(
             Ok(dispatch) => dispatch,
             Err(status) => return status,
         };
-    let request = match prepare_typed_llm_dispatch(dispatch) {
-        Ok(request) => request,
+    let (request, target) = match prepare_typed_llm_dispatch(dispatch) {
+        Ok(prepared) => prepared,
         Err(status) => return status,
     };
     let continuation_context = match next.context.isolated_for_current_invocation() {
@@ -2703,7 +2760,7 @@ unsafe extern "C" fn native_async_llm_next_open_stream_v2(
             return;
         }
         continuation_context
-            .run(async move {
+            .invoke_with_llm_dispatch_target(target, move || async move {
                 let mut callback_guard = callback_guard;
                 let result = AssertUnwindSafe(async {
                     match next_fn(request).await {
@@ -2762,11 +2819,11 @@ unsafe extern "C" fn native_async_llm_next_open_stream_v2(
                                     || output_stream_for_task.settled.load(Ordering::Acquire)
                                 {
                                     producer_abort.abort();
-                                    callback_guard.failure(&LlmCallErrorV2::Cancelled {
-                                        message:
-                                            "typed native LLM stream output settled during setup"
-                                                .into(),
-                                    });
+                                    callback_guard.failure(&non_http_llm_failure(
+                                        LlmNonHttpFailureKindV2::Cancelled,
+                                        "typed native LLM stream output settled during setup"
+                                            .into(),
+                                    ));
                                     return;
                                 }
                                 output_stream_for_task
@@ -2785,12 +2842,13 @@ unsafe extern "C" fn native_async_llm_next_open_stream_v2(
                 .catch_unwind()
                 .await;
                 if let Err(payload) = result {
-                    callback_guard.failure(&LlmCallErrorV2::Internal {
-                        message: format!(
+                    callback_guard.failure(&non_http_llm_failure(
+                        LlmNonHttpFailureKindV2::Internal,
+                        format!(
                             "typed native LLM stream continuation panicked: {}",
                             panic_payload_message(payload.as_ref())
                         ),
-                    });
+                    ));
                 }
             })
             .await;
@@ -2836,9 +2894,10 @@ unsafe extern "C" fn native_async_llm_stream_next_v2(
             .recv()
             .await
             .unwrap_or_else(|| LlmStreamEventV2::Failure {
-                error: LlmCallErrorV2::Cancelled {
-                    message: "native API v2 provider stream closed without a terminal event".into(),
-                },
+                error: non_http_llm_failure(
+                    LlmNonHttpFailureKindV2::Cancelled,
+                    "native API v2 provider stream closed without a terminal event".into(),
+                ),
             });
         // The pull operation is complete before callback delivery. Clearing
         // the guard first lets a callback wake plugin code that immediately

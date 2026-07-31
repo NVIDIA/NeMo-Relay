@@ -114,14 +114,23 @@ Set `compat.native_api = "2"` in `relay-plugin.toml`. During registration,
 `PluginContext::host_api_v4` exposes the C-safe typed LLM dispatch table and
 the raw v2 registration helpers.
 
-The plugin provides JSON plus an absolute target URL and protocol route. Relay
-returns response JSON or a structured provider failure. Streaming dispatch
-returns an opaque host-owned stream; request one JSON event at a time, then
-cancel and release it exactly once. No Rust future, trait object,
-`serde_json::Value`, or allocator-owned Rust string crosses the ABI boundary.
+The plugin provides JSON plus an HTTP method, absolute target URL, protocol
+route, and explicit target headers. Relay binds that transport target to the
+current LLM continuation without storing it in `LlmRequest.headers`. Successful
+calls return provider JSON. Provider rejections return an HTTP status, bounded
+body, and safe response headers; failures without an HTTP response use a small
+transport-oriented kind.
+
+Streaming dispatch returns an opaque host-owned stream; request one JSON event
+at a time, then cancel and release it exactly once. No Rust future, trait
+object, `serde_json::Value`, or allocator-owned Rust string crosses the ABI
+boundary.
 
 The manifest API number is distinct from the internal host-table ABI number:
 native API v1 negotiates the V3 host table and native API v2 negotiates V4.
+Native plugins are trusted in-process extensions. A v2 plugin owns its target
+credentials; Relay transports them but excludes their values from diagnostics
+and observability.
 
 ## Documentation
 

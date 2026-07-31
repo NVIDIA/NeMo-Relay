@@ -14,7 +14,8 @@ use std::sync::{
 
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
-    Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonStream, LlmNext,
+    Event, EventCategory, EventSanitizeFields, Json, LlmCallFailureV2, LlmCodecIdentity,
+    LlmHttpFailureV2, LlmJsonStream, LlmNext, LlmNonHttpFailureKindV2, LlmNonHttpFailureV2,
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_LLM_DISPATCH, NativePlugin,
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareKind,
@@ -33,6 +34,68 @@ use nemo_relay_plugin::{
     ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
+
+#[test]
+fn native_api_v2_retry_policy_is_derived_from_http_semantics() {
+    for status in [408, 425, 429, 500, 502, 503, 504] {
+        assert!(
+            LlmCallFailureV2::Http {
+                failure: LlmHttpFailureV2 {
+                    status,
+                    body: String::new(),
+                    headers: Default::default(),
+                },
+            }
+            .is_retryable(),
+            "status={status}"
+        );
+    }
+    for status in [400, 401, 404, 409, 422, 501] {
+        assert!(
+            !LlmCallFailureV2::Http {
+                failure: LlmHttpFailureV2 {
+                    status,
+                    body: String::new(),
+                    headers: Default::default(),
+                },
+            }
+            .is_retryable(),
+            "status={status}"
+        );
+    }
+    for kind in [
+        LlmNonHttpFailureKindV2::Transport,
+        LlmNonHttpFailureKindV2::Timeout,
+    ] {
+        assert!(
+            LlmCallFailureV2::NonHttp {
+                failure: LlmNonHttpFailureV2 {
+                    kind,
+                    message: String::new(),
+                },
+            }
+            .is_retryable(),
+            "kind={kind:?}"
+        );
+    }
+    for kind in [
+        LlmNonHttpFailureKindV2::Cancelled,
+        LlmNonHttpFailureKindV2::InvalidRequest,
+        LlmNonHttpFailureKindV2::Guardrail,
+        LlmNonHttpFailureKindV2::Internal,
+    ] {
+        assert!(
+            !LlmCallFailureV2::NonHttp {
+                failure: LlmNonHttpFailureV2 {
+                    kind,
+                    message: String::new(),
+                },
+            }
+            .is_retryable(),
+            "kind={kind:?}"
+        );
+    }
+}
 
 #[test]
 fn async_abi_discriminants_reject_unknown_values() {

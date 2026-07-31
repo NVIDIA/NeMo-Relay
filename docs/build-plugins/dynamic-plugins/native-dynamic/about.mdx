@@ -124,7 +124,7 @@ separate from the internal host-table `abi_version` field:
 | Manifest API | Rust export macro | Host table | Use case |
 |---|---|---|---|
 | `"1"` | `nemo_relay_plugin!` | `NemoRelayNativeHostApiV3` | Existing subscribers, guardrails, scopes, and generic middleware |
-| `"2"` | `nemo_relay_plugin_v2!` | `NemoRelayNativeHostApiV4` | Host-dispatched LLM calls with typed targets, failures, and provider streams |
+| `"2"` | `nemo_relay_plugin_v2!` | `NemoRelayNativeHostApiV4` | Host-dispatched LLM calls with typed HTTP targets and provider streams |
 
 Relay retains native API v1 unchanged. A v2-only plugin is rejected clearly by
 a v1 host and is not retried against an older table. Validation, inspection,
@@ -132,21 +132,36 @@ and doctor output report the selected manifest API.
 
 Native API v2 is intended for in-process orchestrators that decide which LLM
 call to make while Relay still owns provider transport. The plugin supplies a
-replacement `LlmRequest`, absolute HTTP(S) target URL, and target route
-(`openai_chat`, `openai_responses`, or `anthropic_messages`). Relay returns
-either:
+replacement `LlmRequest` and a target containing the HTTP method, absolute
+HTTP(S) URL, provider route (`openai_chat`, `openai_responses`, or
+`anthropic_messages`), and explicit outbound headers. Target headers may
+contain provider credentials. Relay validates and transports them but never
+places their values in diagnostics or observability.
+
+The typed target is invocation-scoped continuation context. It is not encoded
+into `LlmRequest.headers`, and target credentials are not visible to downstream
+request middleware. Relay returns either:
 
 - buffered response JSON;
-- a structured provider failure with stable class, retryability, optional HTTP
-  status, a body bounded to 16 KiB, and a conservative safe-header allowlist; or
+- an HTTP failure with status, a body bounded to 16 KiB, and a conservative
+  safe-header allowlist;
+- a non-HTTP failure classified as transport, timeout, cancelled, invalid
+  request, guardrail, or internal; or
 - a host-owned provider stream pulled one JSON event at a time, including typed
   setup and late failures.
 
-The host converts the public target into its private dispatch metadata. Plugins
-do not construct private Relay headers. Provider stream production and plugin
-output each use bounded 32-event queues. Dropping or cancelling a stream stops
-provider production, and the library stays loaded until all callbacks and
-streams release their handles.
+HTTP retryability is derived by the SDK from status alone: `408`, `425`, `429`,
+`500`, `502`, `503`, and `504` are retryable. Transport and timeout failures
+are retryable; other non-HTTP failures are not. Relay does not inspect provider
+bodies to infer context-window or model-availability errors, so ordinary `400`
+and `404` responses do not trigger automatic reselection.
+
+Targeted dispatch does not follow redirects. Relay rejects embedded URL
+credentials, hop-by-hop headers, host-owned framing headers, and
+`x-nemo-relay-internal-*` headers. Provider stream production and plugin output
+each use bounded 32-event queues. Dropping or cancelling a stream stops provider
+production, and the library stays loaded until all callbacks and streams
+release their handles.
 
 V2 callbacks run on Relay's blocking executor with the active scope stack
 restored. Continuations run on Relay's existing Tokio runtime; Relay does not

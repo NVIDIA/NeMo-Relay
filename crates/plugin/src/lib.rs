@@ -938,10 +938,17 @@ impl LlmDispatchRouteV2 {
 /// Explicit provider target supplied to Relay through native API v2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct LlmDispatchTargetV2 {
+    /// HTTP method used for the provider call.
+    pub method: String,
     /// Absolute HTTP(S) provider URL including the selected endpoint.
     pub url: String,
     /// Provider protocol used by the selected endpoint.
     pub route: LlmDispatchRouteV2,
+    /// Explicit outbound provider headers, including target credentials.
+    ///
+    /// Relay validates and transports these headers but never records their
+    /// values in plugin diagnostics or observability events.
+    pub headers: BTreeMap<String, String>,
 }
 
 /// Typed LLM continuation invocation supplied through native API v2.
@@ -953,78 +960,80 @@ pub struct LlmDispatchRequestV2 {
     pub target: LlmDispatchTargetV2,
 }
 
-/// Stable provider-failure classification exposed to native plugins.
+/// Bounded HTTP failure returned by a provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct LlmHttpFailureV2 {
+    /// Provider HTTP status.
+    pub status: u16,
+    /// Bounded provider response body.
+    pub body: String,
+    /// Safe response headers with credential-bearing fields removed.
+    pub headers: BTreeMap<String, String>,
+}
+
+/// Stable non-HTTP failure classification exposed through native API v2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LlmUpstreamFailureClassV2 {
+pub enum LlmNonHttpFailureKindV2 {
     /// Provider connection could not be established or was interrupted.
-    Connection,
+    Transport,
     /// Provider request timed out.
     Timeout,
-    /// Retryable HTTP status without a more specific provider classification.
-    RetryableStatus,
-    /// Provider rejected the request because its context window was exceeded.
-    ContextWindow,
-    /// Requested provider model is temporarily unavailable.
-    ModelUnavailable,
-    /// Provider authentication or authorization failed.
-    Authentication,
-    /// Provider rejected an invalid request.
+    /// The caller cancelled the operation.
+    Cancelled,
+    /// Relay rejected an invalid dispatch request.
     InvalidRequest,
-    /// Other non-retryable provider failure.
-    Other,
+    /// A guardrail rejected the provider call.
+    Guardrail,
+    /// Relay could not complete the operation.
+    Internal,
+}
+
+/// Bounded failure for an operation that produced no provider HTTP response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct LlmNonHttpFailureV2 {
+    /// Stable failure kind.
+    pub kind: LlmNonHttpFailureKindV2,
+    /// Bounded human-readable context.
+    pub message: String,
 }
 
 /// Structured LLM continuation failure exposed through native API v2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LlmCallErrorV2 {
-    /// Relay received a provider or provider-transport failure.
-    Upstream {
-        /// Stable failure classification.
-        class: LlmUpstreamFailureClassV2,
-        /// Whether Relay considers the failure safe to retry.
-        retryable: bool,
-        /// Provider HTTP status when a response was received.
-        status: Option<u16>,
-        /// Bounded provider response body or transport error.
-        body: String,
-        /// Safe response headers with credential-bearing fields removed.
-        headers: BTreeMap<String, String>,
+pub enum LlmCallFailureV2 {
+    /// A provider returned a non-success HTTP response.
+    Http {
+        /// Bounded HTTP failure details.
+        failure: LlmHttpFailureV2,
     },
-    /// A guardrail rejected the provider call.
-    GuardrailRejected {
-        /// Human-readable rejection reason.
-        message: String,
-    },
-    /// Relay rejected an invalid dispatch request.
-    InvalidRequest {
-        /// Human-readable validation failure.
-        message: String,
-    },
-    /// The caller cancelled the operation.
-    Cancelled {
-        /// Human-readable cancellation context.
-        message: String,
-    },
-    /// Relay could not complete the operation because of an internal failure.
-    Internal {
-        /// Human-readable internal failure.
-        message: String,
+    /// No provider HTTP response was available.
+    NonHttp {
+        /// Bounded non-HTTP failure details.
+        failure: LlmNonHttpFailureV2,
     },
 }
 
-impl LlmCallErrorV2 {
-    /// Returns whether Relay classified this failure as retryable.
+impl LlmCallFailureV2 {
+    /// Return Relay's provider-neutral retry disposition.
+    ///
+    /// The disposition is derived rather than serialized so the wire contract
+    /// contains only HTTP semantics and the minimal non-HTTP failure kind.
     pub const fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::Upstream {
-                retryable: true,
-                ..
-            }
-        )
+        match self {
+            Self::Http { failure } => is_retryable_http_status_v2(failure.status),
+            Self::NonHttp { failure } => matches!(
+                failure.kind,
+                LlmNonHttpFailureKindV2::Transport | LlmNonHttpFailureKindV2::Timeout
+            ),
+        }
     }
+}
+
+/// Return Relay's provider-neutral retry disposition for an HTTP status.
+#[must_use]
+pub const fn is_retryable_http_status_v2(status: u16) -> bool {
+    matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
 }
 
 /// Unary LLM continuation outcome delivered through native API v2.
@@ -1039,7 +1048,7 @@ pub enum LlmCallOutcomeV2 {
     /// Provider call failed before producing a response.
     Failure {
         /// Structured Relay/provider failure.
-        error: LlmCallErrorV2,
+        error: LlmCallFailureV2,
     },
 }
 
@@ -1057,7 +1066,7 @@ pub enum LlmStreamEventV2 {
     /// Provider stream failed before clean completion.
     Failure {
         /// Structured Relay/provider failure.
-        error: LlmCallErrorV2,
+        error: LlmCallFailureV2,
     },
 }
 

@@ -8,6 +8,9 @@ use std::future::Future;
 use crate::api::optimization::{
     LlmOptimizationRecorder, current_llm_optimization_recorder, scope_llm_optimization_recorder,
 };
+use crate::api::runtime::llm_dispatch_context::{
+    LlmDispatchTargetContext, scope_llm_dispatch_target,
+};
 use crate::api::runtime::scope_stack::{
     ScopeStackHandle, TASK_SCOPE_STACK, active_event_uuid, current_context_scope_stack,
     current_scope_stack, scope_stack_active, snapshot_scope_stack, with_active_event_uuid,
@@ -101,6 +104,20 @@ impl MiddlewareContinuationContext {
             Some(recorder) => scope_llm_optimization_recorder(recorder.clone(), active).await,
             None => active.await,
         }
+    }
+
+    /// Invoke a callback and poll its future with the captured Relay context and typed LLM target.
+    #[doc(hidden)]
+    pub async fn invoke_with_llm_dispatch_target<C, F>(
+        &self,
+        target: LlmDispatchTargetContext,
+        callback: C,
+    ) -> F::Output
+    where
+        C: FnOnce() -> F,
+        F: Future,
+    {
+        scope_llm_dispatch_target(target, self.run(async move { callback().await })).await
     }
 
     /// Invoke a callback and poll its future with the captured Relay context.
