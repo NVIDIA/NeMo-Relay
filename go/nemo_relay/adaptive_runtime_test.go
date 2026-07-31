@@ -172,6 +172,167 @@ func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
+	backend := NewInMemoryResponseCacheBackend()
+	rc := NewResponseCacheConfig()
+	if rc.TTLSeconds == nil || *rc.TTLSeconds != 3600 {
+		t.Fatalf("constructor TTL default mismatch: %#v", rc.TTLSeconds)
+	}
+	if rc.Priority == nil || *rc.Priority != 50 {
+		t.Fatalf("constructor priority default mismatch: %#v", rc.Priority)
+	}
+	rc.Namespace = "go-harness"
+	rc.CacheNondeterministic = true
+	rc.Backend = &backend
+
+	config := NewAdaptiveConfig()
+	config.ResponseCache = &rc
+
+	// 1. The typed AdaptiveConfig must carry response_cache through json.Marshal.
+	//    The bug this guards is the struct silently DROPPING the section because it
+	//    enumerates fields by name with no response_cache field and no catch-all.
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	section, ok := decoded["response_cache"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_cache missing from marshaled config: %s", payload)
+	}
+	if section["namespace"] != "go-harness" {
+		t.Fatalf("response_cache fields not preserved: %#v", section)
+	}
+	if _, ok := section["skip_keys"]; ok {
+		t.Fatalf("response_cache must not expose arbitrary key omission: %#v", section)
+	}
+	if v, ok := section["cache_nondeterministic"].(bool); !ok || !v {
+		t.Fatalf("explicit cache_nondeterministic=true was not preserved: %#v", section["cache_nondeterministic"])
+	}
+	if b, ok := section["backend"].(map[string]any); !ok || b["kind"] != "in_memory" {
+		t.Fatalf("backend not preserved: %#v", section["backend"])
+	}
+
+	// 2. A valid section validates clean through the FFI -> Rust adaptive validator.
+	report, err := ValidateAdaptiveConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+	}
+
+	// 3. An invalid section produces a response_cache diagnostic. This proves the
+	//    section is actually validated end-to-end (a dropped section would yield no
+	//    diagnostic at all), not merely carried in the struct.
+	bad := NewResponseCacheConfig()
+	bad.Namespace = "go-harness"
+	bad.BypassRate = 2.0
+	badConfig := NewAdaptiveConfig()
+	badConfig.ResponseCache = &bad
+	badReport, err := ValidateAdaptiveConfig(badConfig)
+	if err != nil {
+		t.Fatalf("ValidateAdaptiveConfig (invalid bypass_rate) returned error: %v", err)
+	}
+	found := false
+	for _, d := range badReport.Diagnostics {
+		if d.Code == "response_cache.invalid_bypass_rate" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected response_cache.invalid_bypass_rate diagnostic, got %#v", badReport.Diagnostics)
+	}
+}
+
+func TestResponseCacheConfigPreservesOmissionAndExplicitZero(t *testing.T) {
+	marshal := func(t *testing.T, responseCache ResponseCacheConfig) map[string]any {
+		t.Helper()
+		payload, err := json.Marshal(responseCache)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+		return decoded
+	}
+	validate := func(t *testing.T, responseCache ResponseCacheConfig) ConfigReport {
+		t.Helper()
+		config := NewAdaptiveConfig()
+		config.ResponseCache = &responseCache
+		report, err := ValidateAdaptiveConfig(config)
+		if err != nil {
+			t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+		}
+		return report
+	}
+
+	t.Run("partial config delegates to Rust defaults", func(t *testing.T) {
+		responseCache := ResponseCacheConfig{Namespace: "dev"}
+		decoded := marshal(t, responseCache)
+		if _, ok := decoded["ttl_seconds"]; ok {
+			t.Fatalf("partial config must omit ttl_seconds: %#v", decoded)
+		}
+		if _, ok := decoded["priority"]; ok {
+			t.Fatalf("partial config must omit priority: %#v", decoded)
+		}
+		if report := validate(t, responseCache); len(report.Diagnostics) != 0 {
+			t.Fatalf("expected Rust defaults to validate cleanly, got %#v", report.Diagnostics)
+		}
+	})
+
+	t.Run("missing namespace remains invalid", func(t *testing.T) {
+		report := validate(t, ResponseCacheConfig{})
+		found := false
+		for _, diagnostic := range report.Diagnostics {
+			if diagnostic.Code == "response_cache.missing_namespace" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected response_cache.missing_namespace, got %#v", report.Diagnostics)
+		}
+	})
+
+	t.Run("explicit TTL zero remains invalid", func(t *testing.T) {
+		zero := uint64(0)
+		responseCache := ResponseCacheConfig{TTLSeconds: &zero, Namespace: "dev"}
+		if got := marshal(t, responseCache)["ttl_seconds"]; got != float64(0) {
+			t.Fatalf("explicit ttl_seconds=0 was not preserved: %#v", got)
+		}
+		report := validate(t, responseCache)
+		found := false
+		for _, diagnostic := range report.Diagnostics {
+			if diagnostic.Code == "response_cache.invalid_ttl" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected response_cache.invalid_ttl, got %#v", report.Diagnostics)
+		}
+	})
+
+	t.Run("explicit priority zero remains valid", func(t *testing.T) {
+		zero := int32(0)
+		responseCache := ResponseCacheConfig{Priority: &zero, Namespace: "dev"}
+		decoded := marshal(t, responseCache)
+		if got := decoded["priority"]; got != float64(0) {
+			t.Fatalf("explicit priority=0 was not preserved: %#v", got)
+		}
+		if _, ok := decoded["ttl_seconds"]; ok {
+			t.Fatalf("unconfigured ttl_seconds must remain omitted: %#v", decoded)
+		}
+		if report := validate(t, responseCache); len(report.Diagnostics) != 0 {
+			t.Fatalf("expected priority=0 to validate cleanly, got %#v", report.Diagnostics)
+		}
+	})
+}
+
 func TestAdaptiveRuntimeLifecycleRejectsUseAfterShutdown(t *testing.T) {
 	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
 	if err != nil {

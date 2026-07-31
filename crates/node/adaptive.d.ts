@@ -52,6 +52,34 @@ export interface AcgConfig {
   stability_thresholds?: AcgStabilityThresholds;
 }
 
+/** Opt-in LLM response cache (exact-match) settings. */
+export interface ResponseCacheConfig {
+  ttlSeconds?: number;
+  /**
+   * Required non-empty cache trust domain. One configured cache must not span
+   * mutually untrusted tenants or upstreams.
+   */
+  namespace?: string;
+  priority?: number;
+  bypassRate?: number;
+  cacheNondeterministic?: boolean;
+  keyStrategy?: string;
+  headerAllowlist?: string[];
+  backend?: BackendSpec;
+}
+
+interface ResponseCachePluginConfig {
+  ttl_seconds?: number;
+  /** Required non-empty cache trust domain. */
+  namespace?: string;
+  priority?: number;
+  bypass_rate?: number;
+  cache_nondeterministic?: boolean;
+  key_strategy?: string;
+  header_allowlist?: string[];
+  backend?: BackendSpec;
+}
+
 /** Canonical config object for the top-level adaptive component. */
 export interface Config {
   version?: number;
@@ -61,14 +89,19 @@ export interface Config {
   adaptive_hints?: AdaptiveHintsConfig;
   tool_parallelism?: ToolParallelismConfig;
   acg?: AcgConfig;
+  responseCache?: ResponseCacheConfig;
   policy?: ConfigPolicy;
 }
+
+type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
+  response_cache?: ResponseCachePluginConfig;
+};
 
 /** Top-level adaptive component wrapper with fixed kind `adaptive`. */
 export interface ComponentSpec {
   kind: 'adaptive';
   enabled?: boolean;
-  config: Config;
+  config: AdaptivePluginConfig;
 }
 
 /** Normalized LLM token usage for cache telemetry. */
@@ -244,6 +277,20 @@ export declare function toolParallelismConfig(config?: ToolParallelismConfig): T
  * callers can override only the thresholds they need.
  */
 export declare function acgConfig(config?: AcgConfig): AcgConfig;
+/**
+ * Create response-cache settings with defaults applied.
+ *
+ * Merges caller-supplied overrides onto the opt-in LLM response-cache config
+ * shape (exact-match) used by the adaptive plugin. This is a section of
+ * the adaptive component, not a standalone plugin kind.
+ *
+ * @param config - Partial response-cache settings to override.
+ * @returns A normalized response-cache config object.
+ * @remarks The default backend is in-memory; pass a `backend` (e.g.
+ * `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`,
+ * while caching nondeterministic requests is opt-in.
+ */
+export declare function responseCacheConfig(config?: ResponseCacheConfig): ResponseCacheConfig;
 /**
  * Wrap adaptive config as a top-level component.
  *

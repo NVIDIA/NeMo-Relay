@@ -884,8 +884,15 @@ fn resolve_worker_connect_endpoint(
                     )));
                 }
             };
+            let endpoint = endpoint.trim();
+            if endpoint.is_empty() {
+                // The worker may have created or truncated the announcement file immediately
+                // before publishing its endpoint. Treat that transient state like a missing file
+                // so the bounded startup loop polls again.
+                return Ok(None);
+            }
             Ok(Some(WorkerConnectEndpoint::Tcp(
-                normalize_worker_tcp_endpoint(endpoint.trim())?,
+                normalize_worker_tcp_endpoint(endpoint)?,
             )))
         }
     }
