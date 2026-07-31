@@ -29,6 +29,11 @@ with collector or backend schemas.
 NeMo Relay uses OpenTelemetry Rust `0.32`. It deterministically derives
 compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
 receive the same event stream use the same identifiers and parentage.
+Rooted Relay propagation continues the Relay-derived trace across the import
+boundary. Rootless propagation retains Relay event parentage but starts a new
+OpenTelemetry trace from the first local event. Carry W3C `traceparent` and
+`tracestate` alongside Relay propagation when an integration also needs to
+preserve upstream OpenTelemetry sampling or vendor state.
 
 ## `plugins.toml` Example
 

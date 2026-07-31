@@ -373,6 +373,46 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
     assert_eq!(span_context.span_id(), relay_span_id(root_uuid));
 }
 
+#[test]
+fn rootless_propagation_starts_a_new_otel_trace() {
+    let parent_uuid = Uuid::now_v7();
+    let local_uuid = Uuid::now_v7();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    let imported_stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: None,
+        parent_uuid,
+    })
+    .unwrap();
+    set_thread_scope_stack(imported_stack);
+
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider, "test".into());
+    processor.process(&make_start_event(
+        local_uuid,
+        Some(parent_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.process(&make_end_event(
+        local_uuid,
+        Some(parent_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.span_context.trace_id(), relay_trace_id(local_uuid));
+    assert_eq!(span.span_context.span_id(), relay_span_id(local_uuid));
+    assert_eq!(span.parent_span_id, SpanId::INVALID);
+    assert!(!span.parent_span_is_remote);
+}
+
 fn make_start_event_with_metadata(
     uuid: Uuid,
     parent_uuid: Option<Uuid>,
