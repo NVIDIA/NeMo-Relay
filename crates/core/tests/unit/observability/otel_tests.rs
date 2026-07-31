@@ -25,15 +25,13 @@ use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use crate::observability::{relay_span_id, relay_trace_id};
 use opentelemetry::trace::TraceContextExt;
-use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SpanExporter as SdkSpanExporter};
+use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use uuid::Uuid;
 
@@ -305,58 +303,6 @@ fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
-}
-
-#[derive(Debug, Clone)]
-struct TestBlockingSpanExporter {
-    first_export: Arc<AtomicBool>,
-    export_started: mpsc::Sender<()>,
-    release: Arc<(Mutex<bool>, Condvar)>,
-    exported_span_count: Arc<AtomicUsize>,
-}
-
-impl TestBlockingSpanExporter {
-    fn new() -> (Self, mpsc::Receiver<()>) {
-        let (export_started, receiver) = mpsc::channel();
-        (
-            Self {
-                first_export: Arc::new(AtomicBool::new(true)),
-                export_started,
-                release: Arc::new((Mutex::new(false), Condvar::new())),
-                exported_span_count: Arc::new(AtomicUsize::new(0)),
-            },
-            receiver,
-        )
-    }
-
-    fn release(&self) {
-        let (released, signal) = &*self.release;
-        *released.lock().unwrap() = true;
-        signal.notify_all();
-    }
-
-    fn exported_span_count(&self) -> usize {
-        self.exported_span_count.load(Ordering::Acquire)
-    }
-}
-
-impl SdkSpanExporter for TestBlockingSpanExporter {
-    async fn export(
-        &self,
-        batch: Vec<opentelemetry_sdk::trace::SpanData>,
-    ) -> opentelemetry_sdk::error::OTelSdkResult {
-        if self.first_export.swap(false, Ordering::AcqRel) {
-            let _ = self.export_started.send(());
-            let (released, signal) = &*self.release;
-            let mut released = released.lock().unwrap();
-            while !*released {
-                released = signal.wait(released).unwrap();
-            }
-        }
-        self.exported_span_count
-            .fetch_add(batch.len(), Ordering::AcqRel);
-        Ok(())
-    }
 }
 
 fn make_provider() -> (
@@ -647,8 +593,7 @@ fn config_defaults_and_builder_overrides_are_applied() {
             .with_mark_projection(MarkProjection::Tool)
             .with_mark_exclude_names(["notification"])
             .with_attribute_mapping("nemo_relay.model_name", "model.alias")
-            .with_timeout(Duration::from_millis(1250))
-            .with_max_queue_size(8_192);
+            .with_timeout(Duration::from_millis(1250));
 
     assert_eq!(config.transport, OtlpTransport::HttpBinary);
     assert_eq!(config.endpoint, "http://localhost:4318/v1/traces");
@@ -668,7 +613,6 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(config.mark_exclude_names, vec!["notification"]);
     assert_eq!(config.attribute_mappings.len(), 1);
     assert_eq!(config.timeout, Duration::from_millis(1250));
-    assert_eq!(config.max_queue_size, Some(8_192));
 
     let defaults = OpenTelemetryConfig::default();
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
@@ -677,7 +621,6 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(defaults.mark_projection, MarkProjection::Inherit);
     assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(defaults.timeout, Duration::from_secs(3));
-    assert_eq!(defaults.max_queue_size, None);
     assert!(defaults.headers.is_empty());
     assert!(defaults.resource_attributes.is_empty());
 }
@@ -715,18 +658,6 @@ fn invalid_grpc_headers_are_rejected() {
     )]))
     .expect_err("invalid metadata key should fail");
     assert!(matches!(err, OpenTelemetryError::InvalidGrpcHeader { .. }));
-}
-
-#[test]
-fn direct_config_rejects_a_zero_queue_capacity() {
-    let error = match OpenTelemetrySubscriber::new(
-        OpenTelemetryConfig::new(OpenTelemetryType::GenAi, "http://localhost:4318/v1/traces")
-            .with_max_queue_size(0),
-    ) {
-        Ok(_) => panic!("zero queue capacity must be rejected"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, OpenTelemetryError::InvalidQueueSize));
 }
 
 #[test]
@@ -2908,47 +2839,6 @@ fn provider_builders_cover_success_paths() {
     .unwrap();
     subscriber.force_flush().unwrap();
     subscriber.shutdown().unwrap();
-}
-
-#[test]
-fn configured_endpoint_queue_retains_an_8001_span_burst() {
-    const MAX_QUEUE_SIZE: usize = 16_384;
-    const MAX_EXPORT_BATCH_SIZE: usize = 512;
-
-    let (exporter, export_started) = TestBlockingSpanExporter::new();
-    let config =
-        OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
-            .with_max_queue_size(MAX_QUEUE_SIZE);
-    let processor = BatchSpanProcessor::builder(exporter.clone())
-        .with_batch_config(
-            BatchConfigBuilder::default()
-                .with_max_queue_size(config.max_queue_size().unwrap())
-                .with_max_export_batch_size(MAX_EXPORT_BATCH_SIZE)
-                .build(),
-        )
-        .build();
-    let provider = SdkTracerProvider::builder()
-        .with_span_processor(processor)
-        .build();
-    let tracer = provider.tracer("burst-capacity-test");
-
-    for _ in 0..MAX_EXPORT_BATCH_SIZE {
-        let mut span = tracer.start("burst-span");
-        span.end();
-    }
-    export_started
-        .recv_timeout(Duration::from_secs(30))
-        .expect("the first full batch should start exporting");
-
-    for _ in MAX_EXPORT_BATCH_SIZE..8_001 {
-        let mut span = tracer.start("burst-span");
-        span.end();
-    }
-    exporter.release();
-    provider.force_flush().unwrap();
-
-    assert_eq!(exporter.exported_span_count(), 8_001);
-    provider.shutdown().unwrap();
 }
 
 #[test]

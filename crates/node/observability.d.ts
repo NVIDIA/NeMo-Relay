@@ -81,7 +81,6 @@ export interface OpenTelemetryEndpointConfig {
   service_version?: string;
   instrumentation_scope?: string;
   timeout_millis?: number;
-  max_queue_size?: number;
 }
 
 export interface OpenTelemetrySectionConfig {

@@ -92,7 +92,6 @@ class OpenTelemetryEndpointConfig:
     headers: dict[str, str] = field(default_factory=dict)
     header_env: dict[str, str] = field(default_factory=dict)
     resource_attributes: dict[str, str] = field(default_factory=dict)
-    max_queue_size: int | None = ...
     def to_dict(self) -> JsonObject: ...
 
 @dataclass(slots=True)

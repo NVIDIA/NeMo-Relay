@@ -44,8 +44,7 @@ use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{
-    BatchConfigBuilder, BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer,
-    SdkTracerProvider, Span, SpanExporter as SdkSpanExporter, TracerProviderBuilder,
+    BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
 };
 use uuid::Uuid;
 
@@ -135,9 +134,6 @@ pub enum OpenTelemetryError {
     /// Attribute mapping configuration was invalid.
     #[error("invalid attribute mappings: {0}")]
     InvalidAttributeMappings(String),
-    /// The configured batch queue size was zero.
-    #[error("OpenTelemetry max_queue_size must be greater than zero")]
-    InvalidQueueSize,
     /// Registration errors from the core runtime.
     #[error(transparent)]
     Core(#[from] FlowError),
@@ -169,7 +165,6 @@ pub struct OpenTelemetryConfig {
     attribute_mappings: Vec<OtlpAttributeMapping>,
     timeout: Duration,
     transport: OtlpTransport,
-    max_queue_size: Option<usize>,
 }
 
 impl OpenTelemetryConfig {
@@ -188,7 +183,6 @@ impl OpenTelemetryConfig {
             attribute_mappings: Vec::new(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
-            max_queue_size: None,
         }
     }
 
@@ -250,11 +244,6 @@ impl OpenTelemetryConfig {
         self.headers.get(key).map(String::as_str)
     }
 
-    #[cfg(test)]
-    pub(crate) fn max_queue_size(&self) -> Option<usize> {
-        self.max_queue_size
-    }
-
     /// Adds a resource attribute as a string key/value pair.
     pub fn with_resource_attribute(
         mut self,
@@ -268,12 +257,6 @@ impl OpenTelemetryConfig {
     /// Sets the OTLP request timeout.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
-        self
-    }
-
-    /// Sets the maximum number of completed spans buffered for this endpoint.
-    pub(crate) fn with_max_queue_size(mut self, max_queue_size: usize) -> Self {
-        self.max_queue_size = Some(max_queue_size);
         self
     }
 
@@ -399,9 +382,6 @@ impl OpenTelemetrySubscriber {
         }
         validate_attribute_mappings(&config.attribute_mappings)
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
-        if config.max_queue_size == Some(0) {
-            return Err(OpenTelemetryError::InvalidQueueSize);
-        }
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
         let (provider, runtime) = build_owned_tracer_provider(config.clone())?;
@@ -751,34 +731,8 @@ fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvid
         .with_max_attributes_per_span(u32::MAX)
         .with_max_attributes_per_event(u32::MAX);
 
-    Ok(build_tracer_provider_with_exporter(
-        builder,
-        exporter,
-        config.max_queue_size,
-    ))
-}
-
-fn build_tracer_provider_with_exporter<E>(
-    builder: TracerProviderBuilder,
-    exporter: E,
-    max_queue_size: Option<usize>,
-) -> SdkTracerProvider
-where
-    E: SdkSpanExporter + 'static,
-{
-    match max_queue_size {
-        Some(max_queue_size) => {
-            let processor = BatchSpanProcessor::builder(exporter)
-                .with_batch_config(
-                    BatchConfigBuilder::default()
-                        .with_max_queue_size(max_queue_size)
-                        .build(),
-                )
-                .build();
-            builder.with_span_processor(processor).build()
-        }
-        None => builder.with_batch_exporter(exporter).build(),
-    }
+    let processor = BatchSpanProcessor::builder(exporter).build();
+    Ok(builder.with_span_processor(processor).build())
 }
 
 fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {

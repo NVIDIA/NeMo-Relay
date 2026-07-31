@@ -70,12 +70,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	otel.Endpoints = []ObservabilityOpenTelemetryEndpointConfig{
 		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces"),
 	}
-	if otel.Endpoints[0].MaxQueueSize != nil {
-		t.Fatal("expected the default endpoint queue capacity to be omitted")
-	}
 	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
-	maxQueueSize := uint64(8192)
-	otel.Endpoints[0].MaxQueueSize = &maxQueueSize
 
 	config.Atof = &atof
 	config.Atif = &atif
@@ -137,8 +132,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
 	otelEndpoints := wrapped.Config["opentelemetry"].(map[string]any)["endpoints"].([]any)
-	if otelEndpoints[0].(map[string]any)["type"] != "full" ||
-		otelEndpoints[0].(map[string]any)["max_queue_size"] != float64(8192) {
+	if otelEndpoints[0].(map[string]any)["type"] != "full" {
 		t.Fatalf("expected typed OpenTelemetry endpoint in serialized config: %#v", wrapped.Config)
 	}
 	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {

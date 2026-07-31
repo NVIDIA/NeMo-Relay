@@ -392,19 +392,6 @@ fn editor_schema_tracks_observability_config_types() {
         EditorFieldKind::StringMap
     );
     assert_eq!(
-        otlp_endpoint_schema
-            .field("max_queue_size")
-            .expect("OTLP endpoint max_queue_size")
-            .kind,
-        EditorFieldKind::Integer
-    );
-    assert!(
-        otlp_endpoint_schema
-            .field("max_queue_size")
-            .expect("OTLP endpoint max_queue_size")
-            .optional
-    );
-    assert_eq!(
         default_opentelemetry_endpoint_editor_value(),
         json!({
             "type": "full",
@@ -567,7 +554,6 @@ fn default_config_and_component_conversion_cover_public_shape() {
             service_version: None,
             instrumentation_scope: default_otel_instrumentation_scope(),
             timeout_millis: default_timeout_millis(),
-            max_queue_size: None,
             headers: HashMap::new(),
             header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -588,18 +574,6 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(3));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
-    assert!(
-        generic.config["opentelemetry"]["endpoints"][0]
-            .get("max_queue_size")
-            .is_none()
-    );
-
-    let endpoint: OpenTelemetryEndpointConfig = serde_json::from_value(json!({
-        "type": "full",
-        "endpoint": "http://localhost:4318/v1/traces"
-    }))
-    .unwrap();
-    assert_eq!(endpoint.max_queue_size, None);
 }
 
 #[test]
@@ -651,7 +625,6 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             service_version: None,
             instrumentation_scope: default_otel_instrumentation_scope(),
             timeout_millis: default_timeout_millis(),
-            max_queue_size: None,
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
             resource_attributes: HashMap::new(),
@@ -676,7 +649,6 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
-        max_queue_size: None,
         headers: HashMap::new(),
         header_env: HashMap::new(),
         resource_attributes: HashMap::new(),
@@ -684,14 +656,6 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         mark_exclude_names: default_mark_exclude_names(),
         attribute_mappings: Vec::new(),
     }
-}
-
-#[test]
-fn opentelemetry_endpoint_queue_capacity_is_passed_to_the_core_config() {
-    let mut endpoint = test_opentelemetry_endpoint();
-    endpoint.max_queue_size = Some(8_192);
-    let config = build_otel_config(0, endpoint).unwrap();
-    assert_eq!(config.max_queue_size(), Some(8_192));
 }
 
 #[test]
@@ -704,10 +668,6 @@ fn build_otel_config_rejects_each_activation_only_invalid_value() {
 
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.transport = "udp".to_string();
-    assert!(build_otel_config(0, endpoint).is_err());
-
-    let mut endpoint = test_opentelemetry_endpoint();
-    endpoint.max_queue_size = Some(0);
     assert!(build_otel_config(0, endpoint).is_err());
 
     for variable in ["", " PADDED_ENV "] {
@@ -757,7 +717,6 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.endpoint = " ".to_string();
     endpoint.transport = "udp".to_string();
-    endpoint.max_queue_size = Some(0);
     endpoint
         .header_env
         .insert("empty".to_string(), String::new());
@@ -776,7 +735,6 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
     for field in [
         "endpoints[0].endpoint",
         "endpoints[0].transport",
-        "endpoints[0].max_queue_size",
         "endpoints[0].header_env.empty",
         "endpoints[0].header_env.padded",
     ] {
@@ -859,7 +817,6 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
                 "mark_projection": "tool",
                 "mark_exclude_names": ["notification"],
                 "attribute_mappings": [{"key": "nemo_relay.model_name", "alias": "model.alias"}],
-                "max_queue_size": 8192,
                 "capture_content": true
             }]
         }
@@ -885,7 +842,6 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
             Some("endpoints[0].mark_projection")
                 | Some("endpoints[0].mark_exclude_names")
                 | Some("endpoints[0].attribute_mappings")
-                | Some("endpoints[0].max_queue_size")
         )
     }));
 }
@@ -2673,8 +2629,24 @@ fn opentelemetry_endpoints_fan_out_to_heterogeneous_and_repeated_types() {
     }
 }
 
+const OTEL_BSP_BURST_TEST_CHILD: &str = "NEMO_RELAY_OTEL_BSP_BURST_TEST_CHILD";
+
 #[test]
-fn configured_opentelemetry_endpoint_retains_an_8001_span_burst_end_to_end() {
+fn opentelemetry_batch_environment_retains_an_8001_span_burst_end_to_end() {
+    if std::env::var_os(OTEL_BSP_BURST_TEST_CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("observability::plugin_component::tests::opentelemetry_batch_environment_retains_an_8001_span_burst_end_to_end")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(OTEL_BSP_BURST_TEST_CHILD, "1")
+            .env("OTEL_BSP_MAX_QUEUE_SIZE", "16384")
+            .env("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "512")
+            .status()
+            .expect("start OTEL BSP child test");
+        assert!(status.success(), "OTEL BSP child test failed: {status}");
+        return;
+    }
+
     const SPAN_COUNT: usize = 8_001;
     const FIRST_BATCH_SIZE: usize = 512;
 
@@ -2688,7 +2660,6 @@ fn configured_opentelemetry_endpoint_retains_an_8001_span_burst_end_to_end() {
             "endpoints": [{
                 "type": "full",
                 "endpoint": collector.endpoint.clone(),
-                "max_queue_size": 16_384,
                 "timeout_millis": 60_000
             }]
         }
