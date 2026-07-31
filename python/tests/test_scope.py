@@ -103,15 +103,27 @@ class TestScope:
 
         assert scope.get_handle().name == "root"
 
+    @pytest.mark.parametrize(
+        ("cancel_message", "expected_status_description"),
+        [
+            (None, "cancelled"),
+            ("shutdown", "shutdown"),
+        ],
+    )
     async def test_scope_ctx_mgr_cancelled_task_sets_error_status(
         self,
         subscribed_events,
+        cancel_message,
+        expected_status_description,
     ):
         async def cancel_within_scope() -> None:
             with scope.scope("cancelled_scope", ScopeType.Agent):
                 task = asyncio.current_task()
                 assert task is not None
-                task.cancel()
+                if cancel_message is None:
+                    task.cancel()
+                else:
+                    task.cancel(cancel_message)
                 await asyncio.sleep(0)
 
         with pytest.raises(asyncio.CancelledError):
@@ -126,7 +138,7 @@ class TestScope:
         assert end.scope_category == "end"
         assert end.metadata == {
             "otel.status_code": "ERROR",
-            "otel.status_description": "cancelled",
+            "otel.status_description": expected_status_description,
         }
 
 
