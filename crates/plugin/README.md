@@ -121,6 +121,11 @@ calls return provider JSON. Provider rejections return an HTTP status, bounded
 body, and safe response headers; failures without an HTTP response use a small
 transport-oriented kind.
 
+Relay core performs the terminal targeted HTTP request after the remaining LLM
+execution intercepts run. This contract is host-independent: it works through
+the CLI gateway and through SDK-embedded Relay hosts that call the managed LLM
+execution APIs directly.
+
 Streaming dispatch returns an opaque host-owned stream; request one JSON event
 at a time, then cancel and release it exactly once. No Rust future, trait
 object, `serde_json::Value`, or allocator-owned Rust string crosses the ABI

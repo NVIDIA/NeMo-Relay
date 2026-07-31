@@ -13,7 +13,6 @@ use axum::response::IntoResponse;
 use http_body_util::BodyExt;
 use reqwest::Client;
 use serde_json::{Map, json};
-use std::collections::BTreeMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn test_http_client() -> Client {
@@ -701,71 +700,6 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
     );
     assert!(effective.headers.get(INTERNAL_RETRY_AWARE_HEADER).is_none());
     assert!(retry_aware_dispatch(&request));
-}
-
-#[test]
-fn typed_dispatch_target_overrides_legacy_headers_without_exposing_transport_data() {
-    let original_body = Bytes::from_static(br#"{"model":"original"}"#);
-    let mut original_headers = HeaderMap::new();
-    original_headers.insert(
-        header::AUTHORIZATION,
-        HeaderValue::from_static("Bearer source-secret"),
-    );
-    original_headers.insert("x-source", HeaderValue::from_static("source"));
-    let request = LlmRequest {
-        headers: Map::from_iter([
-            (
-                INTERNAL_DISPATCH_URL_HEADER.to_string(),
-                json!("http://attacker.invalid/v1/chat/completions"),
-            ),
-            ("authorization".into(), json!("Bearer request-secret")),
-            ("x-request".into(), json!("request")),
-        ]),
-        content: json!({"model": "selected"}),
-    };
-    let target = LlmDispatchTargetContext::new(
-        "POST".into(),
-        "http://selected.invalid/v1/responses".into(),
-        "openai_responses".into(),
-        BTreeMap::from([
-            ("authorization".into(), "Bearer target-secret".into()),
-            ("x-target".into(), "selected".into()),
-        ]),
-    );
-
-    let effective = effective_dispatch_request_with_target(
-        &original_body,
-        &original_headers,
-        Some(&request),
-        Some(&target),
-        "http://default.invalid/v1/chat/completions",
-        &Method::GET,
-        ProviderRoute::OpenAiChatCompletions,
-    );
-
-    assert_eq!(effective.method, Method::POST);
-    assert_eq!(
-        effective.url,
-        "http://selected.invalid/v1/responses".to_string()
-    );
-    assert_eq!(effective.target_route, ProviderRoute::OpenAiResponses);
-    assert_eq!(
-        effective.headers.get(header::AUTHORIZATION).unwrap(),
-        "Bearer target-secret"
-    );
-    assert_eq!(effective.headers.get("x-target").unwrap(), "selected");
-    assert_eq!(
-        effective.headers.get(header::CONTENT_TYPE).unwrap(),
-        "application/json"
-    );
-    assert!(effective.headers.get("x-source").is_none());
-    assert!(effective.headers.get("x-request").is_none());
-    assert!(
-        effective
-            .headers
-            .get(INTERNAL_DISPATCH_URL_HEADER)
-            .is_none()
-    );
 }
 
 #[test]
@@ -2010,7 +1944,6 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         require_provider_client_token: false,
         transparent_proxy_credential: None,
         http: test_http_client(),
-        targeted_http: test_http_client(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
@@ -2049,7 +1982,6 @@ async fn models_rejects_non_get_requests_directly() {
         require_provider_client_token: false,
         transparent_proxy_credential: None,
         http: test_http_client(),
-        targeted_http: test_http_client(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,

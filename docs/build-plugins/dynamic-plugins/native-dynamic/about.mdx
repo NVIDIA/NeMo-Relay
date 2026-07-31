@@ -13,7 +13,7 @@ contract: a stable kind, JSON component configuration, validation diagnostics,
 and registration through a component-scoped context.
 
 <Warning>
-Native plugins are not sandboxed. They run in the gateway process, must not
+Native plugins are not sandboxed. They run in the Relay host process, must not
 unwind across ABI callbacks, and remain loaded until Relay removes their
 registered callbacks.
 </Warning>
@@ -149,6 +149,12 @@ request middleware. Relay returns either:
   request, guardrail, or internal; or
 - a host-owned provider stream pulled one JSON event at a time, including typed
   setup and late failures.
+
+Relay core owns the terminal HTTP transport for these continuations. The same
+targeted plugin therefore works in the CLI gateway and in an SDK-embedded Relay
+host that calls `llm_call_execute` or `llm_stream_call_execute` directly.
+Remaining LLM execution intercepts still run before core dispatches the target;
+the host's original provider callback is used only when no target is bound.
 
 HTTP retryability is derived by the SDK from status alone: `408`, `425`, `429`,
 `500`, `502`, `503`, and `504` are retryable. Transport and timeout failures

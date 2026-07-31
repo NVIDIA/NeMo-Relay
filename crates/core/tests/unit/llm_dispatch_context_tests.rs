@@ -1,0 +1,347 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
+
+use futures_util::StreamExt;
+use serde_json::{Map, json};
+
+use super::*;
+
+struct FakeProvider {
+    url: String,
+    request: mpsc::Receiver<Vec<u8>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FakeProvider {
+    fn spawn(response: Vec<u8>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fake provider should bind");
+        let address = listener.local_addr().expect("fake provider address");
+        let (request_tx, request) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("fake provider should accept");
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read timeout should configure");
+            let request_bytes = read_http_request(&mut socket);
+            request_tx
+                .send(request_bytes)
+                .expect("test should receive provider request");
+            socket
+                .write_all(&response)
+                .expect("fake provider should write response");
+        });
+        Self {
+            url: format!("http://{address}/v1/messages"),
+            request,
+            thread: Some(thread),
+        }
+    }
+
+    fn request(&self) -> Vec<u8> {
+        self.request
+            .recv_timeout(Duration::from_secs(5))
+            .expect("fake provider request should arrive")
+    }
+}
+
+impl Drop for FakeProvider {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("fake provider thread should finish");
+        }
+    }
+}
+
+fn read_http_request(socket: &mut std::net::TcpStream) -> Vec<u8> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = socket
+            .read(&mut buffer)
+            .expect("request read should succeed");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let content_length = String::from_utf8_lossy(&request[..header_end])
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            break;
+        }
+    }
+    request
+}
+
+fn response(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
+    let mut response = format!("HTTP/1.1 {status}\r\nConnection: close\r\n");
+    for (name, value) in headers {
+        response.push_str(name);
+        response.push_str(": ");
+        response.push_str(value);
+        response.push_str("\r\n");
+    }
+    response.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+    let mut response = response.into_bytes();
+    response.extend_from_slice(body);
+    response
+}
+
+fn target(url: String, headers: BTreeMap<String, String>) -> LlmDispatchTargetContext {
+    LlmDispatchTargetContext::try_new("POST".into(), url, "openai_chat".into(), headers)
+        .expect("test target should be valid")
+}
+
+fn request() -> LlmRequest {
+    LlmRequest {
+        headers: Map::from_iter([
+            ("authorization".into(), json!("Bearer request-secret")),
+            (
+                "x-nemo-relay-internal-dispatch-url".into(),
+                json!("http://attacker.invalid"),
+            ),
+        ]),
+        content: json!({"model": "selected", "prompt": "hello"}),
+    }
+}
+
+#[tokio::test]
+async fn buffered_target_runs_after_downstream_middleware_and_ignores_host_callback() {
+    let provider = FakeProvider::spawn(response(
+        "200 OK",
+        &[("Content-Type", "application/json")],
+        br#"{"id":"selected-response"}"#,
+    ));
+    let target = target(
+        format!("{}?api_key=url-secret", provider.url),
+        BTreeMap::from([
+            ("authorization".into(), "Bearer target-secret".into()),
+            ("x-target".into(), "selected".into()),
+        ]),
+    );
+    let debug = format!("{target:?}");
+    assert!(!debug.contains("target-secret"));
+    assert!(!debug.contains("url-secret"));
+
+    let fallback_called = Arc::new(AtomicBool::new(false));
+    let fallback_called_for_fn = fallback_called.clone();
+    let terminal = targeted_llm_execution(Arc::new(move |_| {
+        fallback_called_for_fn.store(true, Ordering::SeqCst);
+        Box::pin(async { Ok(json!({"id": "wrong-provider"})) })
+    }));
+    let middleware_ran = Arc::new(AtomicBool::new(false));
+    let middleware_ran_for_fn = middleware_ran.clone();
+    let downstream = Arc::new(move |mut request: LlmRequest| {
+        middleware_ran_for_fn.store(true, Ordering::SeqCst);
+        request.content["middleware"] = json!(true);
+        terminal(request)
+    });
+
+    let result = scope_llm_dispatch_target(target, downstream(request()))
+        .await
+        .expect("targeted request should succeed");
+
+    assert_eq!(result, json!({"id": "selected-response"}));
+    assert!(middleware_ran.load(Ordering::SeqCst));
+    assert!(!fallback_called.load(Ordering::SeqCst));
+    let captured = String::from_utf8(provider.request()).expect("request should be UTF-8");
+    assert!(captured.starts_with("POST /v1/messages?api_key=url-secret HTTP/1.1\r\n"));
+    assert!(captured.contains("authorization: Bearer target-secret\r\n"));
+    assert!(captured.contains("x-target: selected\r\n"));
+    assert!(captured.contains(r#"{"middleware":true,"model":"selected","prompt":"hello"}"#));
+    assert!(!captured.contains("request-secret"));
+    assert!(!captured.contains("attacker.invalid"));
+}
+
+#[tokio::test]
+async fn buffered_http_failure_is_bounded_and_filters_headers() {
+    let body = vec![b'x'; MAX_UPSTREAM_ERROR_BODY_BYTES + 1024];
+    let provider = FakeProvider::spawn(response(
+        "429 Too Many Requests",
+        &[
+            ("Retry-After", "2"),
+            ("Set-Cookie", "secret=true"),
+            ("Authorization", "Bearer response-secret"),
+        ],
+        &body,
+    ));
+
+    let error = dispatch_buffered(&target(provider.url.clone(), BTreeMap::new()), request())
+        .await
+        .expect_err("429 should fail");
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure");
+    };
+    assert_eq!(failure.status, Some(429));
+    assert_eq!(failure.class, UpstreamFailureClass::RetryableStatus);
+    assert_eq!(failure.body.len(), MAX_UPSTREAM_ERROR_BODY_BYTES);
+    assert_eq!(
+        failure.headers.get("retry-after").map(String::as_str),
+        Some("2")
+    );
+    assert!(!failure.headers.contains_key("set-cookie"));
+    assert!(!failure.headers.contains_key("authorization"));
+    let _ = provider.request();
+}
+
+#[tokio::test]
+async fn redirects_are_returned_without_following() {
+    let provider = FakeProvider::spawn(response(
+        "302 Found",
+        &[("Location", "http://127.0.0.1:9/should-not-run")],
+        b"redirect",
+    ));
+
+    let error = dispatch_buffered(&target(provider.url.clone(), BTreeMap::new()), request())
+        .await
+        .expect_err("redirect should fail");
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected HTTP failure");
+    };
+    assert_eq!(failure.status, Some(302));
+    assert_eq!(failure.class, UpstreamFailureClass::Other);
+    let _ = provider.request();
+}
+
+#[tokio::test]
+async fn streaming_target_decodes_events_empty_streams_and_late_errors() {
+    let provider = FakeProvider::spawn(response(
+        "200 OK",
+        &[("Content-Type", "text/event-stream")],
+        b"data: {\"delta\":\"hello\"}\n\ndata: not-json\n\n",
+    ));
+    let fallback_called = Arc::new(AtomicBool::new(false));
+    let fallback_called_for_fn = fallback_called.clone();
+    let terminal = targeted_llm_stream_execution(Arc::new(move |_| {
+        fallback_called_for_fn.store(true, Ordering::SeqCst);
+        Box::pin(async { Ok(LlmJsonStream::new(futures_util::stream::empty())) })
+    }));
+    let stream_target = target(provider.url.clone(), BTreeMap::new());
+    let mut stream = scope_llm_dispatch_target(stream_target, terminal(request()))
+        .await
+        .expect("stream should open");
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({"delta": "hello"})
+    );
+    assert!(stream.next().await.unwrap().is_err());
+    assert!(!fallback_called.load(Ordering::SeqCst));
+    let _ = provider.request();
+
+    let empty_provider = FakeProvider::spawn(response(
+        "200 OK",
+        &[("Content-Type", "text/event-stream")],
+        b"",
+    ));
+    let mut empty = dispatch_stream(
+        &target(empty_provider.url.clone(), BTreeMap::new()),
+        request(),
+    )
+    .await
+    .expect("empty stream should open");
+    assert!(empty.next().await.is_none());
+    let _ = empty_provider.request();
+
+    let cancelled_provider = FakeProvider::spawn(response(
+        "200 OK",
+        &[("Content-Type", "text/event-stream")],
+        b"data: {\"delta\":\"first\"}\n\ndata: {\"delta\":\"second\"}\n\n",
+    ));
+    let mut cancelled = dispatch_stream(
+        &target(cancelled_provider.url.clone(), BTreeMap::new()),
+        request(),
+    )
+    .await
+    .expect("cancellable stream should open");
+    assert_eq!(
+        cancelled.next().await.unwrap().unwrap(),
+        json!({"delta": "first"})
+    );
+    cancelled
+        .close()
+        .await
+        .expect("stream should close cleanly");
+    assert!(cancelled.next().await.is_none());
+    let _ = cancelled_provider.request();
+}
+
+#[test]
+fn target_validation_rejects_unsafe_transport_inputs() {
+    for (method, url, headers) in [
+        ("TRACE", "https://provider.example/v1", BTreeMap::new()),
+        ("POST", "ftp://provider.example/v1", BTreeMap::new()),
+        (
+            "POST",
+            "https://user:secret@provider.example/v1",
+            BTreeMap::new(),
+        ),
+        (
+            "POST",
+            "https://provider.example/v1",
+            BTreeMap::from([("host".into(), "attacker.invalid".into())]),
+        ),
+        (
+            "POST",
+            "https://provider.example/v1",
+            BTreeMap::from([(
+                "x-nemo-relay-internal-dispatch-url".into(),
+                "http://attacker.invalid".into(),
+            )]),
+        ),
+    ] {
+        assert!(
+            LlmDispatchTargetContext::try_new(
+                method.into(),
+                url.into(),
+                "openai_chat".into(),
+                headers,
+            )
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn transport_failures_do_not_fall_back_to_the_host_callback() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let fallback_called = Arc::new(AtomicBool::new(false));
+    let fallback_called_for_fn = fallback_called.clone();
+    let terminal = targeted_llm_execution(Arc::new(move |_| {
+        fallback_called_for_fn.store(true, Ordering::SeqCst);
+        Box::pin(async { Ok(json!({"wrong": true})) })
+    }));
+    let target = target(
+        format!("http://{address}/v1/chat/completions?api_key=transport-secret"),
+        BTreeMap::new(),
+    );
+
+    let error = scope_llm_dispatch_target(target, terminal(request()))
+        .await
+        .expect_err("connection should fail");
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected transport failure");
+    };
+    assert_eq!(failure.status, None);
+    assert_eq!(failure.class, UpstreamFailureClass::Connection);
+    assert!(!failure.body.contains("transport-secret"));
+    assert!(!fallback_called.load(Ordering::SeqCst));
+}

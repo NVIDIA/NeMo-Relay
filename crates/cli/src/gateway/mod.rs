@@ -26,8 +26,7 @@ use nemo_relay::api::llm::{
     llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::{
-    LlmCodecIdentity, LlmDispatchTargetContext, LlmExecutionNextFn, LlmJsonStream,
-    LlmStreamExecutionNextFn, TASK_SCOPE_STACK, current_llm_dispatch_target,
+    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -177,7 +176,6 @@ async fn run_unmanaged_gateway(
         &prepared.body_bytes,
         &prepared.headers,
         None,
-        None,
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config),
     )
     .await?;
@@ -320,7 +318,6 @@ fn build_buffered_func(
     upstream_failures: CapturedUpstreamFailuresRef,
 ) -> LlmExecutionNextFn {
     let http = state.http.clone();
-    let targeted_http = state.targeted_http.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -329,7 +326,6 @@ fn build_buffered_func(
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
-        let targeted_http = targeted_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -337,17 +333,14 @@ fn build_buffered_func(
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
         Box::pin(async move {
-            let typed_target = current_llm_dispatch_target();
-            let retry_aware = typed_target.is_some() || retry_aware_dispatch(&request);
-            let http = typed_target.as_ref().map_or(&http, |_| &targeted_http);
+            let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
-                http,
+                &http,
                 &method,
                 &url,
                 &body_bytes,
                 &headers,
                 Some(&request),
-                typed_target.as_ref(),
                 forwarding,
             )
             .await
@@ -519,7 +512,6 @@ fn build_streaming_func(
     upstream_failures: CapturedUpstreamFailuresRef,
 ) -> LlmStreamExecutionNextFn {
     let http = state.http.clone();
-    let targeted_http = state.targeted_http.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -528,7 +520,6 @@ fn build_streaming_func(
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
-        let targeted_http = targeted_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -536,17 +527,14 @@ fn build_streaming_func(
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
         Box::pin(async move {
-            let typed_target = current_llm_dispatch_target();
-            let retry_aware = typed_target.is_some() || retry_aware_dispatch(&request);
-            let http = typed_target.as_ref().map_or(&http, |_| &targeted_http);
+            let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
-                http,
+                &http,
                 &method,
                 &url,
                 &body_bytes,
                 &headers,
                 Some(&request),
-                typed_target.as_ref(),
                 forwarding,
             )
             .await
@@ -800,7 +788,6 @@ async fn forward_upstream_request(
     body_bytes: &Bytes,
     headers: &HeaderMap,
     effective_request: Option<&LlmRequest>,
-    typed_target: Option<&LlmDispatchTargetContext>,
     forwarding: ProviderForwarding,
 ) -> Result<reqwest::Response, reqwest::Error> {
     debug_assert_eq!(
@@ -810,11 +797,10 @@ async fn forward_upstream_request(
             .provider_credential_present(),
         crate::provider_auth::has_provider_credential(headers)
     );
-    let effective = effective_dispatch_request_with_target(
+    let effective = build_effective_dispatch_request(
         body_bytes,
         headers,
         effective_request,
-        typed_target,
         url,
         method,
         forwarding.source_route,
@@ -881,22 +867,20 @@ fn effective_dispatch_request(
     url: &str,
     route: ProviderRoute,
 ) -> EffectiveUpstreamRequest {
-    effective_dispatch_request_with_target(
+    build_effective_dispatch_request(
         body_bytes,
         headers,
         effective_request,
-        None,
         url,
         &Method::POST,
         route,
     )
 }
 
-fn effective_dispatch_request_with_target(
+fn build_effective_dispatch_request(
     body_bytes: &Bytes,
     headers: &HeaderMap,
     effective_request: Option<&LlmRequest>,
-    typed_target: Option<&LlmDispatchTargetContext>,
     url: &str,
     method: &Method,
     route: ProviderRoute,
@@ -909,31 +893,6 @@ fn effective_dispatch_request_with_target(
     let Some((body_bytes, body_reencoded)) = reencode_request_body(request, body_bytes) else {
         return source_request(body_bytes, headers, method, url, route);
     };
-    if let Some(target) = typed_target {
-        let mut target_headers = HeaderMap::new();
-        for (name, value) in target.headers() {
-            let name = HeaderName::from_bytes(name.as_bytes())
-                .expect("native API v2 target header names were validated");
-            let value = HeaderValue::from_str(value)
-                .expect("native API v2 target header values were validated");
-            target_headers.insert(name, value);
-        }
-        target_headers
-            .entry(header::CONTENT_TYPE)
-            .or_insert(HeaderValue::from_static("application/json"));
-        let target_route = ProviderRoute::from_dispatch_override(target.route())
-            .expect("native API v2 target routes originate from a typed route enum");
-        let method = Method::from_bytes(target.method().as_bytes())
-            .expect("native API v2 target methods were validated");
-        return EffectiveUpstreamRequest {
-            body_bytes,
-            headers: target_headers,
-            method,
-            url: target.url().to_owned(),
-            target_route,
-            credential_policy: TargetCredentialPolicy::ExplicitTarget,
-        };
-    }
     let overrides = dispatch_overrides(&request.headers);
     let credential_policy = if overrides.is_explicit_target() {
         crate::provider_auth::remove_provider_credentials(&mut headers);
@@ -1170,7 +1129,6 @@ async fn passthrough_streaming(
         &prepared.upstream_url,
         &prepared.body_bytes,
         &prepared.headers,
-        None,
         None,
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config),
     )

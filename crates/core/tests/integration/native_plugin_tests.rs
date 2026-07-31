@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nemo_relay::api::event::{Event, ScopeCategory};
@@ -1301,6 +1301,62 @@ fn native_api_v2_plugin_requires_the_v2_manifest_contract() {
     assert!(error.contains("entry symbol"), "{error}");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_api_v2_fixture_dispatches_through_core_without_a_cli_gateway() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let provider =
+        EmbeddedFakeProvider::spawn(br#"{"id":"embedded-target-response"}"#, "application/json");
+    let manifest_ref = write_raw_manifest(
+        fixture.manifest_dir.path(),
+        &native_manifest_text(
+            "fixture_native",
+            &format!("={}", env!("CARGO_PKG_VERSION")),
+            "2",
+            &fixture.library_path.to_string_lossy(),
+            "nemo_relay_fixture_targeted_v2_plugin",
+        ),
+    );
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("targeted native API v2 fixture should load");
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::from_iter([("target_url".into(), json!(provider.url))]),
+    });
+    initialize_plugins_exact(plugin_config)
+        .await
+        .expect("targeted native API v2 fixture should initialize");
+
+    let original_provider_called = Arc::new(AtomicBool::new(false));
+    let original_provider_called_for_fn = original_provider_called.clone();
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("embedded-targeted-native-v2")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"model": "caller-model", "prompt": "hello"}),
+            })
+            .func(Arc::new(move |_| {
+                original_provider_called_for_fn.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({"id": "wrong-provider"})) })
+            }))
+            .build(),
+    )
+    .await
+    .expect("embedded targeted dispatch should succeed");
+
+    assert_eq!(response, json!({"id": "embedded-target-response"}));
+    assert!(!original_provider_called.load(Ordering::SeqCst));
+    let captured = String::from_utf8(provider.request()).expect("captured request should be UTF-8");
+    assert!(captured.contains("authorization: Bearer fixture-target\r\n"));
+    assert!(captured.contains("\"fixture_targeted\":true"));
+
+    clear_plugin_configuration().expect("targeted fixture configuration should clear");
+    activation.clear();
+}
+
 #[test]
 fn native_manifest_writer_escapes_toml_strings() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -2093,6 +2149,92 @@ struct BuiltFixture {
     _target_dir: TempDir,
     manifest_dir: TempDir,
     library_path: PathBuf,
+}
+
+struct EmbeddedFakeProvider {
+    url: String,
+    request: std::sync::mpsc::Receiver<Vec<u8>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl EmbeddedFakeProvider {
+    fn spawn(body: &'static [u8], content_type: &'static str) -> Self {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("embedded provider should bind");
+        let address = listener.local_addr().expect("embedded provider address");
+        let (request_tx, request) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("embedded provider should accept");
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("embedded provider timeout should configure");
+            let mut request_bytes = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let read = socket.read(&mut buffer).expect("provider request read");
+                if read == 0 {
+                    break;
+                }
+                request_bytes.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request_bytes
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let content_length = String::from_utf8_lossy(&request_bytes[..header_end])
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':').and_then(|(name, value)| {
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                    })
+                    .unwrap_or(0);
+                if request_bytes.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+            request_tx
+                .send(request_bytes)
+                .expect("embedded test should receive provider request");
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket
+                .write_all(headers.as_bytes())
+                .expect("embedded provider should write headers");
+            socket
+                .write_all(body)
+                .expect("embedded provider should write body");
+        });
+        Self {
+            url: format!("http://{address}/v1/chat/completions"),
+            request,
+            thread: Some(thread),
+        }
+    }
+
+    fn request(&self) -> Vec<u8> {
+        self.request
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("embedded provider request should arrive")
+    }
+}
+
+impl Drop for EmbeddedFakeProvider {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            thread
+                .join()
+                .expect("embedded provider thread should finish");
+        }
+    }
 }
 
 fn build_fixture_plugin() -> BuiltFixture {

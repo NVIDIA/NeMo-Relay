@@ -7,10 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
-    Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
-    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
+    Json, LlmContinuationInvocationV2, LlmContinuationOutcomeV2, LlmContinuationRouteV2,
+    LlmContinuationTargetV2, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NativePlugin,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind,
+    NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1,
+    NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativePluginContext,
     NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
     PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
     ToolExecutionInterceptOutcome,
@@ -300,6 +302,169 @@ nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || Fixtu
 nemo_relay_plugin::nemo_relay_plugin_v2!(
     nemo_relay_fixture_native_api_v2_plugin,
     || FixtureNativePlugin
+);
+
+struct TargetedFixturePlugin;
+
+struct TargetedFixtureState {
+    host: NemoRelayNativeHostApiV4,
+    url: String,
+}
+
+impl NativePlugin for TargetedFixturePlugin {
+    fn plugin_kind(&self) -> &str {
+        "fixture_native"
+    }
+
+    fn register(
+        &mut self,
+        plugin_config: &Map<String, Json>,
+        ctx: &mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::Result<()> {
+        let host = *ctx
+            .host_api_v4()
+            .ok_or_else(|| "targeted fixture requires native API v2".to_string())?;
+        let url = plugin_config
+            .get("target_url")
+            .and_then(Json::as_str)
+            .ok_or_else(|| "targeted fixture requires target_url".to_string())?
+            .to_owned();
+        let state = Box::into_raw(Box::new(TargetedFixtureState { host, url })).cast();
+        let status = unsafe {
+            ctx.register_async_llm_execution_v2_raw(
+                "fixture_targeted_llm",
+                0,
+                targeted_fixture_callback,
+                state,
+                Some(drop_targeted_fixture_state),
+            )
+        };
+        if status == NemoRelayStatus::Ok {
+            Ok(())
+        } else {
+            unsafe { drop(Box::from_raw(state.cast::<TargetedFixtureState>())) };
+            Err(format!("targeted fixture registration failed: {status:?}"))
+        }
+    }
+}
+
+unsafe extern "C" fn drop_targeted_fixture_state(user_data: *mut c_void) {
+    if !user_data.is_null() {
+        unsafe { drop(Box::from_raw(user_data.cast::<TargetedFixtureState>())) };
+    }
+}
+
+struct TargetedFixtureResult {
+    host: NemoRelayNativeHostApiV1,
+    sender: std::sync::mpsc::SyncSender<Result<LlmContinuationOutcomeV2, String>>,
+}
+
+unsafe extern "C" fn targeted_fixture_result(
+    user_data: *mut c_void,
+    outcome_json: *const NemoRelayNativeString,
+) {
+    let state = unsafe { Box::from_raw(user_data.cast::<TargetedFixtureResult>()) };
+    let outcome = unsafe { raw_host_string_value(&state.host, outcome_json) }
+        .ok_or_else(|| "targeted fixture received an invalid result string".to_string())
+        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()));
+    let _ = state.sender.send(outcome);
+}
+
+unsafe extern "C" fn targeted_fixture_callback(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let Some(state) = (unsafe { user_data.cast::<TargetedFixtureState>().as_ref() }) else {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    };
+    let result = (|| {
+        let invocation = unsafe { raw_host_string_value(&state.host.v3.v1, invocation_json) }
+            .ok_or_else(|| "targeted fixture received an invalid invocation".to_string())?;
+        let mut invocation: Json =
+            serde_json::from_str(&invocation).map_err(|error| error.to_string())?;
+        let mut request: LlmRequest = serde_json::from_value(
+            invocation
+                .get_mut("request")
+                .ok_or_else(|| "targeted fixture invocation omitted request".to_string())?
+                .take(),
+        )
+        .map_err(|error| error.to_string())?;
+        request.content["fixture_targeted"] = json!(true);
+        let dispatch = LlmContinuationInvocationV2 {
+            request,
+            target: LlmContinuationTargetV2 {
+                method: "POST".into(),
+                url: state.url.clone(),
+                route: LlmContinuationRouteV2::OpenaiChat,
+                headers: std::collections::BTreeMap::from([(
+                    "authorization".into(),
+                    "Bearer fixture-target".into(),
+                )]),
+            },
+        };
+        let dispatch = serde_json::to_string(&dispatch).map_err(|error| error.to_string())?;
+        let dispatch = unsafe { raw_host_string(&state.host.v3.v1, &dispatch) };
+        if dispatch.is_null() {
+            return Err("targeted fixture could not allocate dispatch".into());
+        }
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let callback_state = Box::into_raw(Box::new(TargetedFixtureResult {
+            host: state.host.v3.v1,
+            sender,
+        }))
+        .cast();
+        let status = unsafe {
+            (state.host.async_llm_next_invoke_result_v2)(
+                next,
+                dispatch,
+                targeted_fixture_result,
+                callback_state,
+            )
+        };
+        unsafe { (state.host.v3.v1.string_free)(dispatch) };
+        if status != NemoRelayStatus::Ok {
+            unsafe { drop(Box::from_raw(callback_state.cast::<TargetedFixtureResult>())) };
+            return Err(format!("targeted fixture dispatch failed: {status:?}"));
+        }
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|error| error.to_string())?
+    })();
+    unsafe { (state.host.v3.async_next_release)(next) };
+
+    match result {
+        Ok(LlmContinuationOutcomeV2::Success { response }) => {
+            if let Ok(response) = serde_json::to_string(&response) {
+                let response = unsafe { raw_host_string(&state.host.v3.v1, &response) };
+                if !response.is_null() {
+                    unsafe {
+                        (state.host.v3.async_completion_resolve_json)(completion, response);
+                        (state.host.v3.v1.string_free)(response);
+                    }
+                    return NemoRelayNativeAsyncCallbackState::Complete as u32;
+                }
+            }
+            unsafe {
+                reject_async_completion(
+                    &state.host.v3,
+                    completion,
+                    "targeted fixture could not serialize response",
+                )
+            };
+        }
+        Ok(LlmContinuationOutcomeV2::Failure { error }) => unsafe {
+            reject_async_completion(&state.host.v3, completion, &format!("{error:?}"))
+        },
+        Err(error) => unsafe { reject_async_completion(&state.host.v3, completion, &error) },
+    }
+    NemoRelayNativeAsyncCallbackState::Complete as u32
+}
+
+nemo_relay_plugin::nemo_relay_plugin_v2!(
+    nemo_relay_fixture_targeted_v2_plugin,
+    || TargetedFixturePlugin
 );
 
 #[unsafe(no_mangle)]

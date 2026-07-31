@@ -1554,10 +1554,16 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
             Box::pin(async move {
                 assert!(request.headers.is_empty());
                 assert_eq!(target.method(), "POST");
-                assert_eq!(target.url(), "https://provider.example/v1/chat/completions");
+                assert_eq!(
+                    target.url().as_str(),
+                    "https://provider.example/v1/chat/completions"
+                );
                 assert_eq!(target.route(), "openai_chat");
                 assert_eq!(
-                    target.headers().get("authorization").map(String::as_str),
+                    target
+                        .headers()
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok()),
                     Some("Bearer target-secret")
                 );
                 Err(FlowError::Upstream(crate::error::UpstreamFailure {
@@ -2146,8 +2152,11 @@ fn native_api_v2_isolates_concurrent_dispatch_targets() {
                 let target = current_llm_dispatch_target().expect("typed target is bound");
                 Ok(json!({
                     "request": request.content,
-                    "url": target.url(),
-                    "authorization": target.headers().get("authorization"),
+                    "url": target.url().as_str(),
+                    "authorization": target
+                        .headers()
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok()),
                 }))
             })
         })),

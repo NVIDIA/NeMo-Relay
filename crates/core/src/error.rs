@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Stable classification for a failure from an upstream provider attempt.
+/// Stable classification for an upstream provider failure captured by managed dispatch.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamFailureClass {
@@ -34,7 +34,7 @@ pub enum UpstreamFailureClass {
     Other,
 }
 
-/// Structured failure returned by one upstream provider attempt.
+/// Structured provider failure surfaced by targeted or explicitly retry-aware dispatch.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpstreamFailure {
     /// HTTP status when a provider response was received.
@@ -48,7 +48,7 @@ pub struct UpstreamFailure {
 }
 
 impl UpstreamFailure {
-    /// Whether Switchyard may be consulted for another bounded provider attempt.
+    /// Whether a provider-neutral routing policy may make another bounded attempt.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.class,
@@ -122,7 +122,7 @@ pub enum FlowError {
     #[error("guardrail rejected: {0}")]
     GuardrailRejected(String),
 
-    /// Structured upstream provider failure from retry-aware gateway dispatch.
+    /// Structured upstream provider failure from managed provider dispatch.
     #[error("{0}")]
     Upstream(UpstreamFailure),
 

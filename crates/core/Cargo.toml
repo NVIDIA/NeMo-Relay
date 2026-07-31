@@ -63,6 +63,7 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 typed-builder = "0.23.2"
 futures-util = "0.3"
+async-stream = "0.3"
 opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["trace", "internal-logs"] }

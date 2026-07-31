@@ -2302,73 +2302,17 @@ const NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES: usize = 4 * 1024;
 fn prepare_llm_continuation_invocation(
     invocation: LlmContinuationInvocationV2,
 ) -> std::result::Result<(LlmRequest, LlmDispatchTargetContext), NemoRelayStatus> {
-    let url = match reqwest::Url::parse(&invocation.target.url) {
-        Ok(url)
-            if matches!(url.scheme(), "http" | "https")
-                && url.has_host()
-                && url.username().is_empty()
-                && url.password().is_none() =>
-        {
-            url
-        }
-        _ => {
-            set_native_last_error(
-                "LLM continuation target must be an absolute HTTP(S) URL without user info",
-            );
-            return Err(NemoRelayStatus::InvalidArg);
-        }
-    };
-    let method = match reqwest::Method::from_bytes(invocation.target.method.as_bytes()) {
-        Ok(method) if method != reqwest::Method::CONNECT && method != reqwest::Method::TRACE => {
-            method
-        }
-        _ => {
-            set_native_last_error("LLM continuation method was invalid or prohibited");
-            return Err(NemoRelayStatus::InvalidArg);
-        }
-    };
-    for (name, value) in &invocation.target.headers {
-        let Ok(parsed_name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
-            set_native_last_error("LLM continuation contained an invalid target header name");
-            return Err(NemoRelayStatus::InvalidArg);
-        };
-        if prohibited_target_header(&parsed_name) {
-            set_native_last_error(format!(
-                "LLM continuation target header {parsed_name} is host-owned or prohibited"
-            ));
-            return Err(NemoRelayStatus::InvalidArg);
-        }
-        if reqwest::header::HeaderValue::from_str(value).is_err() {
-            set_native_last_error(format!(
-                "LLM continuation target header {parsed_name} had an invalid value"
-            ));
-            return Err(NemoRelayStatus::InvalidArg);
-        }
-    }
-    let target = LlmDispatchTargetContext::new(
-        method.as_str().to_owned(),
-        url.to_string(),
+    let target = LlmDispatchTargetContext::try_new(
+        invocation.target.method,
+        invocation.target.url,
         invocation.target.route.as_str().into(),
         invocation.target.headers,
-    );
+    )
+    .map_err(|error| {
+        set_native_last_error(error.to_string());
+        NemoRelayStatus::InvalidArg
+    })?;
     Ok((invocation.request, target))
-}
-
-fn prohibited_target_header(name: &reqwest::header::HeaderName) -> bool {
-    let name = name.as_str();
-    name.starts_with("x-nemo-relay-internal-")
-        || matches!(
-            name,
-            "host"
-                | "content-length"
-                | "connection"
-                | "transfer-encoding"
-                | "upgrade"
-                | "proxy-connection"
-                | "keep-alive"
-                | "trailer"
-                | "te"
-        )
 }
 
 fn non_http_llm_failure(

@@ -28,7 +28,8 @@ use crate::api::runtime::subscriber_dispatcher::{
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
-    MiddlewareContinuationContext, with_active_event_uuid,
+    MiddlewareContinuationContext, targeted_llm_execution, targeted_llm_stream_execution,
+    with_active_event_uuid,
 };
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
@@ -1494,7 +1495,11 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 let state = context
                     .read()
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
-                state.llm_build_execution_chain(&execution_name, func, &scope_locals)
+                state.llm_build_execution_chain(
+                    &execution_name,
+                    targeted_llm_execution(func),
+                    &scope_locals,
+                )
             };
             execution(intercepted_request).await
         }),
@@ -1703,7 +1708,11 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 let state = context
                     .read()
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
-                state.llm_stream_build_execution_chain(&execution_name, func, &scope_locals)
+                state.llm_stream_build_execution_chain(
+                    &execution_name,
+                    targeted_llm_stream_execution(func),
+                    &scope_locals,
+                )
             };
             let execution_context = MiddlewareContinuationContext::capture();
             execution(intercepted_request)
