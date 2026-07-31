@@ -40,20 +40,24 @@ def test_plugin_clear_is_asyncio_safe_with_pending_sanitizer(tmp_path):
 
         delivered = []
 
-        class SanitizedSubscriberPlugin:
-            def validate(self, _config):
-                return None
-
-            def register(self, _config, context):
-                async def sanitize(_event, fields):
-                    await asyncio.sleep(0)
-                    fields["data"] = {"sanitized": True}
-                    return fields
-
-                context.register_mark_sanitize_guardrail("sanitize", 0, sanitize)
-                context.register_subscriber("capture", delivered.append)
-
         async def main():
+            teardown_started = asyncio.Event()
+            allow_teardown = asyncio.Event()
+
+            class SanitizedSubscriberPlugin:
+                def validate(self, _config):
+                    return None
+
+                def register(self, _config, context):
+                    async def sanitize(_event, fields):
+                        teardown_started.set()
+                        await allow_teardown.wait()
+                        fields["data"] = {"sanitized": True}
+                        return fields
+
+                    context.register_mark_sanitize_guardrail("sanitize", 0, sanitize)
+                    context.register_subscriber("capture", delivered.append)
+
             kind = "python.test_async_clear"
             plugin.register(kind, SanitizedSubscriberPlugin())
             try:
@@ -68,11 +72,32 @@ def test_plugin_clear_is_asyncio_safe_with_pending_sanitizer(tmp_path):
                 else:
                     raise AssertionError("plugin.clear() did not reject a running event loop")
 
-                await asyncio.wait_for(plugin.clear_async(), timeout=2)
+                first_clear = asyncio.create_task(plugin.clear_async())
+                await asyncio.wait_for(teardown_started.wait(), timeout=2)
+                first_clear.cancel()
+                try:
+                    await first_clear
+                except asyncio.CancelledError:
+                    pass
+                else:
+                    raise AssertionError("plugin.clear_async() did not propagate cancellation")
+
+                second_clear = asyncio.create_task(plugin.clear_async())
+                await asyncio.sleep(0.05)
+                assert not second_clear.done()
+
+                allow_teardown.set()
+                await asyncio.wait_for(second_clear, timeout=2)
                 assert plugin.report() is None
                 assert len(delivered) == 1
                 assert delivered[0].data == {"sanitized": True}
+
+                await plugin.initialize(plugin.PluginConfig())
+                assert plugin.report() is not None
+                await plugin.clear_async()
+                assert plugin.report() is None
             finally:
+                allow_teardown.set()
                 if plugin.report() is not None:
                     await plugin.clear_async()
                 plugin.deregister(kind)
