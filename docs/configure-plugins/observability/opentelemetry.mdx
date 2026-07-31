@@ -81,7 +81,7 @@ work or delivery to the other exporters.
 | `service_version` | Omitted | Optional `service.version`. |
 | `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
 | `timeout_millis` | `3000` | Export timeout. |
-| `max_queue_size` | Omitted | Positive per-endpoint span queue capacity. When omitted, the OpenTelemetry SDK default or `OTEL_BSP_MAX_QUEUE_SIZE` applies. |
+| `max_queue_size` | Omitted | Positive per-endpoint span queue capacity. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |

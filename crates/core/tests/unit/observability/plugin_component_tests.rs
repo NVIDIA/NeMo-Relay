@@ -16,13 +16,15 @@ use crate::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
     list_plugin_kinds, lookup_plugin, validate_plugin_config,
 };
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use prost::Message;
 use serde_json::json;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-#[cfg(feature = "atof-streaming")]
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn temp_dir(prefix: &str) -> PathBuf {
@@ -198,6 +200,131 @@ fn start_otlp_capture_server() -> (String, mpsc::Receiver<Vec<u8>>) {
         sender.send(body).unwrap();
     });
     (endpoint, receiver)
+}
+
+struct BlockingOtlpTestCollector {
+    endpoint: String,
+    first_request_received: mpsc::Receiver<()>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+    stop: Arc<AtomicBool>,
+    requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    server: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BlockingOtlpTestCollector {
+    fn new() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}/v1/traces", listener.local_addr().unwrap());
+        let (first_request_sender, first_request_received) = mpsc::channel();
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_release = Arc::clone(&release);
+        let server_stop = Arc::clone(&stop);
+        let server_requests = Arc::clone(&requests);
+        let server = std::thread::spawn(move || {
+            let first_request = AtomicBool::new(true);
+            while !server_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(10)))
+                            .unwrap();
+                        let mut request = Vec::new();
+                        let mut byte = [0_u8; 1];
+                        while !request.ends_with(b"\r\n\r\n") {
+                            stream.read_exact(&mut byte).unwrap();
+                            request.push(byte[0]);
+                        }
+                        let headers = String::from_utf8_lossy(&request);
+                        let content_length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.split_once(':').and_then(|(name, value)| {
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then_some(value.trim())
+                                })
+                            })
+                            .unwrap()
+                            .parse::<usize>()
+                            .unwrap();
+                        let mut body = vec![0_u8; content_length];
+                        stream.read_exact(&mut body).unwrap();
+                        server_requests.lock().unwrap().push(body);
+
+                        if first_request.swap(false, Ordering::AcqRel) {
+                            first_request_sender.send(()).unwrap();
+                            let (released, signal) = &*server_release;
+                            let mut released = released.lock().unwrap();
+                            while !*released {
+                                released = signal.wait(released).unwrap();
+                            }
+                        }
+
+                        stream
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            )
+                            .unwrap();
+                        stream.flush().unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("OTLP test collector failed to accept a request: {error}"),
+                }
+            }
+        });
+
+        Self {
+            endpoint,
+            first_request_received,
+            release,
+            stop,
+            requests,
+            server: Some(server),
+        }
+    }
+
+    fn wait_for_first_request(&self) {
+        self.first_request_received
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first OTLP batch should reach the test collector");
+    }
+
+    fn release(&self) {
+        let (released, signal) = &*self.release;
+        *released.lock().unwrap() = true;
+        signal.notify_all();
+    }
+
+    fn finish(mut self) -> Vec<Vec<u8>> {
+        self.stop.store(true, Ordering::Release);
+        self.server.take().unwrap().join().unwrap();
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl Drop for BlockingOtlpTestCollector {
+    fn drop(&mut self) {
+        self.release();
+        self.stop.store(true, Ordering::Release);
+        if let Some(server) = self.server.take() {
+            let _ = server.join();
+        }
+    }
+}
+
+fn count_otlp_spans(body: &[u8]) -> usize {
+    let request = ExportTraceServiceRequest::decode(body).expect("valid OTLP trace request");
+    request
+        .resource_spans
+        .iter()
+        .flat_map(|resource_spans| &resource_spans.scope_spans)
+        .map(|scope_spans| scope_spans.spans.len())
+        .sum()
 }
 
 fn component(config: Json) -> PluginComponentSpec {
@@ -2548,6 +2675,51 @@ fn opentelemetry_endpoints_fan_out_to_heterogeneous_and_repeated_types() {
             .expect("each configured endpoint should receive the exported span");
         assert!(!body.is_empty());
     }
+}
+
+#[test]
+fn configured_opentelemetry_endpoint_retains_an_8001_span_burst_end_to_end() {
+    const SPAN_COUNT: usize = 8_001;
+    const FIRST_BATCH_SIZE: usize = 512;
+
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let collector = BlockingOtlpTestCollector::new();
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": collector.endpoint.clone(),
+                "max_queue_size": 16_384,
+                "timeout_millis": 60_000
+            }]
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+
+    for _ in 0..FIRST_BATCH_SIZE {
+        let agent = push_agent("burst-agent");
+        pop(&agent);
+    }
+    crate::api::subscriber::flush_subscribers().unwrap();
+    collector.wait_for_first_request();
+
+    for _ in FIRST_BATCH_SIZE..SPAN_COUNT {
+        let agent = push_agent("burst-agent");
+        pop(&agent);
+    }
+    crate::api::subscriber::flush_subscribers().unwrap();
+    collector.release();
+    clear_plugin_configuration().unwrap();
+
+    let exported_span_count = collector
+        .finish()
+        .iter()
+        .map(|body| count_otlp_spans(body))
+        .sum::<usize>();
+    assert_eq!(exported_span_count, SPAN_COUNT);
 }
 
 #[test]

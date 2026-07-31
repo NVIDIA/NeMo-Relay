@@ -308,14 +308,14 @@ fn reset_global() {
 }
 
 #[derive(Debug, Clone)]
-struct BlockingSpanExporter {
+struct TestBlockingSpanExporter {
     first_export: Arc<AtomicBool>,
     export_started: mpsc::Sender<()>,
     release: Arc<(Mutex<bool>, Condvar)>,
     exported_span_count: Arc<AtomicUsize>,
 }
 
-impl BlockingSpanExporter {
+impl TestBlockingSpanExporter {
     fn new() -> (Self, mpsc::Receiver<()>) {
         let (export_started, receiver) = mpsc::channel();
         (
@@ -340,7 +340,7 @@ impl BlockingSpanExporter {
     }
 }
 
-impl SdkSpanExporter for BlockingSpanExporter {
+impl SdkSpanExporter for TestBlockingSpanExporter {
     async fn export(
         &self,
         batch: Vec<opentelemetry_sdk::trace::SpanData>,
@@ -2912,7 +2912,7 @@ fn provider_builders_cover_success_paths() {
 
 #[test]
 fn configured_endpoint_queue_retains_an_8001_span_burst() {
-    let (exporter, export_started) = BlockingSpanExporter::new();
+    let (exporter, export_started) = TestBlockingSpanExporter::new();
     let config =
         OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
             .with_max_queue_size(16_384);
