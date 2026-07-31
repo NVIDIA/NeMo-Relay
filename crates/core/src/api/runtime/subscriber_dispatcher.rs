@@ -3,7 +3,7 @@
 
 //! Asynchronous subscriber delivery for native targets.
 
-use crate::api::event::Event;
+use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::registry::Guardrail;
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
@@ -967,8 +967,8 @@ mod native {
 
     /// Apply a transform and sanitizers on the dispatcher thread. A transform
     /// failure drops the event because it may be responsible for inserting the
-    /// sanitized payload. A sanitizer failure retains the transformed snapshot
-    /// and continues publication (fail open).
+    /// sanitized payload. A sanitizer failure clears mutable observability
+    /// fields before publication.
     pub(super) fn sanitize_event_snapshot(
         event: Event,
         transform: Option<EventTransformFn>,
@@ -1037,10 +1037,12 @@ mod native {
                 }
                 log::error!(
                     target: "nemo_relay.runtime",
-                    event = "event_sanitizer_fail_open";
-                    "Publishing the transformed event snapshot because event sanitizers could not run"
+                    event = "event_sanitizer_runtime_failed";
+                    "Event sanitizers could not run; clearing observability fields before publication"
                 );
-                return (Some(transformed), nested_publications);
+                let mut cleared = transformed;
+                cleared.apply_sanitize_fields(EventSanitizeFields::default());
+                return (Some(cleared), nested_publications);
             }
         };
         let fallback = transformed.clone();
@@ -1057,9 +1059,11 @@ mod native {
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_panicked";
-                    "Event sanitizer panicked; preserving the last valid event snapshot"
+                    "Event sanitizer panicked; clearing observability fields"
                 );
-                Some(fallback)
+                let mut cleared = fallback;
+                cleared.apply_sanitize_fields(EventSanitizeFields::default());
+                Some(cleared)
             }
         };
         (event, nested_publications)

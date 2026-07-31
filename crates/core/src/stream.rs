@@ -237,19 +237,19 @@ impl LlmStreamWrapper {
             aggregated
         };
 
-        let entries = match self.scope_stack.read() {
+        let (entries, sanitizer_snapshot_failed) = match self.scope_stack.read() {
             Ok(scope_guard) => {
                 let scope_locals = scope_guard
                     .collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
                 match global_context().read() {
-                    Ok(state) => state.llm_sanitize_response_entries(&scope_locals),
+                    Ok(state) => (state.llm_sanitize_response_entries(&scope_locals), false),
                     Err(error) => {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "stream_end_sanitizer_snapshot_failed";
-                            "LLM stream END sanitizer snapshot failed open: {error}"
+                            "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
                         );
-                        Vec::new()
+                        (Vec::new(), true)
                     }
                 }
             }
@@ -257,9 +257,9 @@ impl LlmStreamWrapper {
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "stream_end_sanitizer_snapshot_failed";
-                    "LLM stream END sanitizer snapshot failed open: {error}"
+                    "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
                 );
-                Vec::new()
+                (Vec::new(), true)
             }
         };
         let handle = self.handle.clone();
@@ -269,12 +269,17 @@ impl LlmStreamWrapper {
         let response_codec = self.response_codec.clone();
         let sanitize_context = self.sanitize_context.clone();
         let finalize = async move {
-            let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
-                response,
-                sanitize_context,
-                &entries,
-            )
-            .await;
+            let sanitized = (!sanitizer_snapshot_failed).then(|| {
+                NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+                    response,
+                    sanitize_context,
+                    &entries,
+                )
+            });
+            let sanitized = match sanitized {
+                Some(sanitized) => sanitized.await,
+                None => None,
+            };
             let data = match sanitized {
                 Some(response) if response_was_null_without_fallback && response.is_null() => None,
                 response => response,

@@ -837,11 +837,17 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
                     invocation_context.as_ref(),
                 )
             }))
-            .await?;
-            Python::attach(|py| {
-                py_to_json(result.bind(py))
-                    .map_err(|e| FlowError::Internal(format!("tool py_to_json failed: {e}")))
-            })
+            .await
+            .and_then(|result| {
+                Python::attach(|py| {
+                    py_to_json(result.bind(py))
+                        .map_err(|e| FlowError::Internal(format!("tool py_to_json failed: {e}")))
+                })
+            });
+            if let Err(error) = &result {
+                eprintln!("nemo_relay: Python tool sanitizer callable failed: {error}");
+            }
+            result
         })
     })
 }
@@ -1339,21 +1345,27 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
                         invocation_context.as_ref(),
                     )
                 }))
-                .await?;
-                Python::attach(|py| {
-                    if result.is_none(py) {
-                        Ok(None)
-                    } else {
-                        result
-                            .extract::<PyLLMRequest>(py)
-                            .map(|request| Some(request.inner))
-                            .map_err(|error| {
-                                FlowError::Internal(format!(
-                                    "LLM sanitize request returned unexpected type: {error}"
-                                ))
-                            })
-                    }
-                })
+                .await
+                .and_then(|result| {
+                    Python::attach(|py| {
+                        if result.is_none(py) {
+                            Ok(None)
+                        } else {
+                            result
+                                .extract::<PyLLMRequest>(py)
+                                .map(|request| Some(request.inner))
+                                .map_err(|error| {
+                                    FlowError::Internal(format!(
+                                        "LLM sanitize request returned unexpected type: {error}"
+                                    ))
+                                })
+                        }
+                    })
+                });
+                if let Err(error) = &result {
+                    eprintln!("nemo_relay: Python LLM sanitize request callable failed: {error}");
+                }
+                result
             })
         },
     )
@@ -1658,16 +1670,22 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
                     invocation_context.as_ref(),
                 )
             }))
-            .await?;
-            Python::attach(|py| {
-                if result.is_none(py) {
-                    Ok(None)
-                } else {
-                    py_to_json(result.bind(py))
-                        .map(Some)
-                        .map_err(|error| FlowError::Internal(error.to_string()))
-                }
-            })
+            .await
+            .and_then(|result| {
+                Python::attach(|py| {
+                    if result.is_none(py) {
+                        Ok(None)
+                    } else {
+                        py_to_json(result.bind(py))
+                            .map(Some)
+                            .map_err(|error| FlowError::Internal(error.to_string()))
+                    }
+                })
+            });
+            if let Err(error) = &result {
+                eprintln!("nemo_relay: Python LLM sanitize response callable failed: {error}");
+            }
+            result
         })
     })
 }
@@ -1796,16 +1814,25 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                     )
                 },
             );
-            let result = resolve_py_object_or_future(result).await?;
-            Python::attach(|py| {
-                py_to_json(result.bind(py))
-                    .map_err(|error| FlowError::Internal(error.to_string()))
-                    .and_then(|value| {
-                        serde_json::from_value(value).map_err(|error| {
-                            FlowError::Internal(format!("invalid event sanitizer result: {error}"))
-                        })
+            let result = resolve_py_object_or_future(result)
+                .await
+                .and_then(|result| {
+                    Python::attach(|py| {
+                        py_to_json(result.bind(py))
+                            .map_err(|error| FlowError::Internal(error.to_string()))
+                            .and_then(|value| {
+                                serde_json::from_value(value).map_err(|error| {
+                                    FlowError::Internal(format!(
+                                        "invalid event sanitizer result: {error}"
+                                    ))
+                                })
+                            })
                     })
-            })
+                });
+            if let Err(error) = &result {
+                eprintln!("nemo_relay: Python event sanitizer callable failed: {error}");
+            }
+            result
         })
     })
 }

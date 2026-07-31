@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::api::event::{Event, ScopeCategory};
+use crate::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use crate::api::llm::LlmRequest;
 use crate::api::registry::Guardrail;
 use crate::api::runtime::global_context;
@@ -61,9 +61,13 @@ pub(crate) fn snapshot_event_sanitizers(
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_snapshot_failed";
-                    "Event sanitizer snapshot failed open because the scope stack lock is poisoned; publishing without event sanitizers: {error}"
+                    "Event sanitizer snapshot failed; clearing observability fields: {error}"
                 );
-                return None;
+                return Some(vec![Guardrail::new(
+                    "event-sanitizer-snapshot-failure",
+                    i32::MIN,
+                    Arc::new(|_, _| Box::pin(async { Ok(EventSanitizeFields::default()) })),
+                )]);
             }
         };
         let context = global_context();
@@ -73,9 +77,13 @@ pub(crate) fn snapshot_event_sanitizers(
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_snapshot_failed";
-                    "Event sanitizer snapshot failed open because the runtime context lock is poisoned; publishing without event sanitizers: {error}"
+                    "Event sanitizer snapshot failed; clearing observability fields: {error}"
                 );
-                return None;
+                return Some(vec![Guardrail::new(
+                    "event-sanitizer-snapshot-failure",
+                    i32::MIN,
+                    Arc::new(|_, _| Box::pin(async { Ok(EventSanitizeFields::default()) })),
+                )]);
             }
         };
         match &event {

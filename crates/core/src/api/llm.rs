@@ -706,6 +706,9 @@ fn emit_optimization_marks_with<F>(
 /// This emits an LLM-start event after applying sanitize-request guardrails to
 /// the payload recorded for observability.
 ///
+/// If a sanitizer errors or panics, Relay omits the payload and request
+/// annotation and does not run remaining sanitizers.
+///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on the span.
 /// - `request`: Raw [`LlmRequest`] associated with the span.
@@ -927,12 +930,14 @@ async fn build_llm_end_payload(
 /// # Errors
 /// Returns an error when the runtime owner check fails or internal state cannot
 /// be read safely. Dispatcher submission failures are logged because
-/// observability publication is best effort. Sanitizer and response-codec errors
-/// discovered during queued publication are also logged and fail open.
+/// observability publication is best effort. Sanitizer errors discovered during
+/// queued publication are logged and fail closed by omitting the governed payload.
+/// Response-codec errors retain their documented fallback behavior.
 ///
 /// # Notes
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
-/// the caller-owned `response` value.
+/// the caller-owned `response` value. If a sanitizer errors or panics, Relay
+/// omits the payload and response annotation and does not run remaining sanitizers.
 pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = params.handle.captured_scope_stack().clone();

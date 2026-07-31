@@ -167,7 +167,8 @@ def call_end(
         ``call_end()`` remains synchronous. Sanitize-response guardrails,
         response-codec annotation, event sanitizers, and subscriber delivery
         run later on Relay's serial publication path. Callback and codec
-        failures are logged and fail open; they cannot be raised by this call.
+        sanitizer failures are logged and fail closed; they cannot be raised by
+        this call. Codec failures retain their documented fallback behavior.
         ``response_codec`` and ``annotated_response`` enrich observability
         output only and do not rewrite the caller-owned response.
         ``timestamp`` must be a timezone-aware ``datetime``; strings and naive

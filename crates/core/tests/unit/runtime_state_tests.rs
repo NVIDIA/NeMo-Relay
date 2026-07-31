@@ -9,7 +9,7 @@ use super::*;
 use crate::api::registry::{RegistryRecord, RequestIntercept};
 
 #[tokio::test]
-async fn middleware_snapshot_chains_contain_callback_panics() {
+async fn sanitizer_snapshot_chains_fail_closed_on_callback_panics() {
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
             .name("preserved-event")
@@ -26,8 +26,8 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
         &[RegistryRecord::new("event-panic", 0, event_sanitizer)],
     )
     .await;
-    assert_eq!(sanitized_event.data(), event.data());
-    assert_eq!(sanitized_event.metadata(), event.metadata());
+    assert_eq!(sanitized_event.data(), None);
+    assert_eq!(sanitized_event.metadata(), None);
 
     let tool_payload = json!({"tool": "preserved"});
     let tool_sanitizer: ToolSanitizeFn =
@@ -40,7 +40,7 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
             &tool_entries,
         )
         .await,
-        tool_payload
+        None
     );
     let tool_response = json!({"tool_response": "preserved"});
     let tool_response_sanitizer: ToolSanitizeFn =
@@ -56,7 +56,7 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
             )],
         )
         .await,
-        tool_response
+        None
     );
 
     let request = LlmRequest {
@@ -73,7 +73,7 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
             &llm_entries,
         )
         .await,
-        Some(request.clone())
+        None
     );
     let llm_response = json!({"llm_response": "preserved"});
     let llm_response_sanitizer: LlmSanitizeResponseFn =
@@ -89,7 +89,7 @@ async fn middleware_snapshot_chains_contain_callback_panics() {
             )],
         )
         .await,
-        Some(llm_response)
+        None
     );
 
     let tool_conditional: ToolConditionalFn =

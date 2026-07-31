@@ -276,7 +276,7 @@ class TestToolGuardrails:
             guardrails.register_tool_sanitize_request("py_dup_guard", 1, lambda n, a: a)
         guardrails.deregister_tool_sanitize_request("py_dup_guard")
 
-    def test_sanitize_request_failure_falls_back_to_original_input(self):
+    def test_sanitize_request_failure_omits_observability_input(self):
         events = []
         subscribers.register("py_tool_sanitize_req_sub", lambda event: events.append(event))
         guardrails.register_tool_sanitize_request(
@@ -293,9 +293,9 @@ class TestToolGuardrails:
             subscribers.deregister("py_tool_sanitize_req_sub")
 
         start = _tool_event(events, "tool_sanitize_req_fail", "start")
-        assert start.data == {"value": 1}
+        assert start.data is None
 
-    def test_sanitize_response_invalid_return_falls_back_to_original_output(self):
+    def test_sanitize_response_invalid_return_omits_observability_output(self):
         events = []
         subscribers.register("py_tool_sanitize_resp_sub", lambda event: events.append(event))
         guardrails.register_tool_sanitize_response(
@@ -312,7 +312,7 @@ class TestToolGuardrails:
             subscribers.deregister("py_tool_sanitize_resp_sub")
 
         end = _tool_event(events, "tool_sanitize_resp_bad", "end")
-        assert end.data == {"ok": True}
+        assert end.data is None
 
     def test_deregister_nonexistent(self):
         assert not guardrails.deregister_tool_sanitize_request("nonexistent")

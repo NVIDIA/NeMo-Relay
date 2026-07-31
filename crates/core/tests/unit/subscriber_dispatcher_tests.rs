@@ -532,7 +532,7 @@ fn detached_publications_share_one_background_executor_thread() {
 }
 
 #[test]
-fn sanitizer_runtime_failure_preserves_untransformed_event_snapshot() {
+fn sanitizer_runtime_failure_clears_untransformed_event_fields() {
     let _lock = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -541,7 +541,9 @@ fn sanitizer_runtime_failure_preserves_untransformed_event_snapshot() {
         "atof_version": "0.1",
         "uuid": "019c1df6-4a57-7000-8000-000000000008",
         "timestamp": "2026-07-28T00:00:00Z",
-        "name": "fail-open-runtime"
+        "name": "fail-closed-runtime",
+        "data": {"secret": true},
+        "metadata": {"secret": true}
     }))
     .expect("valid event");
     let sanitizer: EventSanitizeFn = Arc::new(|_, _| {
@@ -559,7 +561,10 @@ fn sanitizer_runtime_failure_preserves_untransformed_event_snapshot() {
     );
     set_sanitizer_runtime_failure_for_test(None);
 
-    assert_eq!(published, Some(event));
+    let published = published.expect("sanitizer runtime failure still publishes the event shell");
+    assert_eq!(published.name(), event.name());
+    assert_eq!(published.data(), None);
+    assert_eq!(published.metadata(), None);
     assert!(nested.is_empty());
 }
 

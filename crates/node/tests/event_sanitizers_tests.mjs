@@ -31,6 +31,12 @@ function assertSanitizerFieldsPreserved(event, expectedData, expectedMetadata = 
   assert.deepEqual(event.metadata, expectedMetadata);
 }
 
+function assertSanitizerFieldsCleared(event) {
+  assert.equal(event.data, null);
+  assert.equal(event.category_profile, null);
+  assert.equal(event.metadata, null);
+}
+
 async function initializeWithoutDiscoveredPluginConfig(config) {
   const previousDirectory = process.cwd();
   const directory = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-'));
@@ -361,7 +367,7 @@ describe('event sanitizer registries', () => {
     }
   });
 
-  it('fails open and records invalid sanitizer results', async () => {
+  it('fails closed and records invalid sanitizer results', async () => {
     const events = capture('node-event-sanitize-invalid-sub');
     const invalidResults = {
       scalar: () => 'invalid',
@@ -389,7 +395,7 @@ describe('event sanitizer registries', () => {
           lib.deregisterMarkSanitizeGuardrail(seedName);
           lib.deregisterMarkSanitizeGuardrail(name);
         }
-        assertSanitizerFieldsPreserved(events.at(-1), { kept: kind });
+        assertSanitizerFieldsCleared(events.at(-1));
         assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
       }
     } finally {
@@ -417,7 +423,7 @@ describe('event sanitizer registries', () => {
     assert.equal(start.metadata.background, true);
   });
 
-  it('fails open and records invalid queued sanitizer results', async () => {
+  it('fails closed and records invalid queued sanitizer results', async () => {
     const events = capture('node-event-sanitize-background-invalid-sub');
     const invalidResults = {
       emptyObject: () => ({}),
@@ -447,7 +453,7 @@ describe('event sanitizer registries', () => {
         const start = events.find(
           (event) => event.kind === 'scope' && event.name === name && event.scope_category === 'start',
         );
-        assertSanitizerFieldsPreserved(start, { kept: kind });
+        assertSanitizerFieldsCleared(start);
         assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
       }
     } finally {
@@ -455,7 +461,7 @@ describe('event sanitizer registries', () => {
     }
   });
 
-  it('fails open when a queued sanitizer throws', async () => {
+  it('fails closed when a queued sanitizer throws', async () => {
     const events = capture('node-event-sanitize-background-throw-sub');
     lib.clearLastCallbackError();
     lib.registerScopeSanitizeStartGuardrail('node-background-throw-seed', -1, (_event, fields) => ({
@@ -474,7 +480,7 @@ describe('event sanitizer registries', () => {
       const start = events.find(
         (event) => event.kind === 'scope' && event.name === 'background-throw-tool' && event.scope_category === 'start',
       );
-      assertSanitizerFieldsPreserved(start, { kept: true });
+      assertSanitizerFieldsCleared(start);
       assert.match(lib.getLastCallbackError() ?? '', /background sanitizer boom/i);
     } finally {
       lib.deregisterScopeSanitizeStartGuardrail('node-background-throw-seed');
@@ -543,7 +549,7 @@ describe('event sanitizer registries', () => {
     assert.deepEqual(marks.cleared.data, { raw: true });
   });
 
-  it('fails open when a plugin-owned sanitizer throws', async () => {
+  it('fails closed when a plugin-owned sanitizer throws', async () => {
     const kind = `node.test.event-sanitize-throw.${Date.now()}`;
     const events = capture('node-event-sanitize-plugin-throw-sub');
     plugin.register(kind, {
@@ -568,7 +574,7 @@ describe('event sanitizer registries', () => {
       lib.event('plugin-throw', null, { raw: true }, { raw: true });
       await lib.flushSubscribers();
       await waitFor(events, 1);
-      assertSanitizerFieldsPreserved(events.at(-1), { raw: true });
+      assertSanitizerFieldsCleared(events.at(-1));
       assert.match(lib.getLastCallbackError() ?? '', /plugin sanitizer boom/i);
     } finally {
       plugin.clear();
