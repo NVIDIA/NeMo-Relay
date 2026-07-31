@@ -14,7 +14,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Create an isolated scope stack below the current causal parent.
 
-Capture the parent before spawning concurrent work, then install the returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event parentage but does not transfer scope-local registrations.
+Capture the parent before spawning concurrent work, then install the returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event parentage but does not transfer scope-local registrations. Because the fork does not assert a root UUID, its first local OpenTelemetry span starts a new trace.
 
 ## Examples
 

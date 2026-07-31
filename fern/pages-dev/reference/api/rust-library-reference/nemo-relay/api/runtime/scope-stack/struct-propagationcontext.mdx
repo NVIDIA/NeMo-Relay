@@ -14,7 +14,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Versioned, transport-neutral causal context for crossing a Relay boundary.
 
-Applications are responsible for serializing, transporting, authenticating, and trusting this value. It intentionally contains only Relay identifiers; OpenTelemetry `traceparent` and `tracestate` remain transport sidecars.
+Applications are responsible for serializing, transporting, authenticating, and trusting this value. It intentionally contains only Relay identifiers; OpenTelemetry `traceparent` and `tracestate` remain transport sidecars. A context without a `root_uuid` preserves Relay event parentage when imported. The first local OpenTelemetry span created after import starts a new trace.
 
 ## Fields
 
@@ -24,7 +24,7 @@ Wire-format version. Version 1 is the only currently supported value.
 
 ### `root_uuid: Option<Uuid>`
 
-Stable session root when the sending application knows one.
+Stable session root when the sending application knows one. When this root is omitted, the first local OpenTelemetry span after import starts a new trace.
 
 ### `parent_uuid: Uuid`
 
