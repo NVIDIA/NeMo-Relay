@@ -2634,16 +2634,27 @@ const OTEL_BSP_BURST_TEST_CHILD: &str = "NEMO_RELAY_OTEL_BSP_BURST_TEST_CHILD";
 #[test]
 fn opentelemetry_batch_environment_retains_an_8001_span_burst_end_to_end() {
     if std::env::var_os(OTEL_BSP_BURST_TEST_CHILD).is_none() {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("observability::plugin_component::tests::opentelemetry_batch_environment_retains_an_8001_span_burst_end_to_end")
             .arg("--exact")
             .arg("--nocapture")
             .env(OTEL_BSP_BURST_TEST_CHILD, "1")
             .env("OTEL_BSP_MAX_QUEUE_SIZE", "16384")
             .env("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "512")
-            .status()
+            .output()
             .expect("start OTEL BSP child test");
-        assert!(status.success(), "OTEL BSP child test failed: {status}");
+        assert!(
+            output.status.success(),
+            "OTEL BSP child test failed: {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("test result: ok. 1 passed"),
+            "child test filter did not execute exactly one test: {stdout}"
+        );
         return;
     }
 
