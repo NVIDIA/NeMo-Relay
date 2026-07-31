@@ -10,7 +10,7 @@ use super::{EventSubscriberFn, publication_context};
 use crate::api::registry::RegistryRecord;
 use crate::api::runtime::EventSanitizeFn;
 use crate::api::runtime::scope_stack::current_scope_stack;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Barrier, Mutex, mpsc};
 
 #[test]
 fn flush_waits_for_active_but_not_later_publication_barriers() {
@@ -363,6 +363,8 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
     flush_subscribers().unwrap();
     let sender = dispatcher_sender().expect("dispatcher sender");
     let delivered = Arc::new(Mutex::new(Vec::new()));
+    let outer_started = Arc::new(Barrier::new(2));
+    let release_outer = Arc::new(Barrier::new(2));
     let event = |uuid: &str, name: &str| {
         serde_json::from_value(serde_json::json!({
             "kind": "mark",
@@ -414,11 +416,15 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
     let outer_subscriber: EventSubscriberFn = {
         let delivered = Arc::clone(&delivered);
         let child_subscriber = child_subscriber.clone();
+        let outer_started = Arc::clone(&outer_started);
+        let release_outer = Arc::clone(&release_outer);
         Arc::new(move |event| {
             delivered
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(event.name().to_string());
+            outer_started.wait();
+            release_outer.wait();
             assert!(enqueue_dispatch_message(DispatcherMessage::Deliver {
                 event: Box::new(
                     serde_json::from_value(serde_json::json!({
@@ -460,6 +466,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             lineage: None,
         })
         .unwrap();
+    outer_started.wait();
     sender
         .send(DispatcherMessage::Deliver {
             event: Box::new(event("019c1df6-4a57-7000-8000-000000000011", "later")),
@@ -471,6 +478,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             lineage: None,
         })
         .unwrap();
+    release_outer.wait();
 
     flush_subscribers().unwrap();
     assert_eq!(
