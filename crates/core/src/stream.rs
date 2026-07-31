@@ -45,7 +45,7 @@ use crate::api::runtime::{
     current_scope_stack,
 };
 use crate::api::shared::{
-    metadata_with_otel_error, metadata_with_otel_status, metadata_with_otel_unknown_error,
+    metadata_with_otel_error, metadata_with_otel_success, metadata_with_otel_unknown_error,
     snapshot_event_sanitizers,
 };
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -198,20 +198,14 @@ impl LlmStreamWrapper {
         self.finalization = self.emit_end_event(metadata, true, background_thread);
     }
 
-    fn finish_with_status(
-        &mut self,
-        status_code: &'static str,
-        status_message: Option<String>,
-        interrupted: bool,
-    ) {
+    fn finish_successfully(&mut self) {
         if self.ended {
             return;
         }
         self.ended = true;
         self.inner.terminalize();
-        let metadata =
-            metadata_with_otel_status(self.metadata.clone(), status_code, status_message);
-        self.finalization = self.emit_end_event(metadata, interrupted, false);
+        let metadata = metadata_with_otel_success(self.metadata.clone());
+        self.finalization = self.emit_end_event(metadata, false, false);
     }
 
     fn finish_with_error(&mut self, error: &FlowError, interrupted: bool) {
@@ -470,7 +464,7 @@ impl Stream for LlmStreamWrapper {
                 self.poll_next(cx)
             }
             Poll::Ready(None) => {
-                this.finish_with_status("OK", None, false);
+                this.finish_successfully();
                 self.poll_next(cx)
             }
             Poll::Pending => Poll::Pending,

@@ -90,34 +90,16 @@ fn reset_global() {
 }
 
 #[test]
-fn test_metadata_with_otel_status_only_describes_errors() {
-    let success_metadata = metadata_with_otel_status(
-        Some(json!({
-            "caller": "shared-ok",
-            "otel.status_description": "stale status detail"
-        })),
-        "OK",
-        Some("success detail".into()),
-    )
+fn test_metadata_with_otel_success_removes_stale_error_description() {
+    let success_metadata = metadata_with_otel_success(Some(json!({
+        "caller": "shared-ok",
+        "otel.status_description": "stale status detail"
+    })))
     .unwrap();
 
     assert_eq!(success_metadata["caller"], json!("shared-ok"));
     assert_eq!(success_metadata["otel.status_code"], json!("OK"));
     assert!(success_metadata.get("otel.status_description").is_none());
-
-    let error_metadata = metadata_with_otel_status(
-        Some(json!({"caller": "shared-error"})),
-        "ERROR",
-        Some("error detail".into()),
-    )
-    .unwrap();
-
-    assert_eq!(error_metadata["caller"], json!("shared-error"));
-    assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
-    assert_eq!(
-        error_metadata["otel.status_description"],
-        json!("error detail")
-    );
 }
 
 #[test]

@@ -35,7 +35,7 @@ use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_error,
-    metadata_with_otel_status, metadata_with_otel_unknown_error, resolve_parent_uuid,
+    metadata_with_otel_success, metadata_with_otel_unknown_error, resolve_parent_uuid,
     run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
     snapshot_event_subscribers,
 };
@@ -1013,7 +1013,7 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
                 let Ok(state) = context.read() else {
                     return event;
                 };
-                let end_metadata = metadata_with_otel_status(metadata, "OK", None);
+                let end_metadata = metadata_with_otel_success(metadata);
                 state.build_llm_end_event(
                     EndLlmHandleParams::builder()
                         .handle(&handle)
@@ -1082,7 +1082,7 @@ async fn llm_call_end_with_behavior(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let end_metadata = metadata_with_otel_status(metadata, "OK", None);
+        let end_metadata = metadata_with_otel_success(metadata);
         state.build_llm_end_event(
             EndLlmHandleParams::builder()
                 .handle(handle)

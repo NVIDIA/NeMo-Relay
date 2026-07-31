@@ -182,7 +182,7 @@ pub(crate) fn inject_dynamo_session_ids(request: &mut LlmRequest) {
     }
 }
 
-pub(crate) fn metadata_with_otel_status(
+fn metadata_with_otel_status(
     metadata: Option<Json>,
     status_code: &'static str,
     status_message: Option<String>,
@@ -212,6 +212,10 @@ pub(crate) fn metadata_with_otel_status(
         metadata.remove("otel.status_description");
     }
     metadata
+}
+
+pub(crate) fn metadata_with_otel_success(metadata: Option<Json>) -> Option<Json> {
+    metadata_with_otel_status(metadata, "OK", None)
 }
 
 pub(crate) fn metadata_with_otel_error(metadata: Option<Json>, error: &FlowError) -> Option<Json> {
