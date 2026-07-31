@@ -104,6 +104,17 @@ NeMo Relay has two major middleware families:
 - **Intercepts** change the real execution path
 - **Guardrails** block work or rewrite emitted observability payloads
 
+### Callback Error Handling
+
+Conditional-execution guardrails and request or execution intercepts fail
+closed. If one of these callbacks returns an error, raises an exception, or
+rejects a `Promise`, Relay stops at that middleware stage and surfaces the error
+to the managed caller. A conditional guardrail or request intercept therefore
+prevents the real callback from running when it fails. An execution intercept
+cannot undo work from a `next` continuation that it already invoked. This
+fail-closed contract is the same whether the callback completes directly or
+asynchronously.
+
 ## Intercepts
 
 Intercepts are middleware that change the real request or execution path.
