@@ -35,8 +35,9 @@ use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_error,
-    metadata_with_otel_status, resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
-    snapshot_event_sanitizers, snapshot_event_subscribers,
+    metadata_with_otel_status, metadata_with_otel_unknown_error, resolve_parent_uuid,
+    run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -1248,10 +1249,9 @@ impl Drop for ManagedLlmCompletion {
         let Some(handle) = self.handle.take() else {
             return;
         };
-        let metadata = metadata_with_otel_status(
+        let metadata = metadata_with_otel_unknown_error(
             self.metadata.take(),
-            "ERROR",
-            Some("LLM execution cancelled".into()),
+            "LLM execution cancelled".into(),
         );
         let scope_stack = handle.captured_scope_stack().clone();
         let entries = match scope_stack.read() {

@@ -137,6 +137,23 @@ fn test_metadata_with_otel_error_adds_structured_error_type() {
 }
 
 #[test]
+fn test_metadata_with_otel_unknown_error_uses_other_fallback() {
+    let metadata = metadata_with_otel_unknown_error(
+        Some(json!({"caller": "shared-error"})),
+        "execution cancelled".into(),
+    )
+    .unwrap();
+
+    assert_eq!(metadata["caller"], json!("shared-error"));
+    assert_eq!(metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(metadata["error.type"], json!("_OTHER"));
+    assert_eq!(
+        metadata["otel.status_description"],
+        json!("execution cancelled")
+    );
+}
+
+#[test]
 fn test_resolve_parent_uuid_snapshot_and_runtime_owner_helpers() {
     let _guard = lock_runtime_owner();
     reset_global();

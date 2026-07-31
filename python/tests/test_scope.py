@@ -146,22 +146,22 @@ class TestScope:
         [
             (TimeoutError("timed out"), "TimeoutError"),
             (RuntimeError("internal error: ValueError: invalid value"), "ValueError"),
+            (RuntimeError("failed: tenant_123Error"), "RuntimeError"),
         ],
     )
     def test_scope_ctx_mgr_records_exception_type(self, monkeypatch, error, expected_error_type):
         captured_metadata = None
         native_pop_scope = scope._native_pop_scope
 
-        def capture_pop(handle, *, output=None, metadata=None, timestamp=None):
+        def capture_pop(handle, *, output=None, metadata=None, timestamp=None) -> None:
             nonlocal captured_metadata
             captured_metadata = metadata
             native_pop_scope(handle, output=output, metadata=metadata, timestamp=timestamp)
 
         monkeypatch.setattr(scope, "_native_pop_scope", capture_pop)
 
-        with pytest.raises(type(error)):
-            with scope.scope("failing-scope", ScopeType.Agent):
-                raise error
+        with pytest.raises(type(error)), scope.scope("failing-scope", ScopeType.Agent):
+            raise error
 
         assert captured_metadata == {
             "otel.status_code": "ERROR",

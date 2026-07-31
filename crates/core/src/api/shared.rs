@@ -215,11 +215,26 @@ pub(crate) fn metadata_with_otel_status(
 }
 
 pub(crate) fn metadata_with_otel_error(metadata: Option<Json>, error: &FlowError) -> Option<Json> {
-    let mut metadata = metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
+    metadata_with_otel_error_type(metadata, error.to_string(), error.otel_error_type())
+}
+
+pub(crate) fn metadata_with_otel_unknown_error(
+    metadata: Option<Json>,
+    status_message: String,
+) -> Option<Json> {
+    metadata_with_otel_error_type(metadata, status_message, "_OTHER")
+}
+
+fn metadata_with_otel_error_type(
+    metadata: Option<Json>,
+    status_message: String,
+    error_type: &str,
+) -> Option<Json> {
+    let mut metadata = metadata_with_otel_status(metadata, "ERROR", Some(status_message));
     if let Some(Json::Object(metadata)) = metadata.as_mut() {
         metadata.insert(
             "error.type".to_string(),
-            Json::String(error.otel_error_type().to_string()),
+            Json::String(error_type.to_string()),
         );
     }
     metadata

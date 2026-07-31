@@ -162,13 +162,60 @@ impl FlowError {
 fn python_exception_type(message: &str) -> Option<&str> {
     message.split(':').find_map(|segment| {
         let candidate = segment.split_whitespace().last()?;
-        let is_exception_name = candidate.ends_with("Error") || candidate.ends_with("Exception");
-        let is_safe_identifier = candidate.len() <= 128
-            && candidate
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '_');
-        (is_exception_name && is_safe_identifier).then_some(candidate)
+        is_stable_python_exception_type(candidate).then_some(candidate)
     })
+}
+
+fn is_stable_python_exception_type(candidate: &str) -> bool {
+    matches!(
+        candidate,
+        "ArithmeticError"
+            | "AssertionError"
+            | "AttributeError"
+            | "BlockingIOError"
+            | "BrokenPipeError"
+            | "BufferError"
+            | "ChildProcessError"
+            | "ConnectionAbortedError"
+            | "ConnectionError"
+            | "ConnectionRefusedError"
+            | "ConnectionResetError"
+            | "EOFError"
+            | "Exception"
+            | "FileExistsError"
+            | "FileNotFoundError"
+            | "FloatingPointError"
+            | "ImportError"
+            | "IndexError"
+            | "InterruptedError"
+            | "IsADirectoryError"
+            | "KeyError"
+            | "LookupError"
+            | "MemoryError"
+            | "ModuleNotFoundError"
+            | "NameError"
+            | "NotADirectoryError"
+            | "NotImplementedError"
+            | "OSError"
+            | "OverflowError"
+            | "PermissionError"
+            | "ProcessLookupError"
+            | "PythonFinalizationError"
+            | "RecursionError"
+            | "ReferenceError"
+            | "RuntimeError"
+            | "SyntaxError"
+            | "SystemError"
+            | "TimeoutError"
+            | "TypeError"
+            | "UnboundLocalError"
+            | "UnicodeDecodeError"
+            | "UnicodeEncodeError"
+            | "UnicodeError"
+            | "UnicodeTranslateError"
+            | "ValueError"
+            | "ZeroDivisionError"
+    )
 }
 
 #[cfg(test)]

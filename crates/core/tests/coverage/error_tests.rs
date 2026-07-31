@@ -73,6 +73,10 @@ fn otel_error_type_preserves_stable_relay_and_python_classifications() {
         FlowError::Internal("unclassified failure".into()).otel_error_type(),
         "internal_error"
     );
+    assert_eq!(
+        FlowError::Internal("failed: tenant_123Error".into()).otel_error_type(),
+        "internal_error"
+    );
 }
 
 #[test]

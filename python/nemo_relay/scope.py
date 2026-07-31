@@ -17,6 +17,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import builtins
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator
@@ -39,6 +40,10 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     push_scope as _native_push_scope,
+)
+
+_PYTHON_EXCEPTION_TYPES = frozenset(
+    name for name, value in vars(builtins).items() if isinstance(value, type) and issubclass(value, BaseException)
 )
 
 
@@ -264,7 +269,7 @@ def scope(
             if not words:
                 continue
             candidate = words[-1]
-            if len(candidate) <= 128 and candidate.isidentifier() and candidate.endswith(("Error", "Exception")):
+            if candidate in _PYTHON_EXCEPTION_TYPES:
                 error_type = candidate
                 break
         raise

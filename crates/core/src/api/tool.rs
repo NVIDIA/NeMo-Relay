@@ -17,8 +17,9 @@ use crate::api::runtime::{
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
-    snapshot_event_sanitizers, snapshot_event_subscribers,
+    ensure_runtime_owner, metadata_with_otel_error, metadata_with_otel_status,
+    metadata_with_otel_unknown_error, resolve_parent_uuid, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::api::skill_load;
 use crate::error::{FlowError, Result};
@@ -635,10 +636,9 @@ impl Drop for ManagedToolCompletion {
         let Some(handle) = self.handle.take() else {
             return;
         };
-        let metadata = metadata_with_otel_status(
+        let metadata = metadata_with_otel_unknown_error(
             self.metadata.take(),
-            "ERROR",
-            Some("tool execution cancelled".into()),
+            "tool execution cancelled".into(),
         );
         let _ = emit_tool_end_without_output(
             &handle,
