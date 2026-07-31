@@ -975,7 +975,18 @@ fn tool_key(
     args: Json,
     arg_skip: &[String],
 ) -> String {
-    match build_tool_cache_key(namespace, tool, version, &args, arg_skip) {
+    tool_key_with_error_policy(namespace, tool, version, args, arg_skip, false)
+}
+
+fn tool_key_with_error_policy(
+    namespace: &str,
+    tool: &str,
+    version: Option<&str>,
+    args: Json,
+    arg_skip: &[String],
+    cache_errors: bool,
+) -> String {
+    match build_tool_cache_key(namespace, tool, version, &args, arg_skip, cache_errors) {
         KeyOutcome::Key(key) => key,
         other => panic!("expected a tool key, got {other:?}"),
     }
@@ -1020,6 +1031,79 @@ fn arg_skip_drops_only_the_listed_keys() {
 }
 
 #[test]
+fn arg_skip_policy_partitions_keys_and_normalizes_order() {
+    let no_skip: Vec<String> = Vec::new();
+    let locale_only = vec!["locale".to_string()];
+    assert_ne!(
+        tool_key("key-test", "lookup", None, json!({"q": "x"}), &no_skip),
+        tool_key("key-test", "lookup", None, json!({"q": "x"}), &locale_only),
+        "a policy change must not reuse an entry even when the newly skipped key is absent"
+    );
+
+    let reordered_and_duplicated = vec![
+        "trace_id".to_string(),
+        "locale".to_string(),
+        "trace_id".to_string(),
+    ];
+    let normalized = vec!["locale".to_string(), "trace_id".to_string()];
+    assert_eq!(
+        tool_key(
+            "key-test",
+            "lookup",
+            None,
+            json!({"q": "x", "locale": "fr", "trace_id": "one"}),
+            &reordered_and_duplicated,
+        ),
+        tool_key(
+            "key-test",
+            "lookup",
+            None,
+            json!({"q": "x", "locale": "de", "trace_id": "two"}),
+            &normalized,
+        ),
+        "equivalent skip policies must keep their intended hit behavior"
+    );
+}
+
+#[test]
+fn cache_error_policy_partitions_tool_keys() {
+    assert_ne!(
+        tool_key_with_error_policy("key-test", "lookup", None, json!({"q": "x"}), &[], false),
+        tool_key_with_error_policy("key-test", "lookup", None, json!({"q": "x"}), &[], true),
+        "an opt-in error-cache entry must not be replayed after the policy is disabled"
+    );
+}
+
+#[test]
+fn header_allowlist_policy_partitions_keys_and_normalizes_case() {
+    let request = request(json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.0,
+    }));
+    let unpartitioned = cache_all_config();
+    let mut tenant_partitioned = cache_all_config();
+    tenant_partitioned.header_allowlist = vec!["X-Tenant".to_string()];
+    let mut duplicate_spelling = cache_all_config();
+    duplicate_spelling.header_allowlist = vec![
+        "x-tenant".to_string(),
+        "X-TENANT".to_string(),
+        "x-tenant".to_string(),
+    ];
+
+    assert_ne!(
+        key_of("openai", &request, &unpartitioned),
+        key_of("openai", &request, &tenant_partitioned),
+        "changing the header policy must partition keys even before a request supplies that header"
+    );
+    assert_eq!(
+        key_of("openai", &request, &tenant_partitioned),
+        key_of("openai", &request, &duplicate_spelling),
+        "case-only and duplicate policy spellings are equivalent"
+    );
+}
+
+#[test]
 fn tool_keys_are_disjoint_from_llm_keys() {
     let llm = key_of(
         "openai",
@@ -1052,7 +1136,7 @@ fn negative_integers_beyond_the_safe_json_range_bypass_tool_keys() {
     // need the same protection as the positive IDs covered above.
     let too_large = -9_007_199_254_740_993_i64;
     assert_eq!(
-        build_tool_cache_key("key-test", "lookup", None, &json!(too_large), &[]),
+        build_tool_cache_key("key-test", "lookup", None, &json!(too_large), &[], false),
         KeyOutcome::Bypass("unrepresentable_number")
     );
 }

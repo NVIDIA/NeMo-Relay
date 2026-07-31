@@ -52,7 +52,7 @@ type AcgStabilityThresholds = nemo_relay.AcgStabilityThresholds
 // AcgConfig configures the adaptive cache governor.
 type AcgConfig = nemo_relay.AcgConfig
 
-// ResponseCacheConfig configures the opt-in LLM response cache.
+// ResponseCacheConfig configures the opt-in LLM response and tool-result cache.
 type ResponseCacheConfig = nemo_relay.ResponseCacheConfig
 
 // ResponseCacheBackendConfig selects the response-cache backend kind and options.

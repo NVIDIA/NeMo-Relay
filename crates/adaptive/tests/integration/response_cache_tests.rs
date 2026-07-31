@@ -16,6 +16,9 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
+use nemo_relay::api::registry::{
+    deregister_tool_execution_intercept, register_tool_execution_intercept,
+};
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
     NemoRelayContextState, ToolExecutionNextFn, global_context,
@@ -2170,7 +2173,7 @@ async fn disabled_tools_section_does_not_cache() {
 }
 
 #[tokio::test]
-async fn error_shaped_tool_results_are_still_cached() {
+async fn conventional_error_shaped_tool_results_are_not_cached_by_default() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
@@ -2183,9 +2186,130 @@ async fn error_shaped_tool_results_are_still_cached() {
 
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        1,
-        "a successful tool result is cached regardless of an `error` key in its body"
+        2,
+        "a conventional in-band tool error must run live again unless cache_errors is enabled"
     );
+}
+
+#[tokio::test]
+async fn conventional_error_shaped_tool_results_can_be_cached_when_opted_in() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut tools = one_cacheable_class(&["lookup"]);
+    tools.cache_errors = true;
+    activate_cache(cache_with_tools(tools)).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"error": "not found"}));
+
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "cache_errors=true explicitly permits caching conventional in-band error results"
+    );
+}
+
+#[tokio::test]
+async fn tool_callback_errors_emit_misses_and_are_never_cached() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
+
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let sink = Arc::clone(&captured);
+    register_subscriber(
+        "response_cache_tool_callback_error_capture",
+        Arc::new(move |event: &Event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool: ToolExecutionNextFn = {
+        let calls = Arc::clone(&calls);
+        Arc::new(move |_args| {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(FlowError::Internal("tool unavailable".to_string()))
+            })
+        })
+    };
+
+    for _ in 0..2 {
+        let error = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("lookup")
+                .args(json!({"q": "missing"}))
+                .func(tool.clone())
+                .build(),
+        )
+        .await
+        .expect_err("a tool callback error must reach the caller");
+        assert!(matches!(error, FlowError::Internal(message) if message == "tool unavailable"));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    flush_subscribers().unwrap();
+    let misses = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("miss")
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nemo_relay.response_cache.surface"))
+                    .and_then(Json::as_str)
+                    == Some("tool")
+        })
+        .count();
+    assert_eq!(misses, 2, "each failed call must still report a cache miss");
+    deregister_subscriber("response_cache_tool_callback_error_capture").unwrap();
+}
+
+#[tokio::test]
+async fn execution_intercepts_outside_the_cache_run_on_hits() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+
+    let outer_runs = Arc::new(AtomicUsize::new(0));
+    register_tool_execution_intercept(
+        "response_cache_outer_tool_execution_test",
+        40,
+        Arc::new({
+            let outer_runs = Arc::clone(&outer_runs);
+            move |_name, args, next| {
+                let outer_runs = Arc::clone(&outer_runs);
+                Box::pin(async move {
+                    outer_runs.fetch_add(1, Ordering::SeqCst);
+                    next(args).await.map(Into::into)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"answer": "cached"}));
+    tool_call("lookup", &tool, json!({"q": "relay"})).await;
+    tool_call("lookup", &tool, json!({"q": "relay"})).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the second call must hit");
+    assert_eq!(
+        outer_runs.load(Ordering::SeqCst),
+        2,
+        "a lower-priority execution intercept wraps the cache and runs on hits"
+    );
+    deregister_tool_execution_intercept("response_cache_outer_tool_execution_test").unwrap();
 }
 
 #[tokio::test]
@@ -2394,6 +2518,21 @@ async fn wildcard_member_validation_rules() {
     );
 
     let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "read_only".to_string(),
+        cacheable_class(&["docs_*", "docs_*"]),
+    );
+    let report = validate(classes);
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_multiple_classes"),
+        "a repeated member inside one class is inert, not a cross-class conflict: {:?}",
+        report.diagnostics
+    );
+
+    let mut classes = std::collections::BTreeMap::new();
     classes.insert("class_a".to_string(), cacheable_class(&["docs_*"]));
     classes.insert("class_b".to_string(), cacheable_class(&["*_lookup"]));
     let report = validate(classes);
@@ -2403,6 +2542,26 @@ async fn wildcard_member_validation_rules() {
             .iter()
             .any(|diagnostic| diagnostic.code.starts_with("response_cache.tool")),
         "distinct overlapping patterns must validate cleanly: {:?}",
+        report.diagnostics
+    );
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("safe".to_string(), cacheable_class(&["*_email"]));
+    classes.insert(
+        "effectful".to_string(),
+        ToolClass {
+            cacheable: false,
+            members: vec!["send_*".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    let report = validate(classes);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_conflicting_classes"),
+        "opposite cacheability on overlapping wildcard classes must be rejected: {:?}",
         report.diagnostics
     );
 
@@ -2448,6 +2607,82 @@ async fn wildcard_member_validation_rules() {
         "a cacheable '*' override must warn: {:?}",
         report.diagnostics
     );
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "*_email".to_string(),
+        ToolOverride {
+            cacheable: Some(true),
+            ..ToolOverride::default()
+        },
+    );
+    overrides.insert(
+        "send_*".to_string(),
+        ToolOverride {
+            cacheable: Some(false),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_conflicting_overrides"),
+        "opposite cacheability on overlapping wildcard overrides must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "docs_*".to_string(),
+        ToolOverride {
+            cacheable: Some(false),
+            ..ToolOverride::default()
+        },
+    );
+    overrides.insert(
+        "*_private".to_string(),
+        ToolOverride {
+            ttl_seconds: Some(60),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            default: ToolClass {
+                cacheable: true,
+                ..ToolClass::default()
+            },
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_conflicting_overrides"),
+        "a wildcard override that inherits cacheability must not outrank an explicit deny: {:?}",
+        report.diagnostics
+    );
 }
 
 #[tokio::test]
@@ -2460,6 +2695,7 @@ async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
         "response_cache": {
             "tools": {
                 "enabled": true,
+                "cache_errors": false,
                 "classes": {
                     "read_only": {
                         "cacheable": true,

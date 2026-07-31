@@ -772,8 +772,13 @@ async fn collect_response_cache_component_checks(
                 .values()
                 .filter(|class| class.cacheable)
                 .count();
+            let cacheable_overrides = tools
+                .overrides
+                .values()
+                .filter(|override_| override_.cacheable == Some(true))
+                .count();
             format!(
-                "on; {cacheable_classes} cacheable class(es); default {}",
+                "on; {cacheable_classes} cacheable class(es); {cacheable_overrides} cacheable override(s); default {}",
                 if tools.default.cacheable {
                     "cacheable"
                 } else {

@@ -10,6 +10,7 @@ use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
 use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
+use crate::response_cache::tool::wildcard_patterns_overlap;
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
     let mut report = ConfigReport::default();
@@ -233,19 +234,20 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
             class.bypass_rate,
         );
         for member in &class.members {
-            match owning_class.get(member.as_str()) {
-                Some(previous) => report.diagnostics.push(response_cache_error(
-                    "response_cache.tool_multiple_classes",
-                    Some("tools.classes"),
-                    format!(
-                        "tool member '{member}' appears in multiple classes ('{previous}' and \
-                         '{class_name}'); a member — exact name or pattern — may appear in at \
-                         most one class"
-                    ),
-                )),
-                None => {
-                    owning_class.insert(member.as_str(), class_name.as_str());
+            if let Some(previous) = owning_class.get(member.as_str()) {
+                if *previous != class_name.as_str() {
+                    report.diagnostics.push(response_cache_error(
+                        "response_cache.tool_multiple_classes",
+                        Some("tools.classes"),
+                        format!(
+                            "tool member '{member}' appears in multiple classes ('{previous}' and \
+                             '{class_name}'); a member — exact name or pattern — may appear in at \
+                             most one class"
+                        ),
+                    ));
                 }
+            } else {
+                owning_class.insert(member.as_str(), class_name.as_str());
             }
             if class.cacheable && !member.is_empty() && member.chars().all(|c| c == '*') {
                 report.diagnostics.push(response_cache_warning(
@@ -261,6 +263,8 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
             }
         }
     }
+
+    validate_conflicting_tool_class_patterns(report, tools);
 
     for (tool_name, over) in &tools.overrides {
         validate_tool_policy(
@@ -279,6 +283,63 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
                 format!(
                     "override '{tool_name}' sets cacheable = true for every tool; prefer \
                      flipping default.cacheable on explicitly if broad coverage is intended"
+                ),
+            ));
+        }
+    }
+
+    validate_conflicting_tool_override_patterns(report, tools);
+}
+
+fn validate_conflicting_tool_class_patterns(report: &mut ConfigReport, tools: &ToolCacheConfig) {
+    for (index, (left_name, left_class)) in tools.classes.iter().enumerate() {
+        for (right_name, right_class) in tools.classes.iter().skip(index + 1) {
+            if left_class.cacheable == right_class.cacheable {
+                continue;
+            }
+            let conflict = left_class.members.iter().any(|left_member| {
+                left_member.contains('*')
+                    && right_class.members.iter().any(|right_member| {
+                        left_member != right_member
+                            && right_member.contains('*')
+                            && wildcard_patterns_overlap(left_member, right_member)
+                    })
+            });
+            if conflict {
+                report.diagnostics.push(response_cache_error(
+                    "response_cache.tool_conflicting_classes",
+                    Some("tools.classes"),
+                    format!(
+                        "classes '{left_name}' and '{right_name}' contain overlapping wildcard \
+                         members with conflicting cacheable settings; split the patterns so one \
+                         policy applies to every tool"
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_conflicting_tool_override_patterns(report: &mut ConfigReport, tools: &ToolCacheConfig) {
+    for (index, (left_name, left_override)) in tools.overrides.iter().enumerate() {
+        for (right_name, right_override) in tools.overrides.iter().skip(index + 1) {
+            // An omitted value inherits from whichever class wins for the
+            // concrete tool name. Because overlapping patterns can select
+            // different classes, only identical declarations are safe.
+            let conflicting_cacheability = left_override.cacheable != right_override.cacheable;
+            if !conflicting_cacheability
+                || !left_name.contains('*')
+                || !right_name.contains('*')
+                || !wildcard_patterns_overlap(left_name, right_name)
+            {
+                continue;
+            }
+            report.diagnostics.push(response_cache_error(
+                "response_cache.tool_conflicting_overrides",
+                Some("tools.overrides"),
+                format!(
+                    "overrides '{left_name}' and '{right_name}' overlap with conflicting \
+                     cacheable settings; split the patterns so one policy applies to every tool"
                 ),
             ));
         }

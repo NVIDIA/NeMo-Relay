@@ -409,7 +409,14 @@ fn validate_response_cache_tools_fields(
         policy,
         Some("response_cache.tools".to_string()),
         tools_json,
-        &["enabled", "priority", "default", "classes", "overrides"],
+        &[
+            "enabled",
+            "priority",
+            "cache_errors",
+            "default",
+            "classes",
+            "overrides",
+        ],
     );
 
     if let Some(default_json) = tools_json.get("default").and_then(Json::as_object) {

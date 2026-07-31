@@ -7,6 +7,8 @@ use super::*;
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
 use serde_json::json;
 
+use crate::response_cache::config::ToolCacheConfig;
+
 #[test]
 fn test_adaptive_config_defaults() {
     let config = AdaptiveConfig::default();
@@ -32,6 +34,22 @@ fn test_typed_section_helpers_default() {
 
     let response_cache = ResponseCacheConfig::default();
     assert!(!response_cache.cache_nondeterministic);
+
+    let tools = ToolCacheConfig::default();
+    assert!(!tools.enabled);
+    assert_eq!(tools.priority, 50);
+    assert!(!tools.cache_errors);
+}
+
+#[test]
+fn test_tool_cache_deserializes_explicit_error_caching_opt_in() {
+    let tools: ToolCacheConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "cache_errors": true,
+    }))
+    .unwrap();
+    assert!(tools.enabled);
+    assert!(tools.cache_errors);
 }
 
 #[test]

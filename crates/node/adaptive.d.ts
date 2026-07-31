@@ -52,7 +52,7 @@ export interface AcgConfig {
   stability_thresholds?: AcgStabilityThresholds;
 }
 
-/** Opt-in LLM response cache (exact-match) settings. */
+/** Opt-in exact-match LLM response and tool-result cache settings. */
 export interface ResponseCacheConfig {
   ttlSeconds?: number;
   /**
@@ -105,6 +105,8 @@ export interface ToolOverride {
 export interface ToolCacheConfig {
   enabled?: boolean;
   priority?: number;
+  /** Whether error-shaped tool results may be cached; defaults to false. */
+  cacheErrors?: boolean;
   default?: ToolClass;
   classes?: Record<string, ToolClass>;
   overrides?: Record<string, ToolOverride>;
@@ -123,7 +125,8 @@ type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' |
   arg_skip?: string[];
 };
 
-type ToolCachePluginConfig = Omit<ToolCacheConfig, 'default' | 'classes' | 'overrides'> & {
+type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
+  cache_errors?: boolean;
   default?: ToolClassPluginConfig;
   classes?: Record<string, ToolClassPluginConfig>;
   overrides?: Record<string, ToolOverridePluginConfig>;
@@ -329,8 +332,8 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
 /**
  * Create response-cache settings with defaults applied.
  *
- * Merges caller-supplied overrides onto the opt-in LLM response-cache config
- * shape (exact-match) used by the adaptive plugin. This is a section of
+ * Merges caller-supplied overrides onto the opt-in LLM response and tool-result
+ * cache config shape (exact-match) used by the adaptive plugin. This is a section of
  * the adaptive component, not a standalone plugin kind.
  *
  * @param config - Partial response-cache settings to override.

@@ -486,7 +486,7 @@ impl AdaptiveRuntime {
         }
         // The response cache is independent of the learning-state backend: it has
         // its own CacheStore and installs buffered and streaming LLM execution
-        // intercepts.
+        // intercepts plus an opt-in tool execution intercept.
         if let Some(config) = self.config.response_cache.clone() {
             pending.push(Box::new(ResponseCacheFeature::new(config, self.runtime_id)));
         }

@@ -332,6 +332,8 @@ class ToolCacheConfig:
     Args:
         enabled: Master switch for the tool surface. Off by default.
         priority: Tool execution-intercept priority. Lower runs first/outermost.
+        cache_errors: Whether error-shaped tool results may be cached. Off by
+            default.
         default: Policy for tools not listed in any class (defaults to not cached).
         classes: Named tool classes, each with its own policy and member list.
         overrides: Per-tool refinements applied on top of the resolved class.
@@ -341,6 +343,7 @@ class ToolCacheConfig:
 
     enabled: bool = False
     priority: int = 50
+    cache_errors: bool = False
     default: ToolClass = field(default_factory=ToolClass)
     classes: dict[str, ToolClass] = field(default_factory=dict)
     overrides: dict[str, ToolOverride] = field(default_factory=dict)
@@ -351,6 +354,7 @@ class ToolCacheConfig:
             {
                 "enabled": self.enabled,
                 "priority": self.priority,
+                "cache_errors": self.cache_errors,
                 "default": _normalize(self.default),
                 "classes": {name: _normalize(cls) for name, cls in self.classes.items()},
                 "overrides": {name: _normalize(ov) for name, ov in self.overrides.items()},
@@ -360,11 +364,12 @@ class ToolCacheConfig:
 
 @dataclass(slots=True)
 class ResponseCacheConfig:
-    """Opt-in LLM response cache (exact-match) settings.
+    """Opt-in exact-match LLM response and tool-result cache settings.
 
     This is a section of the adaptive component, not a standalone plugin kind.
     When present, the adaptive plugin installs the response-cache execution
-    intercept that reuses an earlier answer for a repeated managed LLM call.
+    intercepts that reuse earlier LLM answers and, when ``tools.enabled`` is
+    set, explicitly classified tool results.
 
     Args:
         ttl_seconds: How long a stored answer stays reusable, in seconds.
@@ -421,7 +426,7 @@ class AdaptiveConfig:
         tool_parallelism: Built-in tool scheduling settings.
         acg: Adaptive Cache Governor settings.
         policy: Unsupported-config policy applied within the adaptive config.
-        response_cache: Opt-in LLM response cache settings.
+        response_cache: Opt-in LLM response and tool-result cache settings.
 
     Behavior:
         This document configures only the adaptive component. Plugins are

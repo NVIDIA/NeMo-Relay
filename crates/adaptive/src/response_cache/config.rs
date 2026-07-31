@@ -76,6 +76,8 @@ pub struct ToolCacheConfig {
     pub enabled: bool,
     /// Tool execution-intercept priority.
     pub priority: i32,
+    /// Whether conventional in-band tool error results may be stored.
+    pub cache_errors: bool,
     /// Policy for unclassified tools; not cacheable by default.
     pub default: ToolClass,
     /// Named tool classes.
@@ -89,6 +91,7 @@ impl Default for ToolCacheConfig {
         Self {
             enabled: false,
             priority: 50,
+            cache_errors: false,
             default: ToolClass::default(),
             classes: BTreeMap::new(),
             overrides: BTreeMap::new(),

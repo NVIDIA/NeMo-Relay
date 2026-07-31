@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Opt-in LLM response cache (exact-match): a feature of the adaptive plugin,
-//! configured through [`crate::config::AdaptiveConfig::response_cache`].
+//! Opt-in exact-match cache for LLM responses and tool results: a feature of
+//! the adaptive plugin, configured through
+//! [`crate::config::AdaptiveConfig::response_cache`].
 //!
-//! The opt-in tool-result surface shares storage but uses disjoint keys.
+//! The two surfaces share storage but use disjoint keys.
 //!
 //! [`intercept`] holds the execution intercepts and storage rules, [`key`] the
 //! cache-key derivation, [`store`] the backends, [`replay`] the streaming

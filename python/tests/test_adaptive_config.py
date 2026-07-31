@@ -224,17 +224,22 @@ class TestDynamicConfigContract:
     def test_tool_cache_config_serializes_and_omits_unset_optionals(self):
         tools = ToolCacheConfig(
             enabled=True,
+            cache_errors=True,
             classes={"read_only": ToolClass(cacheable=True, members=["docs_lookup"])},
             overrides={"docs_lookup": ToolOverride(tool_version="v2")},
         )
         serialized = ResponseCacheConfig(tools=tools).to_dict()["tools"]
         assert serialized == {
             "enabled": True,
+            "cache_errors": True,
             "priority": 50,
             "default": {"cacheable": False, "arg_skip": [], "members": []},
             "classes": {"read_only": {"cacheable": True, "arg_skip": [], "members": ["docs_lookup"]}},
             "overrides": {"docs_lookup": {"tool_version": "v2"}},
         }
+
+    def test_tool_cache_errors_default_to_false(self):
+        assert ToolCacheConfig().to_dict()["cache_errors"] is False
 
     def test_tool_cache_clean_report(self):
         tools = ToolCacheConfig(

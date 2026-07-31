@@ -67,7 +67,7 @@ type AcgConfig struct {
 	StabilityThresholds *AcgStabilityThresholds `json:"stability_thresholds,omitempty"`
 }
 
-// ResponseCacheConfig configures the opt-in LLM response cache: a section
+// ResponseCacheConfig configures the opt-in LLM response and tool-result cache: a section
 // of the adaptive config (a sibling to acg/adaptive_hints/tool_parallelism), not a
 // standalone plugin kind. The Rust core validates and installs it from the adaptive
 // runtime; this struct only has to carry the section through to the FFI validator.
@@ -100,11 +100,15 @@ type ResponseCacheConfig struct {
 
 // ResponseCacheToolsConfig configures caching for read-only, stable tools.
 type ResponseCacheToolsConfig struct {
-	Enabled   bool                                 `json:"enabled,omitempty"`
-	Priority  int32                                `json:"priority"`
-	Default   *ResponseCacheToolClass              `json:"default,omitempty"`
-	Classes   map[string]ResponseCacheToolClass    `json:"classes,omitempty"`
-	Overrides map[string]ResponseCacheToolOverride `json:"overrides,omitempty"`
+	Enabled bool `json:"enabled,omitempty"`
+	// Priority is the execution-intercept priority. Nil delegates to Rust's
+	// default (50); a pointer to 0 selects outermost.
+	Priority *int32 `json:"priority,omitempty"`
+	// CacheErrors lets error-shaped tool results be cached (default false).
+	CacheErrors bool                                 `json:"cache_errors"`
+	Default     *ResponseCacheToolClass              `json:"default,omitempty"`
+	Classes     map[string]ResponseCacheToolClass    `json:"classes,omitempty"`
+	Overrides   map[string]ResponseCacheToolOverride `json:"overrides,omitempty"`
 }
 
 // ResponseCacheToolClass defines a shared tool-cache policy.
@@ -243,8 +247,10 @@ func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendCon
 
 // NewResponseCacheToolsConfig returns a disabled tool-result cache config.
 func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
+	priority := int32(50)
 	return ResponseCacheToolsConfig{
-		Priority: 50,
+		CacheErrors: false,
+		Priority:    &priority,
 	}
 }
 

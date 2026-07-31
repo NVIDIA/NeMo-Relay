@@ -34,7 +34,7 @@ pub mod learner;
 pub mod plugin_component;
 #[cfg(feature = "redis-backend")]
 pub mod redis;
-/// Opt-in LLM response cache (exact-match).
+/// Opt-in exact-match LLM response and tool-result cache.
 pub mod response_cache;
 mod runtime;
 /// Storage backends and backend traits for adaptive state persistence.

@@ -150,8 +150,8 @@ function acgConfig(config = {}) {
 /**
  * Create response-cache settings with defaults applied.
  *
- * Merges caller-supplied overrides onto the opt-in LLM response-cache config
- * shape (exact-match) used by the adaptive plugin. This is a section of
+ * Merges caller-supplied overrides onto the opt-in LLM response and tool-result
+ * cache config shape (exact-match) used by the adaptive plugin. This is a section of
  * the adaptive component, not a standalone plugin kind.
  *
  * @param {object} [config={}] - Partial response-cache settings to override.
@@ -196,6 +196,10 @@ const TOOL_OVERRIDE_PLUGIN_FIELDS = {
   toolVersion: 'tool_version',
 };
 
+const TOOL_CACHE_PLUGIN_FIELDS = {
+  cacheErrors: 'cache_errors',
+};
+
 function mapPluginFields(config, fields) {
   if (config === null || typeof config !== 'object' || Array.isArray(config)) return config;
   return Object.fromEntries(Object.entries(config).map(([key, value]) => [fields[key] ?? key, value]));
@@ -207,7 +211,7 @@ function mapPluginRecord(config, fields) {
 }
 
 function toToolCachePluginConfig(config) {
-  const serialized = mapPluginFields(config, {});
+  const serialized = mapPluginFields(config, TOOL_CACHE_PLUGIN_FIELDS);
   if (serialized === config) return config;
   if (serialized.default !== undefined) {
     serialized.default = mapPluginFields(serialized.default, TOOL_CLASS_PLUGIN_FIELDS);

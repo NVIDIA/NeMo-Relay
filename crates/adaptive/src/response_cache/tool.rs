@@ -7,6 +7,7 @@
 //! enabled only for tools that are read-only and stable for the configured TTL.
 //! Key and store failures fail open to the real call.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,24 +110,76 @@ fn best_wildcard_match<'a, T>(
     candidates: impl Iterator<Item = (&'a str, &'a T)>,
     name: &str,
 ) -> Option<&'a T> {
-    type Rank<'p> = (usize, std::cmp::Reverse<usize>, std::cmp::Reverse<&'p str>);
-    let mut best: Option<(&'a T, Rank<'a>)> = None;
+    let mut best = None;
     for (pattern, candidate) in candidates {
         if !pattern.contains('*') || !wildcard_match(pattern, name) {
             continue;
         }
-        let stars = pattern.matches('*').count();
-        let literal = pattern.len() - stars;
-        let rank: Rank<'a> = (
-            literal,
-            std::cmp::Reverse(stars),
-            std::cmp::Reverse(pattern),
-        );
+        let rank = wildcard_rank(pattern);
         if best.as_ref().is_none_or(|(_, current)| rank > *current) {
             best = Some((candidate, rank));
         }
     }
     best.map(|(candidate, _)| candidate)
+}
+
+type WildcardRank<'a> = (usize, std::cmp::Reverse<usize>, std::cmp::Reverse<&'a str>);
+
+/// Returns the deterministic specificity order for a wildcard pattern.
+///
+/// Literal and wildcard counts are Unicode-character based. The final
+/// lexicographic component only breaks otherwise equal ranks.
+fn wildcard_rank(pattern: &str) -> WildcardRank<'_> {
+    let stars = pattern
+        .chars()
+        .filter(|character| *character == '*')
+        .count();
+    (
+        pattern.chars().count() - stars,
+        std::cmp::Reverse(stars),
+        std::cmp::Reverse(pattern),
+    )
+}
+
+/// Returns whether two `*` patterns can match at least one common tool name.
+///
+/// This evaluates the product of the two wildcard automata, so it is exact for
+/// this deliberately small pattern language without constructing a sample name.
+pub(crate) fn wildcard_patterns_overlap(left: &str, right: &str) -> bool {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut pending = vec![(0, 0)];
+    let mut visited = HashSet::new();
+
+    while let Some((left_index, right_index)) = pending.pop() {
+        if !visited.insert((left_index, right_index)) {
+            continue;
+        }
+        if left_index == left.len() && right_index == right.len() {
+            return true;
+        }
+
+        if left.get(left_index) == Some(&'*') {
+            pending.push((left_index + 1, right_index));
+        }
+        if right.get(right_index) == Some(&'*') {
+            pending.push((left_index, right_index + 1));
+        }
+
+        let (Some(left_character), Some(right_character)) =
+            (left.get(left_index), right.get(right_index))
+        else {
+            continue;
+        };
+        if *left_character == '*' || *right_character == '*' || left_character == right_character {
+            pending.push((
+                left_index + usize::from(*left_character != '*'),
+                right_index + usize::from(*right_character != '*'),
+            ));
+        }
+    }
+
+    false
 }
 
 fn wildcard_match(pattern: &str, name: &str) -> bool {
@@ -196,6 +249,7 @@ async fn run_tool_cache(
         policy.tool_version.as_deref(),
         &args,
         &policy.arg_skip,
+        tools.cache_errors,
     ) {
         KeyOutcome::Key(key) => key,
         KeyOutcome::Bypass(reason) => {
@@ -216,7 +270,7 @@ async fn run_tool_cache(
                 .key_hash(&key),
         );
         let result = next(args).await?;
-        store_tool_result(&store, &key, policy.ttl, &result).await;
+        store_tool_result(&store, &key, policy.ttl, &result, tools.cache_errors).await;
         return Ok(result.into());
     }
 
@@ -241,7 +295,7 @@ async fn run_tool_cache(
                     .ttl_ms(policy.ttl.as_millis() as u64),
             );
             let result = next(args).await?;
-            store_tool_result(&store, &key, policy.ttl, &result).await;
+            store_tool_result(&store, &key, policy.ttl, &result, tools.cache_errors).await;
             Ok(result.into())
         }
         Err(_) => {
@@ -256,9 +310,29 @@ async fn run_tool_cache(
     }
 }
 
-async fn store_tool_result(store: &Arc<dyn CacheStore>, key: &str, ttl: Duration, result: &Json) {
+async fn store_tool_result(
+    store: &Arc<dyn CacheStore>,
+    key: &str,
+    ttl: Duration,
+    result: &Json,
+    cache_errors: bool,
+) {
+    if !cache_errors && is_error_shaped_tool_result(result) {
+        return;
+    }
     let entry = CacheEntry::new(result.clone(), ttl, key.to_string(), None, None);
     let _ = store.set(key, entry, ttl).await;
+}
+
+/// A tool result has no universal provider envelope. Treat only the explicit,
+/// widely used in-band error signals as failures by default; applications that
+/// use these fields for stable data can opt into caching them.
+fn is_error_shaped_tool_result(result: &Json) -> bool {
+    let Some(object) = result.as_object() else {
+        return false;
+    };
+    object.get("error").is_some_and(|error| !error.is_null())
+        || object.get("isError").and_then(Json::as_bool) == Some(true)
 }
 
 #[cfg(test)]
@@ -337,6 +411,8 @@ mod tests {
             "docs_lookup".to_string(),
             ToolOverride {
                 cacheable: Some(false),
+                ttl_seconds: Some(30),
+                bypass_rate: Some(0.25),
                 tool_version: Some("v2".to_string()),
                 ..ToolOverride::default()
             },
@@ -348,6 +424,8 @@ mod tests {
         };
         let policy = resolve_policy("docs_lookup", &response_cache(3600, 0.0), &tools);
         assert!(!policy.cacheable, "override cacheable=false must win");
+        assert_eq!(policy.ttl, Duration::from_secs(30));
+        assert_eq!(policy.bypass_rate, 0.25);
         assert_eq!(policy.tool_version.as_deref(), Some("v2"));
         assert_eq!(policy.arg_skip, vec!["request_id".to_string()]);
     }
@@ -431,6 +509,32 @@ mod tests {
                 "wildcard_match({pattern:?}, {name:?})"
             );
         }
+    }
+
+    #[test]
+    fn wildcard_overlap_table() {
+        let cases = [
+            ("*_email", "send_*", true),
+            ("delete_*", "*_record", true),
+            ("docs_*", "send_*", false),
+            ("a*b*c", "a*c", true),
+            ("é*", "*é", true),
+            ("foo*", "bar*", false),
+        ];
+        for (left, right, expected) in cases {
+            assert_eq!(
+                wildcard_patterns_overlap(left, right),
+                expected,
+                "wildcard_patterns_overlap({left:?}, {right:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn wildcard_rank_counts_unicode_characters_not_utf8_bytes() {
+        assert_eq!(wildcard_rank("*é*").0, 1);
+        assert_eq!(wildcard_rank("*éé*").0, 2);
+        assert_eq!(wildcard_rank("*💡*").0, 1);
     }
 
     #[test]
@@ -593,7 +697,11 @@ mod tests {
         };
         assert!(
             !resolve_policy("docs_secret_dump", &response_cache(3600, 0.0), &tools).cacheable,
-            "`docs_secret_*` (more literal bytes) must beat `docs_*`"
+            "`docs_secret_*` (more literal characters) must beat `docs_*`"
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/response_cache/tool_tests.rs"]
+mod coverage_tests;

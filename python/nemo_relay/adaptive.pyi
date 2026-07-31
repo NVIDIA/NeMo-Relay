@@ -215,6 +215,7 @@ class ToolCacheConfig:
 
     enabled: bool = ...
     priority: int = ...
+    cache_errors: bool = ...
     default: ToolClass = ...
     classes: dict[str, ToolClass] = ...
     overrides: dict[str, ToolOverride] = ...
@@ -225,7 +226,7 @@ class ToolCacheConfig:
 
 @dataclass(slots=True)
 class ResponseCacheConfig:
-    """Opt-in LLM response cache (exact-match) settings.
+    """Opt-in exact-match LLM response and tool-result cache settings.
 
     A section of the adaptive component, not a standalone plugin kind.
 
@@ -241,6 +242,7 @@ class ResponseCacheConfig:
         key_strategy: Key strategy. Only ``"exact_request"`` is supported.
         header_allowlist: Request headers folded into the key.
         backend: Cache storage backend (``in_memory`` or ``redis``).
+        tools: Opt-in tool-result cache; ``None`` leaves the tool surface off.
     """
 
     ttl_seconds: int = ...
@@ -270,7 +272,7 @@ class AdaptiveConfig:
         tool_parallelism: Built-in adaptive tool-scheduling configuration.
         acg: Adaptive Cache Governor configuration.
         policy: Policy for unsupported adaptive configuration.
-        response_cache: Opt-in LLM response cache configuration.
+        response_cache: Opt-in LLM response and tool-result cache configuration.
     """
 
     version: int = ...

@@ -257,8 +257,16 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 	rc := NewResponseCacheConfig()
 	rc.Namespace = "tool-cache-go-test"
 	tools := NewResponseCacheToolsConfig()
+	if tools.Priority == nil || *tools.Priority != 50 {
+		t.Fatalf("constructor tools priority default mismatch: %#v", tools.Priority)
+	}
+	if tools.CacheErrors {
+		t.Fatalf("constructor cache_errors default mismatch: %#v", tools.CacheErrors)
+	}
 	tools.Enabled = true
-	tools.Priority = 0
+	tools.CacheErrors = true
+	zero := int32(0)
+	tools.Priority = &zero
 	tools.Classes = map[string]ResponseCacheToolClass{
 		"read_only": {Cacheable: true, Members: []string{"docs_lookup"}},
 	}
@@ -285,6 +293,9 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 	}
 	if enabled, _ := toolsSection["enabled"].(bool); !enabled {
 		t.Fatalf("tools.enabled not preserved: %#v", toolsSection)
+	}
+	if cacheErrors, ok := toolsSection["cache_errors"].(bool); !ok || !cacheErrors {
+		t.Fatalf("tools.cache_errors not preserved: %#v", toolsSection)
 	}
 	if priority, ok := toolsSection["priority"].(float64); !ok || priority != 0 {
 		t.Fatalf("explicit tools.priority = 0 must survive marshal: %#v", toolsSection)
@@ -325,6 +336,35 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 	}
 	if !foundTool {
 		t.Fatalf("expected response_cache.tool_multiple_classes diagnostic, got %#v", badReport.Diagnostics)
+	}
+}
+
+func TestResponseCacheToolsConfigPreservesPriorityOmissionAndExplicitZero(t *testing.T) {
+	marshal := func(t *testing.T, tools ResponseCacheToolsConfig) map[string]any {
+		t.Helper()
+		payload, err := json.Marshal(tools)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+		return decoded
+	}
+
+	literal := marshal(t, ResponseCacheToolsConfig{Enabled: true})
+	if _, ok := literal["priority"]; ok {
+		t.Fatalf("literal tools config must omit priority: %#v", literal)
+	}
+	if cacheErrors, ok := literal["cache_errors"].(bool); !ok || cacheErrors {
+		t.Fatalf("literal tools config must preserve cache_errors=false: %#v", literal)
+	}
+
+	zero := int32(0)
+	explicitZero := marshal(t, ResponseCacheToolsConfig{Enabled: true, Priority: &zero})
+	if priority, ok := explicitZero["priority"].(float64); !ok || priority != 0 {
+		t.Fatalf("explicit tools priority=0 must survive marshal: %#v", explicitZero)
 	}
 }
 
