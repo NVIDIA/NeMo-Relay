@@ -10,6 +10,7 @@ per component by the runtime, so end users do not provide instance ids.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
@@ -37,6 +38,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     clear_plugin_configuration as _clear_plugin_configuration,
+)
+from nemo_relay._native import (
+    clear_plugin_configuration_async as _clear_plugin_configuration_async,
 )
 from nemo_relay._native import (
     deregister_plugin as _deregister_plugin,
@@ -467,8 +471,27 @@ def clear() -> None:
     Behavior:
         This removes active component registrations but leaves the plugin kind
         registry intact for future validation or initialization.
+
+    Raises:
+        RuntimeError: If called while an ``asyncio`` event loop is running on
+            the current thread. Use :func:`clear_async` instead.
     """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("plugin.clear() cannot block a running asyncio event loop; use 'await plugin.clear_async()'")
     _clear_plugin_configuration()
+
+
+async def clear_async() -> None:
+    """Clear the active plugin configuration without blocking ``asyncio``.
+
+    Native teardown runs outside the Python event-loop thread so queued event
+    sanitizers can finish before their plugin-owned registrations are removed.
+    """
+    await _clear_plugin_configuration_async()
 
 
 @asynccontextmanager
@@ -493,7 +516,7 @@ async def plugin(config: PluginConfig | JsonObject, *, clear_on_exit: bool = Tru
             await subscribers.flush_async()
         finally:
             if clear_on_exit:
-                clear()
+                await clear_async()
 
 
 def report() -> ConfigReport | None:
@@ -569,6 +592,7 @@ __all__ = [
     "Plugin",
     "initialize_with_dynamic_plugins",
     "clear",
+    "clear_async",
     "initialize",
     "deregister",
     "list_kinds",
