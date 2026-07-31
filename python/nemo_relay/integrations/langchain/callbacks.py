@@ -12,6 +12,7 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 
 import nemo_relay
 from nemo_relay.integrations.langchain._serialization import _prepare_lc_payloads
+from nemo_relay.scope import _otel_error_type
 
 if typing.TYPE_CHECKING:
     from uuid import UUID
@@ -95,7 +96,11 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
         self._pop_scope(
             run_id,
             output={"error": repr(error)},
-            metadata={"otel.status_code": "ERROR", "otel.status_description": str(error)},
+            metadata={
+                "otel.status_code": "ERROR",
+                "otel.status_description": str(error),
+                "error.type": _otel_error_type(error),
+            },
         )
 
     def _pop_scope(

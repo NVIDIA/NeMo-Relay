@@ -166,7 +166,7 @@ impl FlowError {
 
 fn runtime_exception_type(message: &str) -> Option<&str> {
     message.split(':').find_map(|segment| {
-        let candidate = segment.split_whitespace().last()?;
+        let candidate = segment.trim();
         is_stable_runtime_exception_type(candidate).then_some(candidate)
     })
 }

@@ -120,22 +120,38 @@ impl CallMode {
 
 #[derive(Clone)]
 struct CallCompletion {
-    sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>>,
+    sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<CallbackResult>>>>,
 }
 
 impl CallCompletion {
-    fn new(sender: tokio::sync::oneshot::Sender<FlowResult<Json>>) -> Self {
+    fn new(sender: tokio::sync::oneshot::Sender<CallbackResult>) -> Self {
         Self {
             sender: Arc::new(std::sync::Mutex::new(Some(sender))),
         }
     }
 
-    fn send(&self, value: FlowResult<Json>) {
+    fn send(&self, value: CallbackResult) {
         if let Some(sender) = self.sender.lock().unwrap().take() {
             let _ = sender.send(value);
         }
     }
 }
+
+pub(crate) struct CallbackError {
+    pub(crate) error: FlowError,
+    pub(crate) error_type: Option<String>,
+}
+
+impl From<FlowError> for CallbackError {
+    fn from(error: FlowError) -> Self {
+        Self {
+            error,
+            error_type: None,
+        }
+    }
+}
+
+type CallbackResult = std::result::Result<Json, CallbackError>;
 
 #[derive(Clone, Default)]
 struct CallCancellation {
@@ -319,9 +335,9 @@ fn build_completion_unknowns(
     let resolve_completion = completion.clone();
     let resolve = env.create_function_from_closure("__nemo_relay_resolve", move |ctx| {
         let value = ctx.get::<Json>(0).map_err(|error| {
-            FlowError::Internal(format!(
+            CallbackError::from(FlowError::Internal(format!(
                 "JavaScript callback result could not be converted to JSON: {error}"
-            ))
+            )))
         });
         resolve_completion.send(value);
         ctx.env.get_undefined()
@@ -334,7 +350,11 @@ fn build_completion_unknowns(
         let message = ctx
             .get::<String>(0)
             .unwrap_or_else(|_| "unknown error".to_string());
-        completion.send(Err(FlowError::Internal(message)));
+        let error_type = ctx.get::<String>(1).ok();
+        completion.send(Err(CallbackError {
+            error: FlowError::Internal(message),
+            error_type,
+        }));
         ctx.env.get_undefined()
     })?;
 
@@ -451,9 +471,9 @@ impl PromiseAwareFn {
                     ])
                 })();
                 if let Err(error) = &result {
-                    completion.send(Err(FlowError::Internal(format!(
+                    completion.send(Err(CallbackError::from(FlowError::Internal(format!(
                         "failed to build JavaScript middleware callback arguments: {error}"
-                    ))));
+                    )))));
                 }
                 result
             })?;
@@ -500,6 +520,11 @@ impl PromiseAwareFn {
     /// `#[napi]` class instance.
     pub async fn call_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
         self.call_inner(PrimaryArg::Build(build_arg0), CallMode::DIRECT, None)
+            .await
+    }
+
+    pub(crate) async fn call_with_arg0_detailed(&self, build_arg0: Arg0Builder) -> CallbackResult {
+        self.call_inner_detailed(PrimaryArg::Build(build_arg0), CallMode::DIRECT, None)
             .await
     }
 
@@ -561,6 +586,17 @@ impl PromiseAwareFn {
         mode: CallMode,
         next: Option<NextFn>,
     ) -> FlowResult<Json> {
+        self.call_inner_detailed(arg0, mode, next)
+            .await
+            .map_err(|error| error.error)
+    }
+
+    async fn call_inner_detailed(
+        &self,
+        arg0: PrimaryArg,
+        mode: CallMode,
+        next: Option<NextFn>,
+    ) -> CallbackResult {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let cancellation = CallCancellation::default();
         let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
@@ -574,7 +610,7 @@ impl PromiseAwareFn {
             .unwrap()
             .as_ref()
             .cloned()
-            .ok_or_else(closed_tsfn_error)?;
+            .ok_or_else(|| CallbackError::from(closed_tsfn_error()))?;
         let status = tsfn.call(
             Ok(CallArgs {
                 arg0,
@@ -594,11 +630,11 @@ impl PromiseAwareFn {
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
         );
-        queue_status_result(status)?;
+        queue_status_result(status).map_err(CallbackError::from)?;
 
         let result = receiver
             .await
-            .map_err(|e| FlowError::Internal(e.to_string()))?;
+            .map_err(|error| CallbackError::from(FlowError::Internal(error.to_string())))?;
         cancellation_guard.disarm();
         result
     }

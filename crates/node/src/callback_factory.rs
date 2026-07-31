@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v12";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v13";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -111,9 +111,22 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     'URIError',
   ]);
 
-  function callbackErrorMessage(error, fallback) {
+  function stableErrorType(error) {
+    try {
+      if (
+        error !== null
+        && (typeof error === 'object' || typeof error === 'function')
+        && typeof error.name === 'string'
+        && stableErrorNames.has(error.name)
+      ) {
+        return error.name;
+      }
+    } catch {}
+    return undefined;
+  }
+
+  function promiseErrorDetails(error, fallback) {
     let message = fallback;
-    let errorType;
     try {
       if (typeof error === 'string') {
         message = error;
@@ -122,16 +135,16 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       } else if (typeof error.message === 'string') {
         message = error.message;
       }
-      if (
-        error !== null
-        && (typeof error === 'object' || typeof error === 'function')
-        && typeof error.name === 'string'
-        && stableErrorNames.has(error.name)
-      ) {
-        errorType = error.name;
-      }
     } catch {}
-    return errorType === undefined ? message : `${errorType}: ${message}`;
+    return { message, errorType: stableErrorType(error) };
+  }
+
+  function stringifiedErrorDetails(error, fallback) {
+    let message = fallback;
+    try {
+      message = String(error?.message ?? error);
+    } catch {}
+    return { message, errorType: stableErrorType(error) };
   }
 
   function callPromise(
@@ -198,7 +211,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         resolve(value);
       }, (error) => {
         settlePublication();
-        reject(callbackErrorMessage(error, 'unknown error'));
+        const details = promiseErrorDetails(error, 'unknown error');
+        reject(details.message, details.errorType);
       });
     };
     eventSanitizerContext.run(token, invoke);
@@ -211,7 +225,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           const value = fn(...args);
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
-          return { ok: false, error: callbackErrorMessage(error, 'JavaScript callback failed') };
+          const details = stringifiedErrorDetails(error, 'JavaScript callback failed');
+          return { ok: false, error: details.message };
         }
       };
     },
@@ -232,7 +247,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       ) {
         if (error != null) {
           if (typeof reject === 'function') {
-            reject(callbackErrorMessage(error, 'unknown error'));
+            const details = stringifiedErrorDetails(error, 'unknown error');
+            reject(details.message, details.errorType);
           }
           return;
         }

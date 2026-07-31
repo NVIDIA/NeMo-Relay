@@ -251,7 +251,10 @@ describe('withScope', () => {
           withScope('with_scope_error_status', ScopeType.Tool, async () => {
             throw new TypeError('node status failure');
           }),
-        /node status failure/,
+        (error) => {
+          assert.equal(error.message, 'internal error: node status failure');
+          return true;
+        },
       );
       await assert.rejects(
         () =>

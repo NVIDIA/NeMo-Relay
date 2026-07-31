@@ -148,6 +148,7 @@ class TestScope:
             (ValueError("expected TypeError: got str"), "ValueError"),
             (RuntimeError("internal error: ValueError: invalid value"), "ValueError"),
             (RuntimeError("failed: tenant_123Error"), "RuntimeError"),
+            (RuntimeError("provider returned Internal Server Error: 500"), "RuntimeError"),
         ],
     )
     def test_scope_ctx_mgr_records_exception_type(self, monkeypatch, error, expected_error_type):

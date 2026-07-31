@@ -125,6 +125,11 @@ fn otel_error_type_uses_bounded_runtime_exception_taxonomy() {
         FlowError::Internal("failed: tenant_123Error".into()).otel_error_type(),
         "internal_error"
     );
+    assert_eq!(
+        FlowError::Internal("provider returned Internal Server Error: 500".into())
+            .otel_error_type(),
+        "internal_error"
+    );
 }
 
 #[test]

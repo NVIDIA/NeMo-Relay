@@ -96,6 +96,18 @@ _STABLE_PYTHON_EXCEPTION_TYPES = frozenset(
 )
 
 
+def _otel_error_type(error: BaseException) -> str:
+    """Return a bounded OpenTelemetry classification for a Python exception."""
+    exception_name = type(error).__name__
+    error_type = exception_name if exception_name in _STABLE_PYTHON_EXCEPTION_TYPES else "internal_error"
+    if isinstance(error, RuntimeError):
+        for segment in str(error).split(":"):
+            candidate = segment.strip()
+            if candidate in _STABLE_PYTHON_EXCEPTION_TYPES:
+                return candidate
+    return error_type
+
+
 def get_handle() -> ScopeHandle:
     """Return the current top-of-stack ``ScopeHandle``.
 
@@ -312,17 +324,7 @@ def scope(
     except Exception as e:
         status_code = "ERROR"
         status_message = str(e)
-        exception_name = type(e).__name__
-        error_type = exception_name if exception_name in _STABLE_PYTHON_EXCEPTION_TYPES else "internal_error"
-        if isinstance(e, RuntimeError):
-            for segment in status_message.split(":"):
-                words = segment.strip().split()
-                if not words:
-                    continue
-                candidate = words[-1]
-                if candidate in _STABLE_PYTHON_EXCEPTION_TYPES:
-                    error_type = candidate
-                    break
+        error_type = _otel_error_type(e)
         raise
     finally:
         if pushed_handle is not None:

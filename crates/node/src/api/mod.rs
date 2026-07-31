@@ -179,34 +179,16 @@ fn otel_status_metadata(status_code: &'static str, status_message: Option<String
     Json::Object(metadata)
 }
 
-fn otel_error_metadata(status_message: String) -> Json {
-    let error_type = javascript_exception_type(&status_message)
-        .unwrap_or("internal_error")
-        .to_string();
+fn otel_error_metadata(status_message: String, error_type: Option<&str>) -> Json {
     let mut metadata = otel_status_metadata("ERROR", Some(status_message));
     metadata
         .as_object_mut()
         .expect("OpenTelemetry status metadata is an object")
-        .insert("error.type".to_string(), Json::String(error_type));
+        .insert(
+            "error.type".to_string(),
+            Json::String(error_type.unwrap_or("internal_error").to_string()),
+        );
     metadata
-}
-
-fn javascript_exception_type(message: &str) -> Option<&str> {
-    message.split(':').find_map(|segment| {
-        let candidate = segment.split_whitespace().last()?;
-        matches!(
-            candidate,
-            "AggregateError"
-                | "Error"
-                | "EvalError"
-                | "RangeError"
-                | "ReferenceError"
-                | "SyntaxError"
-                | "TypeError"
-                | "URIError"
-        )
-        .then_some(candidate)
-    })
 }
 
 fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenTelemetryType> {
@@ -2093,7 +2075,7 @@ pub fn with_scope(
                     core_scope_api::pop_scope(
                         core_scope_api::PopScopeParams::builder()
                             .handle_uuid(&scope_uuid)
-                            .metadata_opt(Some(otel_error_metadata(status_message.clone())))
+                            .metadata_opt(Some(otel_error_metadata(status_message.clone(), None)))
                             .build(),
                     )
                 })
@@ -2121,10 +2103,13 @@ pub fn with_scope(
                                     Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), raw) })
                                 });
 
-                            let result = pa_fn.call_with_arg0(build_handle).await;
+                            let result = pa_fn.call_with_arg0_detailed(build_handle).await;
                             let metadata = match &result {
                                 Ok(_) => otel_status_metadata("OK", None),
-                                Err(error) => otel_error_metadata(error.to_string()),
+                                Err(error) => otel_error_metadata(
+                                    error.error.to_string(),
+                                    error.error_type.as_deref(),
+                                ),
                             };
                             // Always pop the scope, even on error.
                             let _ = core_scope_api::pop_scope(
@@ -2133,7 +2118,7 @@ pub fn with_scope(
                                     .metadata_opt(Some(metadata))
                                     .build(),
                             );
-                            result.map_err(to_napi_err)
+                            result.map_err(|error| to_napi_err(error.error))
                         })
                         .await
                 },
