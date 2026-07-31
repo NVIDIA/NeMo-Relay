@@ -15,7 +15,7 @@ workspace = true
 
 [features]
 default = []
-rampart = ["dep:tokio", "dep:tract-onnx", "dep:unicode_categories", "dep:unicode-normalization"]
+rampart = ["dep:rayon", "dep:tokio", "dep:tract-onnx", "dep:unicode_categories", "dep:unicode-normalization"]
 schema = ["dep:schemars", "nemo-relay/schema"]
 
 [dependencies]
@@ -24,6 +24,7 @@ log = { version = "0.4", features = ["kv"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
+rayon = { version = "1.12", optional = true }
 sha2 = "0.11"
 schemars = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["rt", "sync", "time"], optional = true }

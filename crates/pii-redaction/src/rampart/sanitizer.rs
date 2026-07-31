@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ use nemo_relay::codec::resolve::{
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
@@ -32,11 +34,18 @@ use super::model::{Detection, RampartDetector};
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 const MAX_TEXTS_PER_PAYLOAD: usize = 256;
 const MAX_PAYLOAD_TEXT_BYTES: usize = 256 * 1024;
-// Two model runs balance fan-out throughput against full-window tensor memory.
-const MAX_CONCURRENT_INFERENCE: usize = 2;
+// Cap CPU workers while respecting smaller hosts and container CPU quotas.
+const MAX_CONCURRENT_INFERENCE: usize = 3;
 // Bound admitted work and its wait so large payloads cannot build a long queue.
-const MAX_ADMITTED_INFERENCE: usize = 8;
-const MAX_ADMISSION_WAIT: Duration = Duration::from_millis(250);
+const MAX_ADMITTED_INFERENCE: usize = 16;
+const MAX_ADMISSION_WAIT: Duration = Duration::from_millis(500);
+
+fn inference_worker_count() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .min(MAX_CONCURRENT_INFERENCE)
+}
 
 pub(super) trait DetectionModel: Send + Sync {
     fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>>;
@@ -59,6 +68,7 @@ pub(super) struct RampartSanitizer {
     legacy_surface: Option<ProviderSurface>,
     admission_capacity: Arc<Semaphore>,
     execution_admission: Arc<Semaphore>,
+    executor: Arc<SanitizerExecutor>,
 }
 
 #[derive(Clone)]
@@ -97,6 +107,30 @@ enum EventField {
 struct SanitizerPermit {
     _admission: OwnedSemaphorePermit,
     _execution: OwnedSemaphorePermit,
+    executor: Arc<SanitizerExecutor>,
+}
+
+struct SanitizerExecutor {
+    pool: ThreadPool,
+}
+
+impl SanitizerExecutor {
+    fn new(worker_count: usize) -> PluginResult<Self> {
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(worker_count)
+            .thread_name(|worker| format!("nemo-relay-rampart-{worker}"))
+            .build()
+            .map_err(|error| {
+                PluginError::Internal(format!(
+                    "failed to start Rampart inference workers: {error}"
+                ))
+            })?;
+        Ok(Self { pool })
+    }
+
+    fn submit(&self, job: impl FnOnce() + Send + 'static) {
+        self.pool.spawn_fifo(job);
+    }
 }
 
 impl RampartSanitizer {
@@ -110,6 +144,8 @@ impl RampartSanitizer {
             })?),
             None => None,
         };
+        let worker_count = inference_worker_count();
+        let executor = Arc::new(SanitizerExecutor::new(worker_count)?);
         Ok(Self {
             detector,
             target_paths: Arc::new(
@@ -131,7 +167,8 @@ impl RampartSanitizer {
             replacement: config.replacement.into(),
             legacy_surface,
             admission_capacity: Arc::new(Semaphore::new(MAX_ADMITTED_INFERENCE)),
-            execution_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_INFERENCE)),
+            execution_admission: Arc::new(Semaphore::new(worker_count)),
+            executor,
         })
     }
 
@@ -162,6 +199,7 @@ impl RampartSanitizer {
         Some(SanitizerPermit {
             _admission: admission,
             _execution: execution,
+            executor: Arc::clone(&self.executor),
         })
     }
 
@@ -539,7 +577,7 @@ pub(super) fn tool_sanitize_callback(backend: RampartSanitizer) -> ToolSanitizeF
             let Some(permit) = backend.admit("tool").await else {
                 return Ok(fallback);
             };
-            run_blocking("tool payload", permit, fallback, move || {
+            run_inference("tool payload", permit, fallback, move || {
                 backend.sanitize_json(payload)
             })
             .await
@@ -567,7 +605,7 @@ pub(super) fn event_sanitize_callback(
             let Some(permit) = backend.admit("event").await else {
                 return Ok(fallback);
             };
-            run_blocking("event fields", permit, fallback, move || {
+            run_inference("event fields", permit, fallback, move || {
                 let specialized_scope = is_specialized_scope(event.as_ref());
 
                 let mut selected = Vec::with_capacity(3);
@@ -614,7 +652,7 @@ pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSan
             let Some(permit) = backend.admit("llm_request").await else {
                 return Ok(None);
             };
-            run_blocking("LLM request", permit, None, move || {
+            run_inference("LLM request", permit, None, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
@@ -653,7 +691,7 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
             let Some(permit) = backend.admit("llm_response").await else {
                 return Ok(None);
             };
-            run_blocking("LLM response", permit, None, move || {
+            run_inference("LLM response", permit, None, move || {
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
@@ -695,7 +733,7 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
     })
 }
 
-async fn run_blocking<T>(
+async fn run_inference<T>(
     target: &'static str,
     permit: SanitizerPermit,
     fallback: T,
@@ -704,22 +742,34 @@ async fn run_blocking<T>(
 where
     T: Send + 'static,
 {
-    match tokio::task::spawn_blocking(move || {
+    let executor = Arc::clone(&permit.executor);
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    executor.submit(move || {
         let _permit = permit;
-        operation()
-    })
-    .await
-    {
-        Ok(value) => Ok(value),
+        let _ = sender.send(catch_unwind(AssertUnwindSafe(operation)));
+    });
+    match receiver.await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_)) => {
+            log::error!(
+                target: "nemo_relay.plugin",
+                event = "rampart_pii_inference_failed",
+                plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
+                reason = "dedicated_executor_panic",
+                target,
+                panicked = true;
+                "Rampart PII inference worker panicked and failed closed"
+            );
+            Ok(fallback)
+        }
         Err(error) => {
             log::error!(
                 target: "nemo_relay.plugin",
                 event = "rampart_pii_inference_failed",
                 plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
-                reason = "blocking_task",
-                target,
-                panicked = error.is_panic();
-                "Rampart PII blocking sanitization failed closed: {error}"
+                reason = "dedicated_executor_result",
+                target;
+                "Rampart PII inference worker lost a result and failed closed: {error}"
             );
             Ok(fallback)
         }
@@ -1020,9 +1070,10 @@ mod tests {
 
     #[test]
     fn bounded_fanout_does_not_block_the_runtime_thread() {
+        let worker_count = inference_worker_count();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
-            .max_blocking_threads(MAX_CONCURRENT_INFERENCE)
+            .max_blocking_threads(1)
             .build()
             .unwrap();
         runtime.block_on(async {
@@ -1044,7 +1095,7 @@ mod tests {
                 )));
             }
             tokio::time::timeout(Duration::from_secs(1), async {
-                while started.load(Ordering::Acquire) != MAX_CONCURRENT_INFERENCE {
+                while started.load(Ordering::Acquire) != worker_count {
                     tokio::task::yield_now().await;
                 }
             })
@@ -1071,8 +1122,57 @@ mod tests {
         });
     }
 
+    #[test]
+    fn dedicated_executor_ignores_saturated_tokio_blocking_pool() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let blocker_started = Arc::new(AtomicBool::new(false));
+            let blocker_release = Arc::new(AtomicBool::new(false));
+            let started = Arc::clone(&blocker_started);
+            let release = Arc::clone(&blocker_release);
+            let blocker = tokio::task::spawn_blocking(move || {
+                started.store(true, Ordering::Release);
+                while !release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !blocker_started.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the Tokio blocking-pool fixture should start");
+
+            let calls = Arc::new(AtomicUsize::new(0));
+            let callback = tool_sanitize_callback(sanitizer(
+                Arc::new(CountingDetector(Arc::clone(&calls))),
+                vec!["/message"],
+            ));
+            let output = tokio::time::timeout(
+                Duration::from_millis(250),
+                callback(
+                    "dedicated-executor".into(),
+                    serde_json::json!({"message": "private"}),
+                ),
+            )
+            .await
+            .expect("Rampart must not queue behind Tokio's blocking pool")
+            .unwrap();
+            assert_eq!(output, serde_json::json!({"message": "private"}));
+            assert_eq!(calls.load(Ordering::Acquire), 1);
+
+            blocker_release.store(true, Ordering::Release);
+            blocker.await.unwrap();
+        });
+    }
+
     #[tokio::test(flavor = "current_thread")]
-    async fn blocking_task_panics_fail_closed_for_every_surface() {
+    async fn inference_worker_panics_fail_closed_for_every_surface() {
         use nemo_relay::api::event::{BaseEvent, MarkEvent};
         use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
 
@@ -1131,9 +1231,10 @@ mod tests {
 
     #[test]
     fn bounded_admission_times_out_before_spawning_more_blocking_work() {
+        let worker_count = inference_worker_count();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
-            .max_blocking_threads(MAX_CONCURRENT_INFERENCE)
+            .max_blocking_threads(1)
             .build()
             .unwrap();
         runtime.block_on(async {
@@ -1151,7 +1252,7 @@ mod tests {
             let execution = Arc::clone(&backend.execution_admission);
             let callback = tool_sanitize_callback(backend);
             let mut active = Vec::new();
-            for index in 0..MAX_CONCURRENT_INFERENCE {
+            for index in 0..worker_count {
                 active.push(tokio::spawn(callback(
                     format!("active-{index}"),
                     serde_json::json!({"message": "private"}),
@@ -1201,6 +1302,7 @@ mod tests {
             vec!["/message"],
         );
         let execution = Arc::clone(&backend.execution_admission);
+        let worker_count = execution.available_permits();
         let callback = tool_sanitize_callback(backend);
         let active = tokio::spawn(callback(
             "active".into(),
@@ -1213,26 +1315,25 @@ mod tests {
         })
         .await
         .expect("blocking detector should start");
-        assert_eq!(execution.available_permits(), MAX_CONCURRENT_INFERENCE - 1);
+        assert_eq!(execution.available_permits(), worker_count - 1);
 
         active.abort();
         assert!(active.await.unwrap_err().is_cancelled());
         assert_eq!(
             execution.available_permits(),
-            MAX_CONCURRENT_INFERENCE - 1,
+            worker_count - 1,
             "cancelling the async caller must not release an in-flight model slot"
         );
 
         release.store(true, Ordering::Release);
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !finished.load(Ordering::Acquire)
-                || execution.available_permits() != MAX_CONCURRENT_INFERENCE
+            while !finished.load(Ordering::Acquire) || execution.available_permits() != worker_count
             {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("detached blocking work should finish");
+        .expect("detached inference work should finish");
         assert_eq!(
             callback(
                 "recovered".into(),
@@ -1257,16 +1358,17 @@ mod tests {
         );
         let admission = Arc::clone(&backend.admission_capacity);
         let execution = Arc::clone(&backend.execution_admission);
+        let worker_count = execution.available_permits();
         let callback = tool_sanitize_callback(backend);
         let mut active = Vec::new();
-        for index in 0..MAX_CONCURRENT_INFERENCE {
+        for index in 0..worker_count {
             active.push(tokio::spawn(callback(
                 format!("active-{index}"),
                 serde_json::json!({"message": "private"}),
             )));
         }
         tokio::time::timeout(Duration::from_secs(1), async {
-            while started.load(Ordering::Acquire) != MAX_CONCURRENT_INFERENCE
+            while started.load(Ordering::Acquire) != worker_count
                 || execution.available_permits() != 0
             {
                 tokio::task::yield_now().await;
@@ -1280,7 +1382,7 @@ mod tests {
             serde_json::json!({"message": "private"}),
         ));
         tokio::time::timeout(Duration::from_millis(50), async {
-            while admission.available_permits() != MAX_ADMITTED_INFERENCE - 3 {
+            while admission.available_permits() != MAX_ADMITTED_INFERENCE - worker_count - 1 {
                 tokio::task::yield_now().await;
             }
         })
@@ -1288,8 +1390,11 @@ mod tests {
         .expect("the queued callback should reserve bounded capacity");
         queued.abort();
         assert!(queued.await.unwrap_err().is_cancelled());
-        assert_eq!(admission.available_permits(), MAX_ADMITTED_INFERENCE - 2);
-        assert_eq!(started.load(Ordering::Acquire), MAX_CONCURRENT_INFERENCE);
+        assert_eq!(
+            admission.available_permits(),
+            MAX_ADMITTED_INFERENCE - worker_count
+        );
+        assert_eq!(started.load(Ordering::Acquire), worker_count);
 
         release.store(true, Ordering::Release);
         for task in active {

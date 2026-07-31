@@ -289,9 +289,11 @@ Configuration helpers are available through these binding modules:
 Go and the raw C FFI remain experimental and source-first. Model loading and
 inference run in the shared Rust implementation for every binding.
 
-Rampart runs at most two sanitizer operations concurrently and admits at most
-eight operations per activation. Admitted operations wait asynchronously for
-up to 250 ms before entering Tokio's blocking pool. A full admission queue or
+Rampart uses a dedicated CPU executor with up to three workers per activation,
+limited further by the host's available parallelism. It admits at most 16
+sanitizer operations, and admitted operations wait asynchronously for an
+inference worker for up to 500 ms. This keeps model inference off both Tokio
+executor threads and Tokio's shared blocking pool. A full admission queue or
 expired wait fails closed: tool observability payloads become the configured
 replacement, LLM bodies are omitted, and mutable mark or generic scope fields
 are omitted. Tool and LLM scope metadata is omitted independently so an
