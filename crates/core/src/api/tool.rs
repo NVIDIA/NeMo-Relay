@@ -17,7 +17,7 @@ use crate::api::runtime::{
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, metadata_with_otel_error, metadata_with_otel_success,
+    ensure_runtime_owner, metadata_with_otel_error, metadata_with_otel_status,
     metadata_with_otel_unknown_error, resolve_parent_uuid, snapshot_event_sanitizers,
     snapshot_event_subscribers,
 };
@@ -796,7 +796,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
                 result,
                 pending_marks,
             } = outcome;
-            let end_metadata = metadata_with_otel_success(metadata);
+            let end_metadata = metadata_with_otel_status(metadata, "OK", None);
             tool_call_end_with_pending_marks(
                 ToolCallEndParams::builder()
                     .handle(&handle)
