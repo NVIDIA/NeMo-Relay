@@ -1699,6 +1699,7 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
         .unwrap_err(),
         NemoRelayStatus::InvalidArg
     );
+    assert_last_error_contains("method was invalid or prohibited");
 
     let mut target = test_dispatch_target(
         "https://provider.example/v1/chat/completions",
@@ -1715,6 +1716,7 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
         .unwrap_err(),
         NemoRelayStatus::InvalidArg
     );
+    assert_last_error_contains("host-owned or prohibited");
 
     let mut target = test_dispatch_target(
         "https://provider.example/v1/chat/completions",
@@ -1728,6 +1730,7 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
             .unwrap_err(),
         NemoRelayStatus::InvalidArg
     );
+    assert_last_error_contains("host-owned or prohibited");
 }
 
 #[test]
@@ -1747,6 +1750,7 @@ fn native_api_v2_rejects_target_url_credentials() {
         .unwrap_err(),
         NemoRelayStatus::InvalidArg
     );
+    assert_last_error_contains("absolute HTTP(S) URL");
 }
 
 #[test]

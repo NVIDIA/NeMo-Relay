@@ -1328,6 +1328,8 @@ async fn native_api_v2_fixture_dispatches_through_core_without_a_cli_gateway() {
     initialize_plugins_exact(plugin_config)
         .await
         .expect("targeted native API v2 fixture should initialize");
+    let mut cleanup = NativePluginTestCleanup::new();
+    cleanup.mark_plugin_configuration_active();
 
     let original_provider_called = Arc::new(AtomicBool::new(false));
     let original_provider_called_for_fn = original_provider_called.clone();
@@ -1353,7 +1355,7 @@ async fn native_api_v2_fixture_dispatches_through_core_without_a_cli_gateway() {
     assert!(captured.contains("authorization: Bearer fixture-target\r\n"));
     assert!(captured.contains("\"fixture_targeted\":true"));
 
-    clear_plugin_configuration().expect("targeted fixture configuration should clear");
+    drop(cleanup);
     activation.clear();
 }
 
@@ -2164,10 +2166,28 @@ impl EmbeddedFakeProvider {
         use std::time::Duration;
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("embedded provider should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("embedded provider listener should be nonblocking");
         let address = listener.local_addr().expect("embedded provider address");
         let (request_tx, request) = std::sync::mpsc::channel();
         let thread = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("embedded provider should accept");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let (mut socket, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("embedded provider should accept: {error}"),
+                }
+            };
+            socket
+                .set_nonblocking(false)
+                .expect("embedded provider socket should be blocking");
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .expect("embedded provider timeout should configure");

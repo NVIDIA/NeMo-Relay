@@ -117,7 +117,7 @@ impl MiddlewareContinuationContext {
         C: FnOnce() -> F,
         F: Future,
     {
-        scope_llm_dispatch_target(target, self.run(async move { callback().await })).await
+        scope_llm_dispatch_target(target, self.invoke(callback)).await
     }
 
     /// Invoke a callback and poll its future with the captured Relay context.

@@ -342,7 +342,6 @@ impl NativePlugin for TargetedFixturePlugin {
         if status == NemoRelayStatus::Ok {
             Ok(())
         } else {
-            unsafe { drop(Box::from_raw(state.cast::<TargetedFixtureState>())) };
             Err(format!("targeted fixture registration failed: {status:?}"))
         }
     }

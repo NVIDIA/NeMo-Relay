@@ -79,6 +79,11 @@ impl LlmDispatchTargetContext {
                     "LLM continuation target header {name} is host-owned or prohibited"
                 )));
             }
+            if validated_headers.contains_key(&name) {
+                return Err(FlowError::InvalidArgument(format!(
+                    "LLM continuation target header {name} was specified more than once"
+                )));
+            }
             let value = HeaderValue::from_str(&value).map_err(|_| {
                 FlowError::InvalidArgument(format!(
                     "LLM continuation target header {name} had an invalid value"
@@ -210,14 +215,17 @@ pub(crate) fn targeted_llm_stream_execution(
 }
 
 async fn dispatch_buffered(target: &LlmDispatchTargetContext, request: LlmRequest) -> Result<Json> {
-    let response = send(target, request).await?;
+    let response = send(target, request, Some(HTTP_REQUEST_TIMEOUT)).await?;
     let status = response.status();
     let headers = safe_failure_headers(response.headers());
     if !status.is_success() {
-        let bytes = bounded_response_body(response).await?;
+        let bytes = bounded_response_body(target, response).await?;
         return Err(http_error(status, headers, &bytes));
     }
-    let bytes = response.bytes().await.map_err(transport_error)?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| transport_error(target, error))?;
     serde_json::from_slice(&bytes).map_err(|_| http_error(status, headers, &bytes))
 }
 
@@ -225,14 +233,15 @@ async fn dispatch_stream(
     target: &LlmDispatchTargetContext,
     request: LlmRequest,
 ) -> Result<LlmJsonStream> {
-    let response = send(target, request).await?;
+    let response = send(target, request, None).await?;
     let status = response.status();
     if !status.is_success() {
         let headers = safe_failure_headers(response.headers());
-        let body = bounded_response_body(response).await?;
+        let body = bounded_response_body(target, response).await?;
         return Err(http_error(status, headers, &body));
     }
 
+    let target = target.clone();
     let mut decoder = SseEventDecoder::new();
     let mut bytes = response.bytes_stream();
     Ok(LlmJsonStream::new(stream! {
@@ -250,7 +259,7 @@ async fn dispatch_stream(
                     }
                 }
                 Err(error) => {
-                    yield Err(transport_error(error));
+                    yield Err(transport_error(&target, error));
                     return;
                 }
             }
@@ -263,7 +272,11 @@ async fn dispatch_stream(
     }))
 }
 
-async fn send(target: &LlmDispatchTargetContext, request: LlmRequest) -> Result<reqwest::Response> {
+async fn send(
+    target: &LlmDispatchTargetContext,
+    request: LlmRequest,
+    timeout: Option<Duration>,
+) -> Result<reqwest::Response> {
     let body = serde_json::to_vec(&request.content)
         .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
     let mut outbound = targeted_http_client()
@@ -272,7 +285,13 @@ async fn send(target: &LlmDispatchTargetContext, request: LlmRequest) -> Result<
     for (name, value) in target.headers() {
         outbound = outbound.header(name, value);
     }
-    outbound.send().await.map_err(transport_error)
+    if let Some(timeout) = timeout {
+        outbound = outbound.timeout(timeout);
+    }
+    outbound
+        .send()
+        .await
+        .map_err(|error| transport_error(target, error))
 }
 
 fn targeted_http_client() -> &'static Client {
@@ -280,7 +299,6 @@ fn targeted_http_client() -> &'static Client {
     CLIENT.get_or_init(|| {
         Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
             .read_timeout(HTTP_READ_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -288,22 +306,33 @@ fn targeted_http_client() -> &'static Client {
     })
 }
 
-async fn bounded_response_body(response: reqwest::Response) -> Result<Vec<u8>> {
+async fn bounded_response_body(
+    target: &LlmDispatchTargetContext,
+    response: reqwest::Response,
+) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while body.len() < MAX_UPSTREAM_ERROR_BODY_BYTES {
         let Some(chunk) = stream.next().await else {
             break;
         };
-        let chunk = chunk.map_err(transport_error)?;
+        let chunk = chunk.map_err(|error| transport_error(target, error))?;
         let remaining = MAX_UPSTREAM_ERROR_BODY_BYTES - body.len();
         body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
     }
     Ok(body)
 }
 
-fn transport_error(error: reqwest::Error) -> FlowError {
+fn transport_error(target: &LlmDispatchTargetContext, error: reqwest::Error) -> FlowError {
     let timeout = error.is_timeout();
+    let diagnostic = error.without_url();
+    log::warn!(
+        target: "nemo_relay.llm",
+        event = "targeted_llm_transport_failed",
+        provider_host = target.url().host_str().unwrap_or("<unknown>"),
+        failure_kind = if timeout { "timeout" } else { "transport" };
+        "Targeted LLM provider request failed: {diagnostic}"
+    );
     FlowError::Upstream(UpstreamFailure {
         status: None,
         body: if timeout {

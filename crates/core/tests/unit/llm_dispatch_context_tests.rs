@@ -22,10 +22,28 @@ struct FakeProvider {
 impl FakeProvider {
     fn spawn(response: Vec<u8>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("fake provider should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("fake provider listener should be nonblocking");
         let address = listener.local_addr().expect("fake provider address");
         let (request_tx, request) = mpsc::channel();
         let thread = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("fake provider should accept");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let (mut socket, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("fake provider should accept: {error}"),
+                }
+            };
+            socket
+                .set_nonblocking(false)
+                .expect("fake provider socket should be blocking");
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .expect("read timeout should configure");
@@ -33,9 +51,17 @@ impl FakeProvider {
             request_tx
                 .send(request_bytes)
                 .expect("test should receive provider request");
-            socket
-                .write_all(&response)
-                .expect("fake provider should write response");
+            if let Err(error) = socket.write_all(&response) {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::ConnectionReset
+                    ),
+                    "fake provider should write response: {error}"
+                );
+            }
         });
         Self {
             url: format!("http://{address}/v1/messages"),
@@ -304,6 +330,14 @@ fn target_validation_rejects_unsafe_transport_inputs() {
                 "x-nemo-relay-internal-dispatch-url".into(),
                 "http://attacker.invalid".into(),
             )]),
+        ),
+        (
+            "POST",
+            "https://provider.example/v1",
+            BTreeMap::from([
+                ("Authorization".into(), "Bearer first".into()),
+                ("authorization".into(), "Bearer second".into()),
+            ]),
         ),
     ] {
         assert!(

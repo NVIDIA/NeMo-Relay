@@ -1774,11 +1774,23 @@ async fn invoke_native_async_callback_with_lane(
         })
     };
     let callback_result = if blocking {
-        tokio::task::spawn_blocking(invoke).await.map_err(|error| {
-            FlowError::Internal(format!(
-                "native API v2 blocking callback task failed: {error}"
-            ))
-        })?
+        match tokio::task::spawn_blocking(invoke).await {
+            Ok(result) => result,
+            Err(error) => {
+                unsafe {
+                    drop(Arc::from_raw(
+                        completion_ref as *const NativeAsyncCompletion,
+                    ));
+                    if let Some(next) = next_ref {
+                        drop(Arc::from_raw(next as *const NativeAsyncNext));
+                    }
+                    native_string_free(invocation as *mut NemoRelayNativeString);
+                }
+                return Err(FlowError::Internal(format!(
+                    "native API v2 blocking callback task failed: {error}"
+                )));
+            }
+        }
     } else {
         invoke()
     };
