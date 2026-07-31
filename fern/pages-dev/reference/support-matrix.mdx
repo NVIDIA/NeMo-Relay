@@ -18,18 +18,26 @@ commitment. For release-specific changes and known limitations, refer to
 | Surface | Linux x86_64 | Linux ARM64 | macOS x86_64 | macOS ARM64 | Windows x86_64 | Windows ARM64 | Limitations |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Core Library | Required CI coverage | Required CI coverage | Not in the current CI matrix | Required CI coverage | Non-blocking CI coverage | Non-blocking CI coverage | Rust is the source of truth. Python and Node.js packages require their supported runtimes; Go and raw C FFI remain experimental and source-first. |
-| CLI Application | Published `x86_64-unknown-linux-musl` asset | Published `aarch64-unknown-linux-musl` asset | No published release asset | Published `aarch64-apple-darwin` asset | Published `x86_64-pc-windows-msvc` asset | Published `aarch64-pc-windows-msvc` asset | Intel macOS has no prebuilt CLI asset. Use a source install on unsupported platforms. |
+| CLI Application | Published `x86_64-unknown-linux-gnu` and `x86_64-unknown-linux-musl` assets | Published `aarch64-unknown-linux-gnu` and `aarch64-unknown-linux-musl` assets | No published release asset | Published `aarch64-apple-darwin` asset | Published `x86_64-pc-windows-msvc` asset | Published `aarch64-pc-windows-msvc` asset | Intel macOS has no prebuilt CLI asset. Use a source install on unsupported platforms. |
 | Native Plugins | Build for the host ABI | Build for the host ABI | Build and validate locally | Build for the host ABI | Build for the host ABI; CI is non-blocking | Build for the host ABI; CI is non-blocking | Native plugins run in-process and are not sandboxed. Rebuild for the host ABI and compatible Relay version. |
 | gRPC Worker Plugins | Depends on the selected worker runtime | Depends on the selected worker runtime | Build and validate locally | Depends on the selected worker runtime | Depends on the selected worker runtime | Depends on the selected worker runtime | Workers run as local child processes over `grpc-v1`, not as a security sandbox. Python workers are unsupported on Windows ARM64. Refer to the worker runtime matrix for runtime-specific requirements. |
 
 ### Linux Distribution Notes
 
-The published Linux CLI binaries use musl targets and are not tied to a
-distribution-specific package manager. Linux CI uses Ubuntu runners. NeMo Relay
-does not publish distribution-specific DEB or RPM packages or certify individual
-Ubuntu, Debian, RHEL-compatible, or Fedora releases. On an unsupported CPU,
-unsupported operating system, or a system whose local requirements prevent the
-release asset from running, install from source with Cargo.
+NeMo Relay publishes GNU and musl CLI binaries for each supported Linux
+architecture. The GNU variants are dynamically linked against glibc 2.17 or
+newer and are the performance-oriented choice for glibc-based distributions
+such as Ubuntu, Debian, and RHEL. The statically linked musl variants are
+required for musl-based distributions such as Alpine Linux and also run on
+glibc-based distributions. The Unix shell installer uses the musl variant for
+portability.
+
+The binaries are not tied to a distribution-specific package manager. Linux CI
+uses Ubuntu runners, and NeMo Relay does not publish distribution-specific DEB
+or RPM packages or certify individual Ubuntu, Debian, RHEL-compatible, or
+Fedora releases. On an unsupported CPU, unsupported operating system, or a
+system whose local requirements prevent the release asset from running,
+install from source with Cargo.
 
 ## Worker Runtime Compatibility
 
