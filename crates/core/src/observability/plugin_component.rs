@@ -529,7 +529,7 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("service_version", EditorFieldKind::String, &[], true),
                 otel_editor_field("instrumentation_scope", EditorFieldKind::String, &[], false),
                 otel_editor_field("timeout_millis", EditorFieldKind::Integer, &[], false),
-                otel_editor_field("max_queue_size", EditorFieldKind::Integer, &[], false),
+                otel_editor_field("max_queue_size", EditorFieldKind::Integer, &[], true),
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field(

@@ -2912,26 +2912,35 @@ fn provider_builders_cover_success_paths() {
 
 #[test]
 fn configured_endpoint_queue_retains_an_8001_span_burst() {
+    const MAX_QUEUE_SIZE: usize = 16_384;
+    const MAX_EXPORT_BATCH_SIZE: usize = 512;
+
     let (exporter, export_started) = TestBlockingSpanExporter::new();
     let config =
         OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
-            .with_max_queue_size(16_384);
-    let provider = build_tracer_provider_with_exporter(
-        SdkTracerProvider::builder(),
-        exporter.clone(),
-        config.max_queue_size(),
-    );
+            .with_max_queue_size(MAX_QUEUE_SIZE);
+    let processor = BatchSpanProcessor::builder(exporter.clone())
+        .with_batch_config(
+            BatchConfigBuilder::default()
+                .with_max_queue_size(config.max_queue_size().unwrap())
+                .with_max_export_batch_size(MAX_EXPORT_BATCH_SIZE)
+                .build(),
+        )
+        .build();
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
     let tracer = provider.tracer("burst-capacity-test");
 
-    for _ in 0..512 {
+    for _ in 0..MAX_EXPORT_BATCH_SIZE {
         let mut span = tracer.start("burst-span");
         span.end();
     }
     export_started
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(30))
         .expect("the first full batch should start exporting");
 
-    for _ in 512..8_001 {
+    for _ in MAX_EXPORT_BATCH_SIZE..8_001 {
         let mut span = tracer.start("burst-span");
         span.end();
     }

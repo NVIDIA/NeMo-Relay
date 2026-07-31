@@ -20,7 +20,7 @@ use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 use serde_json::json;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -174,32 +174,37 @@ fn start_otlp_capture_server() -> (String, mpsc::Receiver<Vec<u8>>) {
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
-        let mut request = Vec::new();
-        let mut byte = [0_u8; 1];
-        while !request.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).unwrap();
-            request.push(byte[0]);
-        }
-        let headers = String::from_utf8_lossy(&request);
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                line.split_once(':').and_then(|(name, value)| {
-                    name.eq_ignore_ascii_case("content-length")
-                        .then_some(value.trim())
-                })
-            })
-            .unwrap()
-            .parse::<usize>()
-            .unwrap();
-        let mut body = vec![0_u8; content_length];
-        stream.read_exact(&mut body).unwrap();
+        let body = read_otlp_request(&mut stream).expect("valid OTLP request");
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .unwrap();
         sender.send(body).unwrap();
     });
     (endpoint, receiver)
+}
+
+fn read_otlp_request(stream: &mut impl Read) -> io::Result<Vec<u8>> {
+    let mut headers = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !headers.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte)?;
+        headers.push(byte[0]);
+    }
+    let headers = String::from_utf8_lossy(&headers);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length")
+                    .then_some(value.trim())
+            })
+        })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing Content-Length"))?
+        .parse::<usize>()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let mut body = vec![0_u8; content_length];
+    stream.read_exact(&mut body)?;
+    Ok(body)
 }
 
 struct BlockingOtlpTestCollector {
@@ -228,34 +233,20 @@ impl BlockingOtlpTestCollector {
             while !server_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        stream.set_nonblocking(false).unwrap();
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(10)))
-                            .unwrap();
-                        let mut request = Vec::new();
-                        let mut byte = [0_u8; 1];
-                        while !request.ends_with(b"\r\n\r\n") {
-                            stream.read_exact(&mut byte).unwrap();
-                            request.push(byte[0]);
+                        if stream.set_nonblocking(false).is_err()
+                            || stream
+                                .set_read_timeout(Some(Duration::from_secs(10)))
+                                .is_err()
+                        {
+                            continue;
                         }
-                        let headers = String::from_utf8_lossy(&request);
-                        let content_length = headers
-                            .lines()
-                            .find_map(|line| {
-                                line.split_once(':').and_then(|(name, value)| {
-                                    name.eq_ignore_ascii_case("content-length")
-                                        .then_some(value.trim())
-                                })
-                            })
-                            .unwrap()
-                            .parse::<usize>()
-                            .unwrap();
-                        let mut body = vec![0_u8; content_length];
-                        stream.read_exact(&mut body).unwrap();
+                        let Ok(body) = read_otlp_request(&mut stream) else {
+                            continue;
+                        };
                         server_requests.lock().unwrap().push(body);
 
                         if first_request.swap(false, Ordering::AcqRel) {
-                            first_request_sender.send(()).unwrap();
+                            let _ = first_request_sender.send(());
                             let (released, signal) = &*server_release;
                             let mut released = released.lock().unwrap();
                             while !*released {
@@ -263,12 +254,11 @@ impl BlockingOtlpTestCollector {
                             }
                         }
 
-                        stream
+                        let _ = stream
                             .write_all(
                                 b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                             )
-                            .unwrap();
-                        stream.flush().unwrap();
+                            .and_then(|_| stream.flush());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(1));
@@ -407,6 +397,12 @@ fn editor_schema_tracks_observability_config_types() {
             .expect("OTLP endpoint max_queue_size")
             .kind,
         EditorFieldKind::Integer
+    );
+    assert!(
+        otlp_endpoint_schema
+            .field("max_queue_size")
+            .expect("OTLP endpoint max_queue_size")
+            .optional
     );
     assert_eq!(
         default_opentelemetry_endpoint_editor_value(),
