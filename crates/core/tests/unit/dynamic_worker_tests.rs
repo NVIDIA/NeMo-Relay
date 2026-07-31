@@ -119,6 +119,22 @@ fn python_worker_launch_clears_host_python_environment() {
     }
 }
 
+#[cfg(not(unix))]
+#[test]
+fn empty_worker_endpoint_announcement_is_retried() {
+    let temp = tempfile::tempdir().unwrap();
+    let announcement = temp.path().join("worker-endpoint");
+    std::fs::write(&announcement, "").unwrap();
+
+    let endpoint = WorkerConnectEndpoint::Announced(announcement);
+    assert!(
+        resolve_worker_connect_endpoint(&endpoint)
+            .unwrap()
+            .is_none(),
+        "an empty announcement file is a transient publication state"
+    );
+}
+
 #[test]
 fn response_helpers_cover_error_and_unexpected_shapes() {
     enable_operational_logs();

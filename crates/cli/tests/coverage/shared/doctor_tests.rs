@@ -1123,6 +1123,128 @@ async fn collect_observability_registers_adaptive_before_validation() {
 }
 
 #[tokio::test]
+async fn collect_observability_reports_response_cache_on_when_configured() {
+    // The response cache is a section of the adaptive component; doctor should
+    // find it and report the in-memory backend reachable.
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "response_cache": {
+                            "ttl_seconds": 3600,
+                            "namespace": "doctor-test",
+                            "backend": { "kind": "in_memory" }
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Pass, "checks: {checks:?}");
+    assert!(
+        cache.details.contains("in_memory") && cache.details.contains("reachable"),
+        "details: {}",
+        cache.details
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn response_cache_backend_check_reports_timeout() {
+    let check = response_cache_backend_check(std::future::pending()).await;
+
+    assert_eq!(check.name, "Response cache");
+    assert_eq!(check.status, Status::Fail);
+    assert_eq!(
+        check.details,
+        "backend not reachable: probe timed out after 2s"
+    );
+}
+
+#[tokio::test]
+async fn response_cache_backend_check_preserves_backend_error() {
+    let check = response_cache_backend_check(async { Err("connection refused".to_string()) }).await;
+
+    assert_eq!(check.name, "Response cache");
+    assert_eq!(check.status, Status::Fail);
+    assert_eq!(check.details, "backend not reachable: connection refused");
+}
+
+#[tokio::test]
+async fn collect_observability_reports_response_cache_not_configured_without_section() {
+    // Adaptive present but no `response_cache` section -> reported as not configured.
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                { "kind": "adaptive", "enabled": true, "config": { "version": 1 } }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Info);
+    assert!(
+        cache.details.contains("not configured"),
+        "details: {}",
+        cache.details
+    );
+}
+
+#[tokio::test]
+async fn collect_observability_reports_response_cache_fail_when_config_invalid() {
+    // An invalid section (ttl_seconds = 0) must not be reported as a reachable
+    // "Pass" alongside the validation failure.
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": { "response_cache": { "ttl_seconds": 0 } }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Fail);
+    assert!(
+        cache.details.contains("config invalid"),
+        "details: {}",
+        cache.details
+    );
+    assert!(
+        !cache.details.contains("reachable"),
+        "must not claim reachable for an invalid config"
+    );
+}
+
+#[tokio::test]
 async fn collect_observability_registers_pii_redaction_before_validation() {
     let gateway = GatewayConfig {
         plugin_config: Some(serde_json::json!({

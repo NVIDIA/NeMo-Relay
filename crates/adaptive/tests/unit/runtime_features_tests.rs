@@ -964,6 +964,38 @@ async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_
     assert_subscriber_absent("partial_feature");
 }
 
+#[cfg(feature = "redis-backend")]
+#[tokio::test(flavor = "current_thread")]
+async fn response_cache_store_initialization_failure_fails_open() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut response_cache = ResponseCacheConfig {
+        namespace: "fail-open-test".into(),
+        ..ResponseCacheConfig::default()
+    };
+    response_cache.backend.kind = "redis".into();
+    response_cache
+        .backend
+        .config
+        .insert("url".into(), json!("redis://127.0.0.1:0/"));
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+        response_cache: Some(response_cache),
+        ..AdaptiveConfig::default()
+    })
+    .await
+    .unwrap();
+
+    runtime.register().await.unwrap();
+
+    assert!(runtime.registered);
+    assert!(
+        runtime.registrations.is_empty(),
+        "an unavailable optional cache must not install intercepts"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_shutdown_is_a_clean_noop_after_deregister() {
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())

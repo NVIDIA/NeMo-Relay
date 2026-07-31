@@ -303,4 +303,43 @@ describe('adaptive helpers', () => {
       },
     );
   });
+
+  it('keeps response-cache helpers camelCase and serializes plugin config', () => {
+    const responseCache = adaptive.responseCacheConfig();
+    assert.deepEqual(responseCache, {
+      ttlSeconds: 3600,
+      namespace: '',
+      priority: 50,
+      bypassRate: 0,
+      cacheNondeterministic: false,
+      keyStrategy: 'exact_request',
+      headerAllowlist: [],
+      backend: adaptive.inMemoryBackend(),
+    });
+    assert.deepEqual(adaptive.ComponentSpec({ version: 1, responseCache }).config, {
+      version: 1,
+      response_cache: {
+        ttl_seconds: 3600,
+        namespace: '',
+        priority: 50,
+        bypass_rate: 0,
+        cache_nondeterministic: false,
+        key_strategy: 'exact_request',
+        header_allowlist: [],
+        backend: adaptive.inMemoryBackend(),
+      },
+    });
+  });
+
+  it('serializes response-cache config at both native boundaries', () => {
+    const unscoped = adaptive.validateConfig({ version: 1, responseCache: {} });
+    assert.ok(unscoped.diagnostics.some(({ code }) => code === 'response_cache.missing_namespace'));
+
+    const config = {
+      version: 1,
+      responseCache: { ttlSeconds: 0, namespace: 'node-test' },
+    };
+    assert.equal(adaptive.validateConfig(config).diagnostics[0].code, 'response_cache.invalid_ttl');
+    assert.throws(() => new adaptive.AdaptiveRuntime(config), /ttl_seconds must be greater than 0/);
+  });
 });

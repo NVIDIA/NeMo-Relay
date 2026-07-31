@@ -23,6 +23,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 tdigest = { version = "0.2", features = ["use_serde"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 regex = "1"
 serde_json_canonicalizer = "0.3"
 sha2 = "0.11"
@@ -35,7 +36,6 @@ redis-backend = ["redis"]
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }
-tokio-stream = { version = "0.1", default-features = false }
 
 [[test]]
 name = "redis_integration"
@@ -48,3 +48,11 @@ path = "tests/integration/runtime_integration_tests.rs"
 [[test]]
 name = "acg_module_surface"
 path = "tests/integration/acg_module_surface_tests.rs"
+
+[[test]]
+name = "response_cache_integration"
+path = "tests/integration/response_cache_tests.rs"
+
+[[test]]
+name = "response_cache_benchmark_integration"
+path = "tests/integration/response_cache_benchmark_tests.rs"

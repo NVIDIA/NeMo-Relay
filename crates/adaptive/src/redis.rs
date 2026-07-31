@@ -31,6 +31,57 @@ use crate::trie::serialization::TrieEnvelope;
 use crate::types::plan::ExecutionPlan;
 use crate::types::records::RunRecord;
 
+/// Connect to Redis, returning the client and an auto-reconnecting
+/// [`ConnectionManager`].
+///
+/// # Errors
+///
+/// Returns [`AdaptiveError::Storage`] if the client cannot be created or the
+/// connection cannot be established.
+pub(crate) async fn connect(url: &str) -> Result<(Client, ConnectionManager)> {
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_access_pending",
+        plugin_kind = "adaptive",
+        resource_kind = "redis",
+        permission = "connect";
+        "Plugin Redis connectivity validation started"
+    );
+    let client = redis::Client::open(url).map_err(|e| {
+        log::warn!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_failed",
+            plugin_kind = "adaptive",
+            resource_kind = "redis",
+            permission = "connect",
+            reason = "client_configuration";
+            "Plugin resource access validation failed"
+        );
+        AdaptiveError::Storage(format!("redis client: {e}"))
+    })?;
+    let conn = client.get_connection_manager().await.map_err(|e| {
+        log::warn!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_failed",
+            plugin_kind = "adaptive",
+            resource_kind = "redis",
+            permission = "connect",
+            reason = "connection_failed";
+            "Plugin resource access validation failed"
+        );
+        AdaptiveError::Storage(format!("redis connection: {e}"))
+    })?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_connected",
+        plugin_kind = "adaptive",
+        resource_kind = "redis",
+        permission = "connect";
+        "Plugin Redis connectivity established"
+    );
+    Ok((client, conn))
+}
+
 /// A Redis-backed storage backend for cross-process shared state.
 ///
 /// Uses [`ConnectionManager`] which is `Clone` (internally `Arc`-based) and
@@ -55,46 +106,7 @@ impl RedisBackend {
     /// Returns [`AdaptiveError::Storage`] if the client cannot be created or the
     /// connection cannot be established.
     pub async fn new(url: &str, key_prefix: impl Into<String>) -> Result<Self> {
-        log::info!(
-            target: "nemo_relay.plugin",
-            event = "plugin_resource_access_pending",
-            plugin_kind = "adaptive",
-            resource_kind = "redis",
-            permission = "connect";
-            "Plugin Redis connectivity validation started"
-        );
-        let client = redis::Client::open(url).map_err(|e| {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                event = "plugin_resource_access_failed",
-                plugin_kind = "adaptive",
-                resource_kind = "redis",
-                permission = "connect",
-                reason = "client_configuration";
-                "Plugin resource access validation failed"
-            );
-            AdaptiveError::Storage(format!("redis client: {e}"))
-        })?;
-        let conn = client.get_connection_manager().await.map_err(|e| {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                event = "plugin_resource_access_failed",
-                plugin_kind = "adaptive",
-                resource_kind = "redis",
-                permission = "connect",
-                reason = "connection_failed";
-                "Plugin resource access validation failed"
-            );
-            AdaptiveError::Storage(format!("redis connection: {e}"))
-        })?;
-        log::info!(
-            target: "nemo_relay.plugin",
-            event = "plugin_resource_connected",
-            plugin_kind = "adaptive",
-            resource_kind = "redis",
-            permission = "connect";
-            "Plugin Redis connectivity established"
-        );
+        let (client, conn) = connect(url).await?;
         Ok(Self {
             client,
             conn,

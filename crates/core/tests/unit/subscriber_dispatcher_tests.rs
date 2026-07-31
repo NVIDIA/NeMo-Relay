@@ -10,7 +10,7 @@ use super::{EventSubscriberFn, publication_context};
 use crate::api::registry::RegistryRecord;
 use crate::api::runtime::EventSanitizeFn;
 use crate::api::runtime::scope_stack::current_scope_stack;
-use std::sync::{Arc, Barrier, Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
 #[test]
 fn flush_waits_for_active_but_not_later_publication_barriers() {
@@ -363,8 +363,9 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
     flush_subscribers().unwrap();
     let sender = dispatcher_sender().expect("dispatcher sender");
     let delivered = Arc::new(Mutex::new(Vec::new()));
-    let outer_started = Arc::new(Barrier::new(2));
-    let release_outer = Arc::new(Barrier::new(2));
+    let (outer_started_tx, outer_started_rx) = mpsc::channel();
+    let (release_outer_tx, release_outer_rx) = mpsc::channel();
+    let release_outer_rx = Arc::new(Mutex::new(release_outer_rx));
     let event = |uuid: &str, name: &str| {
         serde_json::from_value(serde_json::json!({
             "kind": "mark",
@@ -416,15 +417,20 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
     let outer_subscriber: EventSubscriberFn = {
         let delivered = Arc::clone(&delivered);
         let child_subscriber = child_subscriber.clone();
-        let outer_started = Arc::clone(&outer_started);
-        let release_outer = Arc::clone(&release_outer);
+        let release_outer_rx = Arc::clone(&release_outer_rx);
         Arc::new(move |event| {
             delivered
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(event.name().to_string());
-            outer_started.wait();
-            release_outer.wait();
+            outer_started_tx
+                .send(())
+                .expect("outer subscriber start receiver was dropped");
+            release_outer_rx
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("outer subscriber was not released within 2 seconds");
             assert!(enqueue_dispatch_message(DispatcherMessage::Deliver {
                 event: Box::new(
                     serde_json::from_value(serde_json::json!({
@@ -466,7 +472,9 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             lineage: None,
         })
         .unwrap();
-    outer_started.wait();
+    outer_started_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("outer subscriber did not start within 2 seconds");
     sender
         .send(DispatcherMessage::Deliver {
             event: Box::new(event("019c1df6-4a57-7000-8000-000000000011", "later")),
@@ -478,7 +486,9 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             lineage: None,
         })
         .unwrap();
-    release_outer.wait();
+    release_outer_tx
+        .send(())
+        .expect("outer subscriber release receiver was dropped");
 
     flush_subscribers().unwrap();
     assert_eq!(

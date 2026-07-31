@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Stable classification for an upstream provider failure captured by retry-aware dispatch.
+/// Stable classification for a failure from an upstream provider attempt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamFailureClass {
@@ -34,7 +34,7 @@ pub enum UpstreamFailureClass {
     Other,
 }
 
-/// Structured provider failure surfaced only for explicitly retry-aware dispatches.
+/// Structured failure returned by one upstream provider attempt.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpstreamFailure {
     /// HTTP status when a provider response was received.

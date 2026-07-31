@@ -17,8 +17,10 @@ use http_body_util::BodyExt;
 use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::registry::{
-    deregister_llm_request_intercept, deregister_tool_conditional_execution_guardrail,
-    register_llm_request_intercept, register_tool_conditional_execution_guardrail,
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_stream_execution_intercept, deregister_tool_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
@@ -28,7 +30,7 @@ use nemo_relay::plugin::{
 };
 use serde_json::{Map, Value, json};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
@@ -97,6 +99,22 @@ struct ToolGuardrailCleanup(&'static str);
 impl Drop for ToolGuardrailCleanup {
     fn drop(&mut self) {
         let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
+
+struct LlmExecutionInterceptCleanup(&'static str);
+
+impl Drop for LlmExecutionInterceptCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_llm_execution_intercept(self.0);
+    }
+}
+
+struct LlmStreamExecutionInterceptCleanup(&'static str);
+
+impl Drop for LlmStreamExecutionInterceptCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_llm_stream_execution_intercept(self.0);
     }
 }
 
@@ -2098,6 +2116,50 @@ async fn static_only_cli_configuration_keeps_the_legacy_lifecycle() {
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
 }
 
+#[cfg(feature = "switchyard")]
+#[test]
+fn switchyard_must_run_before_response_cache() {
+    let build = |switchyard_priority, cache_priority| {
+        let switchyard = nemo_relay_switchyard::SwitchyardConfig {
+            priority: switchyard_priority,
+            ..nemo_relay_switchyard::SwitchyardConfig::default()
+        };
+        let adaptive = nemo_relay_adaptive::AdaptiveConfig {
+            response_cache: Some(nemo_relay_adaptive::ResponseCacheConfig {
+                namespace: "switchyard-order-test".into(),
+                priority: cache_priority,
+                ..nemo_relay_adaptive::ResponseCacheConfig::default()
+            }),
+            ..nemo_relay_adaptive::AdaptiveConfig::default()
+        };
+        PluginConfig {
+            components: vec![
+                switchyard.into(),
+                nemo_relay_adaptive::plugin_component::ComponentSpec::new(adaptive).into(),
+            ],
+            ..PluginConfig::default()
+        }
+    };
+
+    assert!(validate_switchyard_response_cache_order(&build(0, 50)).is_ok());
+    for (switchyard_priority, cache_priority) in [(50, 50), (51, 50)] {
+        let error =
+            validate_switchyard_response_cache_order(&build(switchyard_priority, cache_priority))
+                .unwrap_err();
+        assert!(
+            error.contains("must be lower"),
+            "unexpected ordering error: {error}"
+        );
+    }
+
+    let mut disabled = build(50, 50);
+    disabled.components[0].enabled = false;
+    assert!(
+        validate_switchyard_response_cache_order(&disabled).is_ok(),
+        "disabled Switchyard components do not participate in ordering"
+    );
+}
+
 #[tokio::test]
 async fn serve_listener_activates_adaptive_plugin_config() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -2974,10 +3036,16 @@ async fn gateway_preserves_streaming_provider_error_response() {
         response.headers().get(header::CONTENT_TYPE).unwrap(),
         "application/json"
     );
-    assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "7");
     assert_eq!(
-        response.into_body().collect().await.unwrap().to_bytes(),
-        r#"{"error":{"type":"rate_limit_error"}}"#
+        response.headers().get(header::RETRY_AFTER).unwrap(),
+        "7",
+        "the provider retry hint must reach the client"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        body.as_ref(),
+        br#"{"error":{"type":"rate_limit_error"}}"#,
+        "the provider error body must reach the client unchanged"
     );
     handle.abort();
 }
@@ -3029,9 +3097,29 @@ async fn gateway_rejects_unsupported_paths() {
 }
 
 #[tokio::test]
-async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
+async fn gateway_upstream_transport_error_url_is_opaque_in_events() {
+    const SECRET_USERNAME: &str = "secret-upstream-user";
+    const MODEL: &str = "gpt-opaque-transport-error-test";
+    let subscriber_name = "server-gateway-opaque-transport-error-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_events = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = captured_events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && event.name() == "openai.chat_completions"
+                && event.model_name() == Some(MODEL)
+            {
+                captured.lock().unwrap().push(event.to_json_value());
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
     let mut config = test_config();
-    config.openai_base_url = "http://127.0.0.1:1".into();
+    config.openai_base_url = format!("http://{SECRET_USERNAME}:password@127.0.0.1:1");
     let app = router(config);
     let response = app
         .oneshot(
@@ -3041,7 +3129,7 @@ async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "model": "gpt-test",
+                        "model": MODEL,
                         "messages": [{ "role": "user", "content": "hello" }]
                     })
                     .to_string(),
@@ -3052,6 +3140,22 @@ async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    flush_subscribers().unwrap();
+
+    let events = captured_events.lock().unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    assert!(
+        !event.to_string().contains(SECRET_USERNAME),
+        "upstream credentials leaked into the event: {event}"
+    );
+    let description = event["metadata"]["otel.status_description"]
+        .as_str()
+        .expect("failed call should have an error status description");
+    let token = description
+        .strip_prefix("internal error: nemo-relay-gateway-upstream-attempt:")
+        .expect("event status should contain only the captured failure token");
+    assert!(uuid::Uuid::parse_str(token).is_ok(), "{description}");
 }
 
 #[tokio::test]
@@ -3661,4 +3765,838 @@ async fn spawn_anthropic_upstream() -> TestServer {
         url: format!("http://{address}"),
         handle,
     }
+}
+
+/// Spawns a minimal mock upstream that counts calls and returns a fixed
+/// (status, content-type, body) for every POST. Returns its base URL and the
+/// call counter.
+async fn spawn_mock_upstream(
+    status: StatusCode,
+    content_type: &'static str,
+    body: &'static str,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use axum::routing::any;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    let app = axum::Router::new().route(
+        "/{*path}",
+        any(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                axum::response::Response::builder()
+                    .status(status)
+                    .header(http::header::CONTENT_TYPE, content_type)
+                    .header("x-upstream-marker", "mock")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{address}"), calls)
+}
+
+fn concurrent_selected_chat_response() -> Value {
+    json!({
+        "id": "chatcmpl-selected",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "selected attempt"
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12
+        }
+    })
+}
+
+const CONCURRENT_SELECTED_CHAT_SSE: &str = concat!(
+    "data: {\"id\":\"chatcmpl-selected\",\"object\":\"chat.completion.chunk\",",
+    "\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,",
+    "\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl-selected\",\"object\":\"chat.completion.chunk\",",
+    "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"selected attempt\"},",
+    "\"finish_reason\":null}]}\n\n",
+    "data: {\"id\":\"chatcmpl-selected\",\"object\":\"chat.completion.chunk\",",
+    "\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: [DONE]\n\n",
+);
+
+const CONCURRENT_LOSING_CHAT_SSE: &str =
+    "data: {\"losing\":\"attempt metadata must not escape\"}\n\ndata: [DONE]\n\n";
+
+async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> TestServer {
+    async fn provider(State(release_losing): State<Arc<Semaphore>>, body: Bytes) -> Response {
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        let attempt = request["attempt"].as_str().unwrap();
+        let streaming = request["stream"].as_bool().unwrap_or(false);
+        let both_fail = request["both_fail"].as_bool().unwrap_or(false);
+        if attempt == "losing" {
+            release_losing.acquire().await.unwrap().forget();
+        }
+
+        let (status, content_type, body) = match (attempt, streaming, both_fail) {
+            ("selected", false, true) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "application/vnd.selected-error+json",
+                r#"{"error":"selected buffered failure"}"#.to_string(),
+            ),
+            ("losing", false, true) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "application/vnd.losing-error+json",
+                r#"{"error":"losing buffered failure"}"#.to_string(),
+            ),
+            ("selected", true, true) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "application/vnd.selected-stream-error+json",
+                r#"{"error":"selected streaming failure"}"#.to_string(),
+            ),
+            ("losing", true, true) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "application/vnd.losing-stream-error+json",
+                r#"{"error":"losing streaming failure"}"#.to_string(),
+            ),
+            ("selected", false, false) => (
+                StatusCode::CREATED,
+                "application/vnd.selected+json",
+                serde_json::to_string_pretty(&concurrent_selected_chat_response()).unwrap(),
+            ),
+            ("losing", false, false) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "application/x-losing-json",
+                format!(" \n{}\n ", concurrent_selected_chat_response()),
+            ),
+            ("selected", true, false) => (
+                StatusCode::CREATED,
+                "application/vnd.selected.event-stream",
+                CONCURRENT_SELECTED_CHAT_SSE.to_string(),
+            ),
+            ("losing", true, false) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "application/x-losing-event-stream",
+                CONCURRENT_LOSING_CHAT_SSE.to_string(),
+            ),
+            _ => panic!("unexpected concurrent attempt {attempt:?}"),
+        };
+
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, content_type)
+            .header("x-upstream-attempt", attempt)
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    let app = Router::new()
+        .route("/v1/chat/completions", post(provider))
+        .with_state(release_losing);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    TestServer {
+        url: format!("http://{address}"),
+        handle,
+    }
+}
+
+#[tokio::test]
+async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-next";
+    const MARKER: &str = "select the successful concurrent buffered attempt";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                let mut selected = next(selected_request);
+                let mut losing = next(losing_request);
+                let selected_result = tokio::select! {
+                    biased;
+                    _ = &mut losing => {
+                        panic!("losing attempt completed before release");
+                    }
+                    selected_result = &mut selected => selected_result,
+                };
+
+                release_losing.add_permits(1);
+                let losing_result = losing.await;
+                assert!(
+                    losing_result.is_err(),
+                    "the deliberately failed losing attempt unexpectedly succeeded"
+                );
+                selected_result
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    assert!(
+        response.headers().get("x-upstream-attempt").is_none(),
+        "managed success must not inherit metadata from an arbitrary upstream attempt"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        body.as_ref(),
+        concurrent_selected_chat_response().to_string().as_bytes(),
+        "managed success must serialize the selected final JSON, not losing raw bytes"
+    );
+}
+
+#[tokio::test]
+async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-next";
+    const MARKER: &str = "select the successful concurrent streaming attempt";
+    let _ = deregister_llm_stream_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmStreamExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                let mut selected = next(selected_request);
+                let mut losing = next(losing_request);
+                let selected_result = tokio::select! {
+                    biased;
+                    _ = &mut losing => {
+                        panic!("losing attempt completed before release");
+                    }
+                    selected_result = &mut selected => selected_result,
+                };
+
+                release_losing.add_permits(1);
+                drop(losing.await);
+                selected_result
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}],
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert!(
+        response.headers().get("x-upstream-attempt").is_none(),
+        "managed stream success must not inherit metadata from an arbitrary upstream attempt"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert!(body.contains("selected attempt"), "{body}");
+    assert!(!body.contains("losing attempt"), "{body}");
+}
+
+#[tokio::test]
+async fn gateway_concurrent_next_relays_selected_buffered_failure() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-failures";
+    const MARKER: &str = "select one concurrent buffered failure";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                selected_request.content["both_fail"] = json!(true);
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["both_fail"] = json!(true);
+                let mut selected = next(selected_request);
+                let mut losing = next(losing_request);
+                let selected_result = tokio::select! {
+                    biased;
+                    _ = &mut losing => {
+                        panic!("losing attempt completed before release");
+                    }
+                    selected_result = &mut selected => selected_result,
+                };
+
+                release_losing.add_permits(1);
+                assert!(losing.await.is_err());
+                selected_result
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/vnd.selected-error+json"
+    );
+    assert_eq!(
+        response.headers().get("x-upstream-attempt").unwrap(),
+        "selected"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.as_ref(), br#"{"error":"selected buffered failure"}"#);
+}
+
+#[tokio::test]
+async fn gateway_concurrent_next_relays_selected_streaming_failure() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-failures";
+    const MARKER: &str = "select one concurrent streaming failure";
+    let _ = deregister_llm_stream_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmStreamExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                selected_request.content["both_fail"] = json!(true);
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["both_fail"] = json!(true);
+                let mut selected = next(selected_request);
+                let mut losing = next(losing_request);
+                let selected_result = tokio::select! {
+                    biased;
+                    _ = &mut losing => {
+                        panic!("losing attempt completed before release");
+                    }
+                    selected_result = &mut selected => selected_result,
+                };
+
+                release_losing.add_permits(1);
+                assert!(losing.await.is_err());
+                selected_result
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}],
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/vnd.selected-stream-error+json"
+    );
+    assert_eq!(
+        response.headers().get("x-upstream-attempt").unwrap(),
+        "selected"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.as_ref(), br#"{"error":"selected streaming failure"}"#);
+}
+
+/// Gateway config wired to `upstream` with the response cache enabled.
+fn cache_gateway_config(upstream: &str) -> GatewayConfig {
+    let mut config = test_config();
+    config.openai_base_url = upstream.into();
+    config.anthropic_base_url = upstream.into();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [{
+            "kind": "adaptive",
+            "enabled": true,
+            "config": {"response_cache": {
+                "ttl_seconds": 3600,
+                "bypass_rate": 0.0,
+                "namespace": "gateway-test",
+                "backend": {"kind": "in_memory"}
+            }}
+        }]
+    }));
+    config
+}
+
+const MOCK_CHAT_BODY: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"The answer is 42."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}"#;
+
+#[tokio::test]
+async fn gateway_serves_cached_hit_with_full_body_and_json_content_type() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let (upstream, upstream_calls) =
+        spawn_mock_upstream(StatusCode::OK, "application/json", MOCK_CHAT_BODY).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "What is the answer?"}],
+        "temperature": 0.0
+    });
+    let first = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body: Value = first.json().await.unwrap();
+
+    let second = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        second
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json"),
+        "a cached hit must still declare its JSON content type"
+    );
+    let second_body: Value = second.json().await.unwrap();
+
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the repeat must be served from cache, not the upstream"
+    );
+    assert_eq!(
+        second_body, first_body,
+        "the cached body must be byte-equivalent to the live one"
+    );
+    assert_eq!(
+        second_body["choices"][0]["message"]["content"],
+        json!("The answer is 42.")
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+#[tokio::test]
+async fn gateway_preserves_non_2xx_upstream_failure_and_never_caches_it() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    // A 503 whose body has NO top-level `error` key — the shape the
+    // response-body error check alone would not catch; only the status gate
+    // keeps it out of the cache.
+    let (upstream, upstream_calls) = spawn_mock_upstream(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "application/json",
+        r#"{"message":"service temporarily unavailable"}"#,
+    )
+    .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    for _ in 0..2 {
+        let response = client
+            .post(format!("{url}/v1/chat/completions"))
+            .json(&request_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the typed provider failure must preserve the upstream status"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-upstream-marker")
+                .and_then(|value| value.to_str().ok()),
+            Some("mock"),
+            "ordinary upstream failure headers must reach the client"
+        );
+        assert_eq!(
+            response.text().await.unwrap(),
+            r#"{"message":"service temporarily unavailable"}"#,
+            "ordinary upstream failure bodies must reach the client unchanged"
+        );
+    }
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "an upstream failure must never be cached"
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+#[tokio::test]
+async fn gateway_preserves_2xx_non_json_and_never_caches_it() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let (upstream, upstream_calls) = spawn_mock_upstream(
+        StatusCode::OK,
+        "text/plain",
+        "provider returned malformed JSON",
+    )
+    .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+        "temperature": 0.0
+    });
+    for _ in 0..2 {
+        let response = client
+            .post(format!("{url}/v1/chat/completions"))
+            .json(&request_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "an ordinary upstream response keeps its provider status"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain"),
+            "an ordinary upstream response keeps its content type"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-upstream-marker")
+                .and_then(|value| value.to_str().ok()),
+            Some("mock"),
+            "an ordinary upstream response keeps its provider headers"
+        );
+        assert_eq!(
+            response.text().await.unwrap(),
+            "provider returned malformed JSON",
+            "an undecodable provider body must reach the client unchanged"
+        );
+    }
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "an unparseable upstream response must never be cached"
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+#[tokio::test]
+async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_body() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-post-upstream-reject";
+    const MARKER: &str = "cli-test reject the response after upstream success";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(|_name, request, next| {
+            Box::pin(async move {
+                let marked = request.content["messages"][0]["content"].as_str() == Some(MARKER);
+                let response = next(request).await?;
+                if marked {
+                    return Err(nemo_relay::error::FlowError::Internal(
+                        "response rejected by policy".to_string(),
+                    ));
+                }
+                Ok(response)
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+
+    let (upstream, upstream_calls) =
+        spawn_mock_upstream(StatusCode::OK, "application/json", MOCK_CHAT_BODY).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let response = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": MARKER}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the intercept must reject only after a completed upstream exchange"
+    );
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "a rejection after upstream success must surface as the translated \
+         runtime error, not a relay of the upstream body"
+    );
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+const MOCK_CHAT_SSE: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer is 42.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+
+#[tokio::test]
+async fn gateway_streaming_hit_carries_event_stream_content_type() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let (upstream, upstream_calls) =
+        spawn_mock_upstream(StatusCode::OK, "text/event-stream", MOCK_CHAT_SSE).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "stream it"}],
+        "temperature": 0.0,
+        "stream": true
+    });
+    let first = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let _ = first.text().await.unwrap(); // drain so the tee stores the aggregate
+
+    let second = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        second
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream"),
+        "a replayed stream must declare the SSE content type"
+    );
+    let replayed = second.text().await.unwrap();
+    assert!(
+        replayed.contains("The answer is 42."),
+        "the replay must carry the stored answer: {replayed}"
+    );
+    assert!(
+        replayed.trim_end().ends_with("data: [DONE]"),
+        "a chat replay must terminate the SSE stream: {replayed}"
+    );
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the streaming repeat must be served from cache"
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 }

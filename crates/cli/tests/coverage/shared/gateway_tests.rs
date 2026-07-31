@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::IntoResponse;
 use http_body_util::BodyExt;
 use reqwest::Client;
-use serde_json::Map;
+use serde_json::{Map, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn test_http_client() -> Client {
@@ -646,6 +646,10 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
         INTERNAL_RETRY_AWARE_HEADER,
         HeaderValue::from_static("true"),
     );
+    original_headers.insert(
+        INTERNAL_DISPATCH_BACKEND_HEADER,
+        HeaderValue::from_static("attacker-backend"),
+    );
     let request = LlmRequest {
         headers: Map::from_iter([
             (
@@ -655,6 +659,10 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
             (
                 INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
                 json!("openai_responses"),
+            ),
+            (
+                INTERNAL_DISPATCH_BACKEND_HEADER.to_string(),
+                json!("selected-backend"),
             ),
             (INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true")),
             ("x-backend".to_string(), json!("selected")),
@@ -682,6 +690,12 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
         effective
             .headers
             .get(INTERNAL_DISPATCH_ROUTE_HEADER)
+            .is_none()
+    );
+    assert!(
+        effective
+            .headers
+            .get(INTERNAL_DISPATCH_BACKEND_HEADER)
             .is_none()
     );
     assert!(effective.headers.get(INTERNAL_RETRY_AWARE_HEADER).is_none());
@@ -1037,18 +1051,15 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
             allow_environment_provider_auth: false,
         },
     };
-    let upstream_info = Arc::new(Mutex::new(None));
-    let upstream_error = Arc::new(Mutex::new(None));
-    let upstream_passthrough = Arc::new(Mutex::new(None));
     let func = build_streaming_func(
         state,
         &prepared,
-        upstream_info.clone(),
-        upstream_error.clone(),
-        upstream_passthrough.clone(),
+        Arc::new(CapturedUpstreamFailures::default()),
     );
+    let mut request_headers = Map::new();
+    request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
     let request = LlmRequest {
-        headers: Map::new(),
+        headers: request_headers,
         content: json!({}),
     };
 
@@ -1056,17 +1067,17 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
         Ok(_) => panic!("expected the provider error to terminate managed streaming"),
         Err(error) => error,
     };
-    assert!(matches!(error, FlowError::Internal(_)));
-    assert!(upstream_info.lock().unwrap().is_none());
-    assert!(upstream_error.lock().unwrap().is_none());
-    let (status, headers, body) = upstream_passthrough.lock().unwrap().take().unwrap();
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure, got {error:?}");
+    };
+    assert_eq!(failure.status, Some(429));
+    assert_eq!(failure.class, UpstreamFailureClass::RetryableStatus);
     assert_eq!(
-        headers.get(header::CONTENT_TYPE).unwrap(),
-        "application/json"
+        failure.headers.get("content-type"),
+        Some(&"application/json".to_string())
     );
-    assert_eq!(headers.get(header::RETRY_AFTER).unwrap(), "7");
-    assert_eq!(body, error_body);
+    assert_eq!(failure.headers.get("retry-after"), Some(&"7".to_string()));
+    assert_eq!(failure.body, error_body);
 
     let mut stream = func(request).await.unwrap();
     assert_eq!(
@@ -1074,72 +1085,11 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
         json!({"type": "message_stop"})
     );
     assert!(stream.next().await.is_none());
-    assert_eq!(
-        upstream_info.lock().unwrap().as_ref().unwrap().0,
-        StatusCode::OK
-    );
     server.await.unwrap();
 }
 
 #[tokio::test]
-async fn retry_aware_streaming_provider_error_stays_structured() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut request = [0_u8; 1024];
-        let _ = socket.read(&mut request).await.unwrap();
-        socket
-            .write_all(
-                b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-    });
-
-    let state = AppState::new(GatewayConfig::default());
-    let prepared = PreparedGatewayRequest {
-        method: Method::POST,
-        headers: HeaderMap::new(),
-        path: "/v1/messages".into(),
-        provider: ProviderRoute::AnthropicMessages,
-        upstream_url: format!("http://{address}/v1/messages"),
-        body_bytes: Bytes::from_static(b"{}"),
-        request_json: json!({}),
-        streaming: true,
-        authorization: crate::provider_auth::ProviderRequestAuthorization {
-            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
-            allow_environment_provider_auth: false,
-        },
-    };
-    let upstream_passthrough = Arc::new(Mutex::new(None));
-    let func = build_streaming_func(
-        state,
-        &prepared,
-        Arc::new(Mutex::new(None)),
-        Arc::new(Mutex::new(None)),
-        upstream_passthrough.clone(),
-    );
-    let request = LlmRequest {
-        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"))]),
-        content: json!({}),
-    };
-
-    let error = match func(request).await {
-        Ok(_) => panic!("expected a structured provider failure"),
-        Err(error) => error,
-    };
-    let FlowError::Upstream(failure) = error else {
-        panic!("expected structured upstream failure, got {error:?}");
-    };
-    assert_eq!(failure.status, Some(429));
-    assert_eq!(failure.class, UpstreamFailureClass::RetryableStatus);
-    assert!(upstream_passthrough.lock().unwrap().is_none());
-    server.await.unwrap();
-}
-
-#[tokio::test]
-async fn retry_aware_buffered_body_read_failure_stays_structured() {
+async fn buffered_body_read_failure_stays_structured() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1170,18 +1120,15 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
             allow_environment_provider_auth: false,
         },
     };
-    let upstream_info = Arc::new(Mutex::new(None));
-    let upstream_error = Arc::new(Mutex::new(None));
-    let response_bytes = Arc::new(Mutex::new(None));
     let func = build_buffered_func(
         state,
         &prepared,
-        upstream_info,
-        upstream_error.clone(),
-        response_bytes,
+        Arc::new(CapturedUpstreamFailures::default()),
     );
+    let mut request_headers = Map::new();
+    request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
     let error = func(LlmRequest {
-        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
+        headers: request_headers,
         content: json!({}),
     })
     .await
@@ -1191,12 +1138,11 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
         panic!("expected structured upstream failure, got {error:?}");
     };
     assert_eq!(failure.class, UpstreamFailureClass::Connection);
-    assert!(upstream_error.lock().unwrap().is_none());
     server.await.unwrap();
 }
 
 #[tokio::test]
-async fn retry_aware_buffered_invalid_json_stays_structured() {
+async fn buffered_invalid_json_becomes_safe_upstream_failure() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1226,18 +1172,15 @@ async fn retry_aware_buffered_invalid_json_stays_structured() {
             allow_environment_provider_auth: false,
         },
     };
-    let upstream_info = Arc::new(Mutex::new(None));
-    let upstream_error = Arc::new(Mutex::new(None));
-    let response_bytes = Arc::new(Mutex::new(None));
     let func = build_buffered_func(
         state,
         &prepared,
-        upstream_info,
-        upstream_error.clone(),
-        response_bytes,
+        Arc::new(CapturedUpstreamFailures::default()),
     );
+    let mut request_headers = Map::new();
+    request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
     let error = func(LlmRequest {
-        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
+        headers: request_headers,
         content: json!({}),
     })
     .await
@@ -1246,14 +1189,16 @@ async fn retry_aware_buffered_invalid_json_stays_structured() {
     let FlowError::Upstream(failure) = error else {
         panic!("expected structured upstream failure, got {error:?}");
     };
-    assert_eq!(failure.status, Some(200));
+    assert_eq!(failure.status, None);
     assert_eq!(failure.class, UpstreamFailureClass::Other);
-    assert_eq!(failure.body, "{invalid-provider-json");
+    assert_eq!(
+        failure.body,
+        "upstream returned a non-JSON success response"
+    );
     assert_eq!(
         failure.headers.get("x-request-id"),
         Some(&"provider-request".to_string())
     );
-    assert!(upstream_error.lock().unwrap().is_none());
     server.await.unwrap();
 }
 
