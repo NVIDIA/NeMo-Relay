@@ -154,7 +154,7 @@ export interface TypedLlmExecuteOptions {
 export declare function typedToolExecute<TArgs, TResult>(
   name: string,
   args: TArgs,
-  func: (args: TArgs) => TResult | Promise<TResult>,
+  func: (args: TArgs, signal: AbortSignal) => TResult | Promise<TResult>,
   argsCodec: Codec<TArgs>,
   resultCodec: Codec<TResult>,
   options?: TypedToolExecuteOptions,
@@ -179,7 +179,7 @@ export declare function typedToolExecute<TArgs, TResult>(
 export declare function typedLlmExecute<TRequest extends LlmRequestShape, TResponse>(
   name: string,
   request: TRequest,
-  func: (request: TRequest) => TResponse | Promise<TResponse>,
+  func: (request: TRequest, signal: AbortSignal) => TResponse | Promise<TResponse>,
   responseCodec: Codec<TResponse>,
   options?: TypedLlmExecuteOptions,
 ): Promise<TResponse>;

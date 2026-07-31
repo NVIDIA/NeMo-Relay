@@ -10,8 +10,11 @@
 
 #![allow(clippy::await_holding_lock)]
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 mod test_support;
 use test_support::{ready, ready_result};
@@ -52,7 +55,8 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner, TASK_SCOPE_STACK,
+    ToolExecutionNextFn, capture_propagation_context, task_scope_top,
 };
 use nemo_relay::api::runtime::{create_scope_stack, current_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeHandle, ScopeType, event};
@@ -77,6 +81,33 @@ use serde_json::json;
 
 // All tests share the global context, so we serialize them.
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+struct CloseCallsStreamNext {
+    next: Option<LlmStreamExecutionNextFn>,
+    request: Option<LlmRequest>,
+}
+
+impl futures::Stream for CloseCallsStreamNext {
+    type Item = Result<Json, FlowError>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Pending
+    }
+}
+
+impl LlmStreamInner for CloseCallsStreamNext {
+    fn close(
+        self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FlowError>> + Send + '_>> {
+        Box::pin(async move {
+            let this = self.get_mut();
+            let next = this.next.take().expect("close must run only once");
+            let request = this.request.take().expect("close must run only once");
+            let mut downstream = next(request).await?;
+            downstream.close().await
+        })
+    }
+}
 
 fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCategory) -> bool {
     event.scope_type() == Some(scope_type) && event.scope_category() == Some(scope_category)
@@ -1288,11 +1319,38 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
         )
         .unwrap();
 
+    let provider_barrier = Arc::new(tokio::sync::Barrier::new(2));
     tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool-concurrent-next")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(move |args| {
+                let provider_barrier = Arc::clone(&provider_barrier);
+                Box::pin(async move {
+                    let branch = args["branch"].as_str().unwrap();
+                    let scope_name = if branch == "first" {
+                        "tool-concurrent-next-first"
+                    } else {
+                        "tool-concurrent-next-second"
+                    };
+                    let scope = push_scope(
+                        nemo_relay::api::scope::PushScopeParams::builder()
+                            .name(scope_name)
+                            .scope_type(ScopeType::Tool)
+                            .build(),
+                    )?;
+                    provider_barrier.wait().await;
+                    if branch == "first" {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    pop_scope(
+                        nemo_relay::api::scope::PopScopeParams::builder()
+                            .handle_uuid(&scope.uuid)
+                            .build(),
+                    )?;
+                    Ok(args)
+                })
+            }))
             .build(),
     )
     .await
@@ -1319,6 +1377,532 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
     let mut registrations = plugin_ctx.into_registrations();
     rollback_registrations(&mut registrations);
     deregister_subscriber("tool_concurrent_next_observer").unwrap();
+}
+
+#[tokio::test]
+async fn execution_next_is_revoked_after_each_interceptor_settles() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let tool_next = Arc::new(Mutex::new(None::<ToolExecutionNextFn>));
+    let captured_tool_next = Arc::clone(&tool_next);
+    register_tool_execution_intercept(
+        "late_tool_next",
+        1,
+        Arc::new(move |_name, _args, next| {
+            *captured_tool_next.lock().unwrap() = Some(next);
+            Box::pin(async {
+                Ok(ToolExecutionInterceptOutcome::new(
+                    json!({"source": "tool-intercept"}),
+                ))
+            })
+        }),
+    )
+    .unwrap();
+    let tool_provider_calls = Arc::new(AtomicU32::new(0));
+    let captured_tool_provider_calls = Arc::clone(&tool_provider_calls);
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("late-tool-next")
+            .args(json!({}))
+            .func(Arc::new(move |args| {
+                captured_tool_provider_calls.fetch_add(1, Ordering::AcqRel);
+                ready_result(Ok(args))
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"source": "tool-intercept"}));
+    let late_tool_next = tool_next.lock().unwrap().take().unwrap();
+    let error = late_tool_next(json!({"late": true})).await.unwrap_err();
+    assert!(matches!(
+        error,
+        FlowError::InvalidArgument(message)
+            if message == "execution continuation is no longer active"
+    ));
+    assert_eq!(tool_provider_calls.load(Ordering::Acquire), 0);
+    deregister_tool_execution_intercept("late_tool_next").unwrap();
+
+    let llm_next = Arc::new(Mutex::new(None::<LlmExecutionNextFn>));
+    let captured_llm_next = Arc::clone(&llm_next);
+    register_llm_execution_intercept(
+        "late_llm_next",
+        1,
+        Arc::new(move |_name, _request, next| {
+            *captured_llm_next.lock().unwrap() = Some(next);
+            ready_result(Ok(json!({"source": "llm-intercept"})))
+        }),
+    )
+    .unwrap();
+    let llm_provider_calls = Arc::new(AtomicU32::new(0));
+    let captured_llm_provider_calls = Arc::clone(&llm_provider_calls);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"prompt": "late"}),
+    };
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("late-llm-next")
+            .request(request.clone())
+            .func(Arc::new(move |_request| {
+                captured_llm_provider_calls.fetch_add(1, Ordering::AcqRel);
+                ready_result(Ok(json!({"source": "provider"})))
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"source": "llm-intercept"}));
+    let late_llm_next = llm_next.lock().unwrap().take().unwrap();
+    let error = late_llm_next(request.clone()).await.unwrap_err();
+    assert!(matches!(
+        error,
+        FlowError::InvalidArgument(message)
+            if message == "execution continuation is no longer active"
+    ));
+    assert_eq!(llm_provider_calls.load(Ordering::Acquire), 0);
+    deregister_llm_execution_intercept("late_llm_next").unwrap();
+
+    let stream_next = Arc::new(Mutex::new(None::<LlmStreamExecutionNextFn>));
+    let captured_stream_next = Arc::clone(&stream_next);
+    register_llm_stream_execution_intercept(
+        "late_llm_stream_next",
+        1,
+        Arc::new(move |_name, _request, next| {
+            *captured_stream_next.lock().unwrap() = Some(next);
+            Box::pin(async {
+                Ok(LlmJsonStream::new(futures::stream::iter(vec![Ok(
+                    json!({"source": "stream-intercept"}),
+                )])))
+            })
+        }),
+    )
+    .unwrap();
+    let stream_provider_calls = Arc::new(AtomicU32::new(0));
+    let captured_stream_provider_calls = Arc::clone(&stream_provider_calls);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("late-llm-stream-next")
+            .request(request.clone())
+            .func(Arc::new(move |_request| {
+                captured_stream_provider_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(futures::stream::iter(vec![Ok(
+                        json!({"source": "provider"}),
+                    )])))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({"complete": true})))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({"source": "stream-intercept"})
+    );
+    assert!(stream.next().await.is_none());
+    let late_stream_next = stream_next.lock().unwrap().take().unwrap();
+    let error = match late_stream_next(request).await {
+        Ok(_) => panic!("late stream continuation should be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        FlowError::InvalidArgument(message)
+            if message == "execution continuation is no longer active"
+    ));
+    assert_eq!(stream_provider_calls.load(Ordering::Acquire), 0);
+    deregister_llm_stream_execution_intercept("late_llm_stream_next").unwrap();
+}
+
+#[tokio::test]
+async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_error() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"prompt": "terminal-error"}),
+    };
+    let upstream_error_next = Arc::new(Mutex::new(None::<LlmStreamExecutionNextFn>));
+    let captured_upstream_error_next = Arc::clone(&upstream_error_next);
+    register_llm_stream_execution_intercept(
+        "upstream_error_stream_next",
+        1,
+        Arc::new(move |_name, request, next| {
+            *captured_upstream_error_next.lock().unwrap() = Some(next.clone());
+            next(request)
+        }),
+    )
+    .unwrap();
+    let upstream_provider_calls = Arc::new(AtomicU32::new(0));
+    let captured_upstream_provider_calls = Arc::clone(&upstream_provider_calls);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("upstream-error-stream-next")
+            .request(request.clone())
+            .func(Arc::new(move |_request| {
+                captured_upstream_provider_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(futures::stream::iter(vec![Err(
+                        FlowError::Internal("provider stream failed".into()),
+                    )])))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({})))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(stream.next().await.unwrap().is_err());
+    let late_next = upstream_error_next.lock().unwrap().take().unwrap();
+    let error = match late_next(request.clone()).await {
+        Ok(_) => panic!("terminal upstream error must revoke the stream continuation"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        FlowError::InvalidArgument(message)
+            if message == "execution continuation is no longer active"
+    ));
+    assert_eq!(upstream_provider_calls.load(Ordering::Acquire), 1);
+    deregister_llm_stream_execution_intercept("upstream_error_stream_next").unwrap();
+
+    let collector_error_next = Arc::new(Mutex::new(None::<LlmStreamExecutionNextFn>));
+    let captured_collector_error_next = Arc::clone(&collector_error_next);
+    register_llm_stream_execution_intercept(
+        "collector_error_stream_next",
+        1,
+        Arc::new(move |_name, request, next| {
+            *captured_collector_error_next.lock().unwrap() = Some(next.clone());
+            next(request)
+        }),
+    )
+    .unwrap();
+    let collector_provider_calls = Arc::new(AtomicU32::new(0));
+    let captured_collector_provider_calls = Arc::clone(&collector_provider_calls);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("collector-error-stream-next")
+            .request(request.clone())
+            .func(Arc::new(move |_request| {
+                captured_collector_provider_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(futures::stream::iter(vec![Ok(
+                        json!({"chunk": true}),
+                    )])))
+                })
+            }))
+            .collector(Box::new(|_| {
+                Err(FlowError::Internal("collector failed".into()))
+            }))
+            .finalizer(Box::new(|| json!({})))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(stream.next().await.unwrap().is_err());
+    let late_next = collector_error_next.lock().unwrap().take().unwrap();
+    let error = match late_next(request).await {
+        Ok(_) => panic!("terminal collector error must revoke the stream continuation"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        FlowError::InvalidArgument(message)
+            if message == "execution continuation is no longer active"
+    ));
+    assert_eq!(collector_provider_calls.load(Ordering::Acquire), 1);
+    deregister_llm_stream_execution_intercept("collector_error_stream_next").unwrap();
+}
+
+#[tokio::test]
+async fn spawned_rust_next_preserves_the_full_managed_context() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_events = Arc::clone(&events);
+    register_subscriber(
+        "spawned_rust_next_context",
+        Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_tool_execution_intercept(
+        "spawned_rust_next",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                tokio::spawn(async move { next(args).await })
+                    .await
+                    .map_err(|error| FlowError::Internal(error.to_string()))?
+                    .map(Into::into)
+            })
+        }),
+    )
+    .unwrap();
+
+    let task_stack = create_scope_stack();
+    let (provider_parent, owner) = TASK_SCOPE_STACK
+        .scope(task_stack, async {
+            let owner = push_scope(
+                nemo_relay::api::scope::PushScopeParams::builder()
+                    .name("spawned-rust-next-owner")
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+            let result = tool_call_execute(
+                nemo_relay::api::tool::ToolCallExecuteParams::builder()
+                    .name("spawned-rust-next")
+                    .args(json!({}))
+                    .func(Arc::new(|_args| {
+                        Box::pin(async {
+                            Ok(json!({
+                                "parent_uuid": capture_propagation_context()?.parent_uuid.to_string(),
+                                "scope_uuid": task_scope_top().uuid.to_string(),
+                            }))
+                        })
+                    }))
+                    .build(),
+            )
+            .await
+            .unwrap();
+            pop_scope(
+                nemo_relay::api::scope::PopScopeParams::builder()
+                    .handle_uuid(&owner.uuid)
+                    .build(),
+            )
+            .unwrap();
+            (result, owner)
+        })
+        .await;
+    flush_subscribers().unwrap();
+
+    let start_uuid = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            event.name() == "spawned-rust-next"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap()
+        .uuid()
+        .to_string();
+    assert_eq!(
+        provider_parent,
+        json!({
+            "parent_uuid": start_uuid,
+            "scope_uuid": owner.uuid.to_string(),
+        })
+    );
+
+    deregister_tool_execution_intercept("spawned_rust_next").unwrap();
+    deregister_subscriber("spawned_rust_next_context").unwrap();
+}
+
+#[tokio::test]
+async fn default_lazy_stream_preserves_the_full_managed_context() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_events = Arc::clone(&events);
+    register_subscriber(
+        "default_lazy_stream_context",
+        Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let owner = setup_isolated_scope("default-lazy-stream-owner");
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("default-lazy-stream-context")
+            .request(LlmRequest {
+                headers: Default::default(),
+                content: json!({}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(futures::stream::once(async {
+                        Ok(json!({
+                            "parent_uuid": capture_propagation_context()?.parent_uuid.to_string(),
+                            "scope_uuid": task_scope_top().uuid.to_string(),
+                        }))
+                    })))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({})))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let provider_context = stream.next().await.unwrap().unwrap();
+    assert!(stream.next().await.is_none());
+    flush_subscribers().unwrap();
+    let start_uuid = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            event.name() == "default-lazy-stream-context"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap()
+        .uuid()
+        .to_string();
+    assert_eq!(
+        provider_context,
+        json!({
+            "parent_uuid": start_uuid,
+            "scope_uuid": owner.uuid.to_string(),
+        })
+    );
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&owner.uuid)
+            .build(),
+    )
+    .unwrap();
+    deregister_subscriber("default_lazy_stream_context").unwrap();
+}
+
+#[tokio::test]
+async fn stream_next_preserves_each_invocation_scope_while_polling() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let first_stack = create_scope_stack();
+    let first_scope_uuid = first_stack.read().unwrap().top().uuid;
+    let second_stack = create_scope_stack();
+    let second_scope_uuid = second_stack.read().unwrap().top().uuid;
+    register_llm_stream_execution_intercept(
+        "scoped_stream_next",
+        1,
+        Arc::new(move |_name, request, next| {
+            let first_stack = first_stack.clone();
+            let second_stack = second_stack.clone();
+            Box::pin(async move {
+                let first_request = LlmRequest {
+                    headers: request.headers.clone(),
+                    content: json!({"branch": "first"}),
+                };
+                let second_request = LlmRequest {
+                    headers: request.headers,
+                    content: json!({"branch": "second"}),
+                };
+                let first_next = {
+                    let next = next.clone();
+                    TASK_SCOPE_STACK.scope(first_stack, async move { next(first_request).await })
+                };
+                let second_next =
+                    TASK_SCOPE_STACK.scope(second_stack, async move { next(second_request).await });
+                let (first_stream, second_stream) = tokio::join!(first_next, second_next);
+                let first_stream = first_stream?;
+                let second_stream = second_stream?;
+                Ok(LlmJsonStream::new(first_stream.chain(second_stream)))
+            })
+        }),
+    )
+    .unwrap();
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("scoped-stream-next")
+            .request(LlmRequest {
+                headers: Default::default(),
+                content: json!({}),
+            })
+            .func(Arc::new(|request| {
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(futures::stream::once(async move {
+                        Ok(json!({
+                            "branch": request.content["branch"],
+                            "scope_uuid": task_scope_top().uuid.to_string(),
+                        }))
+                    })))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({})))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({
+            "branch": "first",
+            "scope_uuid": first_scope_uuid.to_string(),
+        })
+    );
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({
+            "branch": "second",
+            "scope_uuid": second_scope_uuid.to_string(),
+        })
+    );
+    assert!(stream.next().await.is_none());
+    deregister_llm_stream_execution_intercept("scoped_stream_next").unwrap();
+}
+
+#[tokio::test]
+async fn stream_next_remains_active_during_interceptor_stream_close() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_llm_stream_execution_intercept(
+        "close_calls_stream_next",
+        1,
+        Arc::new(move |_name, request, next| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::from_closeable(CloseCallsStreamNext {
+                    next: Some(next),
+                    request: Some(request),
+                }))
+            })
+        }),
+    )
+    .unwrap();
+    let provider_calls = Arc::new(AtomicU32::new(0));
+    let captured_provider_calls = Arc::clone(&provider_calls);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("close-calls-stream-next")
+            .request(LlmRequest {
+                headers: Default::default(),
+                content: json!({}),
+            })
+            .func(Arc::new(move |_request| {
+                captured_provider_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async { Ok(LlmJsonStream::new(futures::stream::empty())) })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({})))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    stream.close().await.unwrap();
+    assert_eq!(provider_calls.load(Ordering::Acquire), 1);
+    deregister_llm_stream_execution_intercept("close_calls_stream_next").unwrap();
 }
 
 #[tokio::test]

@@ -27,6 +27,10 @@ for 0.7 before using those surfaces. NeMo Relay does not adapt synchronous Rust
 middleware callbacks or one-argument LLM sanitizer callbacks.
 </Warning>
 
+Rust code that constructs `AdaptiveConfig` with an exhaustive struct literal
+must add `response_cache: None`. Prefer `..AdaptiveConfig::default()` when the
+literal should remain compatible with new optional fields.
+
 ### Migrate Middleware Callbacks
 
 The following callback families are now asynchronous: conditional execution

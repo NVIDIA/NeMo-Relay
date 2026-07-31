@@ -67,11 +67,20 @@ impl TransparentRun {
             .config
             .as_ref()
             .or_else(|| inherited.and_then(|args| args.config.as_ref()));
+        let plugin_config_path = command
+            .plugin_config_path
+            .as_ref()
+            .or_else(|| inherited.and_then(|args| args.plugin_config_path.as_ref()));
+        let explicit_plugin_config =
+            crate::configuration::explicit_plugin_config_path(explicit_config, plugin_config_path);
         let mut resolved = resolve_run_config(&command, inherited)?;
         let dynamic_plugins = if dry_run {
             Vec::new()
         } else {
-            crate::plugins::lifecycle::active_dynamic_plugin_components(explicit_config, &resolved)?
+            crate::plugins::lifecycle::active_dynamic_plugin_components(
+                explicit_plugin_config.as_ref(),
+                &resolved,
+            )?
         };
         let invocation = resolve_agent_invocation(&command, &resolved.agents)?;
         let agent = invocation.agent;

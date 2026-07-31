@@ -884,8 +884,15 @@ fn resolve_worker_connect_endpoint(
                     )));
                 }
             };
+            let endpoint = endpoint.trim();
+            if endpoint.is_empty() {
+                // The worker may have created or truncated the announcement file immediately
+                // before publishing its endpoint. Treat that transient state like a missing file
+                // so the bounded startup loop polls again.
+                return Ok(None);
+            }
             Ok(Some(WorkerConnectEndpoint::Tcp(
-                normalize_worker_tcp_endpoint(endpoint.trim())?,
+                normalize_worker_tcp_endpoint(endpoint)?,
             )))
         }
     }
@@ -1787,6 +1794,7 @@ impl WorkerPluginCallback {
         let mut client = self.client.clone();
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
+        let (next_ready_tx, next_ready_rx) = oneshot::channel();
         self.runtime.spawn(async move {
             let result = tokio::select! {
                 result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))) => result,
@@ -1796,6 +1804,7 @@ impl WorkerPluginCallback {
                     return;
                 }
             };
+            let _ = next_ready_tx.send(());
             match result {
                 Ok(response) => {
                     let mut stream = response.into_inner();
@@ -1839,6 +1848,11 @@ impl WorkerPluginCallback {
             }
             guard.finish();
         });
+        next_ready_rx.await.map_err(|_| {
+            FlowError::Internal(
+                "worker stream invocation ended before the downstream stream opened".into(),
+            )
+        })?;
         Ok(LlmJsonStream::new(
             tokio_stream::wrappers::ReceiverStream::new(rx),
         ))
@@ -2632,6 +2646,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 "continuation is not a tool continuation",
             ));
         };
+        let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
         let value =
             required_envelope(request.value, "tool next value").map_err(status_from_flow)?;
         let value = decode_json_envelope::<Json>(&value)
@@ -2661,6 +2676,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 "continuation is not an LLM continuation",
             ));
         };
+        let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
         let request =
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
@@ -2693,6 +2709,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 "continuation is not an LLM stream continuation",
             ));
         };
+        let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
         let request = required_envelope(request.request, "llm stream next request")
             .map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
@@ -2830,6 +2847,26 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
 }
 
 impl WorkerHostRuntimeService {
+    fn isolated_continuation_context(
+        &self,
+        context: &MiddlewareContinuationContext,
+        scope: Option<&ScopeContext>,
+    ) -> Result<MiddlewareContinuationContext, Status> {
+        let Some(stack_id) = scope
+            .map(|scope| scope.scope_stack_id.as_str())
+            .filter(|stack_id| !stack_id.is_empty())
+        else {
+            return context.isolated().map_err(status_from_flow);
+        };
+        let selected = self
+            .state
+            .invocation_context(stack_id)?
+            .ok_or_else(|| Status::not_found("scope stack not found"))?;
+        context
+            .isolated_with_scope_stack(&selected.scope_stack)
+            .map_err(status_from_flow)
+    }
+
     fn with_stack<T>(
         &self,
         scope: Option<&ScopeContext>,

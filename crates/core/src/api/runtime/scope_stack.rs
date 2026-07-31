@@ -437,6 +437,30 @@ pub fn create_scope_stack_from_propagation(
     )?)))
 }
 
+/// Create an isolated scope stack below the current causal parent.
+///
+/// Capture the parent before spawning concurrent work, then install the
+/// returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event
+/// parentage but does not transfer scope-local registrations.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example() -> nemo_relay::Result<()> {
+/// use nemo_relay::api::runtime::{TASK_SCOPE_STACK, fork_scope_stack};
+///
+/// let stack = fork_scope_stack()?;
+/// tokio::spawn(TASK_SCOPE_STACK.scope(stack, async {
+///     // Relay work in an isolated child task.
+/// }));
+/// # Ok(())
+/// # }
+/// ```
+pub fn fork_scope_stack() -> Result<ScopeStackHandle> {
+    let context = capture_propagation_context()?;
+    create_scope_stack_from_propagation(&context)
+}
+
 /// Capture the current causal parent without asserting a session root.
 pub fn capture_propagation_context() -> Result<PropagationContext> {
     capture_propagation_context_with_root(None)
@@ -501,6 +525,18 @@ pub fn current_scope_stack() -> ScopeStackHandle {
     TASK_SCOPE_STACK
         .try_with(|stack| stack.clone())
         .unwrap_or_else(|_| THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone()))
+}
+
+/// Return a scope stack explicitly bound to the current task or override.
+///
+/// Unlike [`current_scope_stack`], this does not fall back to ambient
+/// thread-local state. Continuation adapters use it to distinguish an
+/// intentional per-call scope selection from an unrelated runtime-worker
+/// thread binding.
+pub(crate) fn current_context_scope_stack() -> Option<ScopeStackHandle> {
+    SCOPE_STACK_OVERRIDE
+        .with(|stack| stack.borrow().clone())
+        .or_else(|| TASK_SCOPE_STACK.try_with(Clone::clone).ok())
 }
 
 /// Run a synchronous callback with `handle` as the visible scope stack.

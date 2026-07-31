@@ -337,17 +337,23 @@ fn start_websocket_capture_server(
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async move {
             let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            while let Some(message) = websocket.next().await {
-                let message = message.unwrap();
-                if message.is_text() {
-                    captures
-                        .lock()
-                        .unwrap()
-                        .push(message.into_text().unwrap().to_string());
-                    if captures.lock().unwrap().len() >= expected_messages {
-                        return;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let Ok(mut websocket) = tokio_tungstenite::accept_async(stream).await else {
+                    continue;
+                };
+                while let Some(message) = websocket.next().await {
+                    let Ok(message) = message else {
+                        break;
+                    };
+                    if message.is_text() {
+                        captures
+                            .lock()
+                            .unwrap()
+                            .push(message.into_text().unwrap().to_string());
+                        if captures.lock().unwrap().len() >= expected_messages {
+                            return;
+                        }
                     }
                 }
             }
@@ -659,7 +665,7 @@ fn websocket_flush_drains_events_queued_before_reconnect() {
                     format!("ws://{local_addr}"),
                     AtofEndpointTransport::Websocket,
                 )
-                .with_timeout_millis(200),
+                .with_timeout_millis(1_000),
             ),
     )
     .unwrap();

@@ -198,19 +198,39 @@ jobs:
         include:
           - platform: linux-amd64
             runner: ubuntu-latest
-            target: x86_64-unknown-linux-musl
+            target: x86_64-unknown-linux-gnu
+            build_image: quay.io/pypa/manylinux2014_x86_64@sha256:35baef377f64c2ae2e7ed647917ecd090c50f6e8b06fd605012661c2e954cc92
+            runtime_image: quay.io/pypa/manylinux2014_x86_64@sha256:35baef377f64c2ae2e7ed647917ecd090c50f6e8b06fd605012661c2e954cc92
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            build_image: quay.io/pypa/manylinux2014_aarch64@sha256:63f73ecd2be3ad7cf66a402c72c1594b3f9140e263ab6838896e93a8fbf53794
+            runtime_image: quay.io/pypa/manylinux2014_aarch64@sha256:63f73ecd2be3ad7cf66a402c72c1594b3f9140e263ab6838896e93a8fbf53794
+          - platform: linux-musl-amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            build_image: ''
+            runtime_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
+          - platform: linux-musl-arm64
+            runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
+            build_image: ''
+            runtime_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
           - platform: macos-arm64
             runner: macos-15
             target: aarch64-apple-darwin
+            build_image: ''
+            runtime_image: ''
           - platform: windows-amd64
             runner: windows-2022
             target: x86_64-pc-windows-msvc
+            build_image: ''
+            runtime_image: ''
           - platform: windows-arm64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
+            build_image: ''
+            runtime_image: ''
 
     steps:
       - name: Checkout
@@ -249,10 +269,39 @@ jobs:
           sudo apt-get -o Acquire::Retries=5 install -y musl-tools
 
       - name: Build CLI release binary
+        if: ${{ matrix.build_image == '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
           cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+
+      - name: Build CLI release binary in manylinux
+        if: ${{ matrix.build_image != '' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
+            "${{ matrix.build_image }}" \
+            /bin/bash -ec '
+              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
+                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
+              export PATH="$HOME/.cargo/bin:$PATH"
+              cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+            '
+
+      - name: Verify CLI binary in its Linux runtime container
+        if: ${{ matrix.runtime_image != '' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            "${{ matrix.runtime_image }}" \
+            "${{ env.NEMO_RELAY_CI_WORKSPACE }}/target/${{ matrix.target }}/release/nemo-relay" --version
 
       - name: Stage CLI binary artifact
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
@@ -306,6 +355,7 @@ jobs:
           python scripts/package-cli-bin.py "${args[@]}"
 
       - name: Install and run CLI wheel
+        if: ${{ !endsWith(matrix.target, '-musl') }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
@@ -320,6 +370,24 @@ jobs:
           fi
           "$venv_python" -m pip install --force-reinstall --no-deps "${wheels[0]}"
           "$venv_cli" --version
+
+      - name: Install and run CLI wheel on musllinux
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env NEMO_RELAY_CI_WORKSPACE_TMP \
+            "${{ matrix.runtime_image }}" \
+            /bin/sh -ec '
+              wheel="$(find "$NEMO_RELAY_CI_WORKSPACE_TMP/cli-packages" -maxdepth 1 -name "*.whl" -print -quit)"
+              test -n "$wheel"
+              /opt/python/cp311-cp311/bin/python -m venv /tmp/nemo-relay-cli-wheel-venv
+              /tmp/nemo-relay-cli-wheel-venv/bin/python -m pip install --force-reinstall --no-deps "$wheel"
+              /tmp/nemo-relay-cli-wheel-venv/bin/nemo-relay --version
+            '
 
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

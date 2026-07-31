@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v5";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v9";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -69,7 +69,10 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     publication,
     publicationContextId,
     scopeStack,
+    registerAbort,
   ) {
+    const controller = new AbortController();
+    registerAbort(() => controller.abort());
     let ownsPublicationState = false;
     let publicationState;
     if (publicationContextId !== undefined) {
@@ -104,12 +107,15 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     };
     const safeNext = next === undefined
       ? undefined
-      : (value) => next(jsonValue(value === undefined ? null : value));
+      : (value) => next(
+        jsonValue(value === undefined ? null : value),
+        eventSanitizerContext.getStore()?.scopeStack,
+      );
     const invoke = () => {
       Promise.resolve().then(() => (
         safeNext === undefined
-          ? (spread ? fn(...arg0) : fn(arg0))
-          : (spread ? fn(...arg0, safeNext) : fn(arg0, safeNext))
+          ? (spread ? fn(...arg0, controller.signal) : fn(arg0, controller.signal))
+          : (spread ? fn(...arg0, safeNext, controller.signal) : fn(arg0, safeNext, controller.signal))
       )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
         settlePublication();
         resolve(value);
@@ -158,6 +164,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         publication,
         publicationContextId,
         scopeStack,
+        registerAbort,
       ) {
         if (error != null) {
           let message = 'unknown error';
@@ -179,7 +186,21 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           publication,
           publicationContextId,
           scopeStack,
+          registerAbort,
         );
+      };
+    },
+
+    scopedStream(fn) {
+      return function __nemo_relay_scoped_stream_wrapper(arg, scopeStack, propagationParentUuid) {
+        const current = eventSanitizerContext.getStore();
+        const token = {
+          publicationState: current?.publicationState ?? { active: false },
+          publicationContextId: current?.publicationContextId,
+          scopeStack,
+          propagationParentUuid,
+        };
+        return eventSanitizerContext.run(token, () => fn(arg));
       };
     },
 
@@ -198,6 +219,10 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       return eventSanitizerContext.getStore()?.scopeStack;
     },
 
+    callbackPropagationParentUuid() {
+      return eventSanitizerContext.getStore()?.propagationParentUuid;
+    },
+
     withCallbackScopeStack(scopeStack, fn) {
       const current = eventSanitizerContext.getStore();
       if (current === undefined) {
@@ -207,6 +232,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         publicationState: current.publicationState,
         publicationContextId: current.publicationContextId,
         scopeStack,
+        propagationParentUuid: current.propagationParentUuid,
       };
       try {
         return { active: true, value: eventSanitizerContext.run(token, fn) };
@@ -220,7 +246,12 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       if (current === undefined) {
         return false;
       }
-      current.scopeStack = scopeStack;
+      eventSanitizerContext.enterWith({
+        publicationState: current.publicationState,
+        publicationContextId: current.publicationContextId,
+        scopeStack,
+        propagationParentUuid: current.propagationParentUuid,
+      });
       return true;
     },
   };
@@ -270,6 +301,13 @@ pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Resul
     wrap_callback(env, func, "promise")
 }
 
+pub(crate) fn wrap_scoped_stream_callback(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "scopedStream")
+}
+
 pub(crate) fn publication_callback_active(env: &Env) -> napi::Result<bool> {
     let factories = callback_factories(env)?;
     let callback: JsFunction = factories.get_named_property("publicationCallbackActive")?;
@@ -307,6 +345,20 @@ pub(crate) fn callback_scope_stack(
         stack.inner.clone(),
         stack.publication_buffer.clone(),
     )))
+}
+
+pub(crate) fn callback_propagation_parent_uuid(env: &Env) -> napi::Result<Option<String>> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("callbackPropagationParentUuid")?;
+    let value = callback.call::<JsUnknown>(None, &[])?;
+    if matches!(value.get_type()?, ValueType::Undefined | ValueType::Null) {
+        return Ok(None);
+    }
+    value
+        .coerce_to_string()?
+        .into_utf8()?
+        .into_owned()
+        .map(Some)
 }
 
 pub(crate) fn with_callback_scope_stack(

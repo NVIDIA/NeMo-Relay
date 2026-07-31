@@ -20,6 +20,7 @@ from nemo_relay import (
     PendingMarkSpec,
     ScopeEvent,
     ScopeType,
+    capture_propagation_context,
     guardrails,
     intercepts,
     llm,
@@ -846,6 +847,70 @@ class TestLLMInterceptsAsync:
         ]
         assert all(value == "emitter" for _label, value in observed)
 
+    async def test_default_lazy_stream_preserves_managed_parent_context(self):
+        events = []
+        subscribers.register("py_default_lazy_stream_context", events.append)
+        owner = scope.push("py-default-lazy-stream-owner", ScopeType.Agent)
+
+        def provider(_request):
+            async def generate():
+                yield {"parent_uuid": capture_propagation_context().parent_uuid}
+
+            return generate()
+
+        try:
+            stream = await llm.stream_execute(
+                "py_default_lazy_stream_context",
+                make_request(),
+                provider,
+                lambda _chunk: None,
+                lambda: {},
+            )
+            chunks = [chunk async for chunk in stream]
+            await subscribers.flush_async()
+        finally:
+            scope.pop(owner)
+            subscribers.deregister("py_default_lazy_stream_context")
+
+        start = _llm_event(events, "py_default_lazy_stream_context", "start")
+        assert chunks == [{"parent_uuid": start.uuid}]
+
+    async def test_terminal_stream_error_close_waits_for_real_producer_cleanup(self):
+        cleanup_started = asyncio.Event()
+        release_cleanup = asyncio.Event()
+        cleanup_finished = asyncio.Event()
+
+        class FailingIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise RuntimeError("provider stream failed")
+
+            async def aclose(self):
+                cleanup_started.set()
+                await release_cleanup.wait()
+                cleanup_finished.set()
+
+        stream = await llm.stream_execute(
+            "py_terminal_error_cleanup",
+            make_request(),
+            lambda _request: FailingIterator(),
+            lambda _chunk: None,
+            lambda: {},
+        )
+        with pytest.raises(RuntimeError, match="provider stream failed"):
+            await anext(stream)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+
+        closing = asyncio.ensure_future(stream.aclose())
+        await asyncio.sleep(0)
+        assert not closing.done()
+        assert not cleanup_finished.is_set()
+        release_cleanup.set()
+        await asyncio.wait_for(closing, timeout=2)
+        assert cleanup_finished.is_set()
+
     async def test_async_request_intercept_runs_on_originating_loop(self):
         originating_loop = asyncio.get_running_loop()
 
@@ -920,6 +985,32 @@ class TestLLMInterceptsAsync:
         finally:
             intercepts.deregister_llm_execution("py_llm_exec_next")
 
+    async def test_execution_intercept_rejects_next_after_settlement(self):
+        captured_next = None
+        provider_calls = 0
+
+        async def middleware(_name, _request, next):
+            nonlocal captured_next
+            captured_next = next
+            return {"source": "intercept"}
+
+        def provider(_request):
+            nonlocal provider_calls
+            provider_calls += 1
+            return {"source": "provider"}
+
+        intercepts.register_llm_execution("py_llm_late_next", 1, middleware)
+        try:
+            result = await llm.execute("late_next_llm", make_request(), provider)
+            assert result == {"source": "intercept"}
+            assert captured_next is not None
+            with pytest.raises(RuntimeError, match="execution continuation is no longer active"):
+                await captured_next(make_request())
+        finally:
+            intercepts.deregister_llm_execution("py_llm_late_next")
+
+        assert provider_calls == 0
+
     async def test_stream_execution_intercept_can_await_next(self):
         def middleware(request, next):
             async def gen():
@@ -949,6 +1040,42 @@ class TestLLMInterceptsAsync:
             assert chunks == [{"token": "wrapped:test-model"}, {"token": "wrapped:done"}]
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_next")
+
+    async def test_stream_execution_intercept_rejects_next_after_settlement(self):
+        captured_next = None
+        provider_calls = 0
+
+        async def middleware(_request, next):
+            nonlocal captured_next
+            captured_next = next
+
+            async def replacement():
+                yield {"source": "intercept"}
+
+            return replacement()
+
+        def provider(_request):
+            nonlocal provider_calls
+            provider_calls += 1
+
+            async def stream():
+                yield {"source": "provider"}
+
+            return stream()
+
+        intercepts.register_llm_stream_execution("py_llm_stream_late_next", 1, middleware)
+        try:
+            stream = await llm.stream_execute(
+                "late_next_stream_llm", make_request(), provider, lambda _chunk: None, lambda: {}
+            )
+            assert [chunk async for chunk in stream] == [{"source": "intercept"}]
+            assert captured_next is not None
+            with pytest.raises(RuntimeError, match="execution continuation is no longer active"):
+                await captured_next(make_request())
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_late_next")
+
+        assert provider_calls == 0
 
     async def test_stream_execution_intercept_async_function_is_supported(self):
         def middleware(request, next):

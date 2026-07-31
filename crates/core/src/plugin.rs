@@ -1636,7 +1636,7 @@ where
     I: IntoIterator<Item = PathBuf>,
 {
     let mut documents = Vec::new();
-    for path in paths {
+    for path in deduplicate_plugin_config_paths(paths) {
         if !path.exists() {
             continue;
         }
@@ -1649,6 +1649,26 @@ where
         documents.push((path, serde_json::to_value(parsed)?));
     }
     merge_plugin_config_documents(documents)
+}
+
+/// Removes physical duplicates while preserving the highest-precedence path.
+/// Internal: `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn deduplicate_plugin_config_paths<I>(paths: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let paths = paths.into_iter().collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(paths.len());
+    for path in paths.into_iter().rev() {
+        let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if seen.insert(identity) {
+            unique.push(path);
+        }
+    }
+    unique.reverse();
+    unique
 }
 
 /// Merges pre-parsed `plugins.toml` JSON documents (lowest precedence first) using the canonical
@@ -1695,20 +1715,21 @@ fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
     )))
 }
 
-/// Default `plugins.toml` search path (lowest precedence first): system, nearest
-/// project file, then user file — mirroring the gateway's discovery. `pub` only
+/// Default `plugins.toml` search path (lowest precedence first): user, nearest
+/// project file, then system file — mirroring the gateway's discovery. `pub` only
 /// for cross-crate reuse by the gateway.
 #[doc(hidden)]
 pub fn default_plugin_config_paths(cwd: Option<&Path>, user_dir: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("/etc/nemo-relay/plugins.toml")];
+    let mut paths = Vec::new();
+    if let Some(dir) = user_dir {
+        paths.push(dir.join("plugins.toml"));
+    }
     if let Some(cwd) = cwd
         && let Some(project) = nearest_project_plugin_config(cwd)
     {
         paths.push(project);
     }
-    if let Some(dir) = user_dir {
-        paths.push(dir.join("plugins.toml"));
-    }
+    paths.push(PathBuf::from("/etc/nemo-relay/plugins.toml"));
     paths
 }
 

@@ -220,6 +220,151 @@ jobs:
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm/*.tgz
           if-no-files-found: error
 
+  PackageMusllinux:
+    name: Package (musllinux-${{ matrix.node_arch }})
+    needs: [Test]
+    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node_arch: x64
+            platform: linux-musl-amd64
+            runner: ubuntu-latest
+            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+          - node_arch: arm64
+            platform: linux-musl-arm64
+            runner: ubuntu-24.04-arm
+            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Derive Node package version
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          version="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync("crates/node/package.json", "utf8")); if (!pkg.version) { throw new Error("crates/node/package.json missing version field"); } console.log(pkg.version);')"
+          if [[ "${{ inputs.ref_type }}" == "tag" ]]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${GITHUB_SHA::8}"
+          fi
+          printf 'NEMO_RELAY_NODE_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Build musllinux Node package
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          output_dir="${NEMO_RELAY_CI_WORKSPACE_TMP}/npm-musllinux"
+          mkdir -p "$output_dir"
+          docker run --rm \
+            --volume "${NEMO_RELAY_CI_WORKSPACE}:${NEMO_RELAY_CI_WORKSPACE}" \
+            --workdir "${NEMO_RELAY_CI_WORKSPACE}" \
+            --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
+            --env NEMO_RELAY_NODE_OUTPUT_DIR="$output_dir" \
+            --env NEMO_RELAY_NODE_VERSION="${NEMO_RELAY_NODE_PACKAGE_VERSION}" \
+            --env NEMO_RELAY_NODE_PLATFORM="${{ matrix.platform }}" \
+            "${{ matrix.container_image }}" \
+            sh -ceu '
+              apk add --no-cache build-base cmake curl python3
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
+              export PATH="$HOME/.cargo/bin:$PATH"
+              node scripts/package_node_musllinux.mjs \
+                --version "$NEMO_RELAY_NODE_VERSION" \
+                --platform "$NEMO_RELAY_NODE_PLATFORM" \
+                --out "$NEMO_RELAY_NODE_OUTPUT_DIR"
+            '
+
+      - name: Upload musllinux Node npm package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: node-npm-package-${{ matrix.platform }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm-musllinux/*.tgz
+          if-no-files-found: error
+
+  PackageMusllinuxSmoke:
+    name: Package smoke (musllinux-${{ matrix.node_arch }})
+    needs: [Package, PackageMusllinux]
+    if: ${{ inputs.run_package && !cancelled() && needs.Package.result == 'success' && needs.PackageMusllinux.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node_arch: x64
+            platform: linux-musl-amd64
+            package_name: nemo-relay-node-linux-x64-musl
+            runner: ubuntu-latest
+            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+          - node_arch: arm64
+            platform: linux-musl-arm64
+            package_name: nemo-relay-node-linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+
+    steps:
+      - name: Download Node metapackage artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: node-npm-package-linux-amd64
+          path: node-metapackage/
+
+      - name: Download matching musllinux Node native package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: node-npm-package-${{ matrix.platform }}
+          path: node-native/
+
+      - name: Install and load musllinux split Node package
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ github.workspace }}:${{ github.workspace }}" \
+            --workdir "${{ github.workspace }}" \
+            --env NEMO_RELAY_NODE_PACKAGE_NAME="${{ matrix.package_name }}" \
+            --env NEMO_RELAY_WORKSPACE="${{ github.workspace }}" \
+            "${{ matrix.container_image }}" \
+            sh -ceu '
+              smoke_dir="$(mktemp -d)"
+              trap "rm -rf $smoke_dir" EXIT
+              cd "$smoke_dir"
+              npm init --yes >/dev/null
+              metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "nemo-relay-node-npm-[0-9]*.tgz" -print -quit)"
+              native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "*.tgz" -print -quit)"
+              test -n "$metapackage"
+              test -n "$native"
+              npm install --ignore-scripts "$native" "$metapackage"
+              node -e "
+                const assert = require(\"node:assert/strict\");
+                const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
+                assert.deepEqual(manifest.libc, [\"musl\"]);
+                for (const entrypoint of [
+                  \"nemo-relay-node\",
+                  \"nemo-relay-node/typed\",
+                  \"nemo-relay-node/plugin\",
+                  \"nemo-relay-node/adaptive\",
+                  \"nemo-relay-node/observability\",
+                  \"nemo-relay-node/pii_redaction\",
+                  \"nemo-relay-node/model_pricing\",
+                ]) {
+                  require(entrypoint);
+                }
+              "
+            '
+
   PackageOpenClaw:
     name: Package OpenClaw plugin
     needs: [Test]

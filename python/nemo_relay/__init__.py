@@ -23,7 +23,8 @@ The main entry points are:
 Top-level exports also include:
 
 - scope stack helpers such as ``get_scope_stack()``, ``create_scope_stack()``,
-  ``set_thread_scope_stack()``, and ``scope_stack_active()``
+  ``fork_asyncio_context()``, ``set_thread_scope_stack()``, and
+  ``scope_stack_active()``
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
@@ -243,6 +244,10 @@ from nemo_relay import (  # noqa: E402
 )
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
+_propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_parent",
+    default=None,
+)
 
 
 def get_scope_stack() -> ScopeStack:
@@ -416,18 +421,66 @@ def create_scope_stack() -> ScopeStack:
 def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport."""
     get_scope_stack()
+    if parent_uuid := _propagation_parent_var.get():
+        return PropagationContext(parent_uuid)
     return _capture_propagation_context()
 
 
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
     """Capture the current parent with an optional stable application session root."""
     get_scope_stack()
+    if parent_uuid := _propagation_parent_var.get():
+        return PropagationContext(parent_uuid, root_uuid)
     return _capture_propagation_context_with_root(root_uuid)
 
 
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack:
     """Create an isolated stack seeded from a received propagation context."""
     return _create_scope_stack_from_propagation(context)
+
+
+def fork_asyncio_context() -> contextvars.Context:
+    """Create an asyncio child context with an isolated Relay scope stack.
+
+    Capture the current Relay parent, then install an isolated stack seeded
+    from that parent into a copy of the current Python context. Use the
+    returned context when creating a child task so concurrent tasks cannot
+    mutate the same scope stack.
+
+    Returns:
+        contextvars.Context: A copy of the current context with an isolated
+            Relay scope stack. Other context variable values are preserved.
+
+    Notes:
+        The child stack preserves event parentage but does not transfer
+        scope-local middleware or subscribers. Call this before the child task
+        starts; it cannot retrofit isolation onto an already-running task. Pass
+        the returned context to ``asyncio.create_task(..., context=...)`` or
+        ``asyncio.TaskGroup.create_task(..., context=...)``.
+
+    Example::
+
+        import asyncio
+
+        import nemo_relay
+
+        async def worker() -> None:
+            with nemo_relay.scope.scope("worker", nemo_relay.ScopeType.Function):
+                await asyncio.sleep(0)
+
+        async def main() -> None:
+            with nemo_relay.scope.scope("parent", nemo_relay.ScopeType.Agent):
+                task = asyncio.create_task(
+                    worker(),
+                    context=nemo_relay.fork_asyncio_context(),
+                )
+                await task
+    """
+    propagation = capture_propagation_context()
+    stack = create_scope_stack_from_propagation(propagation)
+    child_context = contextvars.copy_context()
+    child_context.run(_scope_stack_var.set, stack)
+    return child_context
 
 
 @contextmanager
@@ -520,6 +573,7 @@ __all__ = [
     "capture_propagation_context",
     "capture_propagation_context_with_root",
     "create_scope_stack_from_propagation",
+    "fork_asyncio_context",
     "get_scope_stack",
     "scope_stack_active",
     "propagate_scope_to_thread",

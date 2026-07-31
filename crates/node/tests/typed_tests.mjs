@@ -43,8 +43,12 @@ const {
   popScope,
   registerToolRequestIntercept,
   deregisterToolRequestIntercept,
+  registerToolExecutionIntercept,
+  deregisterToolExecutionIntercept,
   registerLlmRequestIntercept,
   deregisterLlmRequestIntercept,
+  registerLlmExecutionIntercept,
+  deregisterLlmExecutionIntercept,
   registerSubscriber,
   deregisterSubscriber,
 } = lib;
@@ -91,6 +95,20 @@ function makeNative() {
       model: 'test-model',
     },
   };
+}
+
+async function assertCompletesWithin(promise, message) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new assert.AssertionError({ message })), 2000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function makeOpenAIChatRequest() {
@@ -395,6 +413,65 @@ describe('typedToolExecute', () => {
     assert.equal(result.x, 3);
     assert.equal(result.y, 6);
   });
+
+  it('forwards continuation cancellation to typed tool providers', async () => {
+    let providerStarted;
+    const started = new Promise((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerAborted;
+    const aborted = new Promise((resolve) => {
+      providerAborted = resolve;
+    });
+    let releaseProvider;
+    const providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    let downstream;
+    let providerSideEffects = 0;
+    registerToolExecutionIntercept('typed_tool_abort_started_provider', 10, async (args, next) => {
+      downstream = next(args);
+      void downstream.catch(() => {});
+      await started;
+      return { result: { source: 'intercept' } };
+    });
+    try {
+      const result = await typedToolExecute(
+        'typed_abort_started_tool',
+        { value: 1 },
+        async (_args, signal) => {
+          assert.ok(signal instanceof AbortSignal);
+          providerStarted();
+          await Promise.race([
+            providerGate,
+            new Promise((_, reject) => {
+              signal.addEventListener(
+                'abort',
+                () => {
+                  providerAborted();
+                  reject(new Error('provider aborted'));
+                },
+                { once: true },
+              );
+            }),
+          ]);
+          providerSideEffects += 1;
+          return { source: 'provider' };
+        },
+        new JsonPassthrough(),
+        new JsonPassthrough(),
+      );
+      assert.deepEqual(result, { source: 'intercept' });
+      await assert.rejects(downstream, /execution continuation is no longer active/i);
+      await assertCompletesWithin(aborted, 'typed tool provider did not receive cancellation');
+      releaseProvider();
+      assert.equal(providerSideEffects, 0);
+    } finally {
+      releaseProvider?.();
+      await downstream?.catch(() => {});
+      deregisterToolExecutionIntercept('typed_tool_abort_started_provider');
+    }
+  });
 });
 
 // ===========================================================================
@@ -460,6 +537,64 @@ describe('typedLlmExecute', () => {
     assert.ok(result instanceof Point);
     assert.equal(result.x, 8);
     assert.equal(result.y, 13);
+  });
+
+  it('forwards continuation cancellation to typed LLM providers', async () => {
+    let providerStarted;
+    const started = new Promise((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerAborted;
+    const aborted = new Promise((resolve) => {
+      providerAborted = resolve;
+    });
+    let releaseProvider;
+    const providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    let downstream;
+    let providerSideEffects = 0;
+    registerLlmExecutionIntercept('typed_llm_abort_started_provider', 10, async (request, next) => {
+      downstream = next(request);
+      void downstream.catch(() => {});
+      await started;
+      return { source: 'intercept' };
+    });
+    try {
+      const result = await typedLlmExecute(
+        'typed_abort_started_llm',
+        makeNative(),
+        async (_request, signal) => {
+          assert.ok(signal instanceof AbortSignal);
+          providerStarted();
+          await Promise.race([
+            providerGate,
+            new Promise((_, reject) => {
+              signal.addEventListener(
+                'abort',
+                () => {
+                  providerAborted();
+                  reject(new Error('provider aborted'));
+                },
+                { once: true },
+              );
+            }),
+          ]);
+          providerSideEffects += 1;
+          return { source: 'provider' };
+        },
+        new JsonPassthrough(),
+      );
+      assert.deepEqual(result, { source: 'intercept' });
+      await assert.rejects(downstream, /execution continuation is no longer active/i);
+      await assertCompletesWithin(aborted, 'typed LLM provider did not receive cancellation');
+      releaseProvider();
+      assert.equal(providerSideEffects, 0);
+    } finally {
+      releaseProvider?.();
+      await downstream?.catch(() => {});
+      deregisterLlmExecutionIntercept('typed_llm_abort_started_provider');
+    }
   });
 
   it('passes OpenAI Chat request codec through typedLlmExecute', async () => {

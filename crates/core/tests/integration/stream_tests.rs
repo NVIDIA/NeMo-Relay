@@ -243,6 +243,51 @@ async fn explicit_close_caches_cleanup_errors() {
 }
 
 #[tokio::test]
+async fn terminal_error_close_reaches_and_caches_real_producer_cleanup() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let inner = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::iter(vec![Err(FlowError::Internal(
+            "provider stream failed".into(),
+        ))])),
+        close_calls: Arc::clone(&close_calls),
+        close_error: Some(FlowError::NotFound("producer cleanup failed".into())),
+        closed: false,
+    });
+    let wrapper = LlmStreamWrapper::new(
+        inner,
+        make_llm_handle("terminal-error-close"),
+        Box::new(|_| Ok(())),
+        Box::new(|| Json::Null),
+        None,
+        None,
+        None,
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+
+    let terminal_error = stream.next().await.unwrap().unwrap_err();
+    assert!(
+        terminal_error
+            .to_string()
+            .contains("provider stream failed")
+    );
+    for _ in 0..2 {
+        let close_error = stream
+            .close()
+            .await
+            .expect_err("producer cleanup should fail");
+        assert!(matches!(
+            close_error,
+            FlowError::NotFound(ref message) if message == "producer cleanup failed"
+        ));
+    }
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
 async fn default_stream_close_drops_the_wrapped_stream() {
     let drops = Arc::new(AtomicUsize::new(0));
     let mut stream = LlmJsonStream::new(DropTrackingStream {

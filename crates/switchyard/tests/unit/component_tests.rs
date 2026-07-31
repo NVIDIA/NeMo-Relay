@@ -522,6 +522,52 @@ fn disabled_protocol_defaults_are_optional() {
 }
 
 #[test]
+fn routed_requests_carry_one_relay_owned_backend_partition() {
+    let mut candidate = config("http://127.0.0.1:1/v1/routing/decision".into());
+    candidate
+        .targets
+        .get_mut("selected-chat")
+        .unwrap()
+        .headers
+        .insert(
+            "X-NeMo-Relay-Internal-Dispatch-Backend".into(),
+            "spoofed-target".into(),
+        );
+    let runtime = SwitchyardRuntime::new(candidate).unwrap();
+
+    let mut source = chat_request();
+    source.headers.insert(
+        INTERNAL_DISPATCH_BACKEND_HEADER.into(),
+        json!("spoofed-source"),
+    );
+    let routed = runtime
+        .apply_target(WireProtocol::OpenaiChat, source, &decision())
+        .unwrap();
+    assert_eq!(
+        routed.headers.get(INTERNAL_DISPATCH_BACKEND_HEADER),
+        Some(&json!("selected-chat"))
+    );
+    assert_eq!(
+        routed
+            .headers
+            .keys()
+            .filter(|name| name.eq_ignore_ascii_case(INTERNAL_DISPATCH_BACKEND_HEADER))
+            .count(),
+        1,
+        "source and target case variants must not compete with Relay's partition"
+    );
+
+    let fallback = runtime
+        .fallback_request(WireProtocol::OpenaiChat, chat_request())
+        .unwrap();
+    assert_eq!(
+        fallback.headers.get(INTERNAL_DISPATCH_BACKEND_HEADER),
+        Some(&json!("fallback-chat")),
+        "fallback dispatch must carry its own backend partition"
+    );
+}
+
+#[test]
 fn atof_cross_component_validation_rejects_invalid_endpoint_names_before_lookup() {
     for (name, expected) in [
         (" ", "atof_endpoint_name must be non-empty when configured"),

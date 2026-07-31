@@ -152,8 +152,9 @@ nemo-relay run --agent codex --dry-run
 
 Project config lives at `./.nemo-relay/config.toml`; user config lives at
 `~/.config/nemo-relay/config.toml` or `$XDG_CONFIG_HOME/nemo-relay/config.toml`.
-The project layer overrides system config, and the user layer overrides the
-project layer.
+Runtime files layer from lowest to highest precedence as explicit-or-user,
+nearest project, then system. An explicit `--config` replaces the ambient user
+file without suppressing project or system configuration.
 
 Set up agent entries in the top-level config with:
 
@@ -174,8 +175,9 @@ Unix) and reject authorization headers; use the corresponding environment
 variables or a user config for credentials.
 
 When the top-level CLI receives `--config path/to/config.toml`, the config
-editor uses that exact file. An explicit `config edit --user`, `--project`, or
-`--global` flag overrides the inherited target.
+editor uses that exact file as its user target, so the default editor and
+`config edit --user` both open it. Use `--project` or `--global` to edit the
+other active layers.
 
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:
@@ -186,8 +188,9 @@ nemo-relay plugins edit
 
 When the top-level CLI receives `--plugin-config-path`, the editor uses that
 exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
-sibling `path/to/plugins.toml`, matching runtime selection. An explicit
-`--user`, `--project`, or `--global` editor flag overrides the inherited target.
+sibling `path/to/plugins.toml`, matching runtime selection. The explicit file
+replaces the user layer, so `--user` keeps that inherited target.
+`--project` and `--global` edit the other active layers.
 
 The top-level editor menu contains one entry per supported built-in, followed by
 the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
@@ -201,6 +204,12 @@ The canonical plugin file is `plugins.toml`; user config lives at
 `/etc/nemo-relay/plugins.toml`; it is system-readable (`0644` on Unix), so do
 not store credentials there. The editor rejects schema-declared secret values
 in global plugin configuration.
+
+Runtime plugin files layer from lowest to highest precedence as
+explicit-or-user, nearest project, then system. An explicit
+`--plugin-config-path`, or a `plugins.toml` beside `--config`, replaces the
+ambient XDG user file without suppressing project or system policy. Missing
+files are skipped, and symlink aliases to one physical file are loaded once.
 
 Minimal ATIF example:
 

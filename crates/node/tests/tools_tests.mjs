@@ -42,6 +42,20 @@ function rejectWithPrimitive(value) {
   return Promise.reject(value);
 }
 
+async function assertCompletesWithin(promise, message) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new assert.AssertionError({ message })), 2000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function sparseArray() {
   const values = new Array(2);
   values[1] = 1;
@@ -754,7 +768,11 @@ describe('Tool guardrails', () => {
     try {
       const handle = toolCall('node_manual_tool_flush', { original: true });
       toolCallEnd(handle, { ok: true });
-      await flushSubscribers();
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start') &&
+          events.some((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'end'),
+      );
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_manual_tool_flush_request');
       deregisterToolSanitizeResponseGuardrail('node_manual_tool_flush_response');
@@ -986,6 +1004,163 @@ describe('Tool intercepts', () => {
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_repl');
       deregisterSubscriber('node_tool_exec_mark_sub');
+    }
+  });
+
+  it('execution intercept rejects a detached next call after settlement', async () => {
+    let releaseLateNext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateNext = resolve;
+    });
+    let lateNext;
+    let providerCalls = 0;
+    registerToolExecutionIntercept('node_tool_exec_late_next', 10, async (args, next) => {
+      lateNext = lateGate.then(() => next(args));
+      return { result: { source: 'intercept' } };
+    });
+    try {
+      const result = await toolCallExecute('late_next_tool', { value: 1 }, (args) => {
+        providerCalls += 1;
+        return args;
+      });
+      assert.deepEqual(result, { source: 'intercept' });
+      releaseLateNext();
+      await assert.rejects(lateNext, /execution continuation is no longer active/i);
+      assert.equal(providerCalls, 0);
+    } finally {
+      releaseLateNext?.();
+      await lateNext?.catch(() => {});
+      deregisterToolExecutionIntercept('node_tool_exec_late_next');
+    }
+  });
+
+  it('execution intercept aborts an already-started async provider after settlement', async () => {
+    let releaseProvider;
+    const providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    let providerStarted;
+    const started = new Promise((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerAborted;
+    const aborted = new Promise((resolve) => {
+      providerAborted = resolve;
+    });
+    let downstream;
+    let providerSideEffects = 0;
+    registerToolExecutionIntercept('node_tool_exec_abort_started_provider', 10, async (args, next) => {
+      downstream = next(args);
+      void downstream.catch(() => {});
+      await started;
+      return { result: { source: 'intercept' } };
+    });
+    try {
+      const result = await toolCallExecuteAsync('abort_started_tool', { value: 1 }, async (_args, signal) => {
+        providerStarted();
+        await Promise.race([
+          providerGate,
+          new Promise((_, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                providerAborted();
+                reject(new Error('provider aborted'));
+              },
+              { once: true },
+            );
+          }),
+        ]);
+        providerSideEffects += 1;
+        return { source: 'provider' };
+      });
+      assert.deepEqual(result, { source: 'intercept' });
+      await assert.rejects(downstream, /execution continuation is no longer active/i);
+      await assertCompletesWithin(aborted, 'provider did not receive cancellation after continuation revocation');
+      releaseProvider();
+      assert.equal(providerSideEffects, 0);
+    } finally {
+      releaseProvider?.();
+      await downstream?.catch(() => {});
+      deregisterToolExecutionIntercept('node_tool_exec_abort_started_provider');
+    }
+  });
+
+  it('execution intercept isolates concurrent next scope branches', async () => {
+    let releaseBoth;
+    const bothPushed = new Promise((resolve) => {
+      releaseBoth = resolve;
+    });
+    let pushed = 0;
+    registerToolExecutionIntercept('node_tool_exec_concurrent_next_scopes', 10, async (_args, next) => {
+      const [first, second] = await Promise.all([next({ branch: 'first' }), next({ branch: 'second' })]);
+      return { result: [first, second] };
+    });
+    try {
+      const result = await toolCallExecuteAsync('concurrent_next_tool', {}, async (args) => {
+        const handle = pushScope(`node-next-${args.branch}`, ScopeType.Custom);
+        try {
+          pushed += 1;
+          if (pushed === 2) {
+            releaseBoth();
+          }
+          await bothPushed;
+          if (args.branch === 'first') {
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          assert.equal(lib.getHandle().uuid, handle.uuid);
+          return args;
+        } finally {
+          popScope(handle);
+        }
+      });
+      assert.deepEqual(result, [{ branch: 'first' }, { branch: 'second' }]);
+    } finally {
+      releaseBoth?.();
+      deregisterToolExecutionIntercept('node_tool_exec_concurrent_next_scopes');
+    }
+  });
+
+  it('execution intercept isolates concurrent branch scope-stack replacements', async () => {
+    const firstStack = lib.createScopeStack();
+    const secondStack = lib.createScopeStack();
+    const firstScope = lib.withScopeStack(firstStack, () => lib.getHandle().uuid);
+    const secondScope = lib.withScopeStack(secondStack, () => lib.getHandle().uuid);
+    let firstStackInstalled;
+    const firstInstalled = new Promise((resolve) => {
+      firstStackInstalled = resolve;
+    });
+    let secondStackInstalled;
+    const secondInstalled = new Promise((resolve) => {
+      secondStackInstalled = resolve;
+    });
+
+    registerToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements', 10, async (args, next) => {
+      const first = (async () => {
+        lib.setThreadScopeStack(firstStack);
+        firstStackInstalled();
+        await secondInstalled;
+        return next({ ...args, branch: 'first' });
+      })();
+      const second = (async () => {
+        await firstInstalled;
+        lib.setThreadScopeStack(secondStack);
+        secondStackInstalled();
+        return next({ ...args, branch: 'second' });
+      })();
+      return { result: await Promise.all([first, second]) };
+    });
+    try {
+      const result = await toolCallExecuteAsync('concurrent_scope_replacements_tool', {}, async (args) => ({
+        branch: args.branch,
+        scope: lib.getHandle().uuid,
+      }));
+      assert.deepEqual(result, [
+        { branch: 'first', scope: firstScope },
+        { branch: 'second', scope: secondScope },
+      ]);
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements');
     }
   });
 

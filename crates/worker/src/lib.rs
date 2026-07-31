@@ -509,6 +509,9 @@ impl PluginContext {
     /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
     /// [`ToolNext::call`] continues the chain and returns only the raw
     /// downstream result JSON; Relay retains downstream pending marks.
+    /// `ToolNext` may be called repeatedly or concurrently while the callback
+    /// is active. Each call snapshots its visible worker scope stack, and Relay
+    /// rejects late calls or cancels unfinished calls when the callback settles.
     pub fn register_tool_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -622,6 +625,10 @@ impl PluginContext {
     }
 
     /// Registers an LLM execution intercept.
+    ///
+    /// [`LlmNext::call`] may run repeatedly or concurrently while the callback
+    /// is active. Each call snapshots its visible worker scope stack, and Relay
+    /// rejects late calls or cancels unfinished calls when the callback settles.
     pub fn register_llm_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -644,6 +651,11 @@ impl PluginContext {
     }
 
     /// Registers an LLM stream execution intercept.
+    ///
+    /// [`LlmStreamNext::call`] may run repeatedly or concurrently. Each call
+    /// snapshots its visible worker scope stack. The interceptor's returned
+    /// stream keeps the callback active until it closes; Relay then rejects
+    /// late calls and cancels unfinished calls.
     pub fn register_llm_stream_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -926,6 +938,10 @@ pub struct ToolNext {
 
 impl ToolNext {
     /// Calls the remaining tool execution chain.
+    ///
+    /// Calls may be repeated or concurrent while the owning interceptor is
+    /// active. Each call receives an isolated snapshot of the scope stack
+    /// visible here. Calls still unfinished when the interceptor settles fail.
     pub async fn call(&self, value: Json) -> Result<Json> {
         let mut client = self.runtime.host_client().await?;
         let response = client
@@ -934,6 +950,7 @@ impl ToolNext {
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
                 value: Some(json_envelope(JSON_SCHEMA, &value)?),
+                scope: self.runtime.current_scope_context(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -951,6 +968,10 @@ pub struct LlmNext {
 
 impl LlmNext {
     /// Calls the remaining LLM execution chain.
+    ///
+    /// Calls may be repeated or concurrent while the owning interceptor is
+    /// active. Each call receives an isolated snapshot of the scope stack
+    /// visible here. Calls still unfinished when the interceptor settles fail.
     pub async fn call(&self, request: LlmRequest) -> Result<Json> {
         let mut client = self.runtime.host_client().await?;
         let response = client
@@ -959,6 +980,7 @@ impl LlmNext {
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
                 request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
+                scope: self.runtime.current_scope_context(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -976,6 +998,11 @@ pub struct LlmStreamNext {
 
 impl LlmStreamNext {
     /// Calls the remaining LLM streaming execution chain.
+    ///
+    /// Calls may be repeated or concurrent while the owning interceptor stream
+    /// is active. Each call receives an isolated snapshot of the scope stack
+    /// visible here. A returned downstream stream has its ordinary lifetime,
+    /// but unfinished calls are cancelled when the interceptor stream closes.
     pub async fn call(&self, request: LlmRequest) -> Result<JsonStream> {
         let scope = self.runtime.current_scope_context();
         let mut client = self.runtime.host_client().await?;
@@ -985,6 +1012,7 @@ impl LlmStreamNext {
                 auth_token: self.runtime.auth_token.clone(),
                 continuation_id: self.continuation_id.clone(),
                 request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
+                scope: scope.clone(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;

@@ -312,11 +312,11 @@ jobs:
             python_api_wheels=(nemo_relay-*.whl)
             cli_npm=(nemo-relay-bin-npm-*.tgz)
             node_npm=(nemo-relay-node-npm-*.tgz)
-            expect_count 5 "CLI binary" "${cli_binaries[@]}"
-            expect_count 5 "CLI wheel" "${cli_wheels[@]}"
-            expect_count 5 "Python API wheel" "${python_api_wheels[@]}"
-            expect_count 6 "CLI npm" "${cli_npm[@]}"
-            expect_count 6 "Node npm" "${node_npm[@]}"
+            expect_count 7 "CLI binary" "${cli_binaries[@]}"
+            expect_count 7 "CLI wheel" "${cli_wheels[@]}"
+            expect_count 7 "Python API wheel" "${python_api_wheels[@]}"
+            expect_count 8 "CLI npm" "${cli_npm[@]}"
+            expect_count 8 "Node npm" "${node_npm[@]}"
 
             mapfile -t distribution_assets < <(
               find . -maxdepth 1 -type f \
@@ -517,7 +517,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ github.ref_name }}"
-          for pkg in node-packages/nemo-relay-node-npm-{linux-x64,linux-arm64,darwin-arm64,win32-x64,win32-arm64}-${version}.tgz; do
+          for pkg in node-packages/nemo-relay-node-npm-{linux-x64,linux-arm64,linux-x64-musl,linux-arm64-musl,darwin-arm64,win32-x64,win32-arm64}-${version}.tgz; do
             name="$(tar xOf "$pkg" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')"
             if npm view "${name}@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
               echo "${name} ${version} already exists on npm; skipping"
@@ -536,7 +536,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ github.ref_name }}"
-          for pkg in cli-packages/nemo-relay-bin-npm-{linux-x64,linux-arm64,darwin-arm64,win32-x64,win32-arm64}-${version}.tgz; do
+          for pkg in cli-packages/nemo-relay-bin-npm-{linux-x64,linux-arm64,linux-x64-musl,linux-arm64-musl,darwin-arm64,win32-x64,win32-arm64}-${version}.tgz; do
             name="$(tar xOf "$pkg" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')"
             if npm view "${name}@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
               echo "${name} ${version} already exists on npm; skipping"

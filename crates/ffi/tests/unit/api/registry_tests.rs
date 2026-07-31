@@ -29,7 +29,18 @@ fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
                     let mut request = Vec::new();
                     let mut buffer = [0_u8; 4096];
                     let (header_end, content_length) = loop {
-                        let read = stream.read(&mut buffer).unwrap();
+                        let read = match stream.read(&mut buffer) {
+                            Ok(read) => read,
+                            Err(error)
+                                if matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                                ) && Instant::now() < deadline =>
+                            {
+                                continue;
+                            }
+                            Err(error) => panic!("collector header read failed: {error}"),
+                        };
                         assert!(
                             read > 0,
                             "collector connection closed before request headers"
@@ -53,7 +64,18 @@ fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
                         }
                     };
                     while request.len() < header_end + content_length {
-                        let read = stream.read(&mut buffer).unwrap();
+                        let read = match stream.read(&mut buffer) {
+                            Ok(read) => read,
+                            Err(error)
+                                if matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                                ) && Instant::now() < deadline =>
+                            {
+                                continue;
+                            }
+                            Err(error) => panic!("collector body read failed: {error}"),
+                        };
                         assert!(read > 0, "collector connection closed before request body");
                         request.extend_from_slice(&buffer[..read]);
                     }

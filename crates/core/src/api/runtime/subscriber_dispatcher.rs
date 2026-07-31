@@ -371,6 +371,19 @@ mod native {
             .map_err(|error| error.to_string())
     }
 
+    fn build_sanitizer_invocation_runtime() -> std::result::Result<tokio::runtime::Runtime, String>
+    {
+        let runtime = process_state()
+            .sanitizer_runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(Err(error)) = runtime.as_ref() {
+            return Err(error.clone());
+        }
+        drop(runtime);
+        build_sanitizer_runtime()
+    }
+
     fn start_background_publication_executor()
     -> std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String> {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -860,10 +873,14 @@ mod native {
     ) -> (std::thread::Result<F::Output>, Vec<DispatcherMessage>) {
         let buffer = PublicationBuffer::enabled();
         let output = catch_unwind(AssertUnwindSafe(|| {
-            runtime.block_on(ASYNC_PUBLICATION_BUFFER.scope(
-                buffer.clone(),
-                TASK_PUBLICATION_CONTEXT.scope(publication_context, future),
-            ))
+            with_nested_publication_buffer(Some(buffer.clone()), || {
+                with_publication_context(publication_context.clone(), || {
+                    runtime.block_on(ASYNC_PUBLICATION_BUFFER.scope(
+                        buffer.clone(),
+                        TASK_PUBLICATION_CONTEXT.scope(publication_context, future),
+                    ))
+                })
+            })
         }));
         (output, buffer.take())
     }
@@ -879,12 +896,53 @@ mod native {
         publication_context: Option<PublicationContext>,
     ) -> (Option<Event>, Vec<DispatcherMessage>) {
         let state = process_state();
-        let mut runtime = state
-            .sanitizer_runtime
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let runtime = runtime.get_or_insert_with(build_sanitizer_runtime);
-        let runtime = match runtime.as_ref() {
+        let (transformed, mut nested_publications) = match transform {
+            Some(transform) => {
+                let runtime = match build_sanitizer_invocation_runtime() {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        if !state
+                            .sanitizer_runtime_failure_logged
+                            .swap(true, Ordering::AcqRel)
+                        {
+                            log::error!(
+                                target: "nemo_relay.runtime",
+                                event = "event_sanitizer_runtime_failed";
+                                "Event sanitizer runtime failed: {error}"
+                            );
+                        }
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "event_transform_runtime_unavailable";
+                            "Dropping an event because its required asynchronous transform could not run"
+                        );
+                        return (None, Vec::new());
+                    }
+                };
+                let (transformed, nested_publications) = run_with_nested_publication_buffer(
+                    &runtime,
+                    publication_context.clone(),
+                    async move { transform(event).await },
+                );
+                runtime.shutdown_background();
+                match transformed {
+                    Ok(event) => (event, nested_publications),
+                    Err(_) => {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "event_transform_panicked";
+                            "Event transform panicked; dropping the event"
+                        );
+                        return (None, nested_publications);
+                    }
+                }
+            }
+            None => (event, Vec::new()),
+        };
+        if sanitizers.is_empty() {
+            return (Some(transformed), nested_publications);
+        }
+        let runtime = match build_sanitizer_invocation_runtime() {
             Ok(runtime) => runtime,
             Err(error) => {
                 if !state
@@ -897,50 +955,21 @@ mod native {
                         "Event sanitizer runtime failed: {error}"
                     );
                 }
-                if transform.is_some() {
-                    log::error!(
-                        target: "nemo_relay.runtime",
-                        event = "event_transform_runtime_unavailable";
-                        "Dropping an event because its required asynchronous transform could not run"
-                    );
-                    return (None, Vec::new());
-                }
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "event_sanitizer_fail_open";
-                    "Publishing the original event snapshot because event sanitizers could not run"
+                    "Publishing the transformed event snapshot because event sanitizers could not run"
                 );
-                return (Some(event), Vec::new());
+                return (Some(transformed), nested_publications);
             }
         };
-        let transform_context = publication_context.clone();
-        let (transformed, mut nested_publications) =
-            run_with_nested_publication_buffer(runtime, transform_context, async move {
-                match transform {
-                    Some(transform) => transform(event).await,
-                    None => event,
-                }
-            });
-        let transformed = match transformed {
-            Ok(event) => event,
-            Err(_) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "event_transform_panicked";
-                    "Event transform panicked; dropping the event"
-                );
-                return (None, nested_publications);
-            }
-        };
-        if sanitizers.is_empty() {
-            return (Some(transformed), nested_publications);
-        }
         let fallback = transformed.clone();
         let (sanitized, sanitizer_publications) = run_with_nested_publication_buffer(
-            runtime,
+            &runtime,
             publication_context,
             NemoRelayContextState::event_sanitize_snapshot_chain(transformed, &sanitizers),
         );
+        runtime.shutdown_background();
         nested_publications.extend(sanitizer_publications);
         let event = match sanitized {
             Ok(event) => Some(event),

@@ -206,6 +206,7 @@ impl LlmStreamWrapper {
             return;
         }
         self.ended = true;
+        self.inner.terminalize();
         let metadata =
             metadata_with_otel_status(self.metadata.clone(), status_code, status_message);
         self.finalization = self.emit_end_event(metadata, interrupted, false);

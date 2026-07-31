@@ -25,8 +25,9 @@ use crate::api::runtime::subscriber_dispatcher::{
     capture_nested_publication_buffer, with_task_publication_context,
 };
 use crate::api::runtime::{
-    BuiltinLlmCodec, LlmSanitizeRequestContext, LlmSanitizeResponseContext, NemoRelayContextState,
-    TASK_SCOPE_STACK, global_context, with_active_event_uuid,
+    BuiltinLlmCodec, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
+    MiddlewareContinuationLease, NemoRelayContextState, TASK_SCOPE_STACK, current_scope_stack,
+    global_context, with_active_event_uuid,
 };
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::response::AnnotatedLlmResponse;
@@ -87,6 +88,25 @@ unsafe extern "C" fn accept_native_stream_item(
     _done: bool,
 ) -> bool {
     true
+}
+
+unsafe extern "C" fn complete_native_next_result(
+    user_data: *mut c_void,
+    value_json: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+) {
+    let sender = unsafe {
+        Box::from_raw(
+            user_data as *mut tokio::sync::oneshot::Sender<std::result::Result<Json, String>>,
+        )
+    };
+    let result = if !error.is_null() {
+        Err(read_native_string(error).unwrap())
+    } else {
+        parse_json_arg(value_json, "native next callback result")
+            .map_err(|status| format!("invalid native next callback result: {status:?}"))
+    };
+    let _ = sender.send(result);
 }
 
 #[derive(Default)]
@@ -235,6 +255,45 @@ unsafe extern "C" fn invoke_native_stream_next_then_return_state(
         native_async_stream_release(stream);
     }
     state.callback_state
+}
+
+unsafe extern "C" fn invoke_detached_next_and_finish_replacement_stream(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    stream: *const NemoRelayNativeAsyncStream,
+) -> u32 {
+    let invoke_status = unsafe { &*user_data.cast::<AtomicUsize>() };
+    let request = read_native_string(invocation_json)
+        .ok()
+        .and_then(|invocation| serde_json::from_str::<Json>(&invocation).ok())
+        .and_then(|invocation| invocation.get("request").cloned())
+        .and_then(|request| native_string_from_json(&request));
+    let status = if let Some(request) = request {
+        let status = unsafe {
+            native_async_next_invoke_stream(
+                next,
+                request,
+                stream,
+                accept_native_stream_item,
+                ptr::null_mut(),
+            )
+        };
+        unsafe { native_string_free(request) };
+        status
+    } else {
+        NemoRelayStatus::InvalidJson
+    };
+    invoke_status.store(status as usize, Ordering::Release);
+    let replacement = native_string_from_json(&json!({"source": "replacement"})).unwrap();
+    unsafe {
+        let _ = native_async_stream_push_json(stream, replacement);
+        native_string_free(replacement);
+        let _ = native_async_stream_finish(stream);
+        native_async_next_release(next);
+        native_async_stream_release(stream);
+    }
+    NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 
 struct FailingNativeCodec;
@@ -522,12 +581,240 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
     }
 }
 
+#[test]
+fn native_async_next_reports_a_revoked_continuation_without_calling_the_provider() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let (lease, guard) = MiddlewareContinuationLease::capture();
+    let next = Arc::new(NativeAsyncNext::new(
+        NativeAsyncNextInner::Tool({
+            let provider_calls = provider_calls.clone();
+            Arc::new(move |value| {
+                let provider_calls = provider_calls.clone();
+                let invocation = lease.begin();
+                Box::pin(async move {
+                    invocation?
+                        .invoke(|| async move {
+                            provider_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok(value)
+                        })
+                        .await
+                })
+            })
+        }),
+        runtime.handle().clone(),
+        None,
+    ));
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let completion_ref =
+        Arc::into_raw(Arc::clone(&completion)) as *const NemoRelayNativeAsyncCompletion;
+    let invocation = native_string_from_json(&json!({"tool": true})).unwrap();
+
+    drop(guard);
+    assert_eq!(
+        unsafe { native_async_next_invoke(next_ref, invocation, completion_ref) },
+        NemoRelayStatus::Ok
+    );
+    let error = runtime
+        .block_on(receiver)
+        .expect("native completion should settle")
+        .expect_err("revoked continuation should reject");
+    assert!(
+        error
+            .to_string()
+            .contains("execution continuation is no longer active")
+    );
+    assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+
+    unsafe {
+        native_string_free(invocation);
+        native_async_next_release(next_ref);
+        native_async_completion_release(completion_ref);
+    }
+}
+
+#[test]
+fn native_async_next_result_supports_repeated_concurrent_calls() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let next = Arc::new(NativeAsyncNext::new(
+        NativeAsyncNextInner::Tool({
+            let provider_calls = provider_calls.clone();
+            Arc::new(move |value| {
+                provider_calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    tokio::task::yield_now().await;
+                    Ok(json!({
+                        "value": value,
+                        "scope": crate::api::runtime::task_scope_top().uuid.to_string(),
+                    }))
+                })
+            })
+        }),
+        runtime.handle().clone(),
+        None,
+    ));
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let first = native_string_from_json(&json!({"branch": "first"})).unwrap();
+    let second = native_string_from_json(&json!({"branch": "second"})).unwrap();
+    let (first_tx, first_rx) = tokio::sync::oneshot::channel::<std::result::Result<Json, String>>();
+    let (second_tx, second_rx) =
+        tokio::sync::oneshot::channel::<std::result::Result<Json, String>>();
+    let first_stack = create_scope_stack();
+    let first_scope = first_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid
+        .to_string();
+    let second_stack = create_scope_stack();
+    let second_scope = second_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid
+        .to_string();
+
+    assert_eq!(
+        with_scope_stack(first_stack, || unsafe {
+            native_async_next_invoke_result(
+                next_ref,
+                first,
+                complete_native_next_result,
+                Box::into_raw(Box::new(first_tx)).cast(),
+            )
+        }),
+        NemoRelayStatus::Ok
+    );
+    assert_eq!(
+        with_scope_stack(second_stack, || unsafe {
+            native_async_next_invoke_result(
+                next_ref,
+                second,
+                complete_native_next_result,
+                Box::into_raw(Box::new(second_tx)).cast(),
+            )
+        }),
+        NemoRelayStatus::Ok
+    );
+    let (first_result, second_result) =
+        runtime.block_on(async { tokio::join!(first_rx, second_rx) });
+
+    assert_eq!(
+        first_result.unwrap().unwrap(),
+        json!({
+            "value": {"branch": "first"},
+            "scope": first_scope,
+        })
+    );
+    assert_eq!(
+        second_result.unwrap().unwrap(),
+        json!({
+            "value": {"branch": "second"},
+            "scope": second_scope,
+        })
+    );
+    assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
+
+    unsafe {
+        native_string_free(first);
+        native_string_free(second);
+        native_async_next_release(next_ref);
+    }
+}
+
+#[test]
+fn native_async_next_result_uses_captured_scope_on_an_unbound_plugin_thread() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let captured_stack = create_scope_stack();
+    let captured_scope = captured_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid
+        .to_string();
+    let next = with_scope_stack(captured_stack, || {
+        Arc::new(NativeAsyncNext::new(
+            NativeAsyncNextInner::Tool(Arc::new(|value| {
+                Box::pin(async move {
+                    Ok(json!({
+                        "value": value,
+                        "scope": crate::api::runtime::task_scope_top().uuid.to_string(),
+                    }))
+                })
+            })),
+            runtime.handle().clone(),
+            None,
+        ))
+    });
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let invocation = native_string_from_json(&json!({"thread": "plugin"})).unwrap();
+    let (sender, receiver) = tokio::sync::oneshot::channel::<std::result::Result<Json, String>>();
+    let next_address = next_ref as usize;
+    let invocation_address = invocation as usize;
+    let sender_address = Box::into_raw(Box::new(sender)) as usize;
+
+    assert_eq!(
+        std::thread::spawn(move || unsafe {
+            native_async_next_invoke_result(
+                next_address as *const NemoRelayNativeAsyncNext,
+                invocation_address as *const NemoRelayNativeString,
+                complete_native_next_result,
+                sender_address as *mut c_void,
+            )
+        })
+        .join()
+        .unwrap(),
+        NemoRelayStatus::Ok
+    );
+    assert_eq!(
+        runtime.block_on(receiver).unwrap().unwrap(),
+        json!({
+            "value": {"thread": "plugin"},
+            "scope": captured_scope,
+        })
+    );
+
+    unsafe {
+        native_string_free(invocation);
+        native_async_next_release(next_ref);
+    }
+}
+
 fn native_continuation_context_observation(
     expected_stack: &ScopeStackHandle,
     expected_event_uuid: uuid::Uuid,
 ) -> Json {
+    let expected_scope_uuid = expected_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid;
+    let visible_scope_uuid = current_scope_stack()
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid;
     json!({
-        "scope_stack": Arc::ptr_eq(&current_scope_stack(), expected_stack),
+        "scope_stack": visible_scope_uuid == expected_scope_uuid,
         "active_event_uuid": active_event_uuid() == Some(expected_event_uuid),
         "publication_context": crate::api::runtime::subscriber_dispatcher::publication_context::<String>()
             .is_some_and(|context| context.as_str() == "native-continuation"),
@@ -638,8 +925,8 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                             let stream = Arc::new(NativeAsyncStream {
                                 sender: Mutex::new(Some(sender)),
                                 cancelled: AtomicBool::new(false),
-                                next_invoked: AtomicBool::new(false),
-                                downstream_abort: Mutex::new(None),
+                                settled: AtomicBool::new(false),
+                                downstream_aborts: Mutex::new(HashMap::new()),
                                 settlement: Mutex::new(()),
                                 before_settlement_lock: None,
                                 _callback_user_data: None,
@@ -864,8 +1151,8 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
     let output_stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
-        next_invoked: AtomicBool::new(false),
-        downstream_abort: Mutex::new(None),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
         _callback_user_data: None,
@@ -1021,8 +1308,8 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
     let stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(true),
-        next_invoked: AtomicBool::new(false),
-        downstream_abort: Mutex::new(None),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
         _callback_user_data: None,
@@ -1114,7 +1401,7 @@ fn malformed_llm_next_does_not_consume_the_completion() {
 }
 
 #[test]
-fn native_async_stream_next_is_one_shot() {
+fn native_async_stream_next_supports_repeated_concurrent_calls() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1131,8 +1418,8 @@ fn native_async_stream_next_is_one_shot() {
     let stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
-        next_invoked: AtomicBool::new(false),
-        downstream_abort: Mutex::new(None),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
         _callback_user_data: None,
@@ -1169,9 +1456,34 @@ fn native_async_stream_next_is_one_shot() {
                 ptr::null_mut(),
             )
         },
-        NemoRelayStatus::InvalidArg
+        NemoRelayStatus::Ok
     );
-    assert_last_error_contains("already invoked");
+
+    runtime
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if stream
+                        .downstream_aborts
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .is_empty()
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+        })
+        .expect("completed native stream continuations should prune their abort handles");
+    assert!(
+        stream
+            .downstream_aborts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+    );
 
     drop(NativeAsyncStreamReceiver {
         receiver,
@@ -1182,6 +1494,140 @@ fn native_async_stream_next_is_one_shot() {
         native_string_free(invocation);
         native_async_next_release(next_ref);
         native_async_stream_release(stream_ref);
+    }
+}
+
+#[test]
+fn native_async_stream_settlement_rejects_late_next_and_aborts_in_flight_next() {
+    for reject in [false, true] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let next = Arc::new(NativeAsyncNext::new(
+            NativeAsyncNextInner::LlmStream(Arc::new({
+                let provider_calls = Arc::clone(&provider_calls);
+                move |_request| {
+                    let provider_calls = Arc::clone(&provider_calls);
+                    let started_tx = Arc::clone(&started_tx);
+                    Box::pin(async move {
+                        provider_calls.fetch_add(1, Ordering::SeqCst);
+                        if let Some(started_tx) = started_tx
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take()
+                        {
+                            let _ = started_tx.send(());
+                        }
+                        std::future::pending().await
+                    })
+                }
+            })),
+            runtime.handle().clone(),
+            None,
+        ));
+        let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let stream = Arc::new(NativeAsyncStream {
+            sender: Mutex::new(Some(sender)),
+            cancelled: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+            downstream_aborts: Mutex::new(HashMap::new()),
+            settlement: Mutex::new(()),
+            before_settlement_lock: None,
+            _callback_user_data: None,
+        });
+        let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
+        let invocation = native_string_from_json(
+            &serde_json::to_value(LlmRequest {
+                headers: Map::new(),
+                content: json!({"stream": true}),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let callback_state = NativeStreamCallbackState::default();
+
+        assert_eq!(
+            unsafe {
+                native_async_next_invoke_stream(
+                    next_ref,
+                    invocation,
+                    stream_ref,
+                    record_native_stream_result,
+                    (&callback_state as *const NativeStreamCallbackState)
+                        .cast_mut()
+                        .cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        runtime.block_on(started_rx).unwrap();
+
+        if reject {
+            let message = native_string("replacement rejected");
+            assert_eq!(
+                unsafe { native_async_stream_reject(stream_ref, message) },
+                NemoRelayStatus::Ok
+            );
+            unsafe { native_string_free(message) };
+        } else {
+            assert_eq!(
+                unsafe { native_async_stream_finish(stream_ref) },
+                NemoRelayStatus::Ok
+            );
+        }
+
+        runtime
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(1), callback_state.notified.notified())
+                    .await
+            })
+            .expect("settlement should terminate the in-flight continuation callback");
+        assert_eq!(callback_state.callbacks.load(Ordering::SeqCst), 1);
+        assert!(
+            callback_state
+                .error
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_deref()
+                .is_some_and(|error| error.contains("settled"))
+        );
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert!(
+            stream
+                .downstream_aborts
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty()
+        );
+        assert_eq!(
+            unsafe {
+                native_async_next_invoke_stream(
+                    next_ref,
+                    invocation,
+                    stream_ref,
+                    accept_native_stream_item,
+                    ptr::null_mut(),
+                )
+            },
+            NemoRelayStatus::InvalidArg
+        );
+        runtime.block_on(tokio::task::yield_now());
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+
+        drop(NativeAsyncStreamReceiver {
+            receiver,
+            stream: Arc::clone(&stream),
+        });
+        unsafe {
+            native_string_free(invocation);
+            native_async_next_release(next_ref);
+            native_async_stream_release(stream_ref);
+        }
     }
 }
 
@@ -1208,8 +1654,8 @@ fn native_async_stream_next_stops_callbacks_after_false() {
     let stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
-        next_invoked: AtomicBool::new(false),
-        downstream_abort: Mutex::new(None),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
         _callback_user_data: None,
@@ -1281,8 +1727,8 @@ fn native_async_stream_in_flight_cancellation_releases_callback_state() {
     let stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
-        next_invoked: AtomicBool::new(false),
-        downstream_abort: Mutex::new(None),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
         _callback_user_data: None,
@@ -1362,8 +1808,8 @@ fn native_async_stream_cancellation_before_first_poll_releases_callback_state() 
     let stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
-        next_invoked: AtomicBool::new(false),
-        downstream_abort: Mutex::new(None),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
         _callback_user_data: None,
@@ -1827,6 +2273,69 @@ fn native_async_stream_contract_errors_abort_an_invoked_next() {
 }
 
 #[test]
+fn native_replacement_stream_does_not_wait_for_a_detached_pending_next() {
+    struct DropSignal(std::sync::mpsc::Sender<()>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+    let invoke_status = AtomicUsize::new(NemoRelayStatus::Internal as usize);
+    let user_data = Arc::new(NativeCallbackUserData {
+        ptr: (&invoke_status as *const AtomicUsize).cast_mut().cast(),
+        free_fn: None,
+        _instance: None,
+    });
+    let wrapped = wrap_native_incremental_llm_stream_execution_with_user_data(
+        invoke_detached_next_and_finish_replacement_stream,
+        user_data,
+    );
+    let next: LlmStreamExecutionNextFn = Arc::new(move |_request| {
+        let guard = DropSignal(dropped_tx.clone());
+        Box::pin(async move {
+            let _guard = guard;
+            std::future::pending::<FlowResult<LlmJsonStream>>().await
+        })
+    });
+
+    let mut stream = runtime
+        .block_on(wrapped(
+            "detached-next",
+            LlmRequest {
+                headers: Map::new(),
+                content: Json::Null,
+            },
+            next,
+        ))
+        .expect("replacement stream must not wait for detached downstream construction");
+    assert_eq!(
+        runtime.block_on(stream.next()).unwrap().unwrap(),
+        json!({"source": "replacement"})
+    );
+    assert!(runtime.block_on(stream.next()).is_none());
+    drop(stream);
+
+    assert_eq!(
+        invoke_status.load(Ordering::Acquire),
+        NemoRelayStatus::Ok as usize
+    );
+    match dropped_rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("closing replacement output must cancel detached downstream next");
+        }
+    }
+}
+
+#[test]
 fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
     #[derive(Clone, Copy)]
     enum Settlement {
@@ -1845,8 +2354,8 @@ fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
         let stream = Arc::new(NativeAsyncStream {
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
-            next_invoked: AtomicBool::new(false),
-            downstream_abort: Mutex::new(None),
+            settled: AtomicBool::new(false),
+            downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
             before_settlement_lock: Some(Arc::clone(&settlement_checkpoint)),
             _callback_user_data: None,
@@ -1913,8 +2422,8 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
     let stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
-        next_invoked: AtomicBool::new(false),
-        downstream_abort: Mutex::new(None),
+        settled: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
         _callback_user_data: None,

@@ -86,7 +86,7 @@ function decodeResponseWithCodec(codec, response) {
  * @template TResult
  * @param {string} name - Tool name reported to the runtime.
  * @param {TArgs} args - Typed tool arguments supplied by the caller.
- * @param {function(TArgs): TResult | Promise<TResult>} func - Tool implementation to execute.
+ * @param {function(TArgs, AbortSignal): TResult | Promise<TResult>} func - Tool implementation to execute.
  * @param {Codec<TArgs>} argsCodec - Codec used to serialize and deserialize tool args.
  * @param {Codec<TResult>} resultCodec - Codec used to serialize and deserialize tool results.
  * @param {object} [options] - Optional execution-scoping metadata.
@@ -99,9 +99,9 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
   const opts = options || {};
   const jsonArgs = argsCodec.toJson(args);
 
-  const jsonFunc = (jsonArgsInner) => {
+  const jsonFunc = (jsonArgsInner, signal) => {
     const typedArgs = argsCodec.fromJson(jsonArgsInner);
-    const typedResult = func(typedArgs);
+    const typedResult = func(typedArgs, signal);
     if (typedResult && typeof typedResult.then === 'function') {
       return typedResult.then((r) => resultCodec.toJson(r));
     }
@@ -130,7 +130,7 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
  * @template TResponse
  * @param {string} name - Model/provider name.
  * @param {*} request - The LLM request object ({headers, content}).
- * @param {function(*): Promise<TResponse>} func - The LLM implementation.
+ * @param {function(*, AbortSignal): TResponse | Promise<TResponse>} func - The LLM implementation.
  * @param {Codec<TResponse>} responseJsonCodec - Codec for serializing/deserializing the response.
  * @param {object} [options] - Optional parameters.
  * @param {JsScopeHandle} [options.handle] - Parent scope handle.
@@ -150,8 +150,8 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
 async function typedLlmExecute(name, request, func, responseJsonCodec, options) {
   const opts = options || {};
 
-  const jsonFunc = (req) => {
-    const typedResult = func(req);
+  const jsonFunc = (req, signal) => {
+    const typedResult = func(req, signal);
     if (typedResult && typeof typedResult.then === 'function') {
       return typedResult.then((r) => responseJsonCodec.toJson(r));
     }

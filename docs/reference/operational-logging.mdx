@@ -113,6 +113,13 @@ exceed 9. A record larger than `max_file_size_bytes` remains intact rather
 than being split. File sinks remain append-only when rotation settings are
 omitted.
 
+When Relay layers `config.toml` files, the resolved destination `path` is the
+file sink identity. Distinct paths are emitted in highest-to-lowest precedence
+order: system, project, then explicit-or-user. For matching paths, higher-layer
+fields recursively overlay lower-layer fields, producing one effective sink.
+Path aliases such as `relay.log` and `./relay.log` resolve to one sink, using
+the higher-layer spelling and settings.
+
 ## Rust Library API
 
 Initialize operational logging once during application startup by choosing one

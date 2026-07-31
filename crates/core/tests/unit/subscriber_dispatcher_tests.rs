@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-use super::EventSubscriberFn;
 use super::native::{
     DispatcherLoopState, DispatcherMessage, PendingFlush, PublicationLineage, PublicationPermit,
     dispatcher_sender, enqueue_dispatch_message, flush_subscribers, register_async_publication,
     sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test, spawn_background_publication,
 };
+use super::{EventSubscriberFn, publication_context};
 use crate::api::registry::RegistryRecord;
 use crate::api::runtime::EventSanitizeFn;
 use crate::api::runtime::scope_stack::current_scope_stack;
@@ -481,4 +481,182 @@ fn sanitizer_runtime_failure_preserves_untransformed_event_snapshot() {
 
     assert_eq!(published, Some(event));
     assert!(nested.is_empty());
+}
+
+#[test]
+fn synchronous_transform_panics_drop_only_the_current_event() {
+    let event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000015",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "synchronous-transform-panic"
+    }))
+    .expect("valid event");
+    let transform: super::EventTransformFn =
+        Box::new(|_| panic!("transform panicked before returning its future"));
+
+    let (published, nested) = sanitize_event_snapshot(event, Some(transform), Vec::new(), None);
+
+    assert!(published.is_none());
+    assert!(nested.is_empty());
+}
+
+#[test]
+fn detached_blocking_sanitizer_work_does_not_stall_publication() {
+    let event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000016",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "detached-blocking-work"
+    }))
+    .expect("valid event");
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+    let sanitizer: EventSanitizeFn = Arc::new(move |_, fields| {
+        let release_rx = release_rx.lock().unwrap().take().unwrap();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let _ = release_rx.recv();
+            });
+            Ok(fields)
+        })
+    });
+
+    let (completed_tx, completed_rx) = mpsc::channel();
+    let publication = std::thread::spawn(move || {
+        let result = sanitize_event_snapshot(
+            event,
+            None,
+            vec![RegistryRecord::new("detached-blocking", 0, sanitizer)],
+            None,
+        );
+        completed_tx.send(result).unwrap();
+    });
+    let result = completed_rx.recv_timeout(std::time::Duration::from_secs(1));
+    let _ = release_tx.send(());
+    publication.join().unwrap();
+
+    let (published, nested) =
+        result.expect("detached blocking work must not stall the subscriber dispatcher");
+    assert!(published.is_some());
+    assert!(nested.is_empty());
+}
+
+#[test]
+fn sanitizer_spawned_tasks_inherit_the_binding_publication_context() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000012",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "spawned-publication-context"
+    }))
+    .expect("valid event");
+    let (observed_tx, observed_rx) = mpsc::channel();
+    let sanitizer: EventSanitizeFn = Arc::new(move |_, fields| {
+        let observed_tx = observed_tx.clone();
+        Box::pin(async move {
+            tokio::spawn(async move {
+                observed_tx
+                    .send(publication_context::<String>().map(|value| value.as_str().to_string()))
+                    .unwrap();
+            })
+            .await
+            .unwrap();
+            Ok(fields)
+        })
+    });
+
+    let (published, nested) = sanitize_event_snapshot(
+        event.clone(),
+        None,
+        vec![RegistryRecord::new("spawned-context", 0, sanitizer)],
+        Some(Arc::new("binding-context".to_string())),
+    );
+
+    assert_eq!(published, Some(event));
+    assert!(nested.is_empty());
+    assert_eq!(
+        observed_rx.recv().unwrap().as_deref(),
+        Some("binding-context")
+    );
+}
+
+#[test]
+fn detached_sanitizer_tasks_cannot_inherit_a_later_publication_context() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let first_event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000013",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "detached-publication-context"
+    }))
+    .expect("valid event");
+    let second_event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000014",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "later-publication-context"
+    }))
+    .expect("valid event");
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+    let (observed_tx, observed_rx) = mpsc::channel();
+    let first_sanitizer: EventSanitizeFn = Arc::new(move |_, fields| {
+        let release_rx = release_rx.lock().unwrap().take().unwrap();
+        let observed_tx = observed_tx.clone();
+        Box::pin(async move {
+            tokio::spawn(async move {
+                let _ = release_rx.await;
+                observed_tx
+                    .send(publication_context::<String>().map(|value| value.as_str().to_string()))
+                    .unwrap();
+                let (done, _ignored) = mpsc::channel();
+                enqueue_dispatch_message(DispatcherMessage::Flush { done });
+            });
+            Ok(fields)
+        })
+    });
+
+    let (published, nested) = sanitize_event_snapshot(
+        first_event.clone(),
+        None,
+        vec![RegistryRecord::new("detached-context", 0, first_sanitizer)],
+        Some(Arc::new("first-context".to_string())),
+    );
+    assert_eq!(published, Some(first_event));
+    assert!(nested.is_empty());
+
+    let release_tx = Arc::new(Mutex::new(Some(release_tx)));
+    let second_sanitizer: EventSanitizeFn = Arc::new(move |_, fields| {
+        let release_tx = release_tx.lock().unwrap().take().unwrap();
+        Box::pin(async move {
+            let _ = release_tx.send(());
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+            Ok(fields)
+        })
+    });
+    let (published, nested) = sanitize_event_snapshot(
+        second_event.clone(),
+        None,
+        vec![RegistryRecord::new("later-context", 0, second_sanitizer)],
+        Some(Arc::new("second-context".to_string())),
+    );
+
+    assert_eq!(published, Some(second_event));
+    assert!(nested.is_empty());
+    assert!(matches!(
+        observed_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected)
+    ));
 }

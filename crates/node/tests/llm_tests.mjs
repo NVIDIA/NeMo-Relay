@@ -1293,6 +1293,94 @@ describe('LLM intercepts', () => {
     deregisterLlmExecutionIntercept('node_llm_exec_repl');
   });
 
+  it('execution intercept rejects a detached next call after settlement', async () => {
+    let releaseLateNext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateNext = resolve;
+    });
+    let lateNext;
+    let providerCalls = 0;
+    registerLlmExecutionIntercept('node_llm_exec_late_next', 10, async (native, next) => {
+      lateNext = lateGate.then(() => next(native));
+      return { source: 'intercept' };
+    });
+    try {
+      const result = await llmCallExecute('late_next_llm', makeNative(), () => {
+        providerCalls += 1;
+        return { source: 'provider' };
+      });
+      assert.deepEqual(result, { source: 'intercept' });
+      releaseLateNext();
+      await assert.rejects(lateNext, /execution continuation is no longer active/i);
+      assert.equal(providerCalls, 0);
+    } finally {
+      releaseLateNext?.();
+      await lateNext?.catch(() => {});
+      deregisterLlmExecutionIntercept('node_llm_exec_late_next');
+    }
+  });
+
+  it('execution intercept aborts an already-started async provider after settlement', async () => {
+    let releaseProvider;
+    const providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    let providerStarted;
+    const started = new Promise((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerAborted;
+    const aborted = new Promise((resolve) => {
+      providerAborted = resolve;
+    });
+    let downstream;
+    let providerSideEffects = 0;
+    registerLlmExecutionIntercept('node_llm_exec_abort_started_provider', 10, async (native, next) => {
+      downstream = next(native);
+      void downstream.catch(() => {});
+      await started;
+      return { source: 'intercept' };
+    });
+    try {
+      const result = await llmCallExecuteAsync(
+        'abort_started_llm',
+        makeNative(),
+        async (_request, signal) => {
+          providerStarted();
+          await Promise.race([
+            providerGate,
+            new Promise((_, reject) => {
+              signal.addEventListener(
+                'abort',
+                () => {
+                  providerAborted();
+                  reject(new Error('provider aborted'));
+                },
+                { once: true },
+              );
+            }),
+          ]);
+          providerSideEffects += 1;
+          return { source: 'provider' };
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { source: 'intercept' });
+      await assert.rejects(downstream, /execution continuation is no longer active/i);
+      await assertCompletesWithin(aborted, 'provider did not receive cancellation after continuation revocation');
+      releaseProvider();
+      assert.equal(providerSideEffects, 0);
+    } finally {
+      releaseProvider?.();
+      await downstream?.catch(() => {});
+      deregisterLlmExecutionIntercept('node_llm_exec_abort_started_provider');
+    }
+  });
+
   it('execution intercept rejects invalid next request payloads', async () => {
     registerLlmExecutionIntercept('node_llm_exec_invalid_next', 10, async (_native, next) => {
       return next({
@@ -1425,6 +1513,137 @@ describe('LLM intercepts', () => {
       },
     ]);
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec_repl');
+  });
+
+  it('stream execution intercept rejects a detached next call after its output closes', async () => {
+    let releaseLateNext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateNext = resolve;
+    });
+    let lateNext;
+    let providerCalls = 0;
+    registerLlmStreamExecutionIntercept('node_llm_stream_late_next', 10, async (native, next) => {
+      lateNext = lateGate.then(() => next(native));
+      return [{ source: 'intercept' }];
+    });
+    try {
+      const stream = await llmStreamCallExecute('late_next_stream_llm', makeNative(), () => {
+        providerCalls += 1;
+      });
+      assert.deepEqual(await stream.next(), { source: 'intercept' });
+      assert.equal(await stream.next(), null);
+      releaseLateNext();
+      await assert.rejects(lateNext, /execution continuation is no longer active/i);
+      assert.equal(providerCalls, 0);
+    } finally {
+      releaseLateNext?.();
+      await lateNext?.catch(() => {});
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_late_next');
+    }
+  });
+
+  it('stream execution next retains the captured scope after the callback resolves', async () => {
+    const invocationStack = lib.createScopeStack();
+    const invocationScope = lib.withScopeStack(invocationStack, () => lib.getHandle().uuid);
+    let retainedNext;
+    registerLlmStreamExecutionIntercept('node_llm_stream_retained_next_scope', 10, async (native, next) => {
+      retainedNext = () => next(native);
+      // Keep the Rust-to-Node forwarding channel backpressured so the
+      // interceptor output stream, and therefore its continuation lease,
+      // remains active after this callback Promise resolves.
+      return Array.from({ length: 64 }, (_, index) => ({ source: 'intercept', index }));
+    });
+    try {
+      const stream = await lib.withScopeStack(invocationStack, () =>
+        llmStreamCallExecute('retained_next_scope_stream_llm', makeNative(), (wrapper) => {
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
+            scope: lib.getHandle().uuid,
+          });
+          lib.endStream(wrapper.__nemo_relay_stream_id);
+        }),
+      );
+
+      assert.deepEqual(await retainedNext(), [{ scope: invocationScope }]);
+      assert.deepEqual(await stream.next(), { source: 'intercept', index: 0 });
+      await stream.close();
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_retained_next_scope');
+    }
+  });
+
+  it('default lazy stream preserves the managed parent context', async () => {
+    const events = [];
+    registerSubscriber('node_default_lazy_stream_context', (event) => events.push(event));
+    try {
+      const stream = await llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), (wrapper) => {
+        setImmediate(() => {
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
+            parentUuid: lib.capturePropagationContext().parentUuid,
+          });
+          lib.endStream(wrapper.__nemo_relay_stream_id);
+        });
+      });
+      const providerContext = await stream.next();
+      assert.equal(await stream.next(), null);
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'node_default_lazy_stream_context' &&
+          event.scope_category === 'start' &&
+          event.category === 'llm',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      assert.deepEqual(providerContext, { parentUuid: start.uuid });
+    } finally {
+      deregisterSubscriber('node_default_lazy_stream_context');
+    }
+  });
+
+  it('stream execution next honors concurrent per-call scope-stack replacements', async () => {
+    const firstStack = lib.createScopeStack();
+    const secondStack = lib.createScopeStack();
+    const firstScope = lib.withScopeStack(firstStack, () => lib.getHandle().uuid);
+    const secondScope = lib.withScopeStack(secondStack, () => lib.getHandle().uuid);
+    registerLlmStreamExecutionIntercept('node_llm_stream_next_scope_replacements', 10, async (native, next) => {
+      const [first, second] = await Promise.all([
+        lib.withScopeStack(firstStack, () =>
+          next({
+            ...native,
+            content: { ...native.content, branch: 'first' },
+          }),
+        ),
+        lib.withScopeStack(secondStack, () =>
+          next({
+            ...native,
+            content: { ...native.content, branch: 'second' },
+          }),
+        ),
+      ]);
+      return [...first, ...second];
+    });
+    try {
+      const stream = await llmStreamCallExecute('scoped_next_stream_llm', makeNative(), (wrapper) => {
+        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
+          branch: wrapper.__nemo_relay_native.content.branch,
+          scope: lib.getHandle().uuid,
+        });
+        lib.endStream(wrapper.__nemo_relay_stream_id);
+      });
+      const chunks = [];
+      for (;;) {
+        const chunk = await stream.next();
+        if (chunk === null) {
+          break;
+        }
+        chunks.push(chunk);
+      }
+      assert.deepEqual(chunks, [
+        { branch: 'first', scope: firstScope },
+        { branch: 'second', scope: secondScope },
+      ]);
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_next_scope_replacements');
+    }
   });
 
   it('stream execution intercept rejects non-JSON next arguments without aborting Node', async () => {

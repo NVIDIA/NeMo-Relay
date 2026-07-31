@@ -143,9 +143,10 @@ install directories, host-specific behavior, and the shared-sidecar lifecycle.
 
 ## Shared Configuration
 
-Shared TOML config is optional. The gateway loads defaults, then system config,
-then project config, then user config. User config takes priority over system
-and project config. CLI flags and environment variables override file config.
+Shared TOML config is optional. The gateway loads defaults, then the explicit
+file when supplied or the XDG user file otherwise, then the nearest project
+file, and finally the system file. System config has the highest file-level
+priority. CLI flags and environment variables override file config.
 
 ### Interactive Setup
 
@@ -164,6 +165,13 @@ setup uses the user plugin configuration, and `both` continues with the project
 plugin configuration. When the top-level command receives
 `--config path/to/config.toml`, the plugin editor instead uses the sibling
 `path/to/plugins.toml`, matching runtime selection.
+
+Plugin files use the same file-level precedence order:
+explicit-or-user, then the nearest project file, then the system file. An
+explicit `--plugin-config-path`, or the sibling selected by `--config`,
+replaces the ambient XDG user plugin file. Likewise, an explicit `--config`
+replaces the ambient XDG user base file. Neither explicit file suppresses
+project or system configuration.
 
 Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can
@@ -190,12 +198,17 @@ saves are system-readable (`0644` on Unix), so they reject authorization
 headers; store credentials in a user config or environment variables instead.
 
 When the top-level CLI receives `--config path/to/config.toml`, the editor uses
-that exact file. An explicit `config edit --user`, `--project`, or `--global`
-flag overrides the inherited target. This selects only the file opened by the
-editor; it does not change runtime discovery, layering, or merge precedence.
+that exact file as its user target, so the default editor and
+`config edit --user` both open it. Use `--project` or `--global` to edit the
+other active layers. This selects only the file opened by the editor; it does
+not change runtime discovery, layering, or merge precedence.
 
 Agent command setup remains under `nemo-relay config`; plugin components remain
 under `nemo-relay plugins edit`.
+
+When an explicit plugin file is selected, it becomes the editor's user target:
+the default editor and `--user` open that file. Use `--project` to edit the
+nearest project `plugins.toml`, or `--global` to edit the system file.
 
 Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml`.
 Global plugin configuration is system-readable (`0644` on Unix), so do not
@@ -250,11 +263,21 @@ export NEMO_RELAY_OPENAI_AUTH_HEADER="Bearer <openai-credential>"
 export NEMO_RELAY_ANTHROPIC_AUTH_HEADER="Basic <anthropic-credential>"
 ```
 
-If you override a base URL with `NEMO_RELAY_OPENAI_BASE_URL` or
-`NEMO_RELAY_ANTHROPIC_BASE_URL`, set the matching auth-header environment
-variable when the new endpoint needs custom authentication. Relay doesn't carry
-a custom header from `config.toml` across an environment-level endpoint
-override.
+Configure a custom base URL and its authorization header in the same layer. For
+environment configuration, set `NEMO_RELAY_OPENAI_BASE_URL` with
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, or set the corresponding Anthropic variables
+together. A CLI `--openai-base-url` or `--anthropic-base-url` override can
+inherit an environment header only when the environment selected the same URL.
+If the CLI flag changes the URL, Relay clears the environment header; use the
+paired environment variables instead when the new endpoint requires custom
+authentication.
+
+The exact configured base URL is the upstream identity during file,
+environment, and command-line layering. A higher layer that keeps the same URL
+can inherit or replace the lower authorization header. A higher layer that
+changes the URL clears the lower header unless that same layer supplies a
+replacement, preventing credentials for one endpoint from being sent to
+another.
 
 An MCP-managed gateway uses custom or environment credentials only after the
 client proves that it belongs to that managed gateway.
@@ -273,6 +296,12 @@ and routes the request to the Codex ChatGPT backend instead of
 The CLI initializes operational logging before operational commands run.
 `nemo-relay config` and `nemo-relay plugins edit` skip initialization so invalid
 logging settings do not prevent configuration repair.
+
+File sinks from layered `config.toml` files aggregate by their resolved
+destination `path`, with system entries first. A higher layer recursively
+overlays a sink with the same path; path aliases such as `relay.log` and
+`./relay.log` resolve to one sink, while distinct destinations remain active
+together.
 
 Configure temporary CLI settings with `--log-level` and
 `--log-stderr-format`, or select an absolute TOML file with

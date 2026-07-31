@@ -753,18 +753,6 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
     )
     .await?;
 
-    let execution = {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard
-            .collect_scope_local_registries(|registries| &registries.tool_execution_intercepts);
-        let context = global_context();
-        let state = context
-            .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.tool_build_execution_chain(&name, func, &scope_locals)
-    };
-
     let lifecycle_scope_stack = current_scope_stack();
     let mut completion = ManagedToolCompletion::new(
         &handle,
@@ -772,7 +760,23 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         &lifecycle_subscribers,
         lifecycle_scope_stack.clone(),
     );
-    match with_active_event_uuid(handle.uuid, execution(intercepted_args)).await {
+    let execution_name = name.clone();
+    let execution = with_active_event_uuid(handle.uuid, async move {
+        let execution = {
+            let scope_stack = current_scope_stack();
+            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            let scope_locals = scope_guard
+                .collect_scope_local_registries(|registries| &registries.tool_execution_intercepts);
+            let context = global_context();
+            let state = context
+                .read()
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            state.tool_build_execution_chain(&execution_name, func, &scope_locals)
+        };
+        execution(intercepted_args).await
+    })
+    .await;
+    match execution {
         Ok(outcome) => {
             let ToolExecutionInterceptOutcome {
                 result,

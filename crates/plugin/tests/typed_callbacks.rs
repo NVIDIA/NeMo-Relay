@@ -362,11 +362,11 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 432);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 440);
         assert_eq!(
             host_api_v3_offsets(),
             [
-                0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424
+                0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
@@ -406,7 +406,7 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_v3_offsets() -> [usize; 15] {
+fn host_api_v3_offsets() -> [usize; 16] {
     [
         offset_of!(NemoRelayNativeHostApiV3, v1),
         offset_of!(NemoRelayNativeHostApiV3, async_completion_resolve_json),
@@ -429,6 +429,7 @@ fn host_api_v3_offsets() -> [usize; 15] {
             NemoRelayNativeHostApiV3,
             plugin_context_register_async_stream_middleware
         ),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_invoke_result),
     ]
 }
 

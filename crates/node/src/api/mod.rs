@@ -32,11 +32,11 @@ use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::runtime::subscriber_dispatcher::{
-    PublicationBuffer, with_nested_publication_buffer,
+    PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
     EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    ToolExecutionNextFn,
+    ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
@@ -509,6 +509,45 @@ fn json_callback_tsfn(
         .create_threadsafe_function::<Json, Json, _, ErrorStrategy::Fatal>(0, |ctx| {
             Ok(vec![ctx.value])
         })?;
+    tsfn.unref(env)?;
+    Ok(tsfn)
+}
+
+struct ScopedStreamCall {
+    request: Json,
+    scope_stack: CoreScopeStackHandle,
+    publication_buffer: Option<PublicationBuffer>,
+    propagation_parent_uuid: String,
+}
+
+fn scoped_stream_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedStreamCall, ErrorStrategy::Fatal>> {
+    let callback = callback_factory::wrap_scoped_stream_callback(env, func)?;
+    let mut tsfn = callback.create_threadsafe_function(
+        0,
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedStreamCall>| {
+            let request = unsafe {
+                JsUnknown::from_raw_unchecked(
+                    ctx.env.raw(),
+                    Json::to_napi_value(ctx.env.raw(), ctx.value.request)?,
+                )
+            };
+            let scope_stack = ScopeStack {
+                inner: ctx.value.scope_stack,
+                publication_buffer: ctx.value.publication_buffer,
+            }
+            .into_instance(ctx.env)?;
+            Ok(vec![
+                request,
+                unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
+                ctx.env
+                    .create_string(&ctx.value.propagation_parent_uuid)?
+                    .into_unknown(),
+            ])
+        },
+    )?;
     tsfn.unref(env)?;
     Ok(tsfn)
 }
@@ -1613,6 +1652,17 @@ pub fn create_scope_stack() -> ScopeStack {
 /// Capture the current Relay causal parent for application-managed transport.
 #[napi]
 pub fn capture_propagation_context(env: Env) -> napi::Result<PropagationContext> {
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        return Ok(propagation_context_to_napi(
+            nemo_relay::api::runtime::PropagationContext {
+                version: nemo_relay::api::runtime::PropagationContext::VERSION,
+                root_uuid: None,
+                parent_uuid,
+            },
+        ));
+    }
     with_effective_scope_stack(&env, capture_propagation_context_handle)?
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
@@ -1629,6 +1679,17 @@ pub fn capture_propagation_context_with_root(
         .map(uuid::Uuid::parse_str)
         .transpose()
         .map_err(|error| napi::Error::from_reason(format!("invalid root UUID: {error}")))?;
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        return Ok(propagation_context_to_napi(
+            nemo_relay::api::runtime::PropagationContext {
+                version: nemo_relay::api::runtime::PropagationContext::VERSION,
+                root_uuid,
+                parent_uuid,
+            },
+        ));
+    }
     with_effective_scope_stack(&env, || {
         capture_propagation_context_with_root_handle(root_uuid)
     })?
@@ -2592,7 +2653,7 @@ pub fn llm_stream_call_execute(
     env: Env,
     name: String,
     request: Json,
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    func: JsFunction,
     collector: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
     finalizer: Option<ThreadsafeFunction<(), ErrorStrategy::Fatal>>,
     handle: Option<&ScopeHandle>,
@@ -2627,13 +2688,17 @@ pub fn llm_stream_call_execute(
     // event loop and pushes each chunk into Rust via `pushStreamChunk`.
     // We create an unbounded channel here and pass the stream ID to JS
     // so it knows where to send chunks.
-    let mut func = func;
-    func.unref(&env)?;
-    let func = std::sync::Arc::new(func);
+    let func = std::sync::Arc::new(scoped_stream_callback_tsfn(&env, &func)?);
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
+        let propagation_parent_uuid = match capture_propagation_context_handle() {
+            Ok(context) => context.parent_uuid.to_string(),
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let closed = register_stream_channel(stream_id, tx);
+        let scope_stack = current_scope_stack_handle();
+        let publication_buffer = capture_nested_publication_buffer();
 
         // Serialize the LlmRequest to JSON and wrap with streamId so JS can extract both
         let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
@@ -2644,7 +2709,15 @@ pub fn llm_stream_call_execute(
 
         // NonBlocking: queue the call on the JS event loop and return immediately.
         // The JS function starts async iteration and pushes chunks via pushStreamChunk.
-        let call_status = func.call(wrapper, ThreadsafeFunctionCallMode::NonBlocking);
+        let call_status = func.call(
+            ScopedStreamCall {
+                request: wrapper,
+                scope_stack,
+                publication_buffer,
+                propagation_parent_uuid,
+            },
+            ThreadsafeFunctionCallMode::NonBlocking,
+        );
 
         Box::pin(async move {
             ensure_stream_callback_queued(stream_id, call_status)?;
@@ -2951,7 +3024,9 @@ napi_intercept_tool_api!(
 ///
 /// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
 /// the next intercept or original implementation; skip calling `next` to short-circuit
-/// the chain.
+/// the chain. `next` may be called repeatedly or concurrently while `callable` is
+/// pending; each call receives an isolated scope-stack branch, and unfinished or
+/// later calls reject after `callable` settles.
 #[napi]
 pub fn register_tool_execution_intercept(
     env: Env,
@@ -3137,7 +3212,9 @@ pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
 ///
 /// The `callable` receives the request and a `next` function. Call `next(request)` to
 /// invoke the next intercept or original implementation; skip calling `next` to
-/// short-circuit the chain.
+/// short-circuit the chain. `next` may be called repeatedly or concurrently while
+/// `callable` is pending; each call receives an isolated scope-stack branch, and
+/// unfinished or later calls reject after `callable` settles.
 #[napi]
 pub fn register_llm_execution_intercept(
     env: Env,
@@ -3175,7 +3252,10 @@ pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
 /// The `callable` receives the request and a `next` function. Call `next(request)` to
 /// invoke the next intercept or original streaming implementation; in Node the
 /// returned promise resolves to an array of downstream JSON chunks. Skip calling
-/// `next` to short-circuit the chain.
+/// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently
+/// while `callable` is pending; each call receives an isolated scope-stack branch,
+/// and unfinished or later calls reject after the returned interceptor stream settles.
+/// A downstream stream returned successfully by `next` keeps its normal lifetime.
 #[napi]
 pub fn register_llm_stream_execution_intercept(
     env: Env,
@@ -3517,7 +3597,9 @@ napi_scope_intercept_tool_api!(
 ///
 /// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
 /// the next intercept or original implementation; skip calling `next` to short-circuit
-/// the chain.
+/// the chain. `next` may be called repeatedly or concurrently while `callable` is
+/// pending; each call receives an isolated scope-stack branch, and unfinished or
+/// later calls reject after `callable` settles.
 #[napi]
 pub fn scope_register_tool_execution_intercept(
     env: Env,
@@ -3746,7 +3828,9 @@ pub fn scope_deregister_llm_request_intercept(scope_uuid: String, name: String) 
 ///
 /// The `callable` receives the request and a `next` function. Call `next(request)` to
 /// invoke the next intercept or original implementation; skip calling `next` to
-/// short-circuit the chain.
+/// short-circuit the chain. `next` may be called repeatedly or concurrently while
+/// `callable` is pending; each call receives an isolated scope-stack branch, and
+/// unfinished or later calls reject after `callable` settles.
 #[napi]
 pub fn scope_register_llm_execution_intercept(
     env: Env,
@@ -3790,7 +3874,10 @@ pub fn scope_deregister_llm_execution_intercept(scope_uuid: String, name: String
 /// The `callable` receives the request and a `next` function. Call `next(request)` to
 /// invoke the next intercept or original streaming implementation; in Node the
 /// returned promise resolves to an array of downstream JSON chunks. Skip calling
-/// `next` to short-circuit the chain.
+/// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently
+/// while `callable` is pending; each call receives an isolated scope-stack branch,
+/// and unfinished or later calls reject after the returned interceptor stream settles.
+/// A downstream stream returned successfully by `next` keeps its normal lifetime.
 #[napi]
 pub fn scope_register_llm_stream_execution_intercept(
     env: Env,
