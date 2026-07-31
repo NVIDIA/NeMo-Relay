@@ -114,8 +114,9 @@ user `PATH`; the Unix installer does not edit shell configuration.
 Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and
 RHEL. Use the musl target on Alpine Linux and other musl-based systems. The
 Unix shell installer intentionally selects the portable musl target on Linux.
-PyPI and npm installations automatically select the target compatible with the
-host CPU and C library.
+For package versions that publish the corresponding artifacts, `pip`, `uv`, and
+`npm` automatically select a target compatible with the host CPU and C library
+on supported platforms.
 
 The installer reports the detected operating system and architecture when no
 matching asset exists. Intel macOS is not supported because no matching release
