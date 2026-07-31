@@ -249,9 +249,18 @@ describe('withScope', () => {
       await assert.rejects(
         () =>
           withScope('with_scope_error_status', ScopeType.Tool, async () => {
-            throw new Error('node status failure');
+            throw new TypeError('node status failure');
           }),
         /node status failure/,
+      );
+      await assert.rejects(
+        () =>
+          withScope('with_scope_custom_error_status', ScopeType.Tool, async () => {
+            const error = new Error('custom node status failure');
+            error.name = 'MyProviderError';
+            throw error;
+          }),
+        /custom node status failure/,
       );
       await flushSubscribers();
 
@@ -261,6 +270,13 @@ describe('withScope', () => {
       assert.ok(end, 'expected scope end event');
       assert.equal(end.metadata['otel.status_code'], 'ERROR');
       assert.match(end.metadata['otel.status_description'], /node status failure/);
+      assert.equal(end.metadata['error.type'], 'TypeError');
+
+      const customEnd = events.find(
+        (e) => e.name === 'with_scope_custom_error_status' && e.kind === 'scope' && e.scope_category === 'end',
+      );
+      assert.ok(customEnd, 'expected custom-error scope end event');
+      assert.equal(customEnd.metadata['error.type'], 'internal_error');
     } finally {
       deregisterSubscriber('node_with_scope_error_status_sub');
     }

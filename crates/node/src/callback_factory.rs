@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v11";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v12";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -100,6 +100,40 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return result;
   }
 
+  const stableErrorNames = new Set([
+    'AggregateError',
+    'Error',
+    'EvalError',
+    'RangeError',
+    'ReferenceError',
+    'SyntaxError',
+    'TypeError',
+    'URIError',
+  ]);
+
+  function callbackErrorMessage(error, fallback) {
+    let message = fallback;
+    let errorType;
+    try {
+      if (typeof error === 'string') {
+        message = error;
+      } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+        message = String(error);
+      } else if (typeof error.message === 'string') {
+        message = error.message;
+      }
+      if (
+        error !== null
+        && (typeof error === 'object' || typeof error === 'function')
+        && typeof error.name === 'string'
+        && stableErrorNames.has(error.name)
+      ) {
+        errorType = error.name;
+      }
+    } catch {}
+    return errorType === undefined ? message : `${errorType}: ${message}`;
+  }
+
   function callPromise(
     fn,
     arg0,
@@ -164,17 +198,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         resolve(value);
       }, (error) => {
         settlePublication();
-        let message = 'unknown error';
-        try {
-          if (typeof error === 'string') {
-            message = error;
-          } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
-            message = String(error);
-          } else if (error != null && typeof error.message === 'string') {
-            message = error.message;
-          }
-        } catch {}
-        reject(message);
+        reject(callbackErrorMessage(error, 'unknown error'));
       });
     };
     eventSanitizerContext.run(token, invoke);
@@ -187,11 +211,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           const value = fn(...args);
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
-          let message = 'JavaScript callback failed';
-          try {
-            message = String(error?.message ?? error);
-          } catch {}
-          return { ok: false, error: message };
+          return { ok: false, error: callbackErrorMessage(error, 'JavaScript callback failed') };
         }
       };
     },
@@ -211,12 +231,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         registerAbort,
       ) {
         if (error != null) {
-          let message = 'unknown error';
-          try {
-            message = String(error?.message ?? error);
-          } catch {}
           if (typeof reject === 'function') {
-            reject(message);
+            reject(callbackErrorMessage(error, 'unknown error'));
           }
           return;
         }

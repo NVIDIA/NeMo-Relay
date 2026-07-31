@@ -17,7 +17,6 @@ Example::
 from __future__ import annotations
 
 import asyncio
-import builtins
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator
@@ -42,8 +41,58 @@ from nemo_relay._native import (
     push_scope as _native_push_scope,
 )
 
-_PYTHON_EXCEPTION_TYPES = frozenset(
-    name for name, value in vars(builtins).items() if isinstance(value, type) and issubclass(value, BaseException)
+# Keep this bounded taxonomy aligned with `is_stable_runtime_exception_type` in
+# `crates/core/src/error.rs`. Unknown and application-defined names deliberately
+# collapse to `internal_error` to avoid user-controlled telemetry cardinality.
+_STABLE_PYTHON_EXCEPTION_TYPES = frozenset(
+    {
+        "ArithmeticError",
+        "AssertionError",
+        "AttributeError",
+        "BlockingIOError",
+        "BrokenPipeError",
+        "BufferError",
+        "ChildProcessError",
+        "ConnectionAbortedError",
+        "ConnectionError",
+        "ConnectionRefusedError",
+        "ConnectionResetError",
+        "EOFError",
+        "Exception",
+        "FileExistsError",
+        "FileNotFoundError",
+        "FloatingPointError",
+        "ImportError",
+        "IndexError",
+        "InterruptedError",
+        "IsADirectoryError",
+        "KeyError",
+        "LookupError",
+        "MemoryError",
+        "ModuleNotFoundError",
+        "NameError",
+        "NotADirectoryError",
+        "NotImplementedError",
+        "OSError",
+        "OverflowError",
+        "PermissionError",
+        "ProcessLookupError",
+        "PythonFinalizationError",
+        "RecursionError",
+        "ReferenceError",
+        "RuntimeError",
+        "SyntaxError",
+        "SystemError",
+        "TimeoutError",
+        "TypeError",
+        "UnboundLocalError",
+        "UnicodeDecodeError",
+        "UnicodeEncodeError",
+        "UnicodeError",
+        "UnicodeTranslateError",
+        "ValueError",
+        "ZeroDivisionError",
+    }
 )
 
 
@@ -263,15 +312,17 @@ def scope(
     except Exception as e:
         status_code = "ERROR"
         status_message = str(e)
-        error_type = type(e).__name__
-        for segment in status_message.split(":"):
-            words = segment.strip().split()
-            if not words:
-                continue
-            candidate = words[-1]
-            if candidate in _PYTHON_EXCEPTION_TYPES:
-                error_type = candidate
-                break
+        exception_name = type(e).__name__
+        error_type = exception_name if exception_name in _STABLE_PYTHON_EXCEPTION_TYPES else "internal_error"
+        if isinstance(e, RuntimeError):
+            for segment in status_message.split(":"):
+                words = segment.strip().split()
+                if not words:
+                    continue
+                candidate = words[-1]
+                if candidate in _STABLE_PYTHON_EXCEPTION_TYPES:
+                    error_type = candidate
+                    break
         raise
     finally:
         if pushed_handle is not None:

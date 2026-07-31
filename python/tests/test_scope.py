@@ -145,6 +145,7 @@ class TestScope:
         ("error", "expected_error_type"),
         [
             (TimeoutError("timed out"), "TimeoutError"),
+            (ValueError("expected TypeError: got str"), "ValueError"),
             (RuntimeError("internal error: ValueError: invalid value"), "ValueError"),
             (RuntimeError("failed: tenant_123Error"), "RuntimeError"),
         ],
@@ -168,6 +169,26 @@ class TestScope:
             "otel.status_description": str(error),
             "error.type": expected_error_type,
         }
+
+    def test_scope_ctx_mgr_bounds_custom_exception_type(self, monkeypatch):
+        class MyProviderError(Exception):
+            pass
+
+        captured_metadata = None
+        native_pop_scope = scope._native_pop_scope
+
+        def capture_pop(handle, *, output=None, metadata=None, timestamp=None) -> None:
+            nonlocal captured_metadata
+            captured_metadata = metadata
+            native_pop_scope(handle, output=output, metadata=metadata, timestamp=timestamp)
+
+        monkeypatch.setattr(scope, "_native_pop_scope", capture_pop)
+
+        with pytest.raises(MyProviderError), scope.scope("failing-scope", ScopeType.Agent):
+            raise MyProviderError("provider failed")
+
+        assert captured_metadata is not None
+        assert captured_metadata["error.type"] == "internal_error"
 
 
 class TestAllScopeTypes:

@@ -137,6 +137,11 @@ pub type Result<T> = std::result::Result<T, FlowError>;
 impl FlowError {
     /// Returns a low-cardinality classification suitable for OpenTelemetry's
     /// `error.type` attribute.
+    ///
+    /// Relay-owned failures use stable `snake_case` codes. Recognized Python
+    /// and JavaScript runtime failures retain their conventional class names,
+    /// such as `ValueError` or `TypeError`. Unknown, application-defined names
+    /// collapse to `internal_error` to keep the attribute bounded.
     pub(crate) fn otel_error_type(&self) -> &str {
         match self {
             Self::AlreadyExists(_) => "already_exists",
@@ -154,22 +159,23 @@ impl FlowError {
                 UpstreamFailureClass::InvalidRequest => "invalid_request",
                 UpstreamFailureClass::Other => "upstream_error",
             },
-            Self::Internal(message) => python_exception_type(message).unwrap_or("internal_error"),
+            Self::Internal(message) => runtime_exception_type(message).unwrap_or("internal_error"),
         }
     }
 }
 
-fn python_exception_type(message: &str) -> Option<&str> {
+fn runtime_exception_type(message: &str) -> Option<&str> {
     message.split(':').find_map(|segment| {
         let candidate = segment.split_whitespace().last()?;
-        is_stable_python_exception_type(candidate).then_some(candidate)
+        is_stable_runtime_exception_type(candidate).then_some(candidate)
     })
 }
 
-fn is_stable_python_exception_type(candidate: &str) -> bool {
+fn is_stable_runtime_exception_type(candidate: &str) -> bool {
     matches!(
         candidate,
-        "ArithmeticError"
+        "AggregateError"
+            | "ArithmeticError"
             | "AssertionError"
             | "AttributeError"
             | "BlockingIOError"
@@ -181,6 +187,8 @@ fn is_stable_python_exception_type(candidate: &str) -> bool {
             | "ConnectionRefusedError"
             | "ConnectionResetError"
             | "EOFError"
+            | "Error"
+            | "EvalError"
             | "Exception"
             | "FileExistsError"
             | "FileNotFoundError"
@@ -203,11 +211,13 @@ fn is_stable_python_exception_type(candidate: &str) -> bool {
             | "PythonFinalizationError"
             | "RecursionError"
             | "ReferenceError"
+            | "RangeError"
             | "RuntimeError"
             | "SyntaxError"
             | "SystemError"
             | "TimeoutError"
             | "TypeError"
+            | "URIError"
             | "UnboundLocalError"
             | "UnicodeDecodeError"
             | "UnicodeEncodeError"
