@@ -46,6 +46,15 @@ existing error behavior for its middleware family.
 | Node.js | Direct return value | Direct return value or `Promise` |
 | Go / raw C FFI | Synchronous callback | Synchronous callback |
 
+Conditional-execution guardrails and request or execution intercepts retain a
+fail-closed exception contract in 0.7. Relay stops at the failing middleware
+stage and surfaces the error to the managed caller. Conditional guardrail and
+request-intercept failures prevent the real callback from running. This
+behavior is the same for callbacks that return directly and callbacks that
+complete asynchronously. If an execution intercept fails after invoking `next`,
+Relay cannot undo completed downstream work. Relay rejects `next` calls that
+remain unfinished and calls that begin after the interceptor settles.
+
 The experimental Go and raw C FFI callbacks remain synchronous. Relay waits
 for each callback on a native thread, so blocking I/O and other long-running
 callback work occupy that thread. No completion-based registration API is
