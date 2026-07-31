@@ -219,10 +219,13 @@ virtual environment and do not have project metadata, use `uv pip install
 nemo-relay` instead. You can also use `pip install nemo-relay` if you are not
 managing the environment with `uv`.
 
-On supported x86_64 and ARM64 Linux systems, `pip` and `uv` automatically
-select the compatible wheel: `manylinux_2_17` on glibc-based distributions and
-`musllinux_1_2` on musl-based distributions such as Alpine Linux. Alpine users
-do not need a `--platform` override or a source build.
+NeMo Relay publishes CPython 3.11 ABI3 wheels for x86_64 and ARM64 Linux
+systems. On supported CPython 3.11 or newer environments, `pip` and `uv` select
+`manylinux_2_17` for glibc 2.17 or newer or `musllinux_1_2` for musl 1.2 or
+newer. Supported Alpine Linux environments do not need a `--platform` override
+or source build. Alpine environments outside this wheel coverage must use a
+supported Python version and
+[build from source](/contribute/development-setup#source-development).
 
 ## Node.js
 
