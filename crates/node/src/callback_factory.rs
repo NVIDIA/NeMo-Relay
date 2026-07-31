@@ -225,8 +225,11 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           const value = fn(...args);
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
-          const details = stringifiedErrorDetails(error, 'JavaScript callback failed');
-          return { ok: false, error: details.message };
+          let message = 'JavaScript callback failed';
+          try {
+            message = String(error?.message ?? error);
+          } catch {}
+          return { ok: false, error: message };
         }
       };
     },

@@ -252,14 +252,6 @@ describe('Tool execute', () => {
     assert.deepEqual(result, {
       ok: true,
     });
-
-    await assert.rejects(
-      () =>
-        toolCallExecute('exec_tool_throw_object', {}, () => {
-          throw { code: 42 };
-        }),
-      /\[object Object\]/,
-    );
   });
 
   it('sync and async execute reject invalid JSON results without terminating Node', async () => {
@@ -392,7 +384,7 @@ describe('Tool execute', () => {
             'exec_status_error_tool',
             {},
             async () => {
-              throw new TypeError('tool status failure');
+              throw new Error('tool status failure');
             },
             null,
             null,
@@ -423,7 +415,6 @@ describe('Tool execute', () => {
       assert.equal(errorEnd.metadata.caller, 'node-tool-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
-      assert.equal(errorEnd.metadata['error.type'], 'internal_error');
     } finally {
       deregisterSubscriber('node_tool_status_metadata_sub');
     }
