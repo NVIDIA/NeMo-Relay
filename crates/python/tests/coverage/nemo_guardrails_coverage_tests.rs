@@ -709,7 +709,7 @@ async def run_case():
     else:
         raise AssertionError("expected streamed output block")
 
-    nemo_relay.plugin.clear()
+    await nemo_relay.plugin.clear_async()
     await nemo_relay.plugin.initialize(plugin_config("stream_first_false"))
     try:
         await run_stream(request)
