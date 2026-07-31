@@ -741,6 +741,10 @@ fn opentelemetry_endpoint_rejects_invalid_attribute_mappings() {
             "attribute mapping alias must not be blank",
         ),
         (
+            json!([{"key": "nemo_relay.mark.metadata.source", "alias": "\u{200b}"}]),
+            "attribute mapping alias must not be blank",
+        ),
+        (
             json!([
                 {"key": "nemo_relay.model_name", "alias": "duplicate.alias"},
                 {"key": "nemo_relay.tool.name", "alias": "duplicate.alias"}

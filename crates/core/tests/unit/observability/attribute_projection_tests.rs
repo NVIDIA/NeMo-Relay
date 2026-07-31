@@ -123,4 +123,22 @@ fn rejects_invalid_attribute_mappings() {
     assert!(
         super::validate_attribute_mappings(&[OtlpAttributeMapping::new("key", "   ")]).is_err()
     );
+    for invisible in ["\0", "\u{200b}", "\u{feff}", "\u{2060}"] {
+        assert!(
+            super::validate_attribute_mappings(&[OtlpAttributeMapping::new(invisible, "alias")])
+                .is_err()
+        );
+        assert!(
+            super::validate_attribute_mappings(&[OtlpAttributeMapping::new("key", invisible)])
+                .is_err()
+        );
+    }
+    assert!(
+        super::validate_attribute_mappings(&[OtlpAttributeMapping::new(
+            "key",
+            "tenant\u{200b}.id"
+        )])
+        .is_ok()
+    );
+    assert!(super::validate_attribute_mappings(&[OtlpAttributeMapping::new("key", ".")]).is_ok());
 }

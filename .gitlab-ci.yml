@@ -325,12 +325,12 @@ publish:artifactory:npm:
       npm config set registry "$registry_url"
       npm config set "${registry_key}:_auth" "$npm_auth"
 
-      for platform in linux-x64 linux-arm64 darwin-arm64 win32-x64 win32-arm64; do
+      for platform in linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl darwin-arm64 win32-x64 win32-arm64; do
         package="collected/node/nemo-relay-node-npm-${platform}-${CI_COMMIT_TAG}.tgz"
         npm publish --tag dev "$package"
       done
       npm publish --tag dev "collected/node/nemo-relay-node-npm-${CI_COMMIT_TAG}.tgz"
-      for platform in linux-x64 linux-arm64 darwin-arm64 win32-x64 win32-arm64; do
+      for platform in linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl darwin-arm64 win32-x64 win32-arm64; do
         package="collected/cli-npm/nemo-relay-bin-npm-${platform}-${CI_COMMIT_TAG}.tgz"
         npm publish --tag dev "$package"
       done
