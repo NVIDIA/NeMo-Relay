@@ -9,9 +9,9 @@ use crate::api::event::{
     tool_attributes_to_strings,
 };
 use crate::api::runtime::{
-    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding, capture_thread_scope_stack,
-    create_scope_stack_from_propagation, global_context, restore_thread_scope_stack,
-    set_thread_scope_stack,
+    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding,
+    capture_propagation_context, capture_thread_scope_stack, create_scope_stack_from_propagation,
+    fork_scope_stack, global_context, restore_thread_scope_stack, set_thread_scope_stack,
 };
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
@@ -385,6 +385,18 @@ fn rootless_propagation_starts_a_new_otel_trace() {
     })
     .unwrap();
     set_thread_scope_stack(imported_stack);
+
+    let captured = capture_propagation_context().unwrap();
+    assert_eq!(captured.root_uuid, None);
+    assert_eq!(captured.parent_uuid, parent_uuid);
+
+    let forked_stack = fork_scope_stack().unwrap();
+    {
+        let forked_stack = forked_stack.read().unwrap();
+        assert_eq!(forked_stack.root_uuid(), parent_uuid);
+        assert_eq!(forked_stack.top().uuid, parent_uuid);
+    }
+    set_thread_scope_stack(forked_stack);
 
     let (provider, exporter) = make_provider();
     let mut processor = OtelEventProcessor::new(provider, "test".into());
