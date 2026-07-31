@@ -121,6 +121,22 @@ fn test_metadata_with_otel_status_only_describes_errors() {
 }
 
 #[test]
+fn test_metadata_with_otel_error_adds_structured_error_type() {
+    let metadata = metadata_with_otel_error(
+        Some(json!({"caller": "shared-error"})),
+        &FlowError::Internal("TimeoutError: provider timed out".into()),
+    )
+    .unwrap();
+
+    assert_eq!(metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(metadata["error.type"], json!("TimeoutError"));
+    assert_eq!(
+        metadata["otel.status_description"],
+        json!("internal error: TimeoutError: provider timed out")
+    );
+}
+
+#[test]
 fn test_resolve_parent_uuid_snapshot_and_runtime_owner_helpers() {
     let _guard = lock_runtime_owner();
     reset_global();

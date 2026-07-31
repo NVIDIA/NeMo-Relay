@@ -34,9 +34,9 @@ use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_status,
-    resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
-    snapshot_event_subscribers,
+    ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_error,
+    metadata_with_otel_status, resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
+    snapshot_event_sanitizers, snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -1522,8 +1522,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             Ok(response)
         }
         Err(error) => {
-            let end_metadata =
-                metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
+            let end_metadata = metadata_with_otel_error(metadata, &error);
             let _ = emit_llm_end_without_output(
                 &handle,
                 end_metadata,
@@ -1729,8 +1728,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             Ok(LlmJsonStream::from_closeable(wrapper))
         }
         Err(error) => {
-            let end_metadata =
-                metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
+            let end_metadata = metadata_with_otel_error(metadata, &error);
             let _ = emit_llm_end_without_output(
                 &handle,
                 end_metadata,

@@ -134,6 +134,43 @@ pub enum FlowError {
 /// A specialized [`Result`](std::result::Result) type for NeMo Relay operations.
 pub type Result<T> = std::result::Result<T, FlowError>;
 
+impl FlowError {
+    /// Returns a low-cardinality classification suitable for OpenTelemetry's
+    /// `error.type` attribute.
+    pub(crate) fn otel_error_type(&self) -> &str {
+        match self {
+            Self::AlreadyExists(_) => "already_exists",
+            Self::NotFound(_) => "not_found",
+            Self::InvalidArgument(_) => "invalid_argument",
+            Self::ScopeStackEmpty => "scope_stack_empty",
+            Self::GuardrailRejected(_) => "guardrail_rejected",
+            Self::Upstream(failure) => match failure.class {
+                UpstreamFailureClass::Connection => "connection_error",
+                UpstreamFailureClass::Timeout => "timeout",
+                UpstreamFailureClass::RetryableStatus => "retryable_status",
+                UpstreamFailureClass::ContextWindow => "context_window",
+                UpstreamFailureClass::ModelUnavailable => "model_unavailable",
+                UpstreamFailureClass::Authentication => "authentication",
+                UpstreamFailureClass::InvalidRequest => "invalid_request",
+                UpstreamFailureClass::Other => "upstream_error",
+            },
+            Self::Internal(message) => python_exception_type(message).unwrap_or("internal_error"),
+        }
+    }
+}
+
+fn python_exception_type(message: &str) -> Option<&str> {
+    message.split(':').find_map(|segment| {
+        let candidate = segment.split_whitespace().last()?;
+        let is_exception_name = candidate.ends_with("Error") || candidate.ends_with("Exception");
+        let is_safe_identifier = candidate.len() <= 128
+            && candidate
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_');
+        (is_exception_name && is_safe_identifier).then_some(candidate)
+    })
+}
+
 #[cfg(test)]
 #[path = "../tests/coverage/error_tests.rs"]
 mod tests;

@@ -69,7 +69,11 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
                 .name("tool-error")
                 .args(json!({"value": 2}))
                 .func(Arc::new(|_args| {
-                    Box::pin(async { Err(FlowError::Internal("tool boom".to_string())) })
+                    Box::pin(async {
+                        Err(FlowError::Internal(
+                            "ConnectionRefusedError: tool boom".to_string(),
+                        ))
+                    })
                 }))
                 .metadata(json!({"caller": "tool-error"}))
                 .build(),
@@ -99,6 +103,10 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
     let error_metadata = metadata_for("tool-error");
     assert_eq!(error_metadata["caller"], json!("tool-error"));
     assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(
+        error_metadata["error.type"],
+        json!("ConnectionRefusedError")
+    );
     assert!(
         error_metadata["otel.status_description"]
             .as_str()

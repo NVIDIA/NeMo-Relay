@@ -1688,7 +1688,9 @@ fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
                 .name("llm-error")
                 .request(request())
                 .func(Arc::new(|_request| {
-                    Box::pin(async { Err(FlowError::Internal("llm boom".to_string())) })
+                    Box::pin(async {
+                        Err(FlowError::Internal("TimeoutError: llm boom".to_string()))
+                    })
                 }))
                 .metadata(json!({"caller": "llm-error"}))
                 .build(),
@@ -1718,6 +1720,7 @@ fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
     let error_metadata = metadata_for("llm-error");
     assert_eq!(error_metadata["caller"], json!("llm-error"));
     assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(error_metadata["error.type"], json!("TimeoutError"));
     assert!(
         error_metadata["otel.status_description"]
             .as_str()
@@ -1815,7 +1818,7 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
                 .func(Arc::new(|_request| {
                     Box::pin(async {
                         Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
-                            FlowError::Internal("stream boom".to_string()),
+                            FlowError::Internal("ConnectionRefusedError: stream boom".to_string()),
                         )])))
                     })
                 }))
@@ -1843,7 +1846,9 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
                     })
                 }))
                 .collector(Box::new(|_chunk| {
-                    Err(FlowError::Internal("collector boom".to_string()))
+                    Err(FlowError::Internal(
+                        "ValueError: collector boom".to_string(),
+                    ))
                 }))
                 .finalizer(Box::new(|| json!({"partial": true})))
                 .metadata(
@@ -1875,6 +1880,10 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
         json!("llm-stream-upstream-error")
     );
     assert_eq!(upstream_error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(
+        upstream_error_metadata["error.type"],
+        json!("ConnectionRefusedError")
+    );
     assert!(
         upstream_error_metadata["otel.status_description"]
             .as_str()
@@ -1888,6 +1897,7 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
         json!("llm-stream-collector-error")
     );
     assert_eq!(collector_error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(collector_error_metadata["error.type"], json!("ValueError"));
     assert!(
         collector_error_metadata["otel.status_description"]
             .as_str()

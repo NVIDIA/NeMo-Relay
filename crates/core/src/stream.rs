@@ -44,7 +44,9 @@ use crate::api::runtime::{
     EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
     current_scope_stack,
 };
-use crate::api::shared::{metadata_with_otel_status, snapshot_event_sanitizers};
+use crate::api::shared::{
+    metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
+};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::{FlowError, Result};
@@ -209,6 +211,16 @@ impl LlmStreamWrapper {
         self.inner.terminalize();
         let metadata =
             metadata_with_otel_status(self.metadata.clone(), status_code, status_message);
+        self.finalization = self.emit_end_event(metadata, interrupted, false);
+    }
+
+    fn finish_with_error(&mut self, error: &FlowError, interrupted: bool) {
+        if self.ended {
+            return;
+        }
+        self.ended = true;
+        self.inner.terminalize();
+        let metadata = metadata_with_otel_error(self.metadata.clone(), error);
         self.finalization = self.emit_end_event(metadata, interrupted, false);
     }
 
@@ -446,17 +458,15 @@ impl Stream for LlmStreamWrapper {
                 match (this.collector)(raw_chunk.clone()) {
                     Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
                     Err(e) => {
-                        let message = e.to_string();
+                        this.finish_with_error(&e, true);
                         this.terminal_result = Some(Err(e));
-                        this.finish_with_status("ERROR", Some(message), true);
                         self.poll_next(cx)
                     }
                 }
             }
             Poll::Ready(Some(Err(e))) => {
-                let message = e.to_string();
+                this.finish_with_error(&e, true);
                 this.terminal_result = Some(Err(e));
-                this.finish_with_status("ERROR", Some(message), true);
                 self.poll_next(cx)
             }
             Poll::Ready(None) => {

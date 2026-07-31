@@ -237,6 +237,7 @@ def scope(
     pushed_handle = None
     status_code = "UNSET"
     status_message = None
+    error_type = None
     try:
         pushed_handle = _native_push_scope(
             name,
@@ -257,12 +258,23 @@ def scope(
     except Exception as e:
         status_code = "ERROR"
         status_message = str(e)
+        error_type = type(e).__name__
+        for segment in status_message.split(":"):
+            words = segment.strip().split()
+            if not words:
+                continue
+            candidate = words[-1]
+            if len(candidate) <= 128 and candidate.isidentifier() and candidate.endswith(("Error", "Exception")):
+                error_type = candidate
+                break
         raise
     finally:
         if pushed_handle is not None:
             metadata = {"otel.status_code": status_code}
             if status_message is not None:
                 metadata["otel.status_description"] = status_message
+            if error_type is not None:
+                metadata["error.type"] = error_type
             pop(pushed_handle, metadata=metadata, timestamp=end_timestamp)
 
 

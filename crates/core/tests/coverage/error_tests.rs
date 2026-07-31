@@ -55,6 +55,27 @@ fn test_error_debug() {
 }
 
 #[test]
+fn otel_error_type_preserves_stable_relay_and_python_classifications() {
+    assert_eq!(
+        FlowError::InvalidArgument("bad scope".into()).otel_error_type(),
+        "invalid_argument"
+    );
+    assert_eq!(
+        FlowError::Internal("ValueError: invalid value".into()).otel_error_type(),
+        "ValueError"
+    );
+    assert_eq!(
+        FlowError::Internal("Python callback failed: ConnectionRefusedError: refused".into())
+            .otel_error_type(),
+        "ConnectionRefusedError"
+    );
+    assert_eq!(
+        FlowError::Internal("unclassified failure".into()).otel_error_type(),
+        "internal_error"
+    );
+}
+
+#[test]
 fn upstream_failures_classify_retryability_and_render_status() {
     use std::collections::BTreeMap;
 
