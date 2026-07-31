@@ -103,20 +103,11 @@ user `PATH`; the Unix installer does not edit shell configuration.
 
 | Operating system | Architecture | Release target |
 | --- | --- | --- |
-| Linux (glibc) | x86_64 | `x86_64-unknown-linux-gnu` |
-| Linux (musl) | x86_64 | `x86_64-unknown-linux-musl` |
-| Linux (glibc) | ARM64 | `aarch64-unknown-linux-gnu` |
-| Linux (musl) | ARM64 | `aarch64-unknown-linux-musl` |
+| Linux | x86_64 | `x86_64-unknown-linux-musl` |
+| Linux | ARM64 | `aarch64-unknown-linux-musl` |
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86_64 | `x86_64-pc-windows-msvc` |
 | Windows | ARM64 | `aarch64-pc-windows-msvc` |
-
-Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and
-RHEL. Use the musl target on Alpine Linux and other musl-based systems. The
-Unix shell installer intentionally selects the portable musl target on Linux.
-For package versions that publish the corresponding artifacts, `pip`, `uv`, and
-`npm` automatically select a target compatible with the host CPU and C library
-on supported platforms.
 
 The installer reports the detected operating system and architecture when no
 matching asset exists. Intel macOS is not supported because no matching release
@@ -186,9 +177,9 @@ new download before replacing the binary in the selected installation directory.
 
 ### Alternative Installation Methods
 
-The PyPI, npm, and installer methods install the same CLI release with a binary
-compatible with the host platform. Use Cargo on unsupported platforms or when
-you prefer to build from source:
+The PyPI, npm, and installer methods all install the same release binary on
+supported platforms. Use Cargo on unsupported platforms or when you prefer to
+build from source:
 
 ```bash
 cargo install nemo-relay-cli
@@ -219,14 +210,6 @@ virtual environment and do not have project metadata, use `uv pip install
 nemo-relay` instead. You can also use `pip install nemo-relay` if you are not
 managing the environment with `uv`.
 
-NeMo Relay publishes CPython 3.11 ABI3 wheels for x86_64 and ARM64 Linux
-systems. On supported CPython 3.11 or newer environments, `pip` and `uv` select
-`manylinux_2_17` for glibc 2.17 or newer or `musllinux_1_2` for musl 1.2 or
-newer. Supported Alpine Linux environments do not need a `--platform` override
-or source build. Alpine environments outside this wheel coverage must use a
-supported Python version and
-[build from source](/contribute/development-setup#source-development).
-
 ## Node.js
 
 Install the Node.js package when your application uses NeMo Relay through the
@@ -235,9 +218,6 @@ JavaScript API and owns the tool or LLM call boundary.
 ```bash
 npm install nemo-relay-node@0.8.0
 ```
-
-On supported x64 and ARM64 Linux systems, npm automatically installs the native
-package for the host C library, including the musl package on Alpine Linux.
 
 ## Rust
 
