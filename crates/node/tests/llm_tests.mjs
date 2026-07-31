@@ -321,6 +321,7 @@ describe('LLM execute', () => {
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /llm status failure/);
+      assert.equal(errorEnd.metadata['error.type'], 'internal_error');
     } finally {
       deregisterSubscriber('node_llm_status_metadata_sub');
     }

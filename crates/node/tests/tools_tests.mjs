@@ -415,6 +415,7 @@ describe('Tool execute', () => {
       assert.equal(errorEnd.metadata.caller, 'node-tool-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
+      assert.equal(errorEnd.metadata['error.type'], 'internal_error');
     } finally {
       deregisterSubscriber('node_tool_status_metadata_sub');
     }
