@@ -125,9 +125,9 @@ includes `push_scope`, `pop_scope`, mark APIs, `tool_call`, `tool_call_end`,
 sanitizer/subscriber chain, then enqueue sanitization and publication on a
 serial dispatcher. Event subscribers and exporters therefore receive sanitized
 events later, in emission order. Do not add `await` to these lifecycle calls.
-Only enqueue-time validation and runtime-state errors are returned directly;
-middleware and codec errors discovered during queued publication are logged and
-handled according to their fail-open contracts.
+Only enqueue-time validation and runtime-state errors are returned directly.
+Sanitizer errors discovered during queued publication are logged and fail
+closed; codec errors retain their documented fallback behavior.
 
 Python subscriber flushing is context-sensitive. Continue to call
 `nemo_relay.subscribers.flush()` from synchronous code. From a running
@@ -228,9 +228,8 @@ Check every callback for an implicit empty return. In particular:
 - A Python function that reaches the end without `return` omits the payload.
 - A JavaScript callback that returns `null` or `undefined` omits the payload.
 - A Rust callback must return `Some(payload)` to retain the payload.
-- A sanitizer error or panic fails open: Relay preserves the last valid payload
-  and annotation snapshot, logs or records the callback error, and continues
-  publication.
+- A sanitizer error or panic fails closed: Relay omits the payload and
+  annotation, logs or records the callback error, and continues publication.
 
 Use omission only when recording the payload would be unsafe.
 

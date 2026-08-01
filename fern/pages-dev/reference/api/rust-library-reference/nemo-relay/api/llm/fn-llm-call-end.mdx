@@ -31,8 +31,8 @@ A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result)
 
 ## Errors
 
-Returns an error when the runtime owner check fails or internal state cannot be read safely. Dispatcher submission failures are logged because observability publication is best effort. Sanitizer and response-codec errors discovered during queued publication are also logged and fail open.
+Returns an error when the runtime owner check fails or internal state cannot be read safely. Dispatcher submission failures are logged because observability publication is best effort. Sanitizer errors discovered during queued publication are logged and fail closed by omitting the governed payload. Response-codec errors retain their documented fallback behavior.
 
 ## Notes
 
-Sanitize-response guardrails affect only the emitted end-event payload, not the caller-owned `response` value.
+Sanitize-response guardrails affect only the emitted end-event payload, not the caller-owned `response` value. If a sanitizer errors or panics, Relay omits the payload and response annotation and does not run remaining sanitizers.
