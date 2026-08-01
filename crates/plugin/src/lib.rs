@@ -36,6 +36,13 @@ pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Map;
 
+mod native_v2;
+
+pub use native_v2::{
+    LlmContinuationV2, LlmJsonAsyncStreamV2, LlmProviderStreamV2, LlmStreamContinuationV2,
+    LlmStreamExecutionOutcomeV2,
+};
+
 /// Native ABI used by the original native API v1 SDK and export macro.
 ///
 /// Relay preserves this value so plugins rebuilt with the current SDK and the
@@ -1094,6 +1101,14 @@ pub type NemoRelayNativeAsyncLlmStreamOpenCbV2 = unsafe extern "C" fn(
 pub type NemoRelayNativeAsyncLlmStreamNextCbV2 =
     unsafe extern "C" fn(user_data: *mut c_void, event_json: *const NemoRelayNativeString);
 
+/// Receives terminal settlement of a directly forwarded downstream stream.
+///
+/// `error` is null after clean completion and contains a borrowed UTF-8 error
+/// message after downstream failure or cancellation. Relay settles the output
+/// stream before invoking this callback.
+pub type NemoRelayNativeAsyncLlmStreamForwardCbV2 =
+    unsafe extern "C" fn(user_data: *mut c_void, error: *const NemoRelayNativeString);
+
 /// Incremental native LLM stream intercept callback.
 ///
 /// The callback owns `next` and `stream` and must release each exactly once.
@@ -1303,7 +1318,9 @@ pub struct NemoRelayNativeHostApiV4 {
     ///
     /// Relay invokes the callback on its reusable blocking executor with the
     /// active scope stack bound to that worker. Provider continuations invoked
-    /// through this table continue to execute on Relay's Tokio runtime.
+    /// through this table continue to execute on Relay's Tokio runtime. Once
+    /// invoked, the host consumes `user_data` and calls `free_fn` exactly once,
+    /// including when registration fails.
     pub plugin_context_register_async_llm_execution_v2: unsafe extern "C" fn(
         ctx: *mut NemoRelayNativePluginContext,
         name: *const NemoRelayNativeString,
@@ -1316,7 +1333,9 @@ pub struct NemoRelayNativeHostApiV4 {
     /// Registers a native API v2 incremental LLM stream execution callback.
     ///
     /// Relay starts the callback on its reusable blocking executor and exposes
-    /// the bounded output stream to the caller concurrently.
+    /// the bounded output stream to the caller concurrently. Once invoked, the
+    /// host consumes `user_data` and calls `free_fn` exactly once, including
+    /// when registration fails.
     pub plugin_context_register_async_llm_stream_execution_v2:
         unsafe extern "C" fn(
             ctx: *mut NemoRelayNativePluginContext,
@@ -1326,6 +1345,19 @@ pub struct NemoRelayNativeHostApiV4 {
             user_data: *mut c_void,
             free_fn: NemoRelayNativeFreeFn,
         ) -> NemoRelayStatus,
+    /// Forwards the ordinary downstream LLM stream directly into a native
+    /// interceptor's output stream.
+    ///
+    /// Relay owns event pumping and bounded backpressure. No provider event
+    /// crosses the plugin boundary. The terminal callback runs exactly once
+    /// after output settlement when this function returns [`NemoRelayStatus::Ok`].
+    pub async_llm_next_forward_stream_v2: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        request_json: *const NemoRelayNativeString,
+        output_stream: *const NemoRelayNativeAsyncStream,
+        terminal_callback: NemoRelayNativeAsyncLlmStreamForwardCbV2,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
 }
 
 unsafe impl Send for NemoRelayNativeHostApiV4 {}
@@ -2897,9 +2929,10 @@ impl<'a> PluginContext<'a> {
     /// Registers a native API v2 unary LLM execution callback.
     ///
     /// # Safety
-    /// The callback and user data must remain valid until deregistration or
-    /// `free_fn`. The callback owns its completion and `next` handles and must
-    /// settle/release them exactly once.
+    /// The host consumes `user_data` as soon as the registration function is
+    /// invoked and calls `free_fn` exactly once on registration failure or
+    /// eventual deregistration. The callback owns its completion and `next`
+    /// handles and must settle/release them exactly once.
     pub unsafe fn register_async_llm_execution_v2_raw(
         &mut self,
         name: &str,
@@ -2921,9 +2954,10 @@ impl<'a> PluginContext<'a> {
     /// Registers a native API v2 incremental LLM stream execution callback.
     ///
     /// # Safety
-    /// The callback and user data must remain valid until deregistration or
-    /// `free_fn`; callback-owned `next` and stream handles must each be
-    /// released exactly once.
+    /// The host consumes `user_data` as soon as the registration function is
+    /// invoked and calls `free_fn` exactly once on registration failure or
+    /// eventual deregistration. Callback-owned `next` and stream handles must
+    /// each be released exactly once.
     pub unsafe fn register_async_llm_stream_execution_v2_raw(
         &mut self,
         name: &str,

@@ -1359,6 +1359,250 @@ async fn native_api_v2_fixture_dispatches_through_core_without_a_cli_gateway() {
     activation.clear();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_api_v2_safe_stream_fixture_dispatches_through_embedded_core() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let provider = EmbeddedFakeProvider::spawn(
+        b"data: {\"delta\":\"embedded-stream-response\"}\n\n",
+        "text/event-stream",
+    );
+    let manifest_ref = write_raw_manifest(
+        fixture.manifest_dir.path(),
+        &native_manifest_text(
+            "fixture_native",
+            &format!("={}", env!("CARGO_PKG_VERSION")),
+            "2",
+            &fixture.library_path.to_string_lossy(),
+            "nemo_relay_fixture_targeted_v2_plugin",
+        ),
+    );
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("safe streaming native API v2 fixture should load");
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::from_iter([("target_url".into(), json!(provider.url))]),
+    });
+    initialize_plugins_exact(plugin_config)
+        .await
+        .expect("safe streaming native API v2 fixture should initialize");
+    let mut cleanup = NativePluginTestCleanup::new();
+    cleanup.mark_plugin_configuration_active();
+
+    let original_provider_called = Arc::new(AtomicBool::new(false));
+    let original_provider_called_for_fn = original_provider_called.clone();
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("embedded-targeted-native-v2-stream")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"model": "caller-model", "prompt": "hello"}),
+            })
+            .func(Arc::new(move |_| {
+                original_provider_called_for_fn.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await
+    .expect("embedded targeted stream dispatch should open");
+
+    assert_eq!(
+        stream
+            .next()
+            .await
+            .expect("targeted provider should emit one event")
+            .expect("targeted provider event should succeed"),
+        json!({"delta": "embedded-stream-response"})
+    );
+    assert!(stream.next().await.is_none());
+    assert!(!original_provider_called.load(Ordering::SeqCst));
+    let captured = String::from_utf8(provider.request()).expect("captured request should be UTF-8");
+    assert!(captured.contains("authorization: Bearer fixture-target\r\n"));
+    assert!(captured.contains("\"fixture_targeted_stream\":true"));
+
+    drop(cleanup);
+    activation.clear();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_api_v2_safe_fixture_forwards_passthrough_inside_embedded_core() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_raw_manifest(
+        fixture.manifest_dir.path(),
+        &native_manifest_text(
+            "fixture_native",
+            &format!("={}", env!("CARGO_PKG_VERSION")),
+            "2",
+            &fixture.library_path.to_string_lossy(),
+            "nemo_relay_fixture_targeted_v2_plugin",
+        ),
+    );
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("safe native API v2 fixture should load");
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::from_iter([("target_url".into(), json!("http://127.0.0.1:1/unused"))]),
+    });
+    initialize_plugins_exact(plugin_config)
+        .await
+        .expect("safe native API v2 fixture should initialize");
+    let mut cleanup = NativePluginTestCleanup::new();
+    cleanup.mark_plugin_configuration_active();
+
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("fixture_passthrough_llm")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "buffered"}),
+            })
+            .func(Arc::new(|request| {
+                Box::pin(async move { Ok(json!({"ordinary": request.content})) })
+            }))
+            .build(),
+    )
+    .await
+    .expect("safe buffered pass-through should use the ordinary continuation");
+    assert_eq!(response, json!({"ordinary": {"prompt": "buffered"}}));
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("fixture_passthrough_llm_stream")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "stream"}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(
+                        (0..40).map(|index| Ok(json!({"index": index}))),
+                    )))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await
+    .expect("safe streaming pass-through should open");
+    for expected in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        assert_eq!(
+            stream
+                .next()
+                .await
+                .expect("all pass-through events should arrive")
+                .expect("pass-through event should succeed"),
+            json!({"index": expected})
+        );
+    }
+    assert!(stream.next().await.is_none());
+
+    let mut failed = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("fixture_passthrough_llm_stream")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "late failure"}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                        Ok(json!({"first": true})),
+                        Err(nemo_relay::error::FlowError::Internal(
+                            "fixture late failure".into(),
+                        )),
+                    ])))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await
+    .expect("late-failing pass-through stream should open");
+    assert_eq!(
+        failed.next().await.unwrap().unwrap(),
+        json!({"first": true})
+    );
+    assert!(
+        failed
+            .next()
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("fixture late failure")
+    );
+
+    let provider_dropped = Arc::new(AtomicBool::new(false));
+    let provider_dropped_for_fn = provider_dropped.clone();
+    let cancelled = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("fixture_passthrough_llm_stream")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "cancel"}),
+            })
+            .func(Arc::new(move |_| {
+                let dropped = provider_dropped_for_fn.clone();
+                Box::pin(async move { Ok(LlmJsonStream::new(PendingDropStream { dropped })) })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await
+    .expect("pending pass-through stream should open");
+    drop(cancelled);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !provider_dropped.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("consumer cancellation should drop downstream production");
+
+    let open_passthrough = |id: usize| {
+        llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("fixture_passthrough_llm_stream")
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"id": id}),
+                })
+                .func(Arc::new(move |_| {
+                    Box::pin(async move {
+                        Ok(LlmJsonStream::new(tokio_stream::iter([Ok(
+                            json!({"id": id}),
+                        )])))
+                    })
+                }))
+                .collector(Box::new(|_| Ok(())))
+                .finalizer(Box::new(|| Json::Null))
+                .build(),
+        )
+    };
+    let (left, right) = tokio::join!(open_passthrough(1), open_passthrough(2));
+    let mut left = left.expect("first concurrent pass-through should open");
+    let mut right = right.expect("second concurrent pass-through should open");
+    assert_eq!(left.next().await.unwrap().unwrap(), json!({"id": 1}));
+    assert_eq!(right.next().await.unwrap().unwrap(), json!({"id": 2}));
+    assert!(left.next().await.is_none());
+    assert!(right.next().await.is_none());
+
+    drop(cleanup);
+    activation.clear();
+}
+
 #[test]
 fn native_manifest_writer_escapes_toml_strings() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -2151,6 +2395,27 @@ struct BuiltFixture {
     _target_dir: TempDir,
     manifest_dir: TempDir,
     library_path: PathBuf,
+}
+
+struct PendingDropStream {
+    dropped: Arc<AtomicBool>,
+}
+
+impl tokio_stream::Stream for PendingDropStream {
+    type Item = Result<Json, nemo_relay::error::FlowError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Pending
+    }
+}
+
+impl Drop for PendingDropStream {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
 }
 
 struct EmbeddedFakeProvider {

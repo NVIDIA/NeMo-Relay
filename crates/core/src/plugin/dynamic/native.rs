@@ -56,9 +56,10 @@ use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
     NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmResultCbV2,
-    NemoRelayNativeAsyncLlmStreamNextCbV2, NemoRelayNativeAsyncLlmStreamOpenCbV2,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
-    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    NemoRelayNativeAsyncLlmStreamForwardCbV2, NemoRelayNativeAsyncLlmStreamNextCbV2,
+    NemoRelayNativeAsyncLlmStreamOpenCbV2, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
+    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmCodecKind,
@@ -928,6 +929,7 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
             native_plugin_context_register_async_llm_execution_v2,
         plugin_context_register_async_llm_stream_execution_v2:
             native_plugin_context_register_async_llm_stream_execution_v2,
+        async_llm_next_forward_stream_v2: native_async_llm_next_forward_stream_v2,
     }
 }
 
@@ -1408,6 +1410,75 @@ impl Drop for NativeCallbackUserDataGuard {
     }
 }
 
+struct NativeInvocationStringGuard(usize);
+
+impl Drop for NativeInvocationStringGuard {
+    fn drop(&mut self) {
+        unsafe { native_string_free(self.0 as *mut NemoRelayNativeString) };
+    }
+}
+
+struct NativeCompletionHandoff {
+    raw: usize,
+    armed: bool,
+}
+
+impl NativeCompletionHandoff {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NativeCompletionHandoff {
+    fn drop(&mut self) {
+        if self.armed {
+            unsafe {
+                native_async_completion_release(self.raw as *const NemoRelayNativeAsyncCompletion)
+            };
+        }
+    }
+}
+
+struct NativeNextHandoff {
+    raw: Option<usize>,
+    armed: bool,
+}
+
+impl NativeNextHandoff {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NativeNextHandoff {
+    fn drop(&mut self) {
+        if self.armed
+            && let Some(raw) = self.raw
+        {
+            unsafe { native_async_next_release(raw as *const NemoRelayNativeAsyncNext) };
+        }
+    }
+}
+
+struct NativeStreamHandoff {
+    raw: usize,
+    armed: bool,
+}
+
+impl NativeStreamHandoff {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NativeStreamHandoff {
+    fn drop(&mut self) {
+        if self.armed {
+            unsafe { native_async_stream_release(self.raw as *const NemoRelayNativeAsyncStream) };
+        }
+    }
+}
+
 unsafe impl Send for NativeCallbackUserData {}
 unsafe impl Sync for NativeCallbackUserData {}
 
@@ -1490,6 +1561,7 @@ struct NativeAsyncNext {
     inner: NativeAsyncNextInner,
     runtime: tokio::runtime::Handle,
     context: MiddlewareContinuationContext,
+    in_flight_aborts: Arc<Mutex<HashMap<tokio::task::Id, tokio::task::AbortHandle>>>,
     // The native callback owns this handle independently of its completion.
     // Retaining the library here prevents an unload while it still uses `next`.
     _callback_user_data: Option<Arc<NativeCallbackUserData>>,
@@ -1505,7 +1577,20 @@ impl NativeAsyncNext {
             inner,
             runtime,
             context: MiddlewareContinuationContext::capture(),
+            in_flight_aborts: Arc::new(Mutex::new(HashMap::new())),
             _callback_user_data: callback_user_data,
+        }
+    }
+}
+
+impl Drop for NativeAsyncNext {
+    fn drop(&mut self) {
+        let mut in_flight = self
+            .in_flight_aborts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for (_, abort) in in_flight.drain() {
+            abort.abort();
         }
     }
 }
@@ -1564,6 +1649,92 @@ struct NativeLlmStreamOpenCallbackGuardV2 {
     _library_guard: Option<Arc<NativeCallbackUserData>>,
 }
 
+struct NativeLlmResultCallbackGuardV2 {
+    cb: NemoRelayNativeAsyncLlmResultCbV2,
+    user_data: usize,
+    active: bool,
+    _library_guard: Option<Arc<NativeCallbackUserData>>,
+}
+
+struct NativeAsyncResultCallbackGuard {
+    cb: NemoRelayNativeAsyncNextResultCb,
+    user_data: usize,
+    active: bool,
+    _library_guard: Option<Arc<NativeCallbackUserData>>,
+}
+
+impl NativeAsyncResultCallbackGuard {
+    fn complete(&mut self, result: FlowResult<Json>) {
+        if !self.active {
+            return;
+        }
+        match result {
+            Ok(value) => {
+                let value = native_string_from_json(&value);
+                unsafe {
+                    (self.cb)(
+                        self.user_data as *mut c_void,
+                        value.unwrap_or(ptr::null_mut()),
+                        ptr::null(),
+                    );
+                    if let Some(value) = value {
+                        native_string_free(value);
+                    }
+                }
+            }
+            Err(error) => {
+                let error = native_string_from_str(&error.to_string());
+                unsafe {
+                    (self.cb)(
+                        self.user_data as *mut c_void,
+                        ptr::null(),
+                        error.unwrap_or(ptr::null_mut()),
+                    );
+                    if let Some(error) = error {
+                        native_string_free(error);
+                    }
+                }
+            }
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for NativeAsyncResultCallbackGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.complete(Err(FlowError::Internal(
+                "native continuation was cancelled".into(),
+            )));
+        }
+    }
+}
+
+impl NativeLlmResultCallbackGuardV2 {
+    fn complete(&mut self, outcome: &LlmContinuationOutcomeV2) {
+        if !self.active {
+            return;
+        }
+        unsafe {
+            invoke_typed_llm_result_callback(self.cb, self.user_data as *mut c_void, outcome);
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for NativeLlmResultCallbackGuardV2 {
+    fn drop(&mut self) {
+        if self.active {
+            self.complete(&LlmContinuationOutcomeV2::Failure {
+                error: non_http_llm_failure(
+                    LlmNonHttpFailureKindV2::Cancelled,
+                    "typed native LLM continuation was cancelled".into(),
+                ),
+            });
+        }
+    }
+}
+
 impl NativeLlmStreamOpenCallbackGuardV2 {
     fn success(&mut self, stream: Arc<NativeLlmProviderStreamV2>) {
         if !self.active {
@@ -1599,6 +1770,78 @@ impl Drop for NativeLlmStreamOpenCallbackGuardV2 {
                 "typed native LLM stream setup was cancelled".into(),
             ));
         }
+    }
+}
+
+struct NativeLlmStreamForwardCallbackGuardV2 {
+    cb: NemoRelayNativeAsyncLlmStreamForwardCbV2,
+    user_data: usize,
+    stream: Arc<NativeAsyncStream>,
+    active: bool,
+    _library_guard: Option<Arc<NativeCallbackUserData>>,
+}
+
+impl NativeLlmStreamForwardCallbackGuardV2 {
+    fn complete(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        unsafe { (self.cb)(self.user_data as *mut c_void, ptr::null()) };
+    }
+
+    fn fail(&mut self, message: &str) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        if let Some(message) = native_string_from_str(message)
+            .or_else(|| native_string_from_str("native LLM stream forwarding failed"))
+        {
+            unsafe {
+                (self.cb)(self.user_data as *mut c_void, message);
+                native_string_free(message);
+            }
+        } else {
+            // Allocation failure must not strand the SDK trampoline. The
+            // output is already failed or cancelled, so null only acts as the
+            // terminal wake-up in this exceptional case.
+            unsafe { (self.cb)(self.user_data as *mut c_void, ptr::null()) };
+        }
+    }
+
+    fn cancel_unsettled_output(&self) {
+        let sender = {
+            let _settlement = self
+                .stream
+                .settlement
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if self.stream.cancelled.load(Ordering::Acquire)
+                || self.stream.settled.load(Ordering::Acquire)
+            {
+                None
+            } else {
+                self.stream.cancelled.store(true, Ordering::Release);
+                self.stream
+                    .sender
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take()
+            }
+        };
+        drop(sender);
+        abort_native_stream_downstream_tasks(&self.stream);
+    }
+}
+
+impl Drop for NativeLlmStreamForwardCallbackGuardV2 {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.cancel_unsettled_output();
+        self.fail("downstream LLM stream forwarding was cancelled");
     }
 }
 
@@ -1759,9 +2002,24 @@ async fn invoke_native_async_callback_with_lane(
     };
     let callback_user_data = user_data.ptr as usize;
     let callback_scope_stack = current_scope_stack();
+    let invocation_guard = NativeInvocationStringGuard(invocation);
+    let completion_handoff = NativeCompletionHandoff {
+        raw: completion_ref,
+        armed: true,
+    };
+    let next_handoff = NativeNextHandoff {
+        raw: next_ref,
+        armed: true,
+    };
     let invoke = move || {
-        with_scope_stack(callback_scope_stack, || {
-            catch_unwind(AssertUnwindSafe(|| unsafe {
+        let _invocation = invocation_guard;
+        let mut completion = completion_handoff;
+        let mut next = next_handoff;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // Ownership transfers at callback entry. From this point the
+            // plugin must release `next`, even if its callback panics.
+            next.disarm();
+            with_scope_stack(callback_scope_stack, || unsafe {
                 cb(
                     callback_user_data as *mut c_void,
                     invocation as *const NemoRelayNativeString,
@@ -1770,72 +2028,61 @@ async fn invoke_native_async_callback_with_lane(
                         .unwrap_or(ptr::null()),
                     completion_ref as *const NemoRelayNativeAsyncCompletion,
                 )
-            }))
-        })
+            })
+        }));
+        if result
+            .as_ref()
+            .ok()
+            .and_then(|state| NemoRelayNativeAsyncCallbackState::try_from(*state).ok())
+            == Some(NemoRelayNativeAsyncCallbackState::Pending)
+        {
+            // A pending plugin callback retains the completion and assumes
+            // responsibility for settling and releasing it.
+            completion.disarm();
+        }
+        result
     };
-    let callback_result = if blocking {
-        match tokio::task::spawn_blocking(invoke).await {
-            Ok(result) => result,
-            Err(error) => {
-                unsafe {
-                    drop(Arc::from_raw(
-                        completion_ref as *const NativeAsyncCompletion,
-                    ));
-                    if let Some(next) = next_ref {
-                        drop(Arc::from_raw(next as *const NativeAsyncNext));
-                    }
-                    native_string_free(invocation as *mut NemoRelayNativeString);
-                }
-                return Err(FlowError::Internal(format!(
+    let state = if blocking {
+        // Cleanup lives in guards captured by the blocking closure. The
+        // monitor reports the callback state only; runtime shutdown cannot
+        // strand host-owned strings or references in that task.
+        let blocking_task = tokio::task::spawn_blocking(invoke);
+        let (state_sender, state_receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let state = match blocking_task.await {
+                Ok(Ok(state)) => NemoRelayNativeAsyncCallbackState::try_from(state).map_err(|()| {
+                    FlowError::Internal("native async callback returned an invalid state".into())
+                }),
+                Ok(Err(_)) => Err(FlowError::Internal("native async callback panicked".into())),
+                Err(error) => Err(FlowError::Internal(format!(
                     "native API v2 blocking callback task failed: {error}"
-                )));
-            }
-        }
+                ))),
+            };
+            let _ = state_sender.send(state);
+        });
+        state_receiver.await.map_err(|_| {
+            FlowError::Internal("native API v2 blocking callback monitor stopped".into())
+        })??
     } else {
-        invoke()
+        let callback_result = invoke();
+        match callback_result {
+            Ok(state) => NemoRelayNativeAsyncCallbackState::try_from(state).map_err(|()| {
+                FlowError::Internal("native async callback returned an invalid state".into())
+            }),
+            Err(_) => Err(FlowError::Internal("native async callback panicked".into())),
+        }?
     };
-    let state = match callback_result {
-        Ok(state) => state,
-        Err(_) => {
-            unsafe {
-                drop(Arc::from_raw(
-                    completion_ref as *const NativeAsyncCompletion,
-                ));
-                native_string_free(invocation as *mut NemoRelayNativeString);
-            }
-            return Err(FlowError::Internal("native async callback panicked".into()));
-        }
-    };
-    unsafe { native_string_free(invocation as *mut NemoRelayNativeString) };
-    let state = match NemoRelayNativeAsyncCallbackState::try_from(state) {
-        Ok(state) => state,
-        Err(()) => {
-            unsafe {
-                drop(Arc::from_raw(
-                    completion_ref as *const NativeAsyncCompletion,
-                ));
-            }
-            return Err(FlowError::Internal(
-                "native async callback returned an invalid state".into(),
-            ));
-        }
-    };
-    if state == NemoRelayNativeAsyncCallbackState::Complete {
-        unsafe {
-            drop(Arc::from_raw(
-                completion_ref as *const NativeAsyncCompletion,
-            ));
-        }
-        if completion
+    if state == NemoRelayNativeAsyncCallbackState::Complete
+        && completion
             .sender
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .is_some()
-        {
-            return Err(FlowError::Internal(
-                "native async callback returned Complete without settling".into(),
-            ));
-        }
+        && !completion.cancelled.load(Ordering::Acquire)
+    {
+        return Err(FlowError::Internal(
+            "native async callback returned Complete without settling".into(),
+        ));
     }
     wait.receive().await
 }
@@ -2265,9 +2512,22 @@ unsafe extern "C" fn native_async_next_invoke_result(
         Ok(context) => context,
         Err(error) => return status_from_flow_error(error),
     };
-    let user_data = user_data as usize;
-    let _library_guard = next._callback_user_data.clone();
-    next.runtime.spawn(async move {
+    let mut in_flight = next
+        .in_flight_aborts
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let callbacks = Arc::clone(&next.in_flight_aborts);
+    let mut callback_guard = NativeAsyncResultCallbackGuard {
+        cb,
+        user_data: user_data as usize,
+        active: true,
+        _library_guard: next._callback_user_data.clone(),
+    };
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let task = next.runtime.spawn(async move {
+        if start_rx.await.is_err() {
+            return;
+        }
         let result = AssertUnwindSafe(continuation_context.run(future))
             .catch_unwind()
             .await
@@ -2277,33 +2537,15 @@ unsafe extern "C" fn native_async_next_invoke_result(
                     panic_payload_message(payload.as_ref())
                 )))
             });
-        match result {
-            Ok(value) => {
-                if let Some(value) = native_string_from_json(&value) {
-                    unsafe {
-                        cb(user_data as *mut c_void, value, ptr::null());
-                        native_string_free(value);
-                    }
-                } else if let Some(error) =
-                    native_string_from_str("failed to allocate native async next result")
-                {
-                    unsafe {
-                        cb(user_data as *mut c_void, ptr::null(), error);
-                        native_string_free(error);
-                    }
-                }
-            }
-            Err(error) => {
-                if let Some(error) = native_string_from_str(&error.to_string()) {
-                    unsafe {
-                        cb(user_data as *mut c_void, ptr::null(), error);
-                        native_string_free(error);
-                    }
-                }
-            }
-        }
-        drop(_library_guard);
+        callback_guard.complete(result);
+        callbacks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&tokio::task::id());
     });
+    let abort = task.abort_handle();
+    in_flight.insert(task.id(), abort);
+    let _ = start_tx.send(());
     NemoRelayStatus::Ok
 }
 
@@ -2458,9 +2700,22 @@ unsafe extern "C" fn native_async_llm_next_invoke_result_v2(
         Err(error) => return status_from_flow_error(error),
     };
     let next_fn = next_fn.clone();
-    let user_data = user_data as usize;
-    let library_guard = next._callback_user_data.clone();
-    next.runtime.spawn(async move {
+    let mut in_flight = next
+        .in_flight_aborts
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let callbacks = Arc::clone(&next.in_flight_aborts);
+    let mut callback_guard = NativeLlmResultCallbackGuardV2 {
+        cb,
+        user_data: user_data as usize,
+        active: true,
+        _library_guard: next._callback_user_data.clone(),
+    };
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let task = next.runtime.spawn(async move {
+        if start_rx.await.is_err() {
+            return;
+        }
         let result = AssertUnwindSafe(
             continuation_context.invoke_with_llm_dispatch_target(target, move || next_fn(request)),
         )
@@ -2478,11 +2733,15 @@ unsafe extern "C" fn native_async_llm_next_invoke_result_v2(
                 error: typed_llm_failure(error),
             },
         };
-        unsafe {
-            invoke_typed_llm_result_callback(cb, user_data as *mut c_void, &outcome);
-        }
-        drop(library_guard);
+        callback_guard.complete(&outcome);
+        callbacks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&tokio::task::id());
     });
+    let abort = task.abort_handle();
+    in_flight.insert(task.id(), abort);
+    let _ = start_tx.send(());
     NemoRelayStatus::Ok
 }
 
@@ -2642,6 +2901,203 @@ async fn forward_native_async_next_stream_with(
         );
     }
     callback_guard.finish();
+}
+
+fn remove_current_native_stream_task(stream: &NativeAsyncStream) {
+    stream
+        .downstream_aborts
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(&tokio::task::id());
+}
+
+fn abort_native_stream_downstream_tasks(stream: &NativeAsyncStream) {
+    let mut downstream_aborts = stream
+        .downstream_aborts
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for (_, abort) in downstream_aborts.drain() {
+        abort.abort();
+    }
+}
+
+async fn push_forwarded_native_stream_chunk(
+    stream: &NativeAsyncStream,
+    chunk: Json,
+) -> FlowResult<()> {
+    if stream.cancelled.load(Ordering::Acquire) || stream.settled.load(Ordering::Acquire) {
+        return Err(FlowError::Internal(
+            "native LLM pass-through output was cancelled".into(),
+        ));
+    }
+    let sender = stream
+        .sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+        .ok_or_else(|| FlowError::Internal("native LLM pass-through output was settled".into()))?;
+    sender
+        .send(Ok(chunk))
+        .await
+        .map_err(|_| FlowError::Internal("native LLM pass-through output was cancelled".into()))
+}
+
+fn finish_forwarded_native_stream(stream: &NativeAsyncStream) -> bool {
+    let sender = {
+        let _settlement = stream
+            .settlement
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if stream.cancelled.load(Ordering::Acquire) || stream.settled.load(Ordering::Acquire) {
+            return false;
+        }
+        let sender = stream
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if sender.is_none() {
+            return false;
+        }
+        stream.settled.store(true, Ordering::Release);
+        sender
+    };
+    abort_native_stream_downstream_tasks(stream);
+    drop(sender);
+    true
+}
+
+async fn reject_forwarded_native_stream(stream: &NativeAsyncStream, error: FlowError) -> bool {
+    let sender = {
+        let _settlement = stream
+            .settlement
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if stream.cancelled.load(Ordering::Acquire) || stream.settled.load(Ordering::Acquire) {
+            return false;
+        }
+        let sender = stream
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let Some(sender) = sender else {
+            return false;
+        };
+        stream.settled.store(true, Ordering::Release);
+        sender
+    };
+    abort_native_stream_downstream_tasks(stream);
+    let _ = sender.send(Err(error)).await;
+    true
+}
+
+/// Forwards the ordinary downstream LLM continuation into the host-owned
+/// output stream without crossing the plugin boundary for each event.
+unsafe extern "C" fn native_async_llm_next_forward_stream_v2(
+    next: *const NemoRelayNativeAsyncNext,
+    request_json: *const NemoRelayNativeString,
+    output_stream: *const NemoRelayNativeAsyncStream,
+    terminal_callback: NemoRelayNativeAsyncLlmStreamForwardCbV2,
+    user_data: *mut c_void,
+) -> NemoRelayStatus {
+    let Some(next) = (unsafe { (next as *const NativeAsyncNext).as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if output_stream.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { Arc::increment_strong_count(output_stream as *const NativeAsyncStream) };
+    let output_stream = unsafe { Arc::from_raw(output_stream as *const NativeAsyncStream) };
+    let NativeAsyncNextInner::LlmStream(next_fn) = &next.inner else {
+        set_native_last_error(
+            "native LLM stream pass-through requires an LLM stream execution continuation",
+        );
+        return NemoRelayStatus::InvalidArg;
+    };
+    let request = match parse_llm_request_arg(request_json, "native LLM stream pass-through") {
+        Ok(request) => request,
+        Err(status) => return status,
+    };
+    let continuation_context = match next.context.isolated_for_current_invocation() {
+        Ok(context) => context,
+        Err(error) => return status_from_flow_error(error),
+    };
+    let settlement = output_stream
+        .settlement
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if output_stream.cancelled.load(Ordering::Acquire)
+        || output_stream.settled.load(Ordering::Acquire)
+        || output_stream
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none()
+    {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let mut downstream_aborts = output_stream
+        .downstream_aborts
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let next_fn = next_fn.clone();
+    let stream_for_pump = Arc::clone(&output_stream);
+    let callback_guard = NativeLlmStreamForwardCallbackGuardV2 {
+        cb: terminal_callback,
+        user_data: user_data as usize,
+        stream: Arc::clone(&output_stream),
+        active: true,
+        _library_guard: next._callback_user_data.clone(),
+    };
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let task = next.runtime.spawn(async move {
+        if start_rx.await.is_err() {
+            return;
+        }
+        let mut callback_guard = callback_guard;
+        let result = continuation_context
+            .run(async move {
+                AssertUnwindSafe(async move {
+                    let mut downstream = next_fn(request).await?;
+                    while let Some(item) = downstream.next().await {
+                        push_forwarded_native_stream_chunk(&stream_for_pump, item?).await?;
+                    }
+                    Ok(())
+                })
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|payload| {
+                    Err(FlowError::Internal(format!(
+                        "native LLM stream pass-through panicked: {}",
+                        panic_payload_message(payload.as_ref())
+                    )))
+                })
+            })
+            .await;
+        remove_current_native_stream_task(&callback_guard.stream);
+        match result {
+            Ok(()) if finish_forwarded_native_stream(&callback_guard.stream) => {
+                callback_guard.complete();
+            }
+            Ok(()) => {
+                callback_guard.fail("downstream LLM stream forwarding was cancelled");
+            }
+            Err(error) => {
+                if reject_forwarded_native_stream(&callback_guard.stream, error).await {
+                    callback_guard.fail("downstream LLM stream failed");
+                } else {
+                    callback_guard.fail("downstream LLM stream forwarding was cancelled");
+                }
+            }
+        }
+    });
+    let abort = task.abort_handle();
+    downstream_aborts.insert(task.id(), abort);
+    drop(downstream_aborts);
+    drop(settlement);
+    let _ = start_tx.send(());
+    NemoRelayStatus::Ok
 }
 
 /// Opens a streaming LLM continuation through native API v2.
@@ -3313,26 +3769,40 @@ fn wrap_native_incremental_llm_stream_execution_v2(
             let stream_ref = Arc::into_raw(stream.clone()) as usize;
             let callback_user_data = user_data.ptr as usize;
             let callback_scope_stack = current_scope_stack();
+            let invocation_guard = NativeInvocationStringGuard(invocation);
+            let next_handoff = NativeNextHandoff {
+                raw: Some(next_ref),
+                armed: true,
+            };
+            let output_handoff = NativeStreamHandoff {
+                raw: stream_ref,
+                armed: true,
+            };
             let blocking_task = tokio::task::spawn_blocking(move || {
-                with_scope_stack(callback_scope_stack, || {
-                    catch_unwind(AssertUnwindSafe(|| unsafe {
+                let _invocation = invocation_guard;
+                let mut next = next_handoff;
+                let mut output = output_handoff;
+                catch_unwind(AssertUnwindSafe(|| {
+                    // Both handles transfer to the plugin at callback entry.
+                    next.disarm();
+                    output.disarm();
+                    with_scope_stack(callback_scope_stack, || unsafe {
                         cb(
                             callback_user_data as *mut c_void,
                             invocation as *const NemoRelayNativeString,
                             next_ref as *const NemoRelayNativeAsyncNext,
                             stream_ref as *const NemoRelayNativeAsyncStream,
                         )
-                    }))
-                })
+                    })
+                }))
             });
             let stream_for_monitor = Arc::clone(&stream);
             tokio::spawn(async move {
-                let state = blocking_task
-                    .await
+                let callback_result = blocking_task.await;
+                let state = callback_result
                     .ok()
                     .and_then(std::result::Result::ok)
                     .and_then(|state| NemoRelayNativeAsyncCallbackState::try_from(state).ok());
-                unsafe { native_string_free(invocation as *mut NemoRelayNativeString) };
                 let error = match state {
                     Some(NemoRelayNativeAsyncCallbackState::Pending) => None,
                     Some(NemoRelayNativeAsyncCallbackState::Complete)

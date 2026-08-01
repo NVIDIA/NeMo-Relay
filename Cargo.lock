@@ -1887,6 +1887,7 @@ dependencies = [
 name = "nemo-relay-plugin"
 version = "0.8.0"
 dependencies = [
+ "futures",
  "nemo-relay-types",
  "serde",
  "serde_json",
