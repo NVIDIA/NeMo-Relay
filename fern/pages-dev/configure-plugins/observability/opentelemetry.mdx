@@ -156,6 +156,36 @@ descendants remain attached to their nearest exported ancestor. This
 projection never emits `nemo_relay.*` fields and does not export message
 content, tool payloads, or retrieval content.
 
+### Error Type Mapping
+
+For managed LLM, tool, and stream failures, NeMo Relay maps structured
+`FlowError` values to the OpenTelemetry `error.type` attribute:
+
+| Relay error | `error.type` |
+|---|---|
+| `AlreadyExists` | `already_exists` |
+| `NotFound` | `not_found` |
+| `InvalidArgument` | `invalid_argument` |
+| `ScopeStackEmpty` | `scope_stack_empty` |
+| `GuardrailRejected` | `guardrail_rejected` |
+| Upstream connection failure | `connection_error` |
+| Upstream timeout | `timeout` |
+| Upstream retryable status | `retryable_status` |
+| Upstream context-window failure | `context_window` |
+| Upstream model unavailable | `model_unavailable` |
+| Upstream authentication failure | `authentication` |
+| Upstream invalid request | `invalid_request` |
+| Other upstream failure | `upstream_error` |
+| `Internal` | `internal_error` |
+
+External application and callback exceptions that do not have a more specific
+`FlowError` classification are represented as `Internal` and emit
+`internal_error`. NeMo Relay does not inspect error messages to recover Python,
+JavaScript, or application-defined exception class names. When no structured
+`FlowError` is available, such as a cancellation or dropped execution, the
+GenAI projection emits `_OTHER`. Caller-provided `error.type` metadata takes
+precedence over the derived mapping.
+
 ## Direct Subscriber
 
 <Tabs>
