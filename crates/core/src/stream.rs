@@ -36,7 +36,7 @@ use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::llm::LlmHandle;
 use crate::api::llm::emit_reserved_optimization_marks;
 use crate::api::optimization::finalize_optimization_summary;
-use crate::api::runtime::LlmSanitizeResponseContext;
+use crate::api::registry::Guardrail;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
@@ -44,6 +44,7 @@ use crate::api::runtime::{
     EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
     current_scope_stack,
 };
+use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
 use crate::api::shared::{
     metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
 };
@@ -249,31 +250,8 @@ impl LlmStreamWrapper {
             aggregated
         };
 
-        let (entries, sanitizer_snapshot_failed) = match self.scope_stack.read() {
-            Ok(scope_guard) => {
-                let scope_locals = scope_guard
-                    .collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
-                match global_context().read() {
-                    Ok(state) => (state.llm_sanitize_response_entries(&scope_locals), false),
-                    Err(error) => {
-                        log::error!(
-                            target: "nemo_relay.runtime",
-                            event = "stream_end_sanitizer_snapshot_failed";
-                            "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
-                        );
-                        (Vec::new(), true)
-                    }
-                }
-            }
-            Err(error) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "stream_end_sanitizer_snapshot_failed";
-                    "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
-                );
-                (Vec::new(), true)
-            }
-        };
+        let (entries, sanitizer_snapshot_failed) =
+            snapshot_stream_end_sanitizers(&self.scope_stack);
         let handle = self.handle.clone();
         let scope_stack = self.scope_stack.clone();
         let finalization_scope_stack = scope_stack.clone();
@@ -408,6 +386,30 @@ impl LlmStreamWrapper {
                 &self.subscribers,
                 self.scope_stack.clone(),
             );
+        }
+    }
+}
+
+fn snapshot_stream_end_sanitizers(
+    scope_stack: &ScopeStackHandle,
+) -> (Vec<Guardrail<LlmSanitizeResponseFn>>, bool) {
+    let entries = scope_stack.read().ok().and_then(|scope_guard| {
+        let scope_locals = scope_guard
+            .collect_scope_local_registries(|registry| &registry.llm_sanitize_response_guardrails);
+        global_context()
+            .read()
+            .ok()
+            .map(|state| state.llm_sanitize_response_entries(&scope_locals))
+    });
+    match entries {
+        Some(entries) => (entries, false),
+        None => {
+            log::error!(
+                target: "nemo_relay.runtime",
+                event = "stream_end_sanitizer_snapshot_failed";
+                "LLM stream END sanitizer snapshot failed; omitting the observability payload"
+            );
+            (Vec::new(), true)
         }
     }
 }

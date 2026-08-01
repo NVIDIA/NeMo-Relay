@@ -434,59 +434,31 @@ fn push_error_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
 }
 
 fn scalar_string(event: &Event, keys: &[&str]) -> Option<String> {
-    if let Some(profile) = event.category_profile() {
-        for key in keys {
-            if let Some(value) = profile.extra.get(*key) {
-                if let Some(value) = value.as_str() {
-                    return Some(value.to_string());
-                }
-                if value.is_number() || value.is_boolean() {
-                    return Some(value.to_string());
-                }
-            }
-        }
-    }
-    for object in event_objects(event) {
-        for key in keys {
-            if let Some(value) = object_value(object, key) {
-                if let Some(value) = value.as_str() {
-                    return Some(value.to_string());
-                }
-                if value.is_number() || value.is_boolean() {
-                    return Some(value.to_string());
-                }
-            }
-        }
-    }
-    None
+    find_scalar(event, keys, |value| {
+        value
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| (value.is_number() || value.is_boolean()).then(|| value.to_string()))
+    })
 }
 
 fn scalar_i64(event: &Event, keys: &[&str]) -> Option<i64> {
-    if let Some(profile) = event.category_profile() {
-        for key in keys {
-            if let Some(value) = profile.extra.get(*key) {
-                if let Some(value) = value.as_i64() {
-                    return Some(value);
-                }
-                if let Some(value) = value.as_u64().and_then(to_i64) {
-                    return Some(value);
-                }
-            }
-        }
-    }
-    for object in event_objects(event) {
-        for key in keys {
-            if let Some(value) = object_value(object, key) {
-                if let Some(value) = value.as_i64() {
-                    return Some(value);
-                }
-                if let Some(value) = value.as_u64().and_then(to_i64) {
-                    return Some(value);
-                }
-            }
-        }
-    }
-    None
+    find_scalar(event, keys, |value| {
+        value.as_i64().or_else(|| value.as_u64().and_then(to_i64))
+    })
+}
+
+fn find_scalar<T>(event: &Event, keys: &[&str], convert: impl Fn(&Json) -> Option<T>) -> Option<T> {
+    let profile_value = event.category_profile().and_then(|profile| {
+        keys.iter()
+            .find_map(|key| profile.extra.get(*key).and_then(&convert))
+    });
+    profile_value.or_else(|| {
+        event_objects(event).into_iter().find_map(|object| {
+            keys.iter()
+                .find_map(|key| object_value(object, key).and_then(&convert))
+        })
+    })
 }
 
 fn object_value<'a>(object: &'a Map<String, Json>, key: &str) -> Option<&'a Json> {

@@ -215,37 +215,7 @@ fn validate_adaptive_plugin_config_with_policy(
         );
     }
 
-    if let Some(state_json) = plugin_config.get("state").and_then(Json::as_object) {
-        validate_unknown_fields(
-            &mut diagnostics,
-            &config.policy,
-            Some("state".to_string()),
-            state_json,
-            &["backend"],
-        );
-        if let Some(backend_json) = state_json.get("backend").and_then(Json::as_object) {
-            validate_unknown_fields(
-                &mut diagnostics,
-                &config.policy,
-                Some("backend".to_string()),
-                backend_json,
-                &["kind", "config"],
-            );
-            let backend_kind = backend_json
-                .get("kind")
-                .and_then(Json::as_str)
-                .unwrap_or_default();
-            if let Some(backend_config_json) = backend_json.get("config").and_then(Json::as_object)
-            {
-                validate_backend_config_fields(
-                    &mut diagnostics,
-                    &config.policy,
-                    backend_kind,
-                    backend_config_json,
-                );
-            }
-        }
-    }
+    validate_adaptive_state_section(&mut diagnostics, &config.policy, plugin_config);
 
     if let Some(telemetry_json) = plugin_config.get("telemetry").and_then(Json::as_object) {
         validate_unknown_fields(
@@ -303,52 +273,94 @@ fn validate_adaptive_plugin_config_with_policy(
         );
     }
 
-    if let Some(response_cache_json) = plugin_config
-        .get("response_cache")
-        .and_then(Json::as_object)
-    {
-        validate_unknown_fields(
-            &mut diagnostics,
-            &config.policy,
-            Some("response_cache".to_string()),
-            response_cache_json,
-            &[
-                "ttl_seconds",
-                "namespace",
-                "priority",
-                "bypass_rate",
-                "cache_nondeterministic",
-                "key_strategy",
-                "header_allowlist",
-                "backend",
-            ],
-        );
-        if let Some(backend_json) = response_cache_json.get("backend").and_then(Json::as_object) {
-            validate_unknown_fields(
-                &mut diagnostics,
-                &config.policy,
-                Some("response_cache.backend".to_string()),
-                backend_json,
-                &["kind", "config"],
-            );
-            let backend_kind = backend_json
-                .get("kind")
-                .and_then(Json::as_str)
-                .unwrap_or("in_memory");
-            if let Some(backend_config_json) = backend_json.get("config").and_then(Json::as_object)
-            {
-                validate_response_cache_backend_config_fields(
-                    &mut diagnostics,
-                    &config.policy,
-                    backend_kind,
-                    backend_config_json,
-                );
-            }
-        }
-    }
+    validate_response_cache_section(&mut diagnostics, &config.policy, plugin_config);
 
     diagnostics.extend(AdaptiveRuntime::validate_config(&config).diagnostics);
     diagnostics
+}
+
+fn validate_adaptive_state_section(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
+) {
+    let Some(state_json) = plugin_config.get("state").and_then(Json::as_object) else {
+        return;
+    };
+    validate_unknown_fields(
+        diagnostics,
+        policy,
+        Some("state".to_string()),
+        state_json,
+        &["backend"],
+    );
+    let Some(backend_json) = state_json.get("backend").and_then(Json::as_object) else {
+        return;
+    };
+    validate_unknown_fields(
+        diagnostics,
+        policy,
+        Some("backend".to_string()),
+        backend_json,
+        &["kind", "config"],
+    );
+    let backend_kind = backend_json
+        .get("kind")
+        .and_then(Json::as_str)
+        .unwrap_or_default();
+    if let Some(backend_config_json) = backend_json.get("config").and_then(Json::as_object) {
+        validate_backend_config_fields(diagnostics, policy, backend_kind, backend_config_json);
+    }
+}
+
+fn validate_response_cache_section(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
+) {
+    let Some(response_cache_json) = plugin_config
+        .get("response_cache")
+        .and_then(Json::as_object)
+    else {
+        return;
+    };
+    validate_unknown_fields(
+        diagnostics,
+        policy,
+        Some("response_cache".to_string()),
+        response_cache_json,
+        &[
+            "ttl_seconds",
+            "namespace",
+            "priority",
+            "bypass_rate",
+            "cache_nondeterministic",
+            "key_strategy",
+            "header_allowlist",
+            "backend",
+        ],
+    );
+    if let Some(backend_json) = response_cache_json.get("backend").and_then(Json::as_object) {
+        validate_unknown_fields(
+            diagnostics,
+            policy,
+            Some("response_cache.backend".to_string()),
+            backend_json,
+            &["kind", "config"],
+        );
+        let backend_kind = backend_json
+            .get("kind")
+            .and_then(Json::as_str)
+            .unwrap_or("in_memory");
+        if let Some(backend_config_json) = backend_json.get("config").and_then(Json::as_object) {
+            validate_response_cache_backend_config_fields(
+                diagnostics,
+                policy,
+                backend_kind,
+                backend_config_json,
+            );
+        }
+    }
 }
 
 fn validate_response_cache_backend_config_fields(

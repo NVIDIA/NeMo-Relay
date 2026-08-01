@@ -20,13 +20,14 @@ function argumentsFrom(args) {
   let version;
   let output;
   let platform;
-  for (let index = 0; index < args.length; index += 1) {
+  for (let index = 0; index < args.length; index += 2) {
+    const value = args[index + 1];
     if (args[index] === "--version") {
-      version = args[++index];
+      version = value;
     } else if (args[index] === "--out") {
-      output = args[++index];
+      output = value;
     } else if (args[index] === "--platform") {
-      platform = args[++index];
+      platform = value;
     } else {
       throw new Error(`Unexpected argument: ${args[index]}`);
     }
