@@ -105,19 +105,38 @@ batch sizing is not supported.
 
 Use positive integer values. The SDK falls back to its defaults for malformed
 values but accepts zero; do not use zero values. Queue capacity counts spans,
-not bytes. A full queue drops completed spans rather than applying backpressure
-to application work.
+not bytes.
+
+<Warning>
+A full queue drops completed spans instead of applying backpressure to
+application work. Bursts can therefore drop spans that finish late, including
+an enclosing root span, and leave an incomplete trace in the backend.
+
+The OpenTelemetry SDK logs
+`BatchSpanProcessor.SpanDroppingStarted` at warning level when each endpoint
+first drops a span. It suppresses additional first-drop warnings for that
+endpoint to avoid a log storm. During graceful shutdown, it logs
+`BatchSpanProcessor.SpansDropped` with the endpoint processor's exact
+`dropped_span_count` and `max_queue_size`. The SDK diagnostics do not include
+the Relay endpoint index or URL.
+</Warning>
+
+Increasing `OTEL_BSP_MAX_QUEUE_SIZE` can reduce the risk for a known burst
+size, but a finite queue does not guarantee lossless telemetry. Always clear
+the plugin during graceful shutdown so the SDK can report its final drop count
+and attempt to export queued spans.
 
 ## Endpoint Capacity and Sizing
 
 NeMo Relay does not impose a maximum number of OpenTelemetry endpoints. Each
-endpoint owns an exporter, tracer provider, batch queue, and exporter runtime.
-Queue capacity and memory are per endpoint, and total export traffic grows
-approximately with endpoint count and trace payload size.
+endpoint owns an exporter, tracer provider, batch processor, batch queue, and
+exporter runtime resources. Nothing in that export stack is shared between
+endpoints. Queue capacity and memory are per endpoint, and total export traffic
+is approximately the trace payload size multiplied by the endpoint count.
 
-Use only the endpoints required by your deployment. Validate configurations
-with tens or hundreds of endpoints against the process thread, memory, and
-network limits.
+Typical deployments need one to three endpoints. Validate configurations with
+tens or hundreds of endpoints against the process limits for threads, memory,
+and network egress before deploying them.
 
 Use `header_env` for secrets so configuration files contain only environment
 variable names. Each variable contains the complete header value. NeMo Relay

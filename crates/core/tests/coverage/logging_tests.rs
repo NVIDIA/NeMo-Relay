@@ -6,11 +6,17 @@ use crate::logging::{
     LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES, build_logger,
     format_event_for_test, init_logging,
 };
+use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
+use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::trace::{
+    BatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider, SpanData, SpanExporter,
+};
 use serde_json::Value;
 use spdlog::Level;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Barrier, Mutex, MutexGuard};
+use std::sync::{Arc, Barrier, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 static LOGGING_TEST_LOCK: Mutex<()> = Mutex::new(());
 const FOREIGN_LOGGER_CHILD_ENV: &str = "NEMO_RELAY_TEST_FOREIGN_LOGGER_CHILD";
@@ -28,6 +34,59 @@ impl log::Log for ForeignLogger {
 }
 
 static FOREIGN_LOGGER: ForeignLogger = ForeignLogger;
+
+#[derive(Clone, Debug, Default)]
+struct BlockingSpanExporter {
+    state: Arc<(Mutex<BlockingExporterState>, Condvar)>,
+}
+
+#[derive(Debug, Default)]
+struct BlockingExporterState {
+    export_started: bool,
+    release_export: bool,
+}
+
+impl BlockingSpanExporter {
+    fn wait_until_export_starts(&self) {
+        let (state, changed) = &*self.state;
+        let guard = state.lock().unwrap_or_else(|error| error.into_inner());
+        let (guard, timeout) = changed
+            .wait_timeout_while(guard, Duration::from_secs(5), |state| !state.export_started)
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(
+            guard.export_started && !timeout.timed_out(),
+            "batch exporter did not start"
+        );
+    }
+
+    fn release(&self) {
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        state.release_export = true;
+        changed.notify_all();
+    }
+}
+
+impl Drop for BlockingSpanExporter {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl SpanExporter for BlockingSpanExporter {
+    async fn export(&self, _batch: Vec<SpanData>) -> OTelSdkResult {
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        state.export_started = true;
+        changed.notify_all();
+        while !state.release_export {
+            state = changed
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        Ok(())
+    }
+}
 
 fn lock_logging_tests() -> MutexGuard<'static, ()> {
     LOGGING_TEST_LOCK
@@ -543,6 +602,99 @@ fn wait_for_log_line(path: &std::path::Path, ready: impl Fn(&str) -> bool) -> St
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     std::fs::read_to_string(path).unwrap_or_default()
+}
+
+#[test]
+fn opentelemetry_batch_processor_logs_dropped_spans() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("otel-dropped-spans.log.jsonl");
+    let config = LoggingConfig {
+        level: LogLevel::Warn,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Warn,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+    let runtime = init_logging(&config).unwrap();
+
+    let exporter = BlockingSpanExporter::default();
+    let processor = BatchSpanProcessor::builder(exporter.clone())
+        .with_batch_config(
+            BatchConfigBuilder::default()
+                .with_max_queue_size(1)
+                .with_max_export_batch_size(1)
+                .with_scheduled_delay(Duration::from_secs(60))
+                .build(),
+        )
+        .build();
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let tracer = provider.tracer("dropped-span-logging-test");
+
+    tracer.start("export-in-progress").end();
+    exporter.wait_until_export_starts();
+    tracer.start("queued").end();
+    tracer.start("dropped-1").end();
+    tracer.start("dropped-2").end();
+
+    runtime.logger.flush();
+    let immediate = wait_for_log_line(&path, |contents| {
+        contents.contains("BatchSpanProcessor.SpanDroppingStarted")
+    });
+    assert_eq!(
+        immediate
+            .matches("BatchSpanProcessor.SpanDroppingStarted")
+            .count(),
+        1,
+        "the processor should warn only for the first drop: {immediate}"
+    );
+    let first_drop: Value = immediate
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|record: &Value| {
+            record["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("BatchSpanProcessor.SpanDroppingStarted"))
+        })
+        .expect("first-drop warning");
+    assert_eq!(first_drop["level"], "warn");
+    assert_eq!(first_drop["target"], "opentelemetry_sdk");
+
+    exporter.release();
+    provider.shutdown().unwrap();
+    runtime.logger.flush();
+    let summary = wait_for_log_line(&path, |contents| {
+        contents.contains("BatchSpanProcessor.SpansDropped")
+            && contents.contains("dropped_span_count=2")
+    });
+    runtime.shutdown();
+
+    assert_eq!(
+        summary
+            .matches("BatchSpanProcessor.SpanDroppingStarted")
+            .count(),
+        1,
+        "later drops should not emit another first-drop warning: {summary}"
+    );
+    let drop_summary: Value = summary
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|record: &Value| {
+            record["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("BatchSpanProcessor.SpansDropped"))
+        })
+        .expect("shutdown drop summary");
+    assert_eq!(drop_summary["level"], "warn");
+    assert_eq!(drop_summary["target"], "opentelemetry_sdk");
+    let message = drop_summary["message"].as_str().unwrap();
+    assert!(message.contains("dropped_span_count=2"), "{message}");
+    assert!(message.contains("max_queue_size=1"), "{message}");
 }
 
 fn read_single_jsonl_record(path: &Path) -> Value {
