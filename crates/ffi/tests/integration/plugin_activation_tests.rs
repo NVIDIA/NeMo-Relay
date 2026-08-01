@@ -158,8 +158,7 @@ source = "project-file"
         "config": {}
     }]));
 
-    // The explicit version 1 must override the discovered version 999. The
-    // file-only component and its config must still survive the merge.
+    // The file-only component and its config must survive the merge.
     assert_eq!(report["diagnostics"], json!([]));
     assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
     assert_eq!(
