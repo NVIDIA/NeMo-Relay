@@ -245,7 +245,8 @@ pub struct ToolCallEndParams<'a> {
 ///
 /// # Notes
 /// Sanitize-request guardrails affect only the emitted start-event payload, not
-/// the caller-owned `args` value.
+/// the caller-owned `args` value. If a sanitizer errors or panics, Relay omits
+/// that observability payload and does not run remaining sanitizers.
 pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
@@ -318,7 +319,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
                 )
                 .await;
                 let mut fields = event.sanitize_fields();
-                fields.data = Some(sanitized);
+                fields.data = sanitized;
                 event.apply_sanitize_fields(fields);
                 event
             })
@@ -376,7 +377,7 @@ async fn tool_call_with_subscriber_snapshot(
             .timestamp_opt(params.timestamp)
             .build();
         let handle = state.create_tool_handle(handle_params);
-        let event = state.build_tool_start_event(&handle, Some(sanitized_args));
+        let event = state.build_tool_start_event(&handle, sanitized_args);
         let marks = skill_loads
             .into_iter()
             .map(|skill_load| {
@@ -432,7 +433,8 @@ async fn tool_call_with_subscriber_snapshot(
 ///
 /// # Notes
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
-/// the caller-owned `result` value.
+/// the caller-owned `result` value. If a sanitizer errors or panics, Relay omits
+/// that observability payload and does not run remaining sanitizers.
 pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
@@ -481,11 +483,13 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
                 )
                 .await;
                 let mut fields = event.sanitize_fields();
-                fields.data = if sanitized.is_null() {
-                    fallback
-                } else {
-                    Some(sanitized)
-                };
+                fields.data = sanitized.and_then(|value| {
+                    if value.is_null() {
+                        fallback
+                    } else {
+                        Some(value)
+                    }
+                });
                 event.apply_sanitize_fields(fields);
                 event
             })
@@ -528,11 +532,13 @@ async fn tool_call_end_with_pending_marks(
         &entries,
     )
     .await;
-    let data = if sanitized_result.is_null() {
-        params.data
-    } else {
-        Some(sanitized_result)
-    };
+    let data = sanitized_result.and_then(|value| {
+        if value.is_null() {
+            params.data
+        } else {
+            Some(value)
+        }
+    });
     let event = {
         let context = global_context();
         let state = context

@@ -207,8 +207,8 @@ event later in FIFO order.
 
 Subscriber and exporter delivery is therefore delayed, while start/end/mark
 order is preserved. Closing a scope or deregistering middleware after emission
-does not affect queued snapshots. Sanitizer failures fail open: Relay records
-the callback failure and publishes the last valid event snapshot.
+does not affect queued snapshots. Sanitizer failures fail closed: Relay records
+the callback failure and withholds the governed observability payload.
 
 ## Managed Execution Order
 

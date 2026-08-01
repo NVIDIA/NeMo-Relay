@@ -360,7 +360,7 @@ class TestLLMGuardrails:
             guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r, context: r)
         guardrails.deregister_llm_sanitize_request("py_llm_dup")
 
-    def test_sanitize_request_callable_error_preserves_observability_input(self):
+    def test_sanitize_request_callable_error_omits_observability_input(self):
         events = []
         subscribers.register("py_llm_sanitize_req_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
@@ -383,10 +383,10 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_sub")
 
         start = _llm_event(events, "llm_sanitize_req_fail", "start")
-        assert start.data == {"headers": {"x-request-id": "safe"}, "content": request.content}
+        assert start.data is None
         assert start.annotated_request is None
 
-    def test_sanitize_request_invalid_return_preserves_observability_input(self):
+    def test_sanitize_request_invalid_return_omits_observability_input(self):
         events = []
         subscribers.register("py_llm_sanitize_req_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
@@ -409,10 +409,10 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_req_bad_sub")
 
         start = _llm_event(events, "llm_sanitize_req_bad", "start")
-        assert start.data == {"headers": {"x-request-id": "safe"}, "content": request.content}
+        assert start.data is None
         assert start.annotated_request is None
 
-    def test_sanitize_response_callable_error_preserves_observability_output(self):
+    def test_sanitize_response_callable_error_omits_observability_output(self):
         events = []
         subscribers.register("py_llm_sanitize_resp_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
@@ -431,10 +431,10 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_resp_sub")
 
         end = _llm_event(events, "llm_sanitize_resp_fail", "end")
-        assert end.data == {"ok": True}
+        assert end.data is None
         assert end.annotated_response is None
 
-    def test_sanitize_response_invalid_return_preserves_observability_output(self):
+    def test_sanitize_response_invalid_return_omits_observability_output(self):
         events = []
         subscribers.register("py_llm_sanitize_resp_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
@@ -453,7 +453,7 @@ class TestLLMGuardrails:
                 subscribers.deregister("py_llm_sanitize_resp_bad_sub")
 
         end = _llm_event(events, "llm_sanitize_resp_bad", "end")
-        assert end.data == {"ok": True}
+        assert end.data is None
         assert end.annotated_response is None
 
     def test_sanitize_response_guardrail_accepts_scalar_json_payloads(self):

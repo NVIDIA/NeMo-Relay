@@ -166,9 +166,12 @@ class EventSanitizeFields(TypedDict):
 
 #: Guardrail callback that sanitizes emitted tool request or response payloads.
 #: Arguments are the tool name and JSON payload. The return value is the JSON
-#: payload recorded on the emitted event. Exceptions fail open and preserve the
-#: last valid observability payload.
+#: payload recorded on the emitted event. Exceptions fail closed and omit the
+#: observability payload, then stop the remaining sanitizer chain.
 ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
+#: Guardrail callback that sanitizes mark and scope event fields. Exceptions
+#: fail closed: Relay clears all mutable observability fields and stops the
+#: remaining sanitizer chain.
 EventSanitizeGuardrail: TypeAlias = Callable[
     ["Event", EventSanitizeFields], EventSanitizeFields | Awaitable[EventSanitizeFields]
 ]
@@ -177,7 +180,8 @@ EventSanitizeGuardrail: TypeAlias = Callable[
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 #: Guardrail callback that sanitizes an ``LLMRequest`` used for emitted events.
 #: Callbacks receive ``(request, context)``. Returning ``None`` omits the LLM observability
-#: payload and annotation without changing the caller-visible request.
+#: payload and annotation without changing the caller-visible request. Exceptions
+#: also fail closed and stop the remaining sanitizer chain.
 LlmSanitizeRequestGuardrail: TypeAlias = Callable[
     [LLMRequest, "LlmSanitizeRequestContext"],
     Optional[LLMRequest] | Awaitable[Optional[LLMRequest]],
@@ -185,6 +189,7 @@ LlmSanitizeRequestGuardrail: TypeAlias = Callable[
 #: Guardrail callback that sanitizes an emitted JSON LLM response payload.
 #: Callbacks receive ``(response, context)`` and can return ``None`` to omit
 #: observability payload and annotation without changing the caller response.
+#: Exceptions also fail closed and stop the remaining sanitizer chain.
 LlmSanitizeResponseGuardrail: TypeAlias = Callable[
     [Json, "LlmSanitizeResponseContext"], Optional[Json] | Awaitable[Optional[Json]]
 ]

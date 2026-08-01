@@ -36,6 +36,9 @@ compatibility information applies to the current 0.7 prerelease.
   for each managed call. Sanitizers can normalize built-in,
   runtime-registered, and opaque codec payloads without changing the
   client-visible request or response.
+- Sanitizer callback failures now fail closed across mark, scope, tool, and
+  LLM surfaces: Relay withholds the governed observability payload while
+  preserving application execution.
 - The PII redaction plugin now selects the active codec per call. One component
   can safely sanitize mixed OpenAI Chat, OpenAI Responses, and Anthropic
   Messages traffic without a fixed provider codec.

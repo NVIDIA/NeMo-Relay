@@ -680,7 +680,7 @@ describe('Tool guardrails', () => {
     }
   });
 
-  it('sanitize guardrail failures preserve the observable payload', async () => {
+  it('sanitize guardrail failures omit the observable payload', async () => {
     clearLastCallbackError();
     const events = [];
     registerSubscriber('node_tool_san_throw_sub', (event) => events.push(event));
@@ -697,7 +697,7 @@ describe('Tool guardrails', () => {
           event.category === 'tool' &&
           event.scope_category === 'start',
       );
-      assert.deepEqual(start.data, { original: true });
+      assert.equal(start.data, null);
       assert.match(getLastCallbackError() ?? '', /sanitize boom/i);
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_tool_san_throw');

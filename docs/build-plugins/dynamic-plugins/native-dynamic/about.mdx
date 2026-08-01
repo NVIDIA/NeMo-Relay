@@ -243,9 +243,9 @@ JSON string handles, which callers release with the ordinary host string
 release operation.
 
 A successful null sanitizer output omits the LLM observability payload and its
-annotation. Returning an error fails open: Relay records the callback error and
-preserves the last valid observability payload and annotation. Neither case
-changes the client-visible request or response.
+annotation. Returning an error also omits the payload and annotation; Relay
+records the callback error. Neither case changes the client-visible request or
+response.
 
 Use the `nemo-relay-plugin` crate rather than the host `nemo-relay` runtime
 crate. Refer to [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)

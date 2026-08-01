@@ -171,7 +171,8 @@ Return:
     JSON payload recorded on the emitted lifecycle event.
 
 Exceptional flow:
-    Exceptions fail open and preserve the last valid observability payload.
+    Exceptions fail closed, omit the observability payload, and stop the
+    remaining sanitizer chain.
 """
 EventSanitizeGuardrail: TypeAlias = Callable[
     [Event, EventSanitizeFields],
@@ -186,7 +187,8 @@ Return:
     Observability fields recorded on the asynchronously published event.
 
 Exceptional flow:
-    Exceptions fail open and preserve the last valid event snapshot.
+    Exceptions fail closed, clear the mutable observability fields, and stop
+    the remaining sanitizer chain.
 """
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 """Guardrail callback that can block tool execution.
@@ -212,6 +214,10 @@ Arguments:
 Return:
     Request object recorded on the emitted lifecycle event, or ``None`` to omit
     the LLM observability payload and annotation.
+
+Exceptional flow:
+    Exceptions fail closed, omit the payload and annotation, and stop the
+    remaining sanitizer chain.
 """
 LlmSanitizeResponseGuardrail: TypeAlias = Callable[
     [Json, "LlmSanitizeResponseContext"],
@@ -228,6 +234,10 @@ Arguments:
 Return:
     Response object recorded on the emitted lifecycle event, or ``None`` to
     omit the LLM observability payload and annotation.
+
+Exceptional flow:
+    Exceptions fail closed, omit the payload and annotation, and stop the
+    remaining sanitizer chain.
 """
 LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str] | Awaitable[Optional[str]]]
 """Guardrail callback that can block an LLM call.

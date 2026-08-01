@@ -368,7 +368,7 @@ fn dispatcher_continues_after_subscriber_panic() {
 }
 
 #[test]
-fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_fails() {
+fn dispatcher_clears_observability_fields_when_an_async_sanitizer_fails() {
     let _lock = TEST_MUTEX.lock().unwrap();
     flush_subscribers().unwrap();
     reset_global();
@@ -377,12 +377,12 @@ fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_fails() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let observed_events = Arc::clone(&observed);
     register_subscriber(
-        "fail-open-sanitizer-subscriber",
+        "fail-closed-sanitizer-subscriber",
         Arc::new(move |event| observed_events.lock().unwrap().push(event.clone())),
     )
     .unwrap();
     register_mark_sanitize_guardrail(
-        "fail-open-mark-sanitizer",
+        "fail-closed-mark-sanitizer",
         10,
         Arc::new(|_, _| {
             Box::pin(async {
@@ -407,17 +407,11 @@ fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_fails() {
     let observed = observed.lock().unwrap();
     assert_eq!(observed.len(), 1);
     assert_eq!(observed[0].name(), "unsanitized-fallback");
-    assert_eq!(
-        observed[0].sanitize_fields().data,
-        Some(json!({"original_data": true}))
-    );
-    assert_eq!(
-        observed[0].sanitize_fields().metadata,
-        Some(json!({"original_metadata": true}))
-    );
+    assert_eq!(observed[0].sanitize_fields().data, None);
+    assert_eq!(observed[0].sanitize_fields().metadata, None);
     drop(observed);
-    deregister_mark_sanitize_guardrail("fail-open-mark-sanitizer").unwrap();
-    deregister_subscriber("fail-open-sanitizer-subscriber").unwrap();
+    deregister_mark_sanitize_guardrail("fail-closed-mark-sanitizer").unwrap();
+    deregister_subscriber("fail-closed-sanitizer-subscriber").unwrap();
 }
 
 #[test]
@@ -447,7 +441,7 @@ fn mark_emission_skips_sanitizers_without_subscribers() {
 }
 
 #[test]
-fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_panics() {
+fn dispatcher_clears_observability_fields_when_an_async_sanitizer_panics() {
     let _lock = TEST_MUTEX.lock().unwrap();
     flush_subscribers().unwrap();
     reset_global();
@@ -484,10 +478,7 @@ fn dispatcher_publishes_the_snapshot_when_an_async_sanitizer_panics() {
     let events = observed.lock().unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name(), "panic-fallback");
-    assert_eq!(
-        events[0].sanitize_fields().data,
-        Some(json!({"redacted": true}))
-    );
+    assert_eq!(events[0].sanitize_fields().data, None);
     drop(events);
     deregister_mark_sanitize_guardrail("successful-mark-sanitizer").unwrap();
     deregister_mark_sanitize_guardrail("panic-mark-sanitizer").unwrap();
