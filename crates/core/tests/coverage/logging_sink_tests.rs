@@ -120,11 +120,14 @@ fn logger_builder_rejects_duplicate_reserved_and_invalid_queue_sinks() {
     ];
     assert!(build_logger_error(&config).contains("conflicts"));
 
-    for capacity in [0, MAX_FILE_SINK_QUEUE_ENTRIES + 1] {
+    for (capacity, expected) in [
+        (0, "must be greater than 0"),
+        (MAX_FILE_SINK_QUEUE_ENTRIES + 1, "exceeds maximum"),
+    ] {
         let mut sink = file_sink(temp.path().join(format!("queue-{capacity}.log")));
         sink.queue_capacity = capacity;
         config.sinks = vec![LogSinkConfig::File(sink)];
-        assert!(!build_logger_error(&config).is_empty());
+        assert!(build_logger_error(&config).contains(expected));
     }
 }
 

@@ -134,7 +134,15 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
     let managed = temp.path().join(MANAGED_ENVIRONMENTS_DIR).join(digest);
     let interpreter = managed.join("bin/python");
     std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
-    std::fs::write(&interpreter, "#!/bin/sh\nexit 0\n").unwrap();
+    let probe = temp.path().join("launch-probe");
+    std::fs::write(
+        &interpreter,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$0\" \"$NEMO_RELAY_WORKER_ENDPOINT_FILE\" > '{}'\nexit 0\n",
+            probe.display()
+        ),
+    )
+    .unwrap();
     let mut permissions = std::fs::metadata(&interpreter).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&interpreter, permissions).unwrap();
@@ -154,6 +162,11 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
     })
     .unwrap();
     assert!(child.wait().unwrap().success());
+    let recorded = std::fs::read_to_string(&probe).unwrap();
+    let mut lines = recorded.lines();
+    assert_eq!(lines.next(), interpreter.to_str());
+    assert_eq!(lines.next(), endpoint_file.to_str());
+    assert_eq!(lines.next(), None);
 }
 
 #[cfg(not(unix))]
@@ -329,6 +342,13 @@ fn response_helpers_cover_stream_optional_and_cancellation_errors() {
         .unwrap_err()
         .to_string()
         .contains("invalid JSON result")
+    );
+    assert_eq!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        })
+        .expect("empty result must map to no replacement JSON"),
+        None
     );
     assert!(
         optional_json_from_invoke_response(InvokeResponse {

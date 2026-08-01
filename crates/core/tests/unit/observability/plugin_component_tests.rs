@@ -650,6 +650,9 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
 
 #[test]
 fn atof_stream_header_validation_reports_invalid_values_and_environment_names() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let policy = ConfigPolicy::default();
     let mut diagnostics = Vec::new();
 
@@ -662,7 +665,7 @@ fn atof_stream_header_validation_reports_invalid_values_and_environment_names() 
     );
 
     let blank = "NEMO_RELAY_TEST_BLANK_ATOF_STREAM_HEADER_ENV";
-    // SAFETY: this uniquely named variable is only observed by this test.
+    // SAFETY: the observability mutex serializes access to this test-only variable.
     unsafe { std::env::set_var(blank, "  ") };
     validate_atof_stream_header_env(&mut diagnostics, &policy, "header_env.blank", blank);
     // SAFETY: cleanup of the test-only environment variable.
@@ -3391,6 +3394,9 @@ fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
 #[test]
 #[cfg(feature = "object-store")]
 fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     for endpoint in [" http://example.com", "://", "ftp://example.com"] {
         assert!(HttpUploadConfig::resolve(2, &http_storage_config(endpoint)).is_err());
     }

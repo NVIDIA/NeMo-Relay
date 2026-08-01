@@ -4403,6 +4403,7 @@ fn assert_async_request_registration_rejects_legacy_relay_contract() {
         },
         NemoRelayStatus::InvalidArg
     );
+    assert_last_error_contains("excludes Relay 0.5");
     unsafe { native_string_free(name) };
 }
 
