@@ -98,6 +98,22 @@ batch sizing is not supported.
 | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | `512` | Maximum spans exported in one batch; capped at the queue size. |
 | `OTEL_BSP_SCHEDULE_DELAY` | `5000` ms | Maximum delay before exporting a non-full batch. |
 
+Use positive integer values. The SDK falls back to its defaults for malformed
+values but accepts zero; do not use zero values. Queue capacity counts spans,
+not bytes. A full queue drops completed spans rather than applying backpressure
+to application work.
+
+## Endpoint Capacity and Sizing
+
+NeMo Relay does not impose a maximum number of OpenTelemetry endpoints. Each
+endpoint owns an exporter, tracer provider, batch queue, and exporter runtime.
+Queue capacity and memory are per endpoint, and total export traffic grows
+approximately with endpoint count and trace payload size.
+
+Use only the endpoints required by your deployment. Validate configurations
+with tens or hundreds of endpoints against the process thread, memory, and
+network limits.
+
 Use `header_env` for secrets so configuration files contain only environment
 variable names. Each variable contains the complete header value. NeMo Relay
 validates variable names without reading their values, then resolves and

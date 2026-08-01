@@ -44,7 +44,7 @@ use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{
-    BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
+    IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
 };
 use uuid::Uuid;
 
@@ -731,8 +731,7 @@ fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvid
         .with_max_attributes_per_span(u32::MAX)
         .with_max_attributes_per_event(u32::MAX);
 
-    let processor = BatchSpanProcessor::builder(exporter).build();
-    Ok(builder.with_span_processor(processor).build())
+    Ok(builder.with_batch_exporter(exporter).build())
 }
 
 fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {
