@@ -597,6 +597,216 @@ fn component_field_clear_only_removes_optional_fields() {
 }
 
 #[test]
+fn menu_keys_cover_selection_shortcuts_and_cancellation() {
+    assert_eq!(
+        menu_response_for_key(&Key::Enter, 2),
+        Some(MenuResponse::Selected(2))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Char(' '), 3),
+        Some(MenuResponse::Selected(3))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Char('p'), 1),
+        Some(MenuResponse::Shortcut(MenuShortcut::Preview, 1))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Char('s'), 1),
+        Some(MenuResponse::Shortcut(MenuShortcut::Save, 1))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Char('r'), 1),
+        Some(MenuResponse::Shortcut(MenuShortcut::Reset, 1))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Backspace, 1),
+        Some(MenuResponse::Shortcut(MenuShortcut::Clear, 1))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Char('?'), 1),
+        Some(MenuResponse::Shortcut(MenuShortcut::Help, 1))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Escape, 1),
+        Some(MenuResponse::Cancel)
+    );
+    assert_eq!(menu_response_for_key(&Key::Char('x'), 1), None);
+}
+
+#[test]
+fn section_menu_helpers_render_defaults_and_reset_sections() {
+    let mut config = ObservabilityConfig::default();
+    let section = ObservabilityConfig::editor_schema().field("atof").unwrap();
+    let fields = section.schema().unwrap().fields;
+
+    let items = section_menu_items(&config, section, fields).unwrap();
+    assert_eq!(items.len(), fields.len() + 3);
+    assert!(items.last().unwrap().label.contains("Back"));
+    assert_eq!(selected_field_index(section, 1), 0);
+    assert_eq!(reset_section_index(section, fields), fields.len() + 1);
+
+    ensure_section(&mut config, section);
+    reset_selected_item(
+        &mut config,
+        section,
+        fields,
+        reset_section_index(section, fields),
+    )
+    .unwrap();
+    assert!(section_configured(&config, section));
+}
+
+#[test]
+fn value_menu_helpers_store_reset_and_clear_nested_values() {
+    static FIELDS: [EditorFieldSpec; 2] = [
+        EditorFieldSpec {
+            name: "optional",
+            label: "Optional",
+            kind: EditorFieldKind::String,
+            enum_values: &[],
+            optional: true,
+            nested_schema: None,
+            nested_default: None,
+            list_item: None,
+            tagged_union: None,
+        },
+        EditorFieldSpec {
+            name: "required",
+            label: "Required",
+            kind: EditorFieldKind::String,
+            enum_values: &[],
+            optional: false,
+            nested_schema: None,
+            nested_default: None,
+            list_item: None,
+            tagged_union: None,
+        },
+    ];
+    static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
+    let optional = FIELDS[0];
+    let required = FIELDS[1];
+    let mut value = json!({});
+    set_value_field(&mut value, optional.name, json!("configured"));
+    set_value_field(&mut value, required.name, Value::Null);
+
+    let items = value_section_menu_items(&value, &SCHEMA, None).unwrap();
+    assert_eq!(items.len(), SCHEMA.fields.len() + 2);
+    assert!(value_field_configured(&value, optional, None));
+    assert!(clear_value_field(
+        &mut value,
+        &SCHEMA,
+        SCHEMA
+            .fields
+            .iter()
+            .position(|field| field.name == optional.name)
+            .unwrap()
+    ));
+    assert!(!value_field_configured(&value, optional, None));
+    assert!(!clear_value_field(&mut value, &SCHEMA, SCHEMA.fields.len()));
+
+    reset_value_section_item(
+        &mut value,
+        &SCHEMA,
+        Some(&json!({"restored": true})),
+        SCHEMA.fields.len(),
+    );
+    assert_eq!(value, json!({"restored": true}));
+}
+
+#[test]
+fn editor_storage_helpers_preserve_nonempty_values_and_prune_empty_sections() {
+    let field = EditorFieldSpec {
+        name: "section",
+        label: "Section",
+        kind: EditorFieldKind::Section,
+        enum_values: &[],
+        optional: true,
+        nested_schema: None,
+        nested_default: None,
+        list_item: None,
+        tagged_union: None,
+    };
+    let mut config = json!({});
+
+    store_edited_config_section(&mut config, field, json!({"enabled": true})).unwrap();
+    assert!(config_field_value(&config, field.name).unwrap().is_some());
+    store_edited_config_section(&mut config, field, json!({})).unwrap();
+    assert!(config_field_value(&config, field.name).unwrap().is_none());
+
+    let mut target = json!({"atof": {"enabled": true}});
+    store_edited_value_section(&mut target, field, json!({}));
+    assert!(value_field_value(&target, field.name).is_none());
+    store_edited_value_section(&mut target, field, json!({"enabled": true}));
+    assert_eq!(
+        value_field_value(&target, field.name),
+        Some(json!({"enabled": true}))
+    );
+}
+
+#[test]
+fn component_shortcut_fallbacks_are_safe_noops() {
+    let mut config = PluginConfig::default();
+    ensure_observability_component(&mut config).unwrap();
+    let mut components = editable_components(&config).unwrap();
+
+    assert_eq!(
+        handle_reset_or_clear_shortcut(&mut components, None, MenuShortcut::Reset).unwrap(),
+        EditLoopControl::Continue
+    );
+    reset_component_menu_item(&mut components[0], None).unwrap();
+    clear_component_menu_item(&mut components[0], Some(ComponentMenuAction::Back)).unwrap();
+}
+
+#[test]
+fn editable_component_dispatch_covers_every_component_variant() {
+    let config = PluginConfig::default();
+    let mut components = editable_components(&config).unwrap();
+
+    for component in &mut components {
+        assert!(!component.label().is_empty());
+        assert!(!component.fields().is_empty());
+        assert!(!component.summary().is_empty());
+        component.toggle_enabled();
+        component.set_enabled(true);
+        component.reset_enabled();
+        let optional = *component
+            .fields()
+            .iter()
+            .find(|field| field.optional)
+            .expect("every editable component exposes an optional field");
+        component.reset_field(optional).unwrap();
+        assert!(component.clear_field(optional).unwrap());
+    }
+
+    let rendered = config_with_editable_components(&config, &components).unwrap();
+    let mut stored = config.clone();
+    store_editable_components(&mut stored, &components).unwrap();
+    assert_eq!(
+        serde_json::to_value(rendered).unwrap(),
+        serde_json::to_value(stored).unwrap()
+    );
+}
+
+#[test]
+fn editor_model_object_and_schema_helpers_cover_fallbacks() {
+    let mut scalar = json!("replace me");
+    ensure_object(&mut scalar).insert("enabled".into(), json!(true));
+    assert_eq!(scalar, json!({"enabled": true}));
+
+    let fields = observability_editor_fields_with_version();
+    assert_eq!(fields.first(), Some(&"version"));
+    let nested = nested_editor_keys(ObservabilityConfig::editor_schema());
+    assert!(nested.contains(&"atof"));
+
+    let error = serde_json::from_str::<Value>("{").unwrap_err();
+    assert!(
+        serde_error(error)
+            .to_string()
+            .contains("invalid plugin editor value")
+    );
+}
+
+#[test]
 fn menu_viewport_keeps_selection_visible_and_pages() {
     let first = menu_viewport(20, 0, 8);
     assert_eq!((first.start, first.end, first.page_size), (0, 4, 4));
@@ -1892,6 +2102,96 @@ config = {}
     assert_dynamic_editor_persisted_document(&persisted);
 }
 
+#[test]
+fn dynamic_editor_menu_actions_reset_clear_and_render_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    write_editor_dynamic_manifest(
+        &temp.path().join("plugin"),
+        "acme.menu",
+        Some("Menu Plugin"),
+        Some(&json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["mode"],
+            "properties": {
+                "mode": {"type": "string", "default": "safe"},
+                "token": {"type": "string", "writeOnly": true, "default": "secret"}
+            }
+        })),
+    );
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        "[[plugins.dynamic]]\nmanifest = \"./plugin/relay-plugin.toml\"\nconfig = { mode = \"fast\" }\n",
+    )
+    .unwrap();
+    let document = PluginConfigDocument::read(&path).unwrap();
+    let mut states = load_dynamic_plugin_states(&document).unwrap();
+    let state = &mut states[0];
+    let fields = state.editor_fields().to_vec();
+
+    let (items, actions) = dynamic_field_menu_items(state, &fields, &[]);
+    assert_eq!(items.len(), fields.len() + 2);
+    assert!(items.iter().any(|item| item.label.contains("[required]")));
+    assert!(items.iter().any(|item| item.label.contains("<redacted>")));
+
+    let mode = fields.iter().position(|field| field.key == "mode").unwrap();
+    reset_dynamic_selection(state, &fields, &[], &actions, mode);
+    assert_eq!(state.config().unwrap().get("mode"), Some(&json!("safe")));
+    clear_dynamic_selection(state, &fields, &[], &actions, mode);
+    assert!(!state.config().unwrap().contains_key("mode"));
+
+    let reset = actions
+        .iter()
+        .position(|action| matches!(action, DynamicMenuAction::ResetPlugin))
+        .unwrap();
+    reset_dynamic_selection(state, &fields, &[], &actions, reset);
+    assert_eq!(state.config(), None);
+}
+
+#[test]
+fn dynamic_editor_raw_menu_and_nested_value_paths_are_deterministic() {
+    let temp = tempfile::tempdir().unwrap();
+    write_editor_dynamic_manifest(&temp.path().join("plugin"), "acme.raw-menu", None, None);
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        "[[plugins.dynamic]]\nmanifest = \"./plugin/relay-plugin.toml\"\n",
+    )
+    .unwrap();
+    let document = PluginConfigDocument::read(&path).unwrap();
+    let states = load_dynamic_plugin_states(&document).unwrap();
+    let (items, actions) = dynamic_root_menu_items(&states[0], &[]);
+    assert_eq!(items.len(), 3);
+    assert!(matches!(actions[0], DynamicMenuAction::EditRawConfig));
+
+    let mut config = None;
+    let path = vec!["outer".to_owned(), "inner".to_owned()];
+    set_value_at_path(&mut config, &path, json!(7));
+    assert_eq!(value_at_path(config.as_ref(), &path), Some(&json!(7)));
+    assert_eq!(value_at_path(config.as_ref(), &[]), None);
+    assert!(remove_value_at_path(config.as_mut().unwrap(), &path));
+    set_value_at_path(&mut config, &[], json!(9));
+    assert!(config.as_ref().unwrap().is_empty());
+}
+
+#[test]
+fn dynamic_editor_rejects_duplicate_plugin_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    write_editor_dynamic_manifest(&temp.path().join("plugin"), "acme.duplicate", None, None);
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        "[[plugins.dynamic]]\nmanifest = \"./plugin/relay-plugin.toml\"\n\n[[plugins.dynamic]]\nmanifest = \"./plugin/relay-plugin.toml\"\n",
+    )
+    .unwrap();
+    let document = PluginConfigDocument::read(&path).unwrap();
+    let error = load_dynamic_plugin_states(&document)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("declared more than once"), "{error}");
+}
+
 fn assert_dynamic_editor_initial_states(states: &[DynamicPluginEditorState]) {
     assert_eq!(states.len(), 4);
     assert_eq!(states[0].label(), "Structured Plugin (acme.structured)");
@@ -2019,6 +2319,96 @@ fn plugin_config_document_reports_invalid_dynamic_entries_and_indexes() {
             .to_string()
             .contains("index 1 is out of range")
     );
+}
+
+#[test]
+fn plugin_config_document_reports_each_dynamic_entry_shape_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+
+    std::fs::write(&path, "[plugins]\n").unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    assert!(document.dynamic_entries().unwrap().is_empty());
+    assert!(document.remove_dynamic_config(0).is_err());
+
+    std::fs::write(&path, "[plugins]\ndynamic = [1]\n").unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    assert!(
+        document
+            .dynamic_entries()
+            .unwrap_err()
+            .to_string()
+            .contains("must be a table")
+    );
+    assert!(
+        document
+            .remove_dynamic_config(0)
+            .unwrap_err()
+            .to_string()
+            .contains("must be a table")
+    );
+
+    std::fs::write(&path, "[[plugins.dynamic]]\nconfig = {}\n").unwrap();
+    let document = PluginConfigDocument::read(&path).unwrap();
+    assert!(
+        document
+            .dynamic_entries()
+            .unwrap_err()
+            .to_string()
+            .contains("manifest must be a string")
+    );
+
+    std::fs::write(
+        &path,
+        "[[plugins.dynamic]]\nmanifest = 'plugin.toml'\nconfig = 'invalid'\n",
+    )
+    .unwrap();
+    let document = PluginConfigDocument::read(&path).unwrap();
+    assert!(
+        document
+            .dynamic_entries()
+            .unwrap_err()
+            .to_string()
+            .contains("config must be a table")
+    );
+}
+
+#[test]
+fn dynamic_config_patching_covers_add_replace_remove_and_object_diff() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(&path, "[[plugins.dynamic]]\nmanifest = 'plugin.toml'\n").unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+
+    let first = Map::from_iter([("first".into(), json!(1))]);
+    document
+        .patch_dynamic_config(0, None, Some(first.clone()))
+        .unwrap();
+    document.remove_dynamic_config(0).unwrap();
+    document
+        .patch_dynamic_config(0, Some(&Map::new()), Some(first.clone()))
+        .unwrap();
+
+    let updated = Map::from_iter([("first".into(), json!(2)), ("second".into(), json!(true))]);
+    document
+        .patch_dynamic_config(0, Some(&first), Some(updated.clone()))
+        .unwrap();
+    assert_eq!(document.dynamic_entries().unwrap()[0].config, Some(updated));
+    document.patch_dynamic_config(0, None, None).unwrap();
+    assert_eq!(document.dynamic_entries().unwrap()[0].config, None);
+}
+
+#[test]
+fn remove_dynamic_plugin_reference_covers_absent_container_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    assert!(!remove_dynamic_plugin_reference(&path, "acme.missing", None).unwrap());
+
+    std::fs::write(&path, "version = 1\n").unwrap();
+    assert!(!remove_dynamic_plugin_reference(&path, "acme.missing", None).unwrap());
+
+    std::fs::write(&path, "[plugins]\npolicy = {}\n").unwrap();
+    assert!(!remove_dynamic_plugin_reference(&path, "acme.missing", None).unwrap());
 }
 
 #[test]

@@ -4256,3 +4256,279 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
         0
     );
 }
+
+fn required_lifecycle_record(
+    temp: &tempfile::TempDir,
+    plugin_id: &str,
+) -> ScopedDynamicPluginRecord {
+    let plugin_dir = temp.path().join(plugin_id);
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, plugin_id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::Project,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    let mut entry = find_record_by_id(&scopes, plugin_id).unwrap().unwrap();
+    entry.record.status.startup_class =
+        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required);
+    entry
+}
+
+#[test]
+fn lifecycle_helpers_cover_environment_manifest_scope_and_restore_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_id = "acme.lifecycle-helpers";
+    assert_eq!(
+        environment_last_error(plugin_id, DynamicPluginCheckState::Valid, None),
+        None
+    );
+    let missing = environment_last_error(plugin_id, DynamicPluginCheckState::Invalid, None)
+        .expect("invalid environment should produce a diagnostic");
+    assert_eq!(missing.code, "environment_failed");
+    assert!(missing.message.contains("has no lifecycle-managed"));
+    let unavailable = environment_last_error(
+        plugin_id,
+        DynamicPluginCheckState::Invalid,
+        Some("managed/python"),
+    )
+    .expect("invalid referenced environment should produce a diagnostic");
+    assert!(
+        unavailable
+            .message
+            .contains("managed/python is unavailable")
+    );
+
+    let mut scopes = Vec::new();
+    let plugins_path = temp.path().join("plugins.toml");
+    let state_path = temp.path().join("state.json");
+    let first = ensure_scope(
+        &mut scopes,
+        RegistryScope::Project,
+        plugins_path.clone(),
+        state_path.clone(),
+    );
+    let existing = ensure_scope(
+        &mut scopes,
+        RegistryScope::Project,
+        plugins_path.clone(),
+        state_path,
+    );
+    assert_eq!((first, existing, scopes.len()), (0, 0, 1));
+    assert!(!scope_flags_selected(&ConfigurationScope::Default));
+    assert!(scope_flags_selected(&ConfigurationScope::Project));
+
+    restore_plugins_toml(&plugins_path, Some(b"[plugins]\n")).unwrap();
+    assert_eq!(std::fs::read(&plugins_path).unwrap(), b"[plugins]\n");
+    restore_plugins_toml(&plugins_path, None).unwrap();
+    assert!(!plugins_path.exists());
+    restore_plugins_toml(&plugins_path, None).unwrap();
+}
+
+#[test]
+fn manifest_helpers_report_missing_and_invalid_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.manifest-helpers");
+    entry.record.source.manifest_ref = None;
+    let error = manifest_ref_from_record(&entry.record).unwrap_err();
+    assert!(error.to_string().contains("has no manifest_ref"));
+
+    let missing = temp.path().join("missing-manifest.toml");
+    let error = load_manifest_for_action("inspect", &missing).unwrap_err();
+    assert!(error.to_string().contains("dynamic plugin inspect failed"));
+}
+
+#[test]
+fn required_startup_failure_reports_policy_trust_and_environment_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.required-checks");
+
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Invalid;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("blocked by host policy"));
+
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Valid;
+    entry.record.status.validation.integrity = DynamicPluginCheckState::Invalid;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("trust verification failed"));
+
+    entry.record.status.validation.integrity = DynamicPluginCheckState::Valid;
+    entry.record.status.validation.environment = DynamicPluginCheckState::Invalid;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("environment is unavailable"));
+}
+
+#[test]
+fn required_startup_failure_reports_custom_and_manifest_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.required-manifest");
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Invalid;
+    entry.record.status.last_error = Some(DynamicPluginFailure {
+        phase: DynamicPluginFailurePhase::Validation,
+        code: "custom_failure".into(),
+        message: "custom lifecycle diagnostic".into(),
+    });
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("custom lifecycle diagnostic"));
+
+    entry.record.status.last_error = None;
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Valid;
+    entry.record.source.manifest_ref = None;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("has no manifest_ref"));
+
+    let missing = temp.path().join("removed-manifest.toml");
+    entry.record.source.manifest_ref = Some(missing.display().to_string());
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("is no longer available"));
+
+    let invalid = temp.path().join("invalid-manifest.toml");
+    std::fs::write(&invalid, b"not valid TOML = [").unwrap();
+    entry.record.source.manifest_ref = Some(invalid.display().to_string());
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("is unreadable"));
+}
+
+#[test]
+fn required_startup_failure_accepts_optional_and_readable_plugins() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.required-ready");
+    assert_eq!(required_startup_failure(&entry, &[]), None);
+
+    entry.record.status.startup_class =
+        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional);
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Invalid;
+    assert_eq!(required_startup_failure(&entry, &[]), None);
+}
+
+#[test]
+fn lifecycle_commands_cover_json_and_human_output_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let server = GatewayOverrides::default();
+
+    list(
+        PluginsListRequest {
+            all: false,
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    list(
+        PluginsListRequest {
+            all: false,
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let plugin_dir = temp.path().join("output-plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.output");
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::Project,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    validate(
+        PluginsValidateRequest {
+            target: manifest_path.display().to_string(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: manifest_path.display().to_string(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: "acme.output".into(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: "acme.output".into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    list(
+        PluginsListRequest {
+            all: false,
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    list(
+        PluginsListRequest {
+            all: false,
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: "acme.output".into(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: "acme.output".into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_rejects_a_missing_path_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let missing = temp.path().join("missing").join("relay-plugin.toml");
+    let error = validate(
+        PluginsValidateRequest {
+            target: missing.display().to_string(),
+            json: false,
+        },
+        &GatewayOverrides::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("does not exist"));
+}

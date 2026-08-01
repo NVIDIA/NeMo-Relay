@@ -674,6 +674,36 @@ fn readiness_file_is_published_atomically_with_gateway_identity() {
 }
 
 #[tokio::test]
+async fn bind_listener_reports_an_actionable_address_conflict() {
+    let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = occupied.local_addr().unwrap();
+    let error = bind_listener(address).await.unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("port is already in use"));
+    assert!(message.contains("ephemeral port"));
+}
+
+#[test]
+fn readiness_file_reports_write_and_publish_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let address = "127.0.0.1:4040".parse().unwrap();
+
+    let missing_parent = temp.path().join("missing").join("ready.json");
+    let error = write_ready_file(&missing_parent, address, "write-failure").unwrap_err();
+    assert!(error.to_string().contains("failed to write readiness file"));
+
+    let directory_target = temp.path().join("ready.json");
+    std::fs::create_dir(&directory_target).unwrap();
+    let error = write_ready_file(&directory_target, address, "publish-failure").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("failed to publish readiness file")
+    );
+    assert!(!temp.path().join("ready.json.tmp").exists());
+}
+
+#[tokio::test]
 async fn serve_listener_honors_plugin_idle_timeout_env() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
@@ -2114,6 +2144,126 @@ async fn static_only_cli_configuration_keeps_the_legacy_lifecycle() {
         .clear()
         .expect("the static teardown guard should tolerate prior clear");
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+}
+
+#[test]
+fn plugin_component_setup_errors_render_every_diagnostic_variant() {
+    let adaptive = PluginComponentSetupError::Adaptive("adaptive failure".into());
+    assert_eq!(adaptive.check_name(), "Adaptive plugin");
+    assert_eq!(
+        adaptive.diagnostic_details(),
+        "registration failed: adaptive failure"
+    );
+    assert_eq!(
+        adaptive.to_string(),
+        "adaptive plugin registration failed: adaptive failure"
+    );
+
+    let pii = PluginComponentSetupError::PiiRedaction("pii failure".into());
+    assert_eq!(pii.check_name(), "PII redaction plugin");
+    assert_eq!(pii.diagnostic_details(), "registration failed: pii failure");
+    assert_eq!(
+        pii.to_string(),
+        "PII redaction plugin registration failed: pii failure"
+    );
+
+    #[cfg(feature = "switchyard")]
+    {
+        let switchyard = PluginComponentSetupError::Switchyard("registration".into());
+        assert_eq!(switchyard.check_name(), "Switchyard plugin");
+        assert!(switchyard.to_string().contains("registration failed"));
+
+        let atof = PluginComponentSetupError::SwitchyardAtof("atof ordering".into());
+        assert_eq!(atof.check_name(), "Switchyard ATOF");
+        assert_eq!(atof.diagnostic_details(), "atof ordering");
+        assert!(atof.to_string().contains("ATOF validation failed"));
+
+        let cache = PluginComponentSetupError::SwitchyardResponseCache("cache ordering".into());
+        assert_eq!(cache.check_name(), "Switchyard response cache");
+        assert_eq!(cache.diagnostic_details(), "cache ordering");
+        assert!(
+            cache
+                .to_string()
+                .contains("response-cache validation failed")
+        );
+    }
+}
+
+fn dynamic_component_without_manifest(
+    plugin_id: &str,
+    kind: DynamicPluginKind,
+) -> ActiveDynamicPluginComponent {
+    ActiveDynamicPluginComponent {
+        plugin_id: plugin_id.into(),
+        kind,
+        lifecycle_generation: 1,
+        manifest_ref: None,
+        environment_ref: None,
+        config: Map::new(),
+        activation_snapshot: None,
+    }
+}
+
+#[tokio::test]
+async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let inactive = PluginActivation::initialize(None, Vec::new())
+        .await
+        .unwrap();
+    assert!(!inactive.active);
+    inactive.clear().unwrap();
+
+    let invalid = PluginActivation::initialize(
+        Some(json!("not a plugin config")),
+        vec![dynamic_component_without_manifest(
+            "acme.invalid-config",
+            DynamicPluginKind::Worker,
+        )],
+    )
+    .await
+    .err()
+    .expect("invalid config should fail activation");
+    assert!(invalid.to_string().contains("invalid plugin config"));
+
+    let native = PluginActivation::initialize(
+        None,
+        vec![dynamic_component_without_manifest(
+            "acme.native-missing",
+            DynamicPluginKind::RustDynamic,
+        )],
+    )
+    .await
+    .err()
+    .expect("native plugin without a manifest should fail activation");
+    assert!(native.to_string().contains("native dynamic plugin"));
+
+    let worker = PluginActivation::initialize(
+        None,
+        vec![dynamic_component_without_manifest(
+            "acme.worker-missing",
+            DynamicPluginKind::Worker,
+        )],
+    )
+    .await
+    .err()
+    .expect("worker plugin without a manifest should fail activation");
+    assert!(worker.to_string().contains("worker dynamic plugin"));
+}
+
+#[tokio::test]
+async fn shutdown_future_helpers_cover_receiver_combinations() {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let shutdown = server_shutdown_future(Some(ShutdownMode::Receiver(shutdown_rx)), None).unwrap();
+    shutdown_tx.send(()).unwrap();
+    shutdown.await;
+
+    let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
+    let shutdown = combine_shutdown_futures(None, Some(bootstrap_rx)).unwrap();
+    bootstrap_tx.send(()).unwrap();
+    shutdown.await;
+
+    let ready: ShutdownFuture = Box::pin(async {});
+    combine_shutdown_futures(Some(ready), None).unwrap().await;
 }
 
 #[cfg(feature = "switchyard")]
