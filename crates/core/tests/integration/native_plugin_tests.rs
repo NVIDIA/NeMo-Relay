@@ -1545,6 +1545,8 @@ async fn native_api_v2_safe_fixture_forwards_passthrough_inside_embedded_core() 
 
     let provider_dropped = Arc::new(AtomicBool::new(false));
     let provider_dropped_for_fn = provider_dropped.clone();
+    let provider_started = Arc::new(AtomicBool::new(false));
+    let provider_started_for_fn = provider_started.clone();
     let cancelled = llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
             .name("fixture_passthrough_llm_stream")
@@ -1554,7 +1556,12 @@ async fn native_api_v2_safe_fixture_forwards_passthrough_inside_embedded_core() 
             })
             .func(Arc::new(move |_| {
                 let dropped = provider_dropped_for_fn.clone();
-                Box::pin(async move { Ok(LlmJsonStream::new(PendingDropStream { dropped })) })
+                let started = provider_started_for_fn.clone();
+                Box::pin(async move {
+                    let stream = LlmJsonStream::new(PendingDropStream { dropped });
+                    started.store(true, Ordering::SeqCst);
+                    Ok(stream)
+                })
             }))
             .collector(Box::new(|_| Ok(())))
             .finalizer(Box::new(|| Json::Null))
@@ -1562,6 +1569,13 @@ async fn native_api_v2_safe_fixture_forwards_passthrough_inside_embedded_core() 
     )
     .await
     .expect("pending pass-through stream should open");
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !provider_started.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("downstream provider stream should start before cancellation");
     drop(cancelled);
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while !provider_dropped.load(Ordering::SeqCst) {

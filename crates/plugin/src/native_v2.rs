@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::Duration;
@@ -86,11 +86,36 @@ struct ContinuationInner {
     next: *const NemoRelayNativeAsyncNext,
 }
 
-struct BlockingThreadWaker(thread::Thread);
+// Do not use `thread::current()` here. Safe callbacks run on reusable host
+// threads, and Rust's thread handle installs a TLS destructor in this plugin
+// library. Relay may unload the library before that host thread exits.
+struct BlockingCallbackWaker {
+    notified: Mutex<bool>,
+    ready: Condvar,
+}
 
-impl ArcWake for BlockingThreadWaker {
+impl BlockingCallbackWaker {
+    fn wait_timeout(&self, timeout: Duration) {
+        let notified = self
+            .notified
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (mut notified, _) = self
+            .ready
+            .wait_timeout_while(notified, timeout, |notified| !*notified)
+            .unwrap_or_else(|error| error.into_inner());
+        *notified = false;
+    }
+}
+
+impl ArcWake for BlockingCallbackWaker {
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        arc_self.0.unpark();
+        let mut notified = arc_self
+            .notified
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *notified = true;
+        arc_self.ready.notify_one();
     }
 }
 
@@ -100,8 +125,11 @@ where
     C: Fn() -> bool,
 {
     let mut future = Box::pin(future);
-    let thread_waker = Arc::new(BlockingThreadWaker(thread::current()));
-    let waker = waker_ref(&thread_waker);
+    let callback_waker = Arc::new(BlockingCallbackWaker {
+        notified: Mutex::new(false),
+        ready: Condvar::new(),
+    });
+    let waker = waker_ref(&callback_waker);
     let mut context = Context::from_waker(&waker);
     loop {
         if is_cancelled() {
@@ -109,7 +137,7 @@ where
         }
         match future.as_mut().poll(&mut context) {
             Poll::Ready(output) => return Some(output),
-            Poll::Pending => thread::park_timeout(CANCELLATION_POLL_DELAY),
+            Poll::Pending => callback_waker.wait_timeout(CANCELLATION_POLL_DELAY),
         }
     }
 }
