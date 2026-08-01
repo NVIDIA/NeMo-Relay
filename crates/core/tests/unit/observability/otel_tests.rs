@@ -1466,8 +1466,8 @@ fn gen_ai_end_projection_preserves_explicit_error_type() {
             .name("chat")
             .metadata(json!({
                 "otel.status_code": "ERROR",
-                "otel.status_description": "internal error: ValueError: invalid value",
-                "error.type": "ValueError",
+                "otel.status_description": "invalid argument: invalid value",
+                "error.type": "invalid_argument",
             }))
             .build(),
         ScopeCategory::End,
@@ -1479,7 +1479,7 @@ fn gen_ai_end_projection_preserves_explicit_error_type() {
     let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
     assert_eq!(
         attributes.get("error.type"),
-        Some(&"ValueError".to_string())
+        Some(&"invalid_argument".to_string())
     );
 }
 

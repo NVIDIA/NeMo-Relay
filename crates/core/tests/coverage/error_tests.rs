@@ -99,35 +99,9 @@ fn otel_error_type_maps_relay_variants() {
 }
 
 #[test]
-fn otel_error_type_uses_bounded_runtime_exception_taxonomy() {
+fn otel_error_type_maps_internal_failures_to_generic_code() {
     assert_eq!(
-        FlowError::Internal("ValueError: invalid value".into()).otel_error_type(),
-        "ValueError"
-    );
-    assert_eq!(
-        FlowError::Internal("Python callback failed: ConnectionRefusedError: refused".into())
-            .otel_error_type(),
-        "ConnectionRefusedError"
-    );
-    assert_eq!(
-        FlowError::Internal("TypeError: invalid JavaScript value".into()).otel_error_type(),
-        "TypeError"
-    );
-    assert_eq!(
-        FlowError::Internal("Error: JavaScript callback failed".into()).otel_error_type(),
-        "Error"
-    );
-    assert_eq!(
-        FlowError::Internal("unclassified failure".into()).otel_error_type(),
-        "internal_error"
-    );
-    assert_eq!(
-        FlowError::Internal("failed: tenant_123Error".into()).otel_error_type(),
-        "internal_error"
-    );
-    assert_eq!(
-        FlowError::Internal("provider returned Internal Server Error: 500".into())
-            .otel_error_type(),
+        FlowError::Internal("application callback failed".into()).otel_error_type(),
         "internal_error"
     );
 }

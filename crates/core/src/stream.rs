@@ -45,8 +45,7 @@ use crate::api::runtime::{
     current_scope_stack,
 };
 use crate::api::shared::{
-    metadata_with_otel_error, metadata_with_otel_status, metadata_with_otel_unknown_error,
-    snapshot_event_sanitizers,
+    metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
 };
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::LlmResponseCodec;
@@ -185,9 +184,10 @@ impl LlmStreamWrapper {
             return;
         }
         self.ended = true;
-        let metadata = metadata_with_otel_unknown_error(
+        let metadata = metadata_with_otel_status(
             self.metadata.clone(),
-            "stream dropped before clean completion".to_string(),
+            "ERROR",
+            Some("stream dropped before clean completion".to_string()),
         );
         // Drop cannot await the async finalizer. Seal contribution acceptance
         // immediately, but let the finalizer decide whether authoritative

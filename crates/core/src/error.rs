@@ -138,10 +138,9 @@ impl FlowError {
     /// Returns a low-cardinality classification suitable for OpenTelemetry's
     /// `error.type` attribute.
     ///
-    /// Relay-owned failures use stable `snake_case` codes. Recognized Python
-    /// and JavaScript runtime failures retain their conventional class names,
-    /// such as `ValueError` or `TypeError`. Unknown, application-defined names
-    /// collapse to `internal_error` to keep the attribute bounded.
+    /// Relay-owned failures use stable `snake_case` codes. Internal failures
+    /// collapse to `internal_error` because Relay cannot reliably infer an
+    /// application exception type from an error message.
     pub(crate) fn otel_error_type(&self) -> &str {
         match self {
             Self::AlreadyExists(_) => "already_exists",
@@ -159,73 +158,9 @@ impl FlowError {
                 UpstreamFailureClass::InvalidRequest => "invalid_request",
                 UpstreamFailureClass::Other => "upstream_error",
             },
-            Self::Internal(message) => runtime_exception_type(message).unwrap_or("internal_error"),
+            Self::Internal(_) => "internal_error",
         }
     }
-}
-
-fn runtime_exception_type(message: &str) -> Option<&str> {
-    message.split(':').find_map(|segment| {
-        let candidate = segment.trim();
-        is_stable_runtime_exception_type(candidate).then_some(candidate)
-    })
-}
-
-fn is_stable_runtime_exception_type(candidate: &str) -> bool {
-    matches!(
-        candidate,
-        "AggregateError"
-            | "ArithmeticError"
-            | "AssertionError"
-            | "AttributeError"
-            | "BlockingIOError"
-            | "BrokenPipeError"
-            | "BufferError"
-            | "ChildProcessError"
-            | "ConnectionAbortedError"
-            | "ConnectionError"
-            | "ConnectionRefusedError"
-            | "ConnectionResetError"
-            | "EOFError"
-            | "Error"
-            | "EvalError"
-            | "Exception"
-            | "FileExistsError"
-            | "FileNotFoundError"
-            | "FloatingPointError"
-            | "ImportError"
-            | "IndexError"
-            | "InterruptedError"
-            | "IsADirectoryError"
-            | "KeyError"
-            | "LookupError"
-            | "MemoryError"
-            | "ModuleNotFoundError"
-            | "NameError"
-            | "NotADirectoryError"
-            | "NotImplementedError"
-            | "OSError"
-            | "OverflowError"
-            | "PermissionError"
-            | "ProcessLookupError"
-            | "PythonFinalizationError"
-            | "RecursionError"
-            | "ReferenceError"
-            | "RangeError"
-            | "RuntimeError"
-            | "SyntaxError"
-            | "SystemError"
-            | "TimeoutError"
-            | "TypeError"
-            | "URIError"
-            | "UnboundLocalError"
-            | "UnicodeDecodeError"
-            | "UnicodeEncodeError"
-            | "UnicodeError"
-            | "UnicodeTranslateError"
-            | "ValueError"
-            | "ZeroDivisionError"
-    )
 }
 
 #[cfg(test)]

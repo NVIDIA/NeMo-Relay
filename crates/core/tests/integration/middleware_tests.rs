@@ -1973,21 +1973,14 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
 
     assert_flush_waits_for_pending_completion(|| drop(execution));
 
-    let captured = captured_events_snapshot(&events);
-    let lifecycle = captured
+    let lifecycle = events
+        .lock()
+        .unwrap()
         .iter()
         .filter(|event| event.name() == "cancelled-tool")
         .filter_map(Event::scope_category)
         .collect::<Vec<_>>();
     assert_eq!(lifecycle, [ScopeCategory::Start, ScopeCategory::End]);
-    let end = captured
-        .iter()
-        .find(|event| {
-            event.name() == "cancelled-tool" && event.scope_category() == Some(ScopeCategory::End)
-        })
-        .expect("cancelled tool should emit an end event");
-    assert_eq!(end.metadata().unwrap()["otel.status_code"], json!("ERROR"));
-    assert_eq!(end.metadata().unwrap()["error.type"], json!("_OTHER"));
 
     deregister_tool_execution_intercept("pending_tool_execution").unwrap();
     deregister_subscriber("cancelled_tool_lifecycle").unwrap();
@@ -2264,21 +2257,14 @@ async fn dropping_pending_llm_execution_closes_the_managed_lifecycle() {
     }
     assert_flush_waits_for_pending_completion(|| drop(execution));
 
-    let captured = captured_events_snapshot(&events);
-    let lifecycle = captured
+    let lifecycle = events
+        .lock()
+        .unwrap()
         .iter()
         .filter(|event| event.name() == "cancelled-llm")
         .filter_map(Event::scope_category)
         .collect::<Vec<_>>();
     assert_eq!(lifecycle, [ScopeCategory::Start, ScopeCategory::End]);
-    let end = captured
-        .iter()
-        .find(|event| {
-            event.name() == "cancelled-llm" && event.scope_category() == Some(ScopeCategory::End)
-        })
-        .expect("cancelled LLM should emit an end event");
-    assert_eq!(end.metadata().unwrap()["otel.status_code"], json!("ERROR"));
-    assert_eq!(end.metadata().unwrap()["error.type"], json!("_OTHER"));
 
     deregister_llm_execution_intercept("pending_llm_execution").unwrap();
     deregister_subscriber("cancelled_llm_lifecycle").unwrap();

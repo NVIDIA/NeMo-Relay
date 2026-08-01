@@ -463,7 +463,6 @@ async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
         end_event.metadata().unwrap()["otel.status_code"],
         json!("ERROR")
     );
-    assert_eq!(end_event.metadata().unwrap()["error.type"], json!("_OTHER"));
     assert!(
         end_event.annotated_response().is_none(),
         "an interrupted stream without optimization evidence must not manufacture a summary"

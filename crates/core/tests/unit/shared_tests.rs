@@ -124,41 +124,24 @@ fn test_metadata_with_otel_status_only_describes_errors() {
 fn test_metadata_with_otel_error_adds_structured_error_type() {
     let metadata = metadata_with_otel_error(
         Some(json!({"caller": "shared-error"})),
-        &FlowError::Internal("TimeoutError: provider timed out".into()),
+        &FlowError::Internal("provider timed out".into()),
     )
     .unwrap();
 
     assert_eq!(metadata["otel.status_code"], json!("ERROR"));
-    assert_eq!(metadata["error.type"], json!("TimeoutError"));
+    assert_eq!(metadata["error.type"], json!("internal_error"));
     assert_eq!(
         metadata["otel.status_description"],
-        json!("internal error: TimeoutError: provider timed out")
+        json!("internal error: provider timed out")
     );
 
     let explicit_metadata = metadata_with_otel_error(
         Some(json!({"error.type": "provider_timeout"})),
-        &FlowError::Internal("TimeoutError: provider timed out".into()),
+        &FlowError::Internal("provider timed out".into()),
     )
     .unwrap();
 
     assert_eq!(explicit_metadata["error.type"], json!("provider_timeout"));
-}
-
-#[test]
-fn test_metadata_with_otel_unknown_error_uses_other_fallback() {
-    let metadata = metadata_with_otel_unknown_error(
-        Some(json!({"caller": "shared-error"})),
-        "execution cancelled".into(),
-    )
-    .unwrap();
-
-    assert_eq!(metadata["caller"], json!("shared-error"));
-    assert_eq!(metadata["otel.status_code"], json!("ERROR"));
-    assert_eq!(metadata["error.type"], json!("_OTHER"));
-    assert_eq!(
-        metadata["otel.status_description"],
-        json!("execution cancelled")
-    );
 }
 
 #[test]

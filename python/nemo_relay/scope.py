@@ -41,72 +41,6 @@ from nemo_relay._native import (
     push_scope as _native_push_scope,
 )
 
-# Keep this bounded taxonomy aligned with `is_stable_runtime_exception_type` in
-# `crates/core/src/error.rs`. Unknown and application-defined names deliberately
-# collapse to `internal_error` to avoid user-controlled telemetry cardinality.
-_STABLE_PYTHON_EXCEPTION_TYPES = frozenset(
-    {
-        "ArithmeticError",
-        "AssertionError",
-        "AttributeError",
-        "BlockingIOError",
-        "BrokenPipeError",
-        "BufferError",
-        "ChildProcessError",
-        "ConnectionAbortedError",
-        "ConnectionError",
-        "ConnectionRefusedError",
-        "ConnectionResetError",
-        "EOFError",
-        "Exception",
-        "FileExistsError",
-        "FileNotFoundError",
-        "FloatingPointError",
-        "ImportError",
-        "IndexError",
-        "InterruptedError",
-        "IsADirectoryError",
-        "KeyError",
-        "LookupError",
-        "MemoryError",
-        "ModuleNotFoundError",
-        "NameError",
-        "NotADirectoryError",
-        "NotImplementedError",
-        "OSError",
-        "OverflowError",
-        "PermissionError",
-        "ProcessLookupError",
-        "PythonFinalizationError",
-        "RecursionError",
-        "ReferenceError",
-        "RuntimeError",
-        "SyntaxError",
-        "SystemError",
-        "TimeoutError",
-        "TypeError",
-        "UnboundLocalError",
-        "UnicodeDecodeError",
-        "UnicodeEncodeError",
-        "UnicodeError",
-        "UnicodeTranslateError",
-        "ValueError",
-        "ZeroDivisionError",
-    }
-)
-
-
-def _otel_error_type(error: BaseException) -> str:
-    """Return a bounded OpenTelemetry classification for a Python exception."""
-    exception_name = type(error).__name__
-    error_type = exception_name if exception_name in _STABLE_PYTHON_EXCEPTION_TYPES else "internal_error"
-    if isinstance(error, RuntimeError):
-        for segment in str(error).split(":"):
-            candidate = segment.strip()
-            if candidate in _STABLE_PYTHON_EXCEPTION_TYPES:
-                return candidate
-    return error_type
-
 
 def get_handle() -> ScopeHandle:
     """Return the current top-of-stack ``ScopeHandle``.
@@ -303,7 +237,6 @@ def scope(
     pushed_handle = None
     status_code = "UNSET"
     status_message = None
-    error_type = None
     try:
         pushed_handle = _native_push_scope(
             name,
@@ -324,15 +257,12 @@ def scope(
     except Exception as e:
         status_code = "ERROR"
         status_message = str(e)
-        error_type = _otel_error_type(e)
         raise
     finally:
         if pushed_handle is not None:
             metadata = {"otel.status_code": status_code}
             if status_message is not None:
                 metadata["otel.status_description"] = status_message
-            if error_type is not None:
-                metadata["error.type"] = error_type
             pop(pushed_handle, metadata=metadata, timestamp=end_timestamp)
 
 

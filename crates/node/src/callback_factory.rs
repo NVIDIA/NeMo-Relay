@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v13";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v11";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -100,53 +100,6 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return result;
   }
 
-  const stableErrorNames = new Set([
-    'AggregateError',
-    'Error',
-    'EvalError',
-    'RangeError',
-    'ReferenceError',
-    'SyntaxError',
-    'TypeError',
-    'URIError',
-  ]);
-
-  function stableErrorType(error) {
-    try {
-      if (
-        error !== null
-        && (typeof error === 'object' || typeof error === 'function')
-        && typeof error.name === 'string'
-        && stableErrorNames.has(error.name)
-      ) {
-        return error.name;
-      }
-    } catch {}
-    return undefined;
-  }
-
-  function promiseErrorDetails(error, fallback) {
-    let message = fallback;
-    try {
-      if (typeof error === 'string') {
-        message = error;
-      } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
-        message = String(error);
-      } else if (typeof error.message === 'string') {
-        message = error.message;
-      }
-    } catch {}
-    return { message, errorType: stableErrorType(error) };
-  }
-
-  function stringifiedErrorDetails(error, fallback) {
-    let message = fallback;
-    try {
-      message = String(error?.message ?? error);
-    } catch {}
-    return { message, errorType: stableErrorType(error) };
-  }
-
   function callPromise(
     fn,
     arg0,
@@ -211,8 +164,17 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         resolve(value);
       }, (error) => {
         settlePublication();
-        const details = promiseErrorDetails(error, 'unknown error');
-        reject(details.message, details.errorType);
+        let message = 'unknown error';
+        try {
+          if (typeof error === 'string') {
+            message = error;
+          } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+            message = String(error);
+          } else if (error != null && typeof error.message === 'string') {
+            message = error.message;
+          }
+        } catch {}
+        reject(message);
       });
     };
     eventSanitizerContext.run(token, invoke);
@@ -249,9 +211,12 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         registerAbort,
       ) {
         if (error != null) {
+          let message = 'unknown error';
+          try {
+            message = String(error?.message ?? error);
+          } catch {}
           if (typeof reject === 'function') {
-            const details = stringifiedErrorDetails(error, 'unknown error');
-            reject(details.message, details.errorType);
+            reject(message);
           }
           return;
         }
