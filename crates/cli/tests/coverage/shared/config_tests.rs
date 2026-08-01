@@ -2048,8 +2048,16 @@ fn plugin_config_path_overrides_sibling_plugin_file() {
     let sibling_path = temp.path().join("plugins.toml");
     let override_path = temp.path().join("override.toml");
     std::fs::write(&config_path, "").unwrap();
-    std::fs::write(&sibling_path, "version = 1\n").unwrap();
-    std::fs::write(&override_path, "version = 2\n").unwrap();
+    std::fs::write(
+        &sibling_path,
+        "version = 1\n[policy]\nunknown_field = \"warn\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &override_path,
+        "version = 1\n[policy]\nunknown_field = \"error\"\n",
+    )
+    .unwrap();
     let command = RunOverrides {
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
@@ -2066,7 +2074,10 @@ fn plugin_config_path_overrides_sibling_plugin_file() {
 
     assert_eq!(
         resolved.gateway.plugin_config,
-        Some(json!({ "version": 2 }))
+        Some(json!({
+            "version": 1,
+            "policy": { "unknown_field": "error" }
+        }))
     );
 }
 

@@ -122,7 +122,7 @@ fn run_discovered_config_activation_test() {
     std::fs::write(
         &plugins_toml,
         format!(
-            r#"version = 999
+            r#"version = 1
 
 [[components]]
 kind = {DISCOVERED_STATIC_PLUGIN_KIND:?}

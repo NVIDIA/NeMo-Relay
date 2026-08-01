@@ -2228,6 +2228,36 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
 }
 
 #[test]
+fn test_load_plugin_config_files_rejects_version_before_layering() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid = dir.path().join("invalid.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &invalid,
+        "version = 2\n\
+         [[components]]\n\
+         kind = \"observability\"\n",
+    )
+    .unwrap();
+    std::fs::write(&higher, "version = 1\n").unwrap();
+
+    let error = load_plugin_config_files([invalid.clone(), higher])
+        .expect_err("a higher-precedence version must not mask an invalid source version");
+
+    match error {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("plugin config version 2"), "{message}");
+            assert!(
+                message.contains(&invalid.display().to_string()),
+                "{message}"
+            );
+            assert!(message.contains("expected 1"), "{message}");
+        }
+        other => panic!("unexpected plugin config version error: {other}"),
+    }
+}
+
+#[test]
 fn test_default_plugin_config_paths_order_user_project_system() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
@@ -2284,13 +2314,12 @@ fn test_load_plugin_config_files_deduplicates_aliases_at_highest_precedence() {
 }
 
 #[test]
-fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
-    // The code-vs-file path `initialize_plugins` takes: a typed `PluginConfig` is layered
-    // over the discovered file base. Its serde defaults (`version`/`policy`/`enabled`)
-    // override the file, the free-form `config` body merges, and an undeclared component
-    // kind is inherited from the file.
+fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
+    // After each file's schema version is validated, a typed `PluginConfig` is layered over
+    // the discovered file base. Default-valued `policy`/`enabled` fields inherit the file,
+    // the free-form `config` body merges, and an undeclared component kind is inherited.
     let file_base = json!({
-        "version": 2,
+        "version": 1,
         "components": [
             {
                 "kind": "observability",
@@ -2314,21 +2343,21 @@ fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
     };
 
     let mut merged = file_base;
-    layer_config(&mut merged, serde_json::to_value(code).unwrap());
+    layer_config(&mut merged, plugin_config_overlay_value(&code).unwrap());
     let typed: PluginConfig = serde_json::from_value(merged).unwrap();
 
-    // Typed defaults override the file base.
-    assert_eq!(typed.version, 1, "typed default version overrides the file");
+    // Typed defaults do not mask the file base.
+    assert_eq!(typed.version, 1);
     assert_eq!(
         typed.policy.unknown_component,
-        UnsupportedBehavior::Warn,
-        "typed default policy overrides the file"
+        UnsupportedBehavior::Error,
+        "typed default policy inherits the file value"
     );
     let observability = &typed.components[0];
     assert_eq!(observability.kind, "observability");
     assert!(
-        observability.enabled,
-        "typed default enabled=true overrides the file's false"
+        !observability.enabled,
+        "typed default enabled=true inherits the file's false"
     );
     // The component config body merges: code's `mode` wins, the file's `output_directory`
     // is inherited.
@@ -2336,4 +2365,43 @@ fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
     assert_eq!(observability.config["output_directory"], json!("/var/log"));
     // A kind the code config does not declare is inherited from the file.
     assert_eq!(typed.components[1].kind, "adaptive");
+}
+
+#[test]
+fn test_plugin_config_overlay_applies_non_default_values() {
+    let mut file_base = json!({
+        "version": 1,
+        "components": [{ "kind": "observability", "enabled": true }],
+        "policy": {
+            "unknown_component": "error",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
+        }
+    });
+    let code = PluginConfig {
+        components: vec![PluginComponentSpec {
+            enabled: false,
+            ..PluginComponentSpec::new("observability")
+        }],
+        policy: ConfigPolicy {
+            unknown_field: UnsupportedBehavior::Ignore,
+            ..ConfigPolicy::default()
+        },
+        ..PluginConfig::default()
+    };
+
+    layer_config(&mut file_base, plugin_config_overlay_value(&code).unwrap());
+    let typed: PluginConfig = serde_json::from_value(file_base).unwrap();
+
+    assert!(!typed.components[0].enabled);
+    assert_eq!(
+        typed.policy.unknown_component,
+        UnsupportedBehavior::Error,
+        "a default-valued field inherits the file"
+    );
+    assert_eq!(
+        typed.policy.unknown_field,
+        UnsupportedBehavior::Ignore,
+        "a non-default field overrides the file"
+    );
 }
