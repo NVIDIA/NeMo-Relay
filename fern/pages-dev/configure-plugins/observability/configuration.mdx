@@ -83,6 +83,14 @@ returns the first teardown error after all attempts finish. Clear the plugin
 during graceful shutdown so queued subscriber work can drain and every
 exporter receives a teardown attempt.
 
+NeMo Relay shuts down OpenTelemetry endpoint providers sequentially. A slow or
+unreachable collector can delay `plugin.clear()` or process shutdown by
+approximately the OpenTelemetry SDK's five-second shutdown bound plus one
+endpoint export timeout. Use each endpoint's `timeout_millis` value to bound
+that export attempt. This timeout behavior does not make a full batch queue
+lossless; refer to [OpenTelemetry](/configure-plugins/observability/opentelemetry#batch-processor-environment-variables)
+for queue sizing and drop-warning behavior.
+
 Top-level component `config` lists concatenate across configuration layers,
 with higher-precedence entries first. The observability destination lists
 `atof.sinks`, `opentelemetry.endpoints`, and `atif.storage` follow the same
