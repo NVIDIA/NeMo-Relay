@@ -83,7 +83,7 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
     (url, captures)
 }
 
-#[cfg(all(feature = "atof-streaming", feature = "object-store"))]
+#[cfg(feature = "object-store")]
 fn start_http_status_server(
     status: &'static str,
 ) -> (String, std::thread::JoinHandle<std::io::Result<()>>) {
@@ -135,7 +135,7 @@ fn start_http_status_server(
         stream.read_exact(&mut body)?;
         write!(
             stream,
-            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nETag: \"test-etag\"\r\nConnection: close\r\n\r\n"
         )?;
         stream.flush()
     });
@@ -408,16 +408,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(!atof.enabled);
     assert!(atof.sinks.is_empty());
 
-    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
-        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
-    }))
-    .unwrap();
-    let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
-        panic!("expected stream sink");
-    };
-    assert_eq!(stream.name.as_deref(), Some("switchyard"));
-    assert_eq!(stream.transport, "http_post");
-    assert_eq!(stream.field_name_policy, "preserve");
+    assert_default_stream_sink_shape();
 
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
@@ -457,6 +448,19 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(3));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
+}
+
+fn assert_default_stream_sink_shape() {
+    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
+        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
+    }))
+    .unwrap();
+    let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
+        panic!("expected stream sink");
+    };
+    assert_eq!(stream.name.as_deref(), Some("switchyard"));
+    assert_eq!(stream.transport, "http_post");
+    assert_eq!(stream.field_name_policy, "preserve");
 }
 
 #[test]
@@ -628,6 +632,96 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
             "missing diagnostic for {field}: {diagnostics:?}"
         );
     }
+}
+
+#[test]
+fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
+    let mut context = PluginRegistrationContext::new();
+    let error = register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            endpoints: Vec::new(),
+        },
+        &mut context,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("at least one endpoint"));
+}
+
+#[test]
+fn atof_stream_header_validation_reports_invalid_values_and_environment_names() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let policy = ConfigPolicy::default();
+    let mut diagnostics = Vec::new();
+
+    validate_atof_stream_header_env(&mut diagnostics, &policy, "header_env.empty", "");
+    validate_atof_stream_header_env(
+        &mut diagnostics,
+        &policy,
+        "header_env.padded",
+        " PADDED_ENV ",
+    );
+
+    let blank = "NEMO_RELAY_TEST_BLANK_ATOF_STREAM_HEADER_ENV";
+    // SAFETY: the observability mutex serializes access to this test-only variable.
+    unsafe { std::env::set_var(blank, "  ") };
+    validate_atof_stream_header_env(&mut diagnostics, &policy, "header_env.blank", blank);
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(blank) };
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("non-empty environment variable")
+    }));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("surrounding whitespace"))
+    );
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("environment variable that is blank")
+    }));
+
+    #[cfg(feature = "atof-streaming")]
+    {
+        diagnostics.clear();
+        validate_atof_stream_header(
+            &mut diagnostics,
+            &policy,
+            "headers.invalid",
+            "x-test",
+            "invalid\nvalue",
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("value is invalid"))
+        );
+    }
+}
+
+#[test]
+fn atif_dispatcher_surfaces_fatal_and_disabled_local_sink_states() {
+    let mut dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
+    dispatcher.fatal_error = Some("fatal export failure".into());
+    assert!(
+        dispatcher
+            .last_error_result()
+            .unwrap_err()
+            .to_string()
+            .contains("fatal export failure")
+    );
+
+    dispatcher.fatal_error = None;
+    dispatcher
+        .sink_errors
+        .insert(SinkLabel::Local, "local write failed".into());
+    assert!(dispatcher.sink_targets().is_empty());
 }
 
 #[test]
@@ -3284,5 +3378,138 @@ fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
         std::env::remove_var(empty);
         std::env::remove_var(secret);
         std::env::remove_var(token);
+    }
+}
+
+#[cfg(feature = "object-store")]
+fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
+    HttpStorageConfig {
+        endpoint: endpoint.into(),
+        headers: std::collections::HashMap::new(),
+        header_env: std::collections::HashMap::new(),
+        timeout_millis: 1_000,
+    }
+}
+
+#[test]
+#[cfg(feature = "object-store")]
+fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for endpoint in [" http://example.com", "://", "ftp://example.com"] {
+        assert!(HttpUploadConfig::resolve(2, &http_storage_config(endpoint)).is_err());
+    }
+
+    let mut config = http_storage_config("https://example.com/atif");
+    config.timeout_millis = 0;
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+
+    config.timeout_millis = 1_000;
+    config.headers.insert("bad header".into(), "value".into());
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+
+    config.headers.clear();
+    config.headers.insert("x-bad".into(), "bad\nvalue".into());
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+
+    let variable = "NEMO_RELAY_TEST_ATIF_HTTP_RESOLVE_ZZZZ";
+    // SAFETY: this uniquely named environment variable is serialized by the observability mutex.
+    unsafe { std::env::set_var(variable, "Bearer resolved") };
+    config.headers.clear();
+    config
+        .header_env
+        .insert("authorization".into(), variable.into());
+    let resolved = HttpUploadConfig::resolve(2, &config).unwrap();
+    assert_eq!(
+        resolved.headers.get("authorization").map(String::as_str),
+        Some("Bearer resolved")
+    );
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(variable) };
+}
+
+#[tokio::test]
+#[cfg(feature = "object-store")]
+async fn post_atif_http_reports_transport_failure() {
+    let config = HttpUploadConfig::resolve(0, &http_storage_config("http://127.0.0.1:1")).unwrap();
+    let client = reqwest::Client::builder()
+        .timeout(config.timeout)
+        .build()
+        .unwrap();
+    assert!(
+        post_atif_http(
+            &client,
+            &config,
+            "trajectory.json".into(),
+            "session".into(),
+            b"{}".to_vec(),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("HTTP ATIF upload")
+    );
+}
+
+#[test]
+#[cfg(feature = "object-store")]
+fn s3_remote_storage_uploads_to_a_custom_http_endpoint() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let variable = "NEMO_RELAY_TEST_S3_UPLOAD_SECRET_ZZZZ";
+    // SAFETY: the observability mutex serializes access to this test-only variable.
+    unsafe { std::env::set_var(variable, "secret") };
+    let (endpoint, server) = start_http_status_server("200 OK");
+    let storage = AtifRemoteStorage::from_config(
+        7,
+        &AtifStorageConfig::S3(S3StorageConfig {
+            bucket: "test-bucket".into(),
+            key_prefix: Some("trajectories".into()),
+            access_key_id: Some("access".into()),
+            secret_access_key_var: Some(variable.into()),
+            session_token_var: None,
+            region: Some("us-east-1".into()),
+            endpoint_url: Some(endpoint),
+            allow_http: Some(true),
+        }),
+    )
+    .unwrap();
+    let result = storage.put("trajectory.json", "session", b"{}");
+    server.join().unwrap().unwrap();
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(variable) };
+    result.unwrap();
+}
+
+#[test]
+fn observability_private_editor_and_validation_helpers_cover_edge_configs() {
+    assert_eq!(
+        default_atof_file_sink_editor_value(),
+        json!({
+            "type": "file",
+            "mode": "append"
+        })
+    );
+    assert_eq!(
+        default_atof_stream_sink_editor_value()["transport"],
+        json!("http_post")
+    );
+    assert_eq!(
+        default_opentelemetry_endpoint_editor_value()["service_name"],
+        json!("unknown_service")
+    );
+    let field = otel_editor_field("optional", EditorFieldKind::String, &[], true);
+    assert_eq!(field.name, "optional");
+    assert!(field.optional);
+
+    let plugin = ObservabilityPlugin;
+    assert!(!plugin.allows_multiple_components());
+    for value in [
+        json!({"atof": {"enabled": true, "filename": "removed.jsonl"}}),
+        json!({"atof": {"enabled": true, "sinks": []}}),
+        json!({"opentelemetry": {"enabled": true, "endpoints": []}}),
+    ] {
+        let config = value.as_object().unwrap();
+        assert!(!plugin.validate(config).is_empty());
     }
 }

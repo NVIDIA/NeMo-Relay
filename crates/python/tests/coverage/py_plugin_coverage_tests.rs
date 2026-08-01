@@ -1006,175 +1006,193 @@ async def tool_execution_intercept(name, value, next):
             namespace_prefix: "poison.".to_string(),
         };
 
-        assert!(
-            context
-                .drain_registrations()
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
+        fn assert_poisoned_tool_registrations(
+            context: &PyPluginContext,
+            helpers: &Bound<'_, PyModule>,
+        ) {
+            assert!(
+                context
+                    .drain_registrations()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
 
-        assert!(
-            context
-                .register_subscriber(
-                    "subscriber",
-                    helpers.getattr("subscriber").unwrap().unbind()
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_subscriber("poison.subscriber").unwrap());
+            assert!(
+                context
+                    .register_subscriber(
+                        "subscriber",
+                        helpers.getattr("subscriber").unwrap().unbind()
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_subscriber("poison.subscriber").unwrap());
 
-        assert!(
-            context
-                .register_tool_sanitize_request_guardrail(
-                    "tool_req",
-                    1,
-                    helpers.getattr("tool_fn").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_tool_sanitize_request_guardrail("poison.tool_req").unwrap());
+            assert!(
+                context
+                    .register_tool_sanitize_request_guardrail(
+                        "tool_req",
+                        1,
+                        helpers.getattr("tool_fn").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_tool_sanitize_request_guardrail("poison.tool_req").unwrap());
 
-        assert!(
-            context
-                .register_tool_sanitize_response_guardrail(
-                    "tool_resp",
-                    1,
-                    helpers.getattr("tool_fn").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_tool_sanitize_response_guardrail("poison.tool_resp").unwrap());
+            assert!(
+                context
+                    .register_tool_sanitize_response_guardrail(
+                        "tool_resp",
+                        1,
+                        helpers.getattr("tool_fn").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_tool_sanitize_response_guardrail("poison.tool_resp").unwrap());
 
-        assert!(
-            context
-                .register_tool_conditional_execution_guardrail(
-                    "tool_cond",
-                    1,
-                    helpers.getattr("tool_conditional").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_tool_conditional_execution_guardrail("poison.tool_cond").unwrap());
+            assert!(
+                context
+                    .register_tool_conditional_execution_guardrail(
+                        "tool_cond",
+                        1,
+                        helpers.getattr("tool_conditional").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_tool_conditional_execution_guardrail("poison.tool_cond").unwrap());
+        }
+        assert_poisoned_tool_registrations(&context, &helpers);
 
-        assert!(
-            context
-                .register_llm_sanitize_request_guardrail(
-                    "llm_req",
-                    1,
-                    helpers.getattr("llm_sanitize_request").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_llm_sanitize_request_guardrail("poison.llm_req").unwrap());
+        fn assert_poisoned_llm_guardrail_registrations(
+            context: &PyPluginContext,
+            helpers: &Bound<'_, PyModule>,
+        ) {
+            assert!(
+                context
+                    .register_llm_sanitize_request_guardrail(
+                        "llm_req",
+                        1,
+                        helpers.getattr("llm_sanitize_request").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_llm_sanitize_request_guardrail("poison.llm_req").unwrap());
 
-        assert!(
-            context
-                .register_llm_sanitize_response_guardrail(
-                    "llm_resp",
-                    1,
-                    helpers.getattr("llm_sanitize_response").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_llm_sanitize_response_guardrail("poison.llm_resp").unwrap());
+            assert!(
+                context
+                    .register_llm_sanitize_response_guardrail(
+                        "llm_resp",
+                        1,
+                        helpers.getattr("llm_sanitize_response").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_llm_sanitize_response_guardrail("poison.llm_resp").unwrap());
 
-        assert!(
-            context
-                .register_llm_conditional_execution_guardrail(
-                    "llm_cond",
-                    1,
-                    helpers.getattr("llm_conditional").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_llm_conditional_execution_guardrail("poison.llm_cond").unwrap());
+            assert!(
+                context
+                    .register_llm_conditional_execution_guardrail(
+                        "llm_cond",
+                        1,
+                        helpers.getattr("llm_conditional").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_llm_conditional_execution_guardrail("poison.llm_cond").unwrap());
+        }
+        assert_poisoned_llm_guardrail_registrations(&context, &helpers);
 
-        assert!(
-            context
-                .register_llm_request_intercept(
-                    "llm_request",
-                    1,
-                    false,
-                    helpers.getattr("llm_request_intercept").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_llm_request_intercept("poison.llm_request").unwrap());
+        fn assert_poisoned_intercept_registrations(
+            context: &PyPluginContext,
+            helpers: &Bound<'_, PyModule>,
+        ) {
+            assert!(
+                context
+                    .register_llm_request_intercept(
+                        "llm_request",
+                        1,
+                        false,
+                        helpers.getattr("llm_request_intercept").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_llm_request_intercept("poison.llm_request").unwrap());
 
-        assert!(
-            context
-                .register_llm_execution_intercept(
-                    "llm_exec",
-                    1,
-                    helpers.getattr("llm_execution_intercept").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_llm_execution_intercept("poison.llm_exec").unwrap());
+            assert!(
+                context
+                    .register_llm_execution_intercept(
+                        "llm_exec",
+                        1,
+                        helpers.getattr("llm_execution_intercept").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_llm_execution_intercept("poison.llm_exec").unwrap());
 
-        assert!(
-            context
-                .register_llm_stream_execution_intercept(
-                    "llm_stream",
-                    1,
-                    helpers
-                        .getattr("llm_stream_execution_intercept")
-                        .unwrap()
-                        .unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_llm_stream_execution_intercept("poison.llm_stream").unwrap());
+            assert!(
+                context
+                    .register_llm_stream_execution_intercept(
+                        "llm_stream",
+                        1,
+                        helpers
+                            .getattr("llm_stream_execution_intercept")
+                            .unwrap()
+                            .unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_llm_stream_execution_intercept("poison.llm_stream").unwrap());
 
-        assert!(
-            context
-                .register_tool_request_intercept(
-                    "tool_request",
-                    1,
-                    false,
-                    helpers.getattr("tool_request_intercept").unwrap().unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_tool_request_intercept("poison.tool_request").unwrap());
+            assert!(
+                context
+                    .register_tool_request_intercept(
+                        "tool_request",
+                        1,
+                        false,
+                        helpers.getattr("tool_request_intercept").unwrap().unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_tool_request_intercept("poison.tool_request").unwrap());
 
-        assert!(
-            context
-                .register_tool_execution_intercept(
-                    "tool_exec",
-                    1,
-                    helpers
-                        .getattr("tool_execution_intercept")
-                        .unwrap()
-                        .unbind(),
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("lock poisoned")
-        );
-        assert!(deregister_tool_execution_intercept("poison.tool_exec").unwrap());
+            assert!(
+                context
+                    .register_tool_execution_intercept(
+                        "tool_exec",
+                        1,
+                        helpers
+                            .getattr("tool_execution_intercept")
+                            .unwrap()
+                            .unbind(),
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lock poisoned")
+            );
+            assert!(deregister_tool_execution_intercept("poison.tool_exec").unwrap());
+        }
+        assert_poisoned_intercept_registrations(&context, &helpers);
     });
 }

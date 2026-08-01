@@ -1061,7 +1061,7 @@ describe('Tool intercepts', () => {
     let providerSideEffects = 0;
     registerToolExecutionIntercept('node_tool_exec_abort_started_provider', 10, async (args, next) => {
       downstream = next(args);
-      void downstream.catch(() => {});
+      downstream.catch(() => undefined);
       await started;
       return { result: { source: 'intercept' } };
     });

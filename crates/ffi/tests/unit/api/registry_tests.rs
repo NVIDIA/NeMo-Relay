@@ -6,7 +6,7 @@
 use super::*;
 use nemo_relay::plugin::rollback_registrations;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -26,61 +26,8 @@ fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
                     stream
                         .set_read_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
-                    let mut request = Vec::new();
-                    let mut buffer = [0_u8; 4096];
-                    let (header_end, content_length) = loop {
-                        let read = match stream.read(&mut buffer) {
-                            Ok(read) => read,
-                            Err(error)
-                                if matches!(
-                                    error.kind(),
-                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                                ) && Instant::now() < deadline =>
-                            {
-                                continue;
-                            }
-                            Err(error) => panic!("collector header read failed: {error}"),
-                        };
-                        assert!(
-                            read > 0,
-                            "collector connection closed before request headers"
-                        );
-                        request.extend_from_slice(&buffer[..read]);
-                        if let Some(header_end) =
-                            request.windows(4).position(|value| value == b"\r\n\r\n")
-                        {
-                            let header_end = header_end + 4;
-                            let headers = String::from_utf8_lossy(&request[..header_end]);
-                            let content_length = headers
-                                .lines()
-                                .find_map(|line| {
-                                    line.split_once(':').and_then(|(name, value)| {
-                                        name.eq_ignore_ascii_case("content-length")
-                                            .then(|| value.trim().parse::<usize>().unwrap())
-                                    })
-                                })
-                                .expect("OTLP request must include content-length");
-                            break (header_end, content_length);
-                        }
-                    };
-                    while request.len() < header_end + content_length {
-                        let read = match stream.read(&mut buffer) {
-                            Ok(read) => read,
-                            Err(error)
-                                if matches!(
-                                    error.kind(),
-                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                                ) && Instant::now() < deadline =>
-                            {
-                                continue;
-                            }
-                            Err(error) => panic!("collector body read failed: {error}"),
-                        };
-                        assert!(read > 0, "collector connection closed before request body");
-                        request.extend_from_slice(&buffer[..read]);
-                    }
                     sender
-                        .send(request[header_end..header_end + content_length].to_vec())
+                        .send(read_otlp_request(&mut stream, deadline))
                         .unwrap();
                     stream
                         .write_all(
@@ -101,6 +48,56 @@ fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
         }
     });
     (format!("http://{address}/v1/traces"), receiver, handle)
+}
+
+fn read_otlp_request(stream: &mut TcpStream, deadline: Instant) -> Vec<u8> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let header_end = loop {
+        let read = read_collector_chunk(stream, &mut buffer, deadline, "headers");
+        request.extend_from_slice(&buffer[..read]);
+        if let Some(position) = request.windows(4).position(|value| value == b"\r\n\r\n") {
+            break position + 4;
+        }
+    };
+    let content_length = otlp_content_length(&request[..header_end]);
+    while request.len() < header_end + content_length {
+        let read = read_collector_chunk(stream, &mut buffer, deadline, "body");
+        request.extend_from_slice(&buffer[..read]);
+    }
+    request[header_end..header_end + content_length].to_vec()
+}
+
+fn read_collector_chunk(
+    stream: &mut TcpStream,
+    buffer: &mut [u8],
+    deadline: Instant,
+    phase: &str,
+) -> usize {
+    loop {
+        match stream.read(buffer) {
+            Ok(0) => panic!("collector connection closed before request {phase}"),
+            Ok(read) => return read,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) && Instant::now() < deadline => {}
+            Err(error) => panic!("collector {phase} read failed: {error}"),
+        }
+    }
+}
+
+fn otlp_content_length(headers: &[u8]) -> usize {
+    String::from_utf8_lossy(headers)
+        .lines()
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+        })
+        .expect("OTLP request must include content-length (chunked bodies are not supported)")
 }
 
 unsafe extern "C" fn event_sanitize_cb(
@@ -137,7 +134,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let subscriber_name = cstring(&unique_name("ffi_event_sanitize_subscriber"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_subscriber(
                 subscriber_name.as_ptr(),
                 subscriber_cb,
@@ -173,13 +170,13 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
                 Some(plugin_free),
             ),
         ] {
-            assert_eq!(status, NemoRelayStatus::Ok);
+            assert_status!(status, NemoRelayStatus::Ok);
         }
 
         let scope_name = cstring("ffi-global-scope");
         let original = cstring(r#"{"secret":true}"#);
         let mut scope = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Custom,
@@ -193,7 +190,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             NemoRelayStatus::Ok
         );
         let mark_name = cstring("ffi-global-mark");
-        assert_eq!(
+        assert_status!(
             nemo_relay_event(
                 mark_name.as_ptr(),
                 scope,
@@ -202,47 +199,33 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(scope, ptr::null()),
             NemoRelayStatus::Ok
         );
         nemo_relay_scope_handle_free(scope);
-        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
 
         let events = lock_unpoisoned(event_log());
-        for name in ["ffi-global-scope", "ffi-global-mark"] {
-            for event in events.iter().filter(|event| event["name"] == name) {
-                assert_eq!(event["data"], json!({"sanitized_by": name}));
-                assert_eq!(
-                    event["json"]["category_profile"]["subtype"],
-                    "ffi.sanitized"
-                );
-                assert_eq!(event["metadata"], Json::Null);
-            }
-        }
-        for phase in ["start", "end"] {
-            assert!(events.iter().any(|event| {
-                event["name"] == "ffi-global-scope" && event["json"]["scope_category"] == phase
-            }));
-        }
+        assert_sanitized_event_log(&events);
         drop(events);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_mark_sanitize_guardrail(mark_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_scope_sanitize_start_guardrail(start_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_scope_sanitize_end_guardrail(end_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(*lock_unpoisoned(plugin_frees()), 3);
+        assert_plugin_free_count(3);
 
         let invalid_guard = cstring(&unique_name("ffi_invalid_event_sanitize"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_mark_sanitize_guardrail(
                 invalid_guard.as_ptr(),
                 1,
@@ -253,7 +236,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             NemoRelayStatus::Ok
         );
         let invalid_mark = cstring("ffi-invalid-callback-mark");
-        assert_eq!(
+        assert_status!(
             nemo_relay_event(
                 invalid_mark.as_ptr(),
                 ptr::null(),
@@ -262,17 +245,17 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_mark_sanitize_guardrail(invalid_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
         // The queued event retains its sanitizer snapshot after deregistration.
-        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
-        assert_eq!(*lock_unpoisoned(plugin_frees()), 4);
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_plugin_free_count(4);
 
         let mut owner = ptr::null_mut();
         let owner_name = cstring("ffi-event-owner");
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 owner_name.as_ptr(),
                 NemoRelayScopeType::Agent,
@@ -315,11 +298,11 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
                 Some(plugin_free),
             ),
         ] {
-            assert_eq!(status, NemoRelayStatus::Ok);
+            assert_status!(status, NemoRelayStatus::Ok);
         }
         let child_name = cstring("ffi-local-child");
         let mut child = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 child_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -333,7 +316,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             NemoRelayStatus::Ok
         );
         let local_mark_name = cstring("ffi-local-mark");
-        assert_eq!(
+        assert_status!(
             nemo_relay_event(
                 local_mark_name.as_ptr(),
                 child,
@@ -342,26 +325,26 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(child, ptr::null()),
             NemoRelayStatus::Ok
         );
         nemo_relay_scope_handle_free(child);
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_mark_sanitize_guardrail(
                 owner_uuid.as_ptr(),
                 local_mark.as_ptr(),
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_scope_sanitize_start_guardrail(
                 owner_uuid.as_ptr(),
                 local_start.as_ptr(),
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_scope_sanitize_end_guardrail(
                 owner_uuid.as_ptr(),
                 local_end.as_ptr(),
@@ -369,12 +352,12 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             NemoRelayStatus::Ok
         );
         // Scope removal does not alter the sanitizer snapshots already queued.
-        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
-        assert_eq!(*lock_unpoisoned(plugin_frees()), 7);
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_plugin_free_count(7);
 
         let invalid_uuid = cstring("not-a-uuid");
         let invalid_name = cstring("invalid-scope-event-sanitizer");
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_mark_sanitize_guardrail(
                 invalid_uuid.as_ptr(),
                 invalid_name.as_ptr(),
@@ -385,14 +368,14 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_scope_sanitize_start_guardrail(
                 invalid_uuid.as_ptr(),
                 invalid_name.as_ptr(),
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_scope_sanitize_end_guardrail(
                 ptr::null(),
                 1,
@@ -402,11 +385,11 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_mark_sanitize_guardrail(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_scope_sanitize_end_guardrail(
                 owner_uuid.as_ptr(),
                 ptr::null(),
@@ -417,7 +400,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_scope_sanitize_end_guardrail(
                 owner_uuid.as_ptr(),
                 ptr::null(),
@@ -425,12 +408,12 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             NemoRelayStatus::NullPointer
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(owner, ptr::null()),
             NemoRelayStatus::Ok
         );
         nemo_relay_scope_handle_free(owner);
-        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log());
         let invalid_callback_event = events
             .iter()
@@ -497,9 +480,9 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
         ] {
             assert!(!name.as_bytes().is_empty());
-            assert_eq!(status, NemoRelayStatus::Ok);
+            assert_status!(status, NemoRelayStatus::Ok);
         }
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_mark_sanitize_guardrail(
                 ptr::null_mut(),
                 invalid_name.as_ptr(),
@@ -510,7 +493,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_mark_sanitize_guardrail(
                 &mut ffi_context,
                 ptr::null(),
@@ -525,12 +508,34 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
         rollback_registrations(&mut registrations);
         assert_eq!(*lock_unpoisoned(plugin_frees()), 10);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
             NemoRelayStatus::Ok
         );
         nemo_relay_scope_stack_free(stack);
     }
+}
+
+fn assert_sanitized_event_log(events: &[Json]) {
+    for name in ["ffi-global-scope", "ffi-global-mark"] {
+        for event in events.iter().filter(|event| event["name"] == name) {
+            assert_eq!(event["data"], json!({"sanitized_by": name}));
+            assert_eq!(
+                event["json"]["category_profile"]["subtype"],
+                "ffi.sanitized"
+            );
+            assert_eq!(event["metadata"], Json::Null);
+        }
+    }
+    for phase in ["start", "end"] {
+        assert!(events.iter().any(|event| {
+            event["name"] == "ffi-global-scope" && event["json"]["scope_category"] == phase
+        }));
+    }
+}
+
+fn assert_plugin_free_count(expected: usize) {
+    assert_eq!(*lock_unpoisoned(plugin_frees()), expected);
 }
 
 #[test]
@@ -552,7 +557,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         let invalid_headers = cstring(r#"{"authorization":1}"#);
         let invalid_resource_attributes = cstring(r#"["not-an-object"]"#);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -568,7 +573,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 invalid_transport.as_ptr(),
@@ -584,7 +589,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -600,7 +605,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -616,7 +621,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 grpc_transport.as_ptr(),
@@ -635,7 +640,7 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         assert!(!subscriber.is_null());
         nemo_relay_otel_subscriber_free(subscriber);
         subscriber = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -654,36 +659,36 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
         assert!(!subscriber.is_null());
 
         let name = cstring(&unique_name("ffi_otel"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(ptr::null(), name.as_ptr()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_force_flush(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(ptr::null()),
             NemoRelayStatus::NullPointer
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(subscriber, name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_force_flush(subscriber),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(subscriber),
             NemoRelayStatus::Ok
         );
@@ -709,7 +714,7 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
             (c"full".as_ptr(), ptr::null()),
             (c"full".as_ptr(), blank.as_ptr()),
         ] {
-            assert_eq!(
+            assert_status!(
                 nemo_relay_otel_subscriber_create(
                     otel_type,
                     ptr::null(),
@@ -730,7 +735,7 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
 
         let (collector_endpoint, request, collector) = start_otlp_http_collector();
         let collector_endpoint = cstring(&collector_endpoint);
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"gen_ai".as_ptr(),
                 ptr::null(),
@@ -747,7 +752,7 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
             NemoRelayStatus::Ok
         );
         let subscriber_name = cstring(&unique_name("ffi_gen_ai"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(subscriber, subscriber_name.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -755,7 +760,7 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
         let stack = fresh_scope_stack();
         let scope_name = cstring("research-agent");
         let mut scope = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Agent,
@@ -768,12 +773,12 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(scope, ptr::null()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
-        assert_eq!(
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_status!(
             nemo_relay_otel_subscriber_force_flush(subscriber),
             NemoRelayStatus::Ok
         );
@@ -793,11 +798,11 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
                 .any(|value| value == b"nemo_relay.")
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(subscriber_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(subscriber),
             NemoRelayStatus::Ok
         );
@@ -827,7 +832,7 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
         let invalid_headers = cstring(r#"{"authorization":1}"#);
         let invalid_resource_attributes = cstring(r#"["not-an-object"]"#);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 ptr::null(),
@@ -843,7 +848,7 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 invalid_transport.as_ptr(),
@@ -859,7 +864,7 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 ptr::null(),
@@ -875,7 +880,7 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 ptr::null(),
@@ -891,7 +896,7 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 grpc_transport.as_ptr(),
@@ -910,7 +915,7 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
         assert!(!subscriber.is_null());
         nemo_relay_otel_subscriber_free(subscriber);
         subscriber = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 ptr::null(),
@@ -929,36 +934,36 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
         assert!(!subscriber.is_null());
 
         let name = cstring(&unique_name("ffi_openinference"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(ptr::null(), name.as_ptr()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_force_flush(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(ptr::null()),
             NemoRelayStatus::NullPointer
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(subscriber, name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_force_flush(subscriber),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(subscriber),
             NemoRelayStatus::Ok
         );
@@ -981,7 +986,7 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
         let mut tool_out = ptr::null_mut();
         let mut llm_error_out = ptr::null_mut();
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_request_intercepts(tool_name.as_ptr(), args.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
@@ -990,11 +995,11 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
                 .unwrap_or_default()
                 .contains("out pointer is null")
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_request_intercepts(ptr::null(), args.as_ptr(), &mut tool_out),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_request_intercepts(
                 tool_name.as_ptr(),
                 invalid_json.as_ptr(),
@@ -1003,17 +1008,17 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
             NemoRelayStatus::InvalidJson
         );
         assert!(tool_out.is_null());
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_conditional_execution(ptr::null(), args.as_ptr()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_conditional_execution(tool_name.as_ptr(), invalid_json.as_ptr()),
             NemoRelayStatus::InvalidJson
         );
 
         let tool_guard = cstring(&unique_name("ffi_tool_reject"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_conditional_execution_guardrail(
                 tool_guard.as_ptr(),
                 1,
@@ -1023,24 +1028,24 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_conditional_execution(tool_name.as_ptr(), args.as_ptr()),
             NemoRelayStatus::GuardrailRejected
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_conditional_execution_guardrail(tool_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let mut llm_out = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_request_intercepts(ptr::null(), request.as_ptr(), &mut llm_out),
             NemoRelayStatus::Ok
         );
         let llm_json = returned_json(llm_out);
         assert_eq!(llm_json["request"]["content"]["model"], json!("ffi-model"));
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_request_intercepts(llm_name.as_ptr(), request.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
@@ -1049,7 +1054,7 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
                 .unwrap_or_default()
                 .contains("out pointer is null")
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_request_intercepts(
                 llm_name.as_ptr(),
                 invalid_json.as_ptr(),
@@ -1058,13 +1063,13 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
             NemoRelayStatus::InvalidJson
         );
         assert!(llm_error_out.is_null());
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_conditional_execution(invalid_json.as_ptr()),
             NemoRelayStatus::InvalidJson
         );
 
         let llm_guard = cstring(&unique_name("ffi_llm_reject"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_conditional_execution_guardrail(
                 llm_guard.as_ptr(),
                 1,
@@ -1074,11 +1079,11 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_conditional_execution(request.as_ptr()),
             NemoRelayStatus::GuardrailRejected
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_conditional_execution_guardrail(llm_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -1094,12 +1099,12 @@ fn test_ffi_registration_name_and_uuid_error_sweep() {
 
     macro_rules! assert_invalid_arg {
         ($expr:expr_2021) => {
-            assert_eq!($expr, NemoRelayStatus::InvalidArg);
+            assert_status!($expr, NemoRelayStatus::InvalidArg);
         };
     }
     macro_rules! assert_null_pointer {
         ($expr:expr_2021) => {
-            assert_eq!($expr, NemoRelayStatus::NullPointer);
+            assert_status!($expr, NemoRelayStatus::NullPointer);
         };
     }
 
@@ -1107,7 +1112,7 @@ fn test_ffi_registration_name_and_uuid_error_sweep() {
         let stack = fresh_scope_stack();
         let scope_name = cstring("ffi_error_sweep_scope");
         let mut scope = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -1392,7 +1397,7 @@ fn test_ffi_registration_name_and_uuid_error_sweep() {
             ptr::null(),
         ));
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(scope, ptr::null()),
             NemoRelayStatus::Ok
         );
@@ -1408,7 +1413,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
 
     macro_rules! assert_already_exists {
         ($expr:expr_2021) => {
-            assert_eq!($expr, NemoRelayStatus::AlreadyExists);
+            assert_status!($expr, NemoRelayStatus::AlreadyExists);
         };
     }
 
@@ -1435,7 +1440,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         let stack = fresh_scope_stack();
         let scope_name = cstring("ffi_duplicate_scope");
         let mut scope = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -1451,7 +1456,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
 
         let tool_cond = cstring(&unique_name("dup_tool_cond"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_conditional_execution_guardrail(
                 tool_cond.as_ptr(),
                 1,
@@ -1468,13 +1473,13 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_conditional_execution_guardrail(tool_cond.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let tool_req = cstring(&unique_name("dup_tool_req"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_request_intercept(
                 tool_req.as_ptr(),
                 1,
@@ -1493,13 +1498,13 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_request_intercept(tool_req.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let llm_san_resp = cstring(&unique_name("dup_llm_san_resp"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_sanitize_response_guardrail(
                 llm_san_resp.as_ptr(),
                 1,
@@ -1516,13 +1521,13 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_sanitize_response_guardrail(llm_san_resp.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let llm_cond = cstring(&unique_name("dup_llm_cond"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_conditional_execution_guardrail(
                 llm_cond.as_ptr(),
                 1,
@@ -1539,13 +1544,13 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_conditional_execution_guardrail(llm_cond.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let llm_req = cstring(&unique_name("dup_llm_req"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_request_intercept(
                 llm_req.as_ptr(),
                 1,
@@ -1564,13 +1569,13 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_request_intercept(llm_req.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let subscriber = cstring(&unique_name("dup_subscriber"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_subscriber(
                 subscriber.as_ptr(),
                 subscriber_cb,
@@ -1585,14 +1590,14 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
-        assert_eq!(
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_status!(
             nemo_relay_deregister_subscriber(subscriber.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let scope_tool_cond = cstring(&unique_name("dup_scope_tool_cond"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_tool_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 scope_tool_cond.as_ptr(),
@@ -1613,7 +1618,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
                 None,
             )
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_tool_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 scope_tool_cond.as_ptr(),
@@ -1622,7 +1627,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         );
 
         let scope_tool_req = cstring(&unique_name("dup_scope_tool_req"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_tool_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_tool_req.as_ptr(),
@@ -1643,7 +1648,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_tool_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_tool_req.as_ptr(),
@@ -1652,7 +1657,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         );
 
         let scope_llm_cond = cstring(&unique_name("dup_scope_llm_cond"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_llm_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 scope_llm_cond.as_ptr(),
@@ -1673,7 +1678,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
                 None,
             )
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_llm_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 scope_llm_cond.as_ptr(),
@@ -1682,7 +1687,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         );
 
         let scope_llm_req = cstring(&unique_name("dup_scope_llm_req"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_llm_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_llm_req.as_ptr(),
@@ -1703,7 +1708,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_llm_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_llm_req.as_ptr(),
@@ -1712,7 +1717,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         );
 
         let scope_subscriber = cstring(&unique_name("dup_scope_subscriber"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_subscriber(
                 scope_uuid.as_ptr(),
                 scope_subscriber.as_ptr(),
@@ -1729,7 +1734,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_subscriber(scope_uuid.as_ptr(), scope_subscriber.as_ptr(),),
             NemoRelayStatus::Ok
         );
@@ -1738,7 +1743,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         let agent = cstring("dup-agent");
         let version = cstring("1.0.0");
         let mut exporter = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_create(
                 ptr::null(),
                 agent.as_ptr(),
@@ -1748,7 +1753,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_create(
                 session.as_ptr(),
                 ptr::null(),
@@ -1758,7 +1763,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_create(
                 session.as_ptr(),
                 agent.as_ptr(),
@@ -1768,7 +1773,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_create(
                 session.as_ptr(),
                 agent.as_ptr(),
@@ -1778,12 +1783,12 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_register(exporter, ptr::null()),
             NemoRelayStatus::NullPointer
         );
         let exporter_name = cstring(&unique_name("dup_exporter_subscriber"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_register(exporter, exporter_name.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -1791,11 +1796,11 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             exporter,
             exporter_name.as_ptr(),
         ));
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(exporter_name.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -1827,7 +1832,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             json!({"role":"assistant","content":"next","tool_calls":[]})
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(scope, ptr::null()),
             NemoRelayStatus::Ok
         );
@@ -1844,39 +1849,39 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
     macro_rules! assert_global_guardrail_sweep {
         ($prefix:literal, $register:ident, $deregister:ident, $cb:expr) => {{
             let name = cstring(&unique_name($prefix));
-            assert_eq!(
+            assert_status!(
                 $register(name.as_ptr(), 1, $cb, ptr::null_mut(), None),
                 NemoRelayStatus::Ok
             );
-            assert_eq!(
+            assert_status!(
                 $register(name.as_ptr(), 1, $cb, ptr::null_mut(), None),
                 NemoRelayStatus::AlreadyExists
             );
-            assert_eq!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
-            assert_eq!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
+            assert_status!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
+            assert_status!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
         }};
     }
 
     macro_rules! assert_global_execution_sweep {
         ($prefix:literal, $register:ident, $deregister:ident, $cb:expr) => {{
             let name = cstring(&unique_name($prefix));
-            assert_eq!(
+            assert_status!(
                 $register(name.as_ptr(), 1, $cb, ptr::null_mut(), None),
                 NemoRelayStatus::Ok
             );
-            assert_eq!(
+            assert_status!(
                 $register(name.as_ptr(), 1, $cb, ptr::null_mut(), None),
                 NemoRelayStatus::AlreadyExists
             );
-            assert_eq!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
-            assert_eq!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
+            assert_status!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
+            assert_status!($deregister(name.as_ptr()), NemoRelayStatus::Ok);
         }};
     }
 
     macro_rules! assert_scope_guardrail_sweep {
         ($scope_uuid:expr, $prefix:literal, $register:ident, $deregister:ident, $cb:expr) => {{
             let name = cstring(&unique_name($prefix));
-            assert_eq!(
+            assert_status!(
                 $register(
                     $scope_uuid.as_ptr(),
                     name.as_ptr(),
@@ -1887,7 +1892,7 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
                 ),
                 NemoRelayStatus::Ok
             );
-            assert_eq!(
+            assert_status!(
                 $register(
                     $scope_uuid.as_ptr(),
                     name.as_ptr(),
@@ -1898,11 +1903,11 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
                 ),
                 NemoRelayStatus::AlreadyExists
             );
-            assert_eq!(
+            assert_status!(
                 $deregister($scope_uuid.as_ptr(), name.as_ptr()),
                 NemoRelayStatus::Ok
             );
-            assert_eq!(
+            assert_status!(
                 $deregister($scope_uuid.as_ptr(), name.as_ptr()),
                 NemoRelayStatus::Ok
             );
@@ -1912,7 +1917,7 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
     macro_rules! assert_scope_execution_sweep {
         ($scope_uuid:expr, $prefix:literal, $register:ident, $deregister:ident, $cb:expr) => {{
             let name = cstring(&unique_name($prefix));
-            assert_eq!(
+            assert_status!(
                 $register(
                     $scope_uuid.as_ptr(),
                     name.as_ptr(),
@@ -1923,7 +1928,7 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
                 ),
                 NemoRelayStatus::Ok
             );
-            assert_eq!(
+            assert_status!(
                 $register(
                     $scope_uuid.as_ptr(),
                     name.as_ptr(),
@@ -1934,11 +1939,11 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
                 ),
                 NemoRelayStatus::AlreadyExists
             );
-            assert_eq!(
+            assert_status!(
                 $deregister($scope_uuid.as_ptr(), name.as_ptr()),
                 NemoRelayStatus::Ok
             );
-            assert_eq!(
+            assert_status!(
                 $deregister($scope_uuid.as_ptr(), name.as_ptr()),
                 NemoRelayStatus::Ok
             );
@@ -1949,7 +1954,7 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
         let stack = fresh_scope_stack();
         let scope_name = cstring("ffi_table_sweep_scope");
         let mut scope = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -2043,7 +2048,7 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
         let agent = cstring("table-sweep-agent");
         let version = cstring("1.0.0");
         let exporter_name = cstring(&unique_name("table_exporter_subscriber"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_create(
                 session.as_ptr(),
                 agent.as_ptr(),
@@ -2053,21 +2058,21 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_register(exporter, exporter_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(exporter_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(exporter_name.as_ptr()),
             NemoRelayStatus::Ok
         );
         nemo_relay_atif_exporter_free(exporter);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(scope, ptr::null()),
             NemoRelayStatus::Ok
         );
@@ -2086,7 +2091,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
 
         let subscriber_name = unique_name("ffi_llm_subscriber");
         let subscriber_name_c = cstring(&subscriber_name);
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_subscriber(
                 subscriber_name_c.as_ptr(),
                 subscriber_cb,
@@ -2097,12 +2102,12 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
         );
 
         let mut root = ptr::null_mut();
-        assert_eq!(nemo_relay_get_handle(&mut root), NemoRelayStatus::Ok);
+        assert_status!(nemo_relay_get_handle(&mut root), NemoRelayStatus::Ok);
         nemo_relay_scope_handle_free(root);
 
         let intercept_name = unique_name("ffi_llm_intercept");
         let intercept_name_c = cstring(&intercept_name);
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_request_intercept(
                 intercept_name_c.as_ptr(),
                 1,
@@ -2116,7 +2121,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
 
         let conditional_name = unique_name("ffi_llm_conditional");
         let conditional_name_c = cstring(&conditional_name);
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_conditional_execution_guardrail(
                 conditional_name_c.as_ptr(),
                 1,
@@ -2129,7 +2134,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
 
         let sanitize_name = unique_name("ffi_llm_sanitize");
         let sanitize_name_c = cstring(&sanitize_name);
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_sanitize_response_guardrail(
                 sanitize_name_c.as_ptr(),
                 1,
@@ -2145,7 +2150,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
         let agent = cstring("ffi-agent");
         let version = cstring("1.0.0");
         let model_name = cstring("ffi-model");
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_create(
                 session.as_ptr(),
                 agent.as_ptr(),
@@ -2158,7 +2163,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
 
         let exporter_sub = unique_name("ffi_exporter");
         let exporter_sub_c = cstring(&exporter_sub);
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_register(exporter, exporter_sub_c.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -2188,7 +2193,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
         nemo_relay_llm_request_free(llm_request);
 
         let mut helper_out = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_request_intercepts(llm_name.as_ptr(), request.as_ptr(), &mut helper_out),
             NemoRelayStatus::Ok
         );
@@ -2198,13 +2203,13 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
             json!(true)
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_conditional_execution(request.as_ptr()),
             NemoRelayStatus::Ok
         );
 
         let mut handle: *mut FfiLLMHandle = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 request.as_ptr(),
@@ -2226,14 +2231,14 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
         assert!(take_string(nemo_relay_llm_handle_parent_uuid(handle)).is_some());
 
         let response = cstring(r#"{"content":"manual end","role":"assistant","tool_calls":[]}"#);
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call_end(handle, response.as_ptr(), ptr::null(), ptr::null()),
             NemoRelayStatus::Ok
         );
         nemo_relay_llm_handle_free(handle);
 
         let mut execute_out = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call_execute(
                 llm_name.as_ptr(),
                 request.as_ptr(),
@@ -2257,21 +2262,12 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
         let execute_json = returned_json(execute_out);
         assert_eq!(execute_json["content"], json!("hello from ffi"));
         assert_eq!(execute_json["model_seen"], json!("ffi-model"));
-        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log()).clone();
-        assert!(
-            events
-                .iter()
-                .any(|event| event["output"]["sanitized"] == json!(true))
-        );
-        assert!(
-            events
-                .iter()
-                .any(|event| event["model_name"] == "ffi-model")
-        );
+        assert_llm_execution_events(&events);
 
         let mut stream = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_stream_call_execute(
                 llm_name.as_ptr(),
                 request.as_ptr(),
@@ -2305,48 +2301,65 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
         assert_eq!(*lock_unpoisoned(finalizer_calls()), 1);
 
         let mut exported = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_export(exporter, &mut exported),
             NemoRelayStatus::Ok
         );
         let trajectory = returned_json(exported);
-        assert_eq!(trajectory["schema_version"], json!("ATIF-v1.7"));
-        assert!(trajectory["steps"].as_array().unwrap().len() >= 4);
+        assert_atif_trajectory(&trajectory);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_clear(exporter),
             NemoRelayStatus::Ok
         );
         let mut cleared = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_export(exporter, &mut cleared),
             NemoRelayStatus::Ok
         );
         let cleared_json = returned_json(cleared);
         assert_eq!(cleared_json["steps"].as_array().unwrap().len(), 0);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(exporter_sub_c.as_ptr()),
             NemoRelayStatus::Ok
         );
         nemo_relay_atif_exporter_free(exporter);
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_subscriber(subscriber_name_c.as_ptr()),
             NemoRelayStatus::Ok
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_request_intercept(intercept_name_c.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_conditional_execution_guardrail(conditional_name_c.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_sanitize_response_guardrail(sanitize_name_c.as_ptr()),
             NemoRelayStatus::Ok
         );
         nemo_relay_scope_stack_free(stack);
     }
+}
+
+fn assert_llm_execution_events(events: &[Json]) {
+    assert!(
+        events
+            .iter()
+            .any(|event| event["output"]["sanitized"] == json!(true))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["model_name"] == "ffi-model")
+    );
+}
+
+fn assert_atif_trajectory(trajectory: &Json) {
+    assert_eq!(trajectory["schema_version"], json!("ATIF-v1.7"));
+    assert!(trajectory["steps"].as_array().unwrap().len() >= 4);
 }

@@ -146,7 +146,7 @@ impl LlmResponseCodec for RuntimeIdentityCodec {
 }
 
 #[test]
-fn sanitizer_context_preserves_all_codec_identity_states() {
+fn request_sanitizer_context_preserves_all_codec_identity_states() {
     let identity_only_request = crate::api::runtime::LlmSanitizeRequestContext::with_identity(
         LlmCodecIdentity::Runtime("identity-only.request.v1".into()),
     );
@@ -155,15 +155,7 @@ fn sanitizer_context_preserves_all_codec_identity_states() {
         &LlmCodecIdentity::Runtime("identity-only.request.v1".into())
     );
     assert!(identity_only_request.resolve_codec().is_none());
-
-    let identity_only_response = crate::api::runtime::LlmSanitizeResponseContext::with_identity(
-        LlmCodecIdentity::Runtime("identity-only.response.v1".into()),
-    );
-    assert_eq!(
-        identity_only_response.codec(),
-        &LlmCodecIdentity::Runtime("identity-only.response.v1".into())
-    );
-    assert!(identity_only_response.resolve_codec().is_none());
+    assert!(format!("{identity_only_request:?}").contains("identity-only.request.v1"));
 
     assert_eq!(
         sanitize_context_for_request_codec(None).codec(),
@@ -192,6 +184,20 @@ fn sanitizer_context_preserves_all_codec_identity_states() {
         .codec(),
         &LlmCodecIdentity::Opaque
     );
+}
+
+#[test]
+fn response_sanitizer_context_preserves_all_codec_identity_states() {
+    let identity_only_response = crate::api::runtime::LlmSanitizeResponseContext::with_identity(
+        LlmCodecIdentity::Runtime("identity-only.response.v1".into()),
+    );
+    assert_eq!(
+        identity_only_response.codec(),
+        &LlmCodecIdentity::Runtime("identity-only.response.v1".into())
+    );
+    assert!(identity_only_response.resolve_codec().is_none());
+    assert!(format!("{identity_only_response:?}").contains("identity-only.response.v1"));
+
     assert_eq!(
         sanitize_context_for_response_codec(Some(&OpenAIChatCodec as &dyn LlmResponseCodec))
             .codec(),

@@ -1008,6 +1008,11 @@ fn test_encode_max_tokens() {
 
 #[test]
 fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
+    assert_anthropic_helper_branches();
+    assert_anthropic_codec_error_and_encode_paths();
+}
+
+fn assert_anthropic_helper_branches() {
     assert_eq!(json_f64(f64::NAN), Json::Null);
     assert_eq!(
         decode_anthropic_tool_choice(&json!({"type": "mystery"})),
@@ -1019,7 +1024,9 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
         MessageContent::Parts(parts)
             if matches!(parts.as_slice(), [super::super::request::ContentPart::Image { .. }])
     ));
+}
 
+fn assert_anthropic_codec_error_and_encode_paths() {
     let system_parts = MessageContent::Parts(vec![
         super::super::request::ContentPart::Text {
             text: "First".into(),
@@ -1126,6 +1133,11 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
 
 #[test]
 fn anthropic_request_component_branch_matrix() {
+    assert_anthropic_tool_choice_and_content_branches();
+    assert_anthropic_message_and_tool_branches();
+}
+
+fn assert_anthropic_tool_choice_and_content_branches() {
     let specific = ToolChoice::Specific(ToolChoiceFunction {
         choice_type: "function".into(),
         function: ToolChoiceFunctionName {
@@ -1233,7 +1245,9 @@ fn anthropic_request_component_branch_matrix() {
         })
         .is_err()
     );
+}
 
+fn assert_anthropic_message_and_tool_branches() {
     for invalid in [json!(42), json!({"content": "x"}), json!({"role": "user"})] {
         assert!(decode_anthropic_message(&invalid).is_err());
     }
@@ -1598,4 +1612,28 @@ fn anthropic_streaming_codec_keeps_partial_json_when_unparseable() {
     assert_eq!(block["type"], json!("tool_use"));
     assert_eq!(block["id"], json!("toolu_p"));
     assert_eq!(block["input"], json!("{\"q\": \"trun"));
+}
+
+#[test]
+fn anthropic_helpers_cover_invalid_and_provider_native_values() {
+    let codec = AnthropicMessagesCodec;
+    for invalid_request in [
+        json!({}),
+        json!({"messages": false}),
+        json!({"messages": [], "tools": false}),
+    ] {
+        assert!(codec.decode(&make_request(invalid_request)).is_err());
+    }
+
+    assert!(decode_anthropic_tool_choice(&Json::Null).is_none());
+    assert!(decode_anthropic_tool_choice(&json!({"type": "provider_choice"})).is_none());
+    assert!(decode_parallel_tool_calls(&json!(false)).unwrap().is_none());
+
+    let mut object = serde_json::Map::from_iter([("remove".into(), json!(true))]);
+    set_or_remove_json(&mut object, "remove", None);
+    assert!(!object.contains_key("remove"));
+    set_or_remove_json(&mut object, "insert", Some(json!(42)));
+    assert_eq!(object["insert"], json!(42));
+
+    assert!(AnthropicMessagesStreamingCodec::default().finalizer()().is_object());
 }
