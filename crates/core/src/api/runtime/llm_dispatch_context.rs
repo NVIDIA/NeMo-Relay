@@ -327,7 +327,7 @@ fn transport_error(target: &LlmDispatchTargetContext, error: reqwest::Error) -> 
     let timeout = error.is_timeout();
     let diagnostic = error.without_url();
     log::warn!(
-        target: "nemo_relay.llm",
+        target: "nemo_relay.runtime",
         event = "targeted_llm_transport_failed",
         provider_host = target.url().host_str().unwrap_or("<unknown>"),
         failure_kind = if timeout { "timeout" } else { "transport" };
