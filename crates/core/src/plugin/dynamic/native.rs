@@ -2258,13 +2258,21 @@ async fn deliver_native_async_next_stream(
 }
 
 async fn forward_native_async_next_stream(
+    stream: LlmJsonStream,
+    callback_guard: &mut NativeAsyncStreamCallbackGuard,
+) {
+    forward_native_async_next_stream_with(stream, callback_guard, native_string_from_json).await;
+}
+
+async fn forward_native_async_next_stream_with(
     mut stream: LlmJsonStream,
     callback_guard: &mut NativeAsyncStreamCallbackGuard,
+    to_native_string: impl Fn(&Json) -> Option<*mut NemoRelayNativeString>,
 ) {
     while let Some(item) = stream.next().await {
         match item {
             Ok(chunk) => {
-                let Some(chunk) = native_string_from_json(&chunk) else {
+                let Some(chunk) = to_native_string(&chunk) else {
                     callback_guard.fail(
                         "failed to serialize or allocate native async stream continuation chunk",
                     );

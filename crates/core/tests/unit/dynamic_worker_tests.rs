@@ -3,6 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::optimization::{
     LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
@@ -119,6 +122,40 @@ fn python_worker_launch_clears_host_python_environment() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file() {
+    let plugin_id = "acme.python.launch";
+    let digest = Sha256::digest(plugin_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temp = tempfile::tempdir().unwrap();
+    let managed = temp.path().join(MANAGED_ENVIRONMENTS_DIR).join(digest);
+    let interpreter = managed.join("bin/python");
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    std::fs::write(&interpreter, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = std::fs::metadata(&interpreter).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&interpreter, permissions).unwrap();
+
+    let endpoint_file = temp.path().join("worker-endpoint");
+    let mut child = spawn_worker_process(WorkerProcessLaunch {
+        runtime: WorkerRuntime::Python,
+        manifest_path: &temp.path().join("plugin.toml"),
+        environment_ref: managed.to_str(),
+        plugin_id,
+        entrypoint: "acme_worker:create_plugin",
+        activation_id: "activation",
+        auth_token: "token",
+        host_endpoint: "http://127.0.0.1:1",
+        worker_endpoint: "http://127.0.0.1:2",
+        worker_endpoint_file: Some(&endpoint_file),
+    })
+    .unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
 #[cfg(not(unix))]
 #[test]
 fn empty_worker_endpoint_announcement_is_retried() {
@@ -155,14 +192,18 @@ fn empty_worker_endpoint_announcement_is_retried() {
     );
 }
 
-#[test]
-fn response_helpers_cover_error_and_unexpected_shapes() {
-    enable_operational_logs();
-    let worker_error = WorkerError {
+fn test_worker_error() -> WorkerError {
+    WorkerError {
         code: "worker.failed".into(),
         message: "boom".into(),
         retryable: false,
-    };
+    }
+}
+
+#[test]
+fn response_helpers_cover_json_and_guardrail_error_shapes() {
+    enable_operational_logs();
+    let worker_error = test_worker_error();
 
     let error = json_from_invoke_response(InvokeResponse {
         result: Some(InvokeResult::Json(JsonResult {
@@ -231,6 +272,12 @@ fn response_helpers_cover_error_and_unexpected_shapes() {
         .to_string()
         .contains("guardrail returned unexpected")
     );
+}
+
+#[test]
+fn response_helpers_cover_stream_optional_and_cancellation_errors() {
+    enable_operational_logs();
+    let worker_error = test_worker_error();
 
     assert!(
         json_from_stream_chunk(StreamChunk {
@@ -256,6 +303,67 @@ fn response_helpers_cover_error_and_unexpected_shapes() {
             .expect_err("empty stream chunk should fail")
             .to_string()
             .contains("stream chunk was empty")
+    );
+
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: None,
+                error: Some(worker_error.clone()),
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("worker.failed")
+    );
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: Some(JsonEnvelope {
+                    schema: JSON_SCHEMA.into(),
+                    json: b"{".to_vec(),
+                }),
+                error: None,
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("invalid JSON result")
+    );
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Guardrail(GuardrailResult {
+                block_reason: String::new(),
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("unexpected LLM sanitizer result")
+    );
+
+    let typed_error = typed_json_result::<Json>(
+        JSON_SCHEMA,
+        Err(FlowError::Internal("typed result failed".into())),
+    );
+    assert!(typed_error.value.is_none());
+    assert!(
+        typed_error
+            .error
+            .is_some_and(|error| error.message.contains("typed result failed"))
+    );
+    assert!(
+        worker_error_to_flow(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "cancelled by caller".into(),
+            retryable: false,
+        })
+        .to_string()
+        .contains("worker invocation cancelled")
+    );
+    assert!(
+        worker_status_to_flow("unused", Status::cancelled("cancelled by transport"))
+            .to_string()
+            .contains("worker invocation cancelled")
     );
 }
 

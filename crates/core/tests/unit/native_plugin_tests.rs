@@ -538,6 +538,70 @@ fn native_stream_callback_guard_covers_terminal_drop_modes() {
 }
 
 #[tokio::test]
+async fn native_async_stream_forwarding_reports_conversion_and_stream_errors() {
+    let make_stream_state = || {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        Arc::new(NativeAsyncStream {
+            sender: Mutex::new(Some(sender)),
+            cancelled: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+            downstream_aborts: Mutex::new(HashMap::new()),
+            settlement: Mutex::new(()),
+            before_settlement_lock: None,
+            _callback_user_data: None,
+        })
+    };
+
+    let conversion_state = NativeStreamCallbackState::default();
+    let mut conversion_guard = NativeAsyncStreamCallbackGuard {
+        cb: record_native_stream_result,
+        user_data: ptr::from_ref(&conversion_state) as usize,
+        stream: make_stream_state(),
+        _library_guard: None,
+        active: true,
+    };
+    forward_native_async_next_stream_with(
+        LlmJsonStream::new(tokio_stream::iter([Ok(json!({"chunk": true}))])),
+        &mut conversion_guard,
+        |_| None,
+    )
+    .await;
+    assert!(
+        conversion_state
+            .error
+            .lock()
+            .unwrap()
+            .as_deref()
+            .is_some_and(|error| error.contains("failed to serialize or allocate"))
+    );
+    assert!(!conversion_state.done.load(Ordering::Acquire));
+
+    let stream_error_state = NativeStreamCallbackState::default();
+    let mut stream_error_guard = NativeAsyncStreamCallbackGuard {
+        cb: record_native_stream_result,
+        user_data: ptr::from_ref(&stream_error_state) as usize,
+        stream: make_stream_state(),
+        _library_guard: None,
+        active: true,
+    };
+    forward_native_async_next_stream(
+        LlmJsonStream::new(tokio_stream::iter([Err(FlowError::Internal(
+            "provider stream failed".into(),
+        ))])),
+        &mut stream_error_guard,
+    )
+    .await;
+    assert!(
+        stream_error_state
+            .error
+            .lock()
+            .unwrap()
+            .as_deref()
+            .is_some_and(|error| error.contains("provider stream failed"))
+    );
+}
+
+#[tokio::test]
 async fn native_async_result_entrypoint_covers_llm_and_stream_continuations() {
     let llm_next = Arc::new(NativeAsyncNext::new(
         NativeAsyncNextInner::Llm(Arc::new(|request| {
@@ -3245,6 +3309,10 @@ unsafe extern "C" fn count_scope_callback(user_data: *mut c_void) -> NemoRelaySt
     NemoRelayStatus::Ok
 }
 
+unsafe extern "C" fn fail_scope_callback(_user_data: *mut c_void) -> NemoRelayStatus {
+    NemoRelayStatus::InvalidArg
+}
+
 #[test]
 fn native_scope_stack_abi_covers_lifecycle_and_validation() {
     let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
@@ -3291,6 +3359,22 @@ fn assert_native_scope_stack_null_validation() {
         unsafe { native_scope_get_current(ptr::null_mut()) },
         NemoRelayStatus::NullPointer
     );
+    assert_eq!(
+        unsafe {
+            native_scope_push(
+                ptr::null(),
+                NemoRelayNativeScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
 }
 
 fn create_active_native_scope_stack() -> *mut NemoRelayNativeScopeStack {
@@ -3318,6 +3402,11 @@ fn create_active_native_scope_stack() -> *mut NemoRelayNativeScopeStack {
         NemoRelayStatus::Ok
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        unsafe { native_scope_stack_with_current(stack, fail_scope_callback, ptr::null_mut()) },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_last_error_contains("scope-stack callback returned InvalidArg");
 
     stack
 }
@@ -3457,6 +3546,37 @@ fn assert_native_scope_push_validation(strings: &NativeScopeTestStrings) {
         },
         NemoRelayStatus::InvalidArg
     );
+
+    let invalid_name = Box::into_raw(Box::new(NativeHostString(vec![0xff]))).cast();
+    assert_eq!(
+        unsafe {
+            native_scope_push(
+                invalid_name,
+                NemoRelayNativeScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut invalid_scope,
+            )
+        },
+        NemoRelayStatus::InvalidUtf8
+    );
+    assert_eq!(
+        unsafe {
+            native_emit_mark(
+                invalid_name,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::InvalidUtf8
+    );
+    unsafe { native_string_free(invalid_name) };
 }
 
 fn assert_native_scope_pop_and_mark_validation(
@@ -3831,6 +3951,8 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
 
     assert_registration_entrypoints_reject_invalid_names(ctx);
     assert_registration_entrypoints_accept_valid_names(ctx);
+    assert_async_registration_entrypoints_validate_contracts(ctx);
+    assert_async_request_registration_rejects_legacy_relay_contract();
 }
 
 #[cfg(unix)]
@@ -3965,6 +4087,30 @@ fn assert_registration_entrypoints_reject_invalid_names(ctx: *mut NemoRelayNativ
                 invalid_name,
                 0,
                 noop_llm_stream_execution,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::InvalidUtf8
+        );
+        assert_eq!(
+            native_plugin_context_register_async_stream_middleware(
+                ctx,
+                invalid_name,
+                0,
+                invoke_native_stream_next_then_return_state,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::InvalidUtf8
+        );
+        assert_eq!(
+            native_plugin_context_register_async_middleware(
+                ctx,
+                NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest as u32,
+                invalid_name,
+                0,
+                false,
+                resolve_async_static_json,
                 ptr::null_mut(),
                 None,
             ),
@@ -4116,6 +4262,151 @@ fn assert_registration_entrypoints_accept_valid_names(ctx: *mut NemoRelayNativeP
 }
 
 #[cfg(unix)]
+fn assert_async_registration_entrypoints_validate_contracts(
+    ctx: *mut NemoRelayNativePluginContext,
+) {
+    unsafe {
+        assert_eq!(
+            native_plugin_context_register_async_stream_middleware(
+                ptr::null_mut(),
+                ptr::null(),
+                0,
+                invoke_native_stream_next_then_return_state,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            native_plugin_context_register_async_middleware(
+                ptr::null_mut(),
+                0,
+                ptr::null(),
+                0,
+                false,
+                resolve_async_static_json,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+
+        let name = native_string("async-registered");
+        assert_eq!(
+            native_plugin_context_register_async_middleware(
+                ctx,
+                u32::MAX,
+                name,
+                0,
+                false,
+                resolve_async_static_json,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            native_plugin_context_register_async_middleware(
+                ctx,
+                NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept as u32,
+                name,
+                0,
+                false,
+                resolve_async_static_json,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            native_plugin_context_register_async_middleware(
+                ctx,
+                NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest as u32,
+                name,
+                0,
+                false,
+                resolve_async_static_json,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            native_plugin_context_register_async_middleware(
+                ctx,
+                NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest as u32,
+                name,
+                0,
+                false,
+                resolve_async_static_json,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Internal
+        );
+
+        let stream_name = native_string("async-stream-registered");
+        assert_eq!(
+            native_plugin_context_register_async_stream_middleware(
+                ctx,
+                stream_name,
+                0,
+                invoke_native_stream_next_then_return_state,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            native_plugin_context_register_async_stream_middleware(
+                ctx,
+                stream_name,
+                0,
+                invoke_native_stream_next_then_return_state,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Internal
+        );
+        native_string_free(name);
+        native_string_free(stream_name);
+    }
+}
+
+#[cfg(unix)]
+fn assert_async_request_registration_rejects_legacy_relay_contract() {
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native.legacy".into(),
+        relay_compat: "^0.5".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let mut registration = PluginRegistrationContext::new();
+    let mut host = NativeHostPluginContext {
+        ctx: ptr::from_mut(&mut registration),
+        instance,
+    };
+    let name = native_string("legacy-request");
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_async_middleware(
+                ptr::from_mut(&mut host).cast(),
+                NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept as u32,
+                name,
+                0,
+                false,
+                resolve_async_static_json,
+                ptr::null_mut(),
+                None,
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    unsafe { native_string_free(name) };
+}
+
+#[cfg(unix)]
 unsafe extern "C" fn resolve_async_static_json(
     user_data: *mut c_void,
     _invocation_json: *const NemoRelayNativeString,
@@ -4230,13 +4521,54 @@ async fn native_async_wrappers_validate_callback_result_shapes() {
             .contains("invalid native async LLM intercept outcome")
     );
 
+    let tool_execution = wrap_native_async_tool_execution(
+        Arc::clone(&instance),
+        resolve_async_static_json,
+        user_data,
+        None,
+    );
+    assert!(
+        tool_execution("tool", json!({}), tool_next(Ok(Json::Null)))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("invalid native async tool outcome")
+    );
+
+    let fields = EventSanitizeFields::default();
+    let fields_result = native_string_from_json(&serde_json::to_value(&fields).unwrap()).unwrap();
+    let event_sanitize = wrap_native_async_event_sanitize(
+        Arc::clone(&instance),
+        resolve_async_static_json,
+        fields_result.cast(),
+        None,
+    );
+    let event = Event::Mark(crate::api::event::MarkEvent::new(
+        crate::api::event::BaseEvent::builder()
+            .name("native-async-event")
+            .build(),
+        None,
+        None,
+    ));
+    assert_eq!(
+        event_sanitize(Arc::new(event), fields.clone())
+            .await
+            .unwrap(),
+        fields
+    );
+
+    drop(event_sanitize);
+    drop(tool_execution);
     drop(request_intercept);
     drop(sanitize_response);
     drop(sanitize_request);
     drop(llm_conditional);
     drop(tool_conditional);
     drop(tool_json);
-    unsafe { native_string_free(result) };
+    unsafe {
+        native_string_free(fields_result);
+        native_string_free(result);
+    }
 }
 
 #[test]
@@ -4568,6 +4900,119 @@ unsafe extern "C" fn tool_json_error(
     NemoRelayStatus::InvalidArg
 }
 
+unsafe extern "C" fn tool_conditional_error(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _args_json: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_reason = native_string("discarded reason") };
+    set_native_last_error("tool conditional failed");
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn tool_conditional_reason(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _args_json: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_reason = native_string("blocked by tool policy") };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn llm_conditional_error(
+    _user_data: *mut c_void,
+    _request_json: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_reason = native_string("discarded reason") };
+    set_native_last_error("LLM conditional failed");
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn llm_conditional_reason(
+    _user_data: *mut c_void,
+    _request_json: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_reason = native_string("blocked by LLM policy") };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn llm_request_error(
+    _user_data: *mut c_void,
+    _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeRequestContext,
+    out_request_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_request_json = native_string(r#"{"discarded":true}"#) };
+    set_native_last_error("LLM request sanitizer failed");
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn llm_response_error(
+    _user_data: *mut c_void,
+    _response_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeResponseContext,
+    out_response_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_response_json = native_string(r#"{"discarded":true}"#) };
+    set_native_last_error("LLM response sanitizer failed");
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn tool_execution_error(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _args_json: *const NemoRelayNativeString,
+    _next_fn: NemoRelayNativeToolNextFn,
+    _next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_outcome_json = native_string(r#"{"discarded":true}"#) };
+    set_native_last_error("tool execution failed");
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn llm_request_intercept_error(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _request_json: *const NemoRelayNativeString,
+    _annotated_json: *const NemoRelayNativeString,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_outcome_json = native_string(r#"{"discarded":true}"#) };
+    set_native_last_error("LLM request intercept failed");
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn llm_execution_error(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _request_json: *const NemoRelayNativeString,
+    _next_fn: NemoRelayNativeLlmNextFn,
+    _next_ctx: *mut c_void,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_json = native_string(r#"{"discarded":true}"#) };
+    set_native_last_error("LLM execution failed");
+    NemoRelayStatus::InvalidArg
+}
+
+unsafe extern "C" fn llm_stream_execution_error(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _request_json: *const NemoRelayNativeString,
+    _next_fn: NemoRelayNativeLlmStreamNextFn,
+    _next_ctx: *mut c_void,
+    out_stream: *mut NemoRelayNativeLlmStreamV1,
+) -> NemoRelayStatus {
+    unsafe { *out_stream = NemoRelayNativeLlmStreamV1::default() };
+    set_native_last_error("LLM stream execution failed");
+    NemoRelayStatus::InvalidArg
+}
+
 unsafe extern "C" fn llm_request_echo(
     _user_data: *mut c_void,
     request_json: *const NemoRelayNativeString,
@@ -4663,7 +5108,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             LlmSanitizeRequestContext::default(),
         )
         .unwrap(),
-        Some(request)
+        Some(request.clone())
     );
 
     let request = LlmRequest {
@@ -4678,7 +5123,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             LlmSanitizeRequestContext::default(),
         )
         .unwrap(),
-        Some(request)
+        Some(request.clone())
     );
 
     let response = json!({"message": "alias"});
@@ -4690,7 +5135,169 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             LlmSanitizeResponseContext::default(),
         )
         .unwrap(),
-        Some(response)
+        Some(response.clone())
+    );
+
+    assert!(
+        call_llm_sanitize_request_callback(
+            llm_request_error,
+            ptr::null_mut(),
+            &request,
+            LlmSanitizeRequestContext::default(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("LLM request sanitizer failed")
+    );
+    assert_eq!(
+        call_llm_sanitize_request_callback(
+            noop_llm_request,
+            ptr::null_mut(),
+            &request,
+            LlmSanitizeRequestContext::default(),
+        )
+        .unwrap(),
+        None
+    );
+    assert!(
+        call_llm_sanitize_response_callback(
+            llm_response_error,
+            ptr::null_mut(),
+            &response,
+            LlmSanitizeResponseContext::default(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("LLM response sanitizer failed")
+    );
+    assert_eq!(
+        call_llm_sanitize_response_callback(
+            noop_json,
+            ptr::null_mut(),
+            &response,
+            LlmSanitizeResponseContext::default(),
+        )
+        .unwrap(),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native.callback-errors".into(),
+        relay_compat: "^0.7".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({"model": "test"}),
+    };
+
+    let tool_conditional = wrap_tool_conditional_fn(
+        Arc::clone(&instance),
+        tool_conditional_error,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        tool_conditional("tool".into(), json!({}))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("tool conditional failed")
+    );
+    let tool_conditional = wrap_tool_conditional_fn(
+        Arc::clone(&instance),
+        tool_conditional_reason,
+        ptr::null_mut(),
+        None,
+    );
+    assert_eq!(
+        tool_conditional("tool".into(), json!({})).await.unwrap(),
+        Some("blocked by tool policy".into())
+    );
+
+    let tool_execution = wrap_tool_execution_fn(
+        Arc::clone(&instance),
+        tool_execution_error,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        tool_execution("tool", json!({}), tool_next(Ok(Json::Null)))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("tool execution failed")
+    );
+
+    let llm_conditional = wrap_llm_conditional_fn(
+        Arc::clone(&instance),
+        llm_conditional_error,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        llm_conditional(request.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("LLM conditional failed")
+    );
+    let llm_conditional = wrap_llm_conditional_fn(
+        Arc::clone(&instance),
+        llm_conditional_reason,
+        ptr::null_mut(),
+        None,
+    );
+    assert_eq!(
+        llm_conditional(request.clone()).await.unwrap(),
+        Some("blocked by LLM policy".into())
+    );
+
+    let request_intercept = wrap_llm_request_intercept_fn(
+        Arc::clone(&instance),
+        llm_request_intercept_error,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        request_intercept("model".into(), request.clone(), None)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("LLM request intercept failed")
+    );
+
+    let llm_execution = wrap_llm_execution_fn(
+        Arc::clone(&instance),
+        llm_execution_error,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        llm_execution("model", request.clone(), llm_next(Ok(Json::Null)))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("LLM execution failed")
+    );
+
+    let stream_next: LlmStreamExecutionNextFn =
+        Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) }));
+    let llm_stream_execution =
+        wrap_llm_stream_execution_fn(instance, llm_stream_execution_error, ptr::null_mut(), None);
+    assert!(
+        llm_stream_execution("model", request, stream_next)
+            .await
+            .err()
+            .expect("native stream callback should fail")
+            .to_string()
+            .contains("LLM stream execution failed")
     );
 }
 
@@ -4914,6 +5521,16 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         NemoRelayStatus::NotFound
     );
     unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
+
+    let panicking_next: ToolExecutionNextFn =
+        Arc::new(|_| Box::pin(async { panic!("tool next panic") }));
+    let next = Box::into_raw(Box::new(panicking_next)) as *mut c_void;
+    assert_eq!(
+        unsafe { native_tool_next(args, next, &mut out) },
+        NemoRelayStatus::Internal
+    );
+    assert_last_error_contains("native tool next panicked");
+    unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
     unsafe { native_string_free(args) };
 
     let request = LlmRequest {
@@ -4941,6 +5558,16 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         unsafe { native_llm_next(request_json, next, &mut out) },
         NemoRelayStatus::GuardrailRejected
     );
+    unsafe { drop(Box::from_raw(next as *mut LlmExecutionNextFn)) };
+
+    let panicking_next: LlmExecutionNextFn =
+        Arc::new(|_| Box::pin(async { panic!("LLM next panic") }));
+    let next = Box::into_raw(Box::new(panicking_next)) as *mut c_void;
+    assert_eq!(
+        unsafe { native_llm_next(request_json, next, &mut out) },
+        NemoRelayStatus::Internal
+    );
+    assert_last_error_contains("native LLM next panicked");
     unsafe {
         drop(Box::from_raw(next as *mut LlmExecutionNextFn));
         native_string_free(request_json);
@@ -4953,7 +5580,9 @@ enum NativeStreamItem {
     InvalidJson,
     Null,
     Error(NemoRelayStatus),
+    ErrorWithJson(NemoRelayStatus),
     End,
+    EndWithJson,
 }
 
 struct TestNativeStream {
@@ -4976,7 +5605,15 @@ unsafe extern "C" fn test_native_stream_poll(
         }
         NativeStreamItem::Null => NemoRelayStatus::Ok,
         NativeStreamItem::Error(status) => status,
+        NativeStreamItem::ErrorWithJson(status) => {
+            unsafe { *out_json = native_string(r#"{"discarded":true}"#) };
+            status
+        }
         NativeStreamItem::End => NemoRelayStatus::StreamEnd,
+        NativeStreamItem::EndWithJson => {
+            unsafe { *out_json = native_string(r#"{"discarded":true}"#) };
+            NemoRelayStatus::StreamEnd
+        }
     }
 }
 
@@ -5042,6 +5679,7 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
         NativeStreamItem::InvalidJson,
         NativeStreamItem::Null,
         NativeStreamItem::Error(NemoRelayStatus::InvalidArg),
+        NativeStreamItem::ErrorWithJson(NemoRelayStatus::InvalidArg),
     ] {
         let (raw, _, drop_count) = test_native_stream([item]);
         let mut stream = native_stream_to_relay_stream(raw, None, None).unwrap();
@@ -5059,6 +5697,20 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
     raw.next = None;
     assert!(NativeRelayLlmStream::from_raw(raw, None, None).is_err());
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
+
+    let (raw, _, drop_count) = test_native_stream([NativeStreamItem::EndWithJson]);
+    let mut stream = native_stream_to_relay_stream(raw, None, None).unwrap();
+    assert!(stream.next().await.is_none());
+    assert_eq!(drop_count.load(Ordering::SeqCst), 1);
+
+    let mut invalid = NativeRelayLlmStream {
+        raw: NemoRelayNativeLlmStreamV1::default(),
+        finished: false,
+        _next_ctx: None,
+        _callback_user_data: None,
+    };
+    assert!(invalid.next().await.unwrap().is_err());
+    assert!(invalid.next().await.is_none());
 }
 
 #[tokio::test]
@@ -5094,6 +5746,10 @@ async fn relay_stream_adapter_covers_poll_end_error_and_cancel() {
         NemoRelayStatus::StreamEnd
     );
     assert_eq!(
+        unsafe { poll(raw.user_data, &mut out) },
+        NemoRelayStatus::StreamEnd
+    );
+    assert_eq!(
         unsafe { cancel_relay_llm_stream(raw.user_data) },
         NemoRelayStatus::Ok
     );
@@ -5117,6 +5773,10 @@ async fn relay_stream_adapter_covers_poll_end_error_and_cancel() {
         let _guard = mutex.lock().unwrap();
         panic!("poison native stream lock");
     }));
+    assert_eq!(
+        unsafe { raw.next.unwrap()(raw.user_data, &mut out) },
+        NemoRelayStatus::Internal
+    );
     assert_eq!(
         unsafe { cancel_relay_llm_stream(raw.user_data) },
         NemoRelayStatus::Internal
@@ -5165,6 +5825,16 @@ fn native_stream_continuation_covers_success_and_error() {
         unsafe { native_llm_stream_next(request_json, next_ctx, &mut raw) },
         NemoRelayStatus::NotFound
     );
+    unsafe { drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn)) };
+
+    let next: LlmStreamExecutionNextFn =
+        Arc::new(|_| Box::pin(async { panic!("stream next panic") }));
+    let next_ctx = Box::into_raw(Box::new(next)) as *mut c_void;
+    assert_eq!(
+        unsafe { native_llm_stream_next(request_json, next_ctx, &mut raw) },
+        NemoRelayStatus::Internal
+    );
+    assert_last_error_contains("native LLM stream next panicked");
     unsafe {
         drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn));
         native_string_free(request_json);
