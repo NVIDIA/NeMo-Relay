@@ -174,6 +174,57 @@ restored. Continuations run on Relay's existing Tokio runtime; Relay does not
 create an OS thread per continuation. Separate callback invocations can run
 concurrently and have no stable OS-thread affinity.
 
+Rust authors use the safe SDK facade. Buffered callbacks receive
+`LlmContinuationV2`; streaming callbacks receive `LlmStreamContinuationV2`
+and return either a boxed Rust stream or an explicit pass-through request:
+
+```rust
+use futures::StreamExt;
+use nemo_relay_plugin::{
+    LlmContinuationInvocationV2, LlmStreamExecutionOutcomeV2,
+};
+
+let buffered_target = target.clone();
+context.register_async_llm_execution_v2("route", 0, move |_name, request, next| {
+    let target = buffered_target.clone();
+    async move {
+        next.call(LlmContinuationInvocationV2 { request, target })
+            .await
+            .map_err(|failure| format!("{failure:?}"))
+    }
+})?;
+
+let stream_target = target.clone();
+context.register_async_llm_stream_execution_v2(
+    "route-stream",
+    0,
+    move |_name, request, next| {
+        let target = stream_target.clone();
+        async move {
+            let provider = next
+                .open_stream(LlmContinuationInvocationV2 { request, target })
+                .await
+                .map_err(|failure| format!("{failure:?}"))?;
+            let stream = provider.map(|item| {
+                item.map_err(|failure| format!("{failure:?}"))
+            });
+            Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream)))
+        }
+    },
+)?;
+```
+
+Use `LlmContinuationV2::call_passthrough` for an unmanaged buffered call. For
+an unmanaged stream, return
+`LlmStreamExecutionOutcomeV2::Passthrough(request)`. Relay connects the
+original downstream stream directly to the caller through its bounded queue,
+so pass-through events do not cross the plugin boundary.
+
+The SDK drives safe callback futures and returned streams to completion on the
+blocking callback lane. It does not enter Relay's Tokio runtime on that thread.
+`LlmProviderStreamV2` implements `Stream`, enforces one pending pull, and
+cancels unfinished provider production on drop.
+
 Export a v2-only plugin with:
 
 ```rust
@@ -184,8 +235,7 @@ nemo_relay_plugin::nemo_relay_plugin_v2!(
 ```
 
 Set `compat.native_api = "2"` in its manifest. Use
-`PluginContext::host_api_v4` and the raw v2 LLM registration methods when the
-plugin needs the typed dispatch contract.
+the safe registration methods above for normal Rust plugins.
 
 ## Native C ABI Table Versioning
 
@@ -202,6 +252,14 @@ extern "C" fn nemo_relay_register_plugin(
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus
 ```
+
+`PluginContext::host_api_v4` and the `_raw` v2 registration methods are the
+advanced escape hatch for raw ABI consumers and non-Rust bindings. They expose
+opaque callbacks and handles intentionally: the caller must own host strings,
+completion settlement, stream backpressure, cancellation, panic fencing, and
+every release operation. The safe Rust facade is implemented on top of these
+same C functions; Rust futures, streams, trait objects, and allocator-owned
+strings never cross the shared-library boundary.
 
 The V3 host table used by manifest native API v1 retains the frozen legacy prefix and appends a
 completion-based asynchronous middleware extension. An entry that rejects the

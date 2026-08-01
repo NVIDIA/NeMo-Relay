@@ -42,23 +42,24 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **`PluginContext`**: Component-scoped registration APIs for middleware and
   subscribers.
 - **`PluginRuntime`**: Typed helpers for Relay-owned scopes and marks.
-- **Stable native ABI v3**: C-compatible host and plugin tables behind the
-  safe Rust authoring interface. The v3 tables preserve a v2-compatible field
-  prefix, but native plugins must still be rebuilt for v3 as described in the
+- **Versioned native C ABI**: C-compatible host and plugin tables behind the
+  safe Rust authoring interface. Manifest native API v1 uses the V3 table and
+  native API v2 uses its append-only V4 extension. Plugins must still be
+  rebuilt for V3 as described in the
   [0.7 migration guide](https://docs.nvidia.com/nemo/relay/reference/migration-guides#upgrade-to-nemo-relay-07).
 - **Raw async middleware**: Completion-based raw registrations for plugins
   that need asynchronous guardrails, intercepts, or event sanitizers. Typed
   Rust callbacks remain synchronous convenience APIs.
-- **Native API v2 targeted LLM continuations**: Register v2-only execution
-  callbacks that send an explicit provider target through Relay and receive
-  buffered JSON, structured failures, or a bounded host-owned provider stream.
+- **Safe native API v2 LLM continuations**: Register future-returning Rust
+  callbacks, dispatch explicit provider targets, and consume provider events
+  as Rust streams without writing C callback or handle-management code.
 
 ## Installation
 
 Add the SDK to a Rust dynamic-plugin project:
 
 ```bash
-cargo add nemo-relay-plugin serde_json
+cargo add nemo-relay-plugin futures serde_json
 ```
 
 Configure the library as a dynamic library:
@@ -110,9 +111,47 @@ nemo_relay_plugin::nemo_relay_plugin_v2!(
 );
 ```
 
-Set `compat.native_api = "2"` in `relay-plugin.toml`. During registration,
-`PluginContext::host_api_v4` exposes the C-safe targeted LLM continuation table
-and the raw v2 registration helpers.
+Set `compat.native_api = "2"` in `relay-plugin.toml`. Rust plugins normally use
+`PluginContext::register_async_llm_execution_v2` and
+`PluginContext::register_async_llm_stream_execution_v2`. The SDK owns the C
+callback trampolines, host strings, JSON conversion, panic isolation, output
+settlement, cancellation, and handle release.
+
+```rust
+use futures::StreamExt;
+use nemo_relay_plugin::{
+    LlmContinuationInvocationV2, LlmContinuationTargetV2,
+    LlmStreamExecutionOutcomeV2,
+};
+
+let buffered_target = target.clone();
+ctx.register_async_llm_execution_v2("route", 0, move |_name, request, next| {
+    let target = buffered_target.clone();
+    async move {
+        next.call(LlmContinuationInvocationV2 { request, target })
+            .await
+            .map_err(|failure| format!("{failure:?}"))
+    }
+})?;
+
+ctx.register_async_llm_stream_execution_v2("route-stream", 0, move |_name, request, next| {
+    let target = target.clone();
+    async move {
+        let provider = next
+            .open_stream(LlmContinuationInvocationV2 { request, target })
+            .await
+            .map_err(|failure| format!("{failure:?}"))?;
+        let stream = provider.map(|item| item.map_err(|failure| format!("{failure:?}")));
+        Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream)))
+    }
+})?;
+```
+
+For an unmanaged buffered request, call
+`LlmContinuationV2::call_passthrough`. For an unmanaged streaming request,
+return `LlmStreamExecutionOutcomeV2::Passthrough(request)`. Relay then pumps
+the original downstream stream directly through its bounded queue; provider
+events do not cross into the plugin merely to be forwarded.
 
 The plugin provides JSON plus an HTTP method, absolute target URL, protocol
 route, and explicit target headers. Relay binds that transport target to the
@@ -126,10 +165,16 @@ execution intercepts run. This contract is host-independent: it works through
 the CLI gateway and through SDK-embedded Relay hosts that call the managed LLM
 execution APIs directly.
 
-Streaming dispatch returns an opaque host-owned stream; request one JSON event
-at a time, then cancel and release it exactly once. No Rust future, trait
-object, `serde_json::Value`, or allocator-owned Rust string crosses the ABI
-boundary.
+Streaming dispatch returns `LlmProviderStreamV2`, which implements Rust
+`Stream` and cancels unfinished provider work on drop. Safe callback futures
+and returned streams run to completion on Relay's reusable blocking callback
+lane, outside an entered Tokio runtime. No Rust future, trait object,
+`serde_json::Value`, or allocator-owned Rust string crosses the C ABI boundary.
+
+The raw `PluginContext::host_api_v4` table and `_raw` v2 registration methods
+remain available for advanced ABI consumers and non-Rust bindings. Code using
+them is responsible for every callback lifetime, host string, completion,
+stream settlement, cancellation, and release operation.
 
 The manifest API number is distinct from the internal host-table ABI number:
 native API v1 negotiates the V3 host table and native API v2 negotiates V4.
