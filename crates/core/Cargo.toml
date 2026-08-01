@@ -84,8 +84,6 @@ spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
 futures = "0.3"
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["trace", "gen-tonic-messages"] }
-prost = "0.14"
 serde_json = "1"
 object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
 tempfile = "3"
