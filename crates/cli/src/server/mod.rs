@@ -412,68 +412,10 @@ async fn finish_server_shutdown(
             error_kind = "io";
             "Gateway server failed"
         );
-        if let Err(close_error) = close_result {
-            log::error!(
-                target: "nemo_relay.server",
-                event = "server_teardown_failed",
-                instance_id,
-                component = "sessions",
-                error_kind = close_error.log_kind();
-                "Gateway server teardown failed"
-            );
-        }
-        if let Err(flush_error) = flush_result {
-            log::error!(
-                target: "nemo_relay.server",
-                event = "server_teardown_failed",
-                instance_id,
-                component = "subscribers",
-                error_kind = flush_error.log_kind();
-                "Gateway server teardown failed"
-            );
-        }
-        if let Err(clear_error) = clear_result {
-            log::error!(
-                target: "nemo_relay.server",
-                event = "server_teardown_failed",
-                instance_id,
-                component = "plugins",
-                error_kind = clear_error.log_kind();
-                "Gateway server teardown failed"
-            );
-        }
+        log_server_teardown_results(&close_result, &flush_result, &clear_result, instance_id);
         return Err(serve_error.into());
     }
-    if let Err(error) = &close_result {
-        log::error!(
-            target: "nemo_relay.server",
-            event = "server_teardown_failed",
-            instance_id,
-            component = "sessions",
-            error_kind = error.log_kind();
-            "Gateway server teardown failed"
-        );
-    }
-    if let Err(error) = &flush_result {
-        log::error!(
-            target: "nemo_relay.server",
-            event = "server_teardown_failed",
-            instance_id,
-            component = "subscribers",
-            error_kind = error.log_kind();
-            "Gateway server teardown failed"
-        );
-    }
-    if let Err(error) = &clear_result {
-        log::error!(
-            target: "nemo_relay.server",
-            event = "server_teardown_failed",
-            instance_id,
-            component = "plugins",
-            error_kind = error.log_kind();
-            "Gateway server teardown failed"
-        );
-    }
+    log_server_teardown_results(&close_result, &flush_result, &clear_result, instance_id);
     close_result?;
     flush_result?;
     clear_result?;
@@ -484,6 +426,31 @@ async fn finish_server_shutdown(
         "Gateway server stopped"
     );
     Ok(())
+}
+
+fn log_server_teardown_results(
+    close_result: &Result<(), CliError>,
+    flush_result: &Result<(), CliError>,
+    clear_result: &Result<(), CliError>,
+    instance_id: &str,
+) {
+    for (component, result) in [
+        ("sessions", close_result),
+        ("subscribers", flush_result),
+        ("plugins", clear_result),
+    ] {
+        let Err(error) = result else {
+            continue;
+        };
+        log::error!(
+            target: "nemo_relay.server",
+            event = "server_teardown_failed",
+            instance_id,
+            component,
+            error_kind = error.log_kind();
+            "Gateway server teardown failed"
+        );
+    }
 }
 
 async fn shutdown_signal() {
