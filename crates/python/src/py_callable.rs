@@ -1777,15 +1777,15 @@ fn call_event_sanitizer(
     py_event: Py<PyAny>,
     py_fields: Py<PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    let result = match (invocation_context, !loop_affine) {
-        (Some(context), true) => {
+    let result = match (invocation_context, loop_affine) {
+        (Some(context), false) => {
             context.call_method1("run", (invoke, callback.bind(py), py_event, py_fields))
         }
-        (None, true) => invoke.call1((callback.bind(py), py_event, py_fields)),
-        (Some(context), false) => {
+        (None, false) => invoke.call1((callback.bind(py), py_event, py_fields)),
+        (Some(context), true) => {
             context.call_method1("run", (callback.bind(py), py_event, py_fields))
         }
-        (None, false) => callback.bind(py).call1((py_event, py_fields)),
+        (None, true) => callback.bind(py).call1((py_event, py_fields)),
     }?;
     Ok(result.unbind())
 }

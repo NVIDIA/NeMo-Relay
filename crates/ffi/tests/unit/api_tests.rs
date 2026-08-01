@@ -46,6 +46,7 @@ static COLLECTED_CHUNKS: OnceLock<Mutex<Vec<Json>>> = OnceLock::new();
 static FINALIZER_CALLS: OnceLock<Mutex<usize>> = OnceLock::new();
 static PLUGIN_FREES: OnceLock<Mutex<usize>> = OnceLock::new();
 
+#[track_caller]
 fn assert_native_status(actual: NemoRelayStatus, expected: NemoRelayStatus) {
     assert_eq!(actual, expected);
 }

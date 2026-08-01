@@ -2265,7 +2265,10 @@ async fn forward_native_async_next_stream(
         match item {
             Ok(chunk) => {
                 let Some(chunk) = native_string_from_json(&chunk) else {
-                    break;
+                    callback_guard.fail(
+                        "failed to serialize or allocate native async stream continuation chunk",
+                    );
+                    return;
                 };
                 let keep_going = unsafe {
                     (callback_guard.cb)(

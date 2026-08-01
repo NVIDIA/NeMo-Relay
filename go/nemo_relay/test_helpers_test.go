@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+// runTestInIsolatedWorkingDirectory changes the process-wide working directory,
+// so callers must not use it with t.Parallel().
 func runTestInIsolatedWorkingDirectory(t *testing.T, fn func(*testing.T)) {
 	t.Helper()
 

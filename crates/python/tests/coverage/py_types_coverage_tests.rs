@@ -1984,17 +1984,21 @@ def run(types):
         for key in [
             "chat_tool_calls_is_none",
             "chat_usage_is_none",
-            "chat_api_specific_is_none",
             "responses_message_is_none",
             "responses_tool_calls_is_none",
             "responses_usage_is_none",
-            "responses_api_specific_is_none",
             "anthropic_message_is_none",
             "anthropic_tool_calls_is_none",
-            "anthropic_api_specific_is_none",
             "anthropic_usage_is_none",
         ] {
-            assert!(result_json[key].as_bool().is_some(), "{key}");
+            assert_eq!(result_json[key].as_bool(), Some(true), "{key}");
+        }
+        for key in [
+            "chat_api_specific_is_none",
+            "responses_api_specific_is_none",
+            "anthropic_api_specific_is_none",
+        ] {
+            assert_eq!(result_json[key].as_bool(), Some(false), "{key}");
         }
     });
 }

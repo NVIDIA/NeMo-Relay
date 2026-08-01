@@ -13,8 +13,10 @@ use std::time::Duration;
 use nemo_relay_plugin::{
     NemoRelayNativeLlmNextFn, NemoRelayNativeLlmSanitizeRequestContext,
     NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamNextFn,
-    NemoRelayNativePluginRegisterFn, NemoRelayNativePluginValidateFn, NemoRelayNativeToolNextFn,
+    NemoRelayNativeToolNextFn,
 };
+#[cfg(unix)]
+use nemo_relay_plugin::{NemoRelayNativePluginRegisterFn, NemoRelayNativePluginValidateFn};
 use serde_json::json;
 
 use crate::api::optimization::{
@@ -241,6 +243,7 @@ fn native_async_entrypoints_reject_null_handles() {
     }
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn native_test_validate_invalid_json(
     _user_data: *mut c_void,
     _config: *const NemoRelayNativeString,
@@ -250,6 +253,7 @@ unsafe extern "C" fn native_test_validate_invalid_json(
     NemoRelayStatus::Ok
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn native_test_validate_error(
     _user_data: *mut c_void,
     _config: *const NemoRelayNativeString,
@@ -260,6 +264,7 @@ unsafe extern "C" fn native_test_validate_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn native_test_validate_empty(
     _user_data: *mut c_void,
     _config: *const NemoRelayNativeString,
@@ -276,6 +281,7 @@ unsafe extern "C" fn native_test_register_ok(
     NemoRelayStatus::Ok
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn native_test_register_error(
     _user_data: *mut c_void,
     _config: *const NemoRelayNativeString,
@@ -3827,6 +3833,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     assert_registration_entrypoints_accept_valid_names(ctx);
 }
 
+#[cfg(unix)]
 fn assert_registration_entrypoints_reject_invalid_names(ctx: *mut NemoRelayNativePluginContext) {
     let invalid_name = Box::into_raw(Box::new(NativeHostString(vec![0xff]))).cast();
     unsafe {
@@ -3967,6 +3974,7 @@ fn assert_registration_entrypoints_reject_invalid_names(ctx: *mut NemoRelayNativ
     }
 }
 
+#[cfg(unix)]
 fn assert_registration_entrypoints_accept_valid_names(ctx: *mut NemoRelayNativePluginContext) {
     unsafe {
         let name = native_string("registered");

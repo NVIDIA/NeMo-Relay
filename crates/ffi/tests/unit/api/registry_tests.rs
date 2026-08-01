@@ -97,7 +97,7 @@ fn otlp_content_length(headers: &[u8]) -> usize {
                     .then(|| value.trim().parse::<usize>().unwrap())
             })
         })
-        .expect("OTLP request must include content-length")
+        .expect("OTLP request must include content-length (chunked bodies are not supported)")
 }
 
 unsafe extern "C" fn event_sanitize_cb(
