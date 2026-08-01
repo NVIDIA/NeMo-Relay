@@ -525,7 +525,7 @@ fn test_openinference_typed_otel_config_rejects_invalid_inputs() {
 }
 
 #[test]
-fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
+fn test_attribute_wrappers_cover_remaining_bitwise_methods() {
     let _python = crate::test_support::init_python_test();
 
     let scope_or = PyScopeAttributes::new(PyScopeAttributes::PARALLEL)
@@ -550,7 +550,11 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
     );
     let llm_and = llm_or.__and__(&PyLLMAttributes::new(PyLLMAttributes::STREAMING));
     assert_eq!(llm_and.value(), PyLLMAttributes::STREAMING);
+}
 
+#[test]
+fn test_request_and_handle_wrappers_cover_remaining_methods() {
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         fn assert_remaining_handle_methods(py: Python<'_>) {
             let stack = PyScopeStack {
@@ -616,7 +620,13 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
             assert_eq!(request.__repr__(), "LLMRequest(...)");
         }
         assert_remaining_handle_methods(py);
+    });
+}
 
+#[test]
+fn test_event_wrappers_cover_remaining_methods() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
         fn assert_remaining_event_methods(py: Python<'_>) {
             let parent_uuid = Uuid::now_v7();
             let annotated_request = AnnotatedLLMRequest {
@@ -823,7 +833,13 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
             assert_eq!(mark.name(), "mark");
         }
         assert_remaining_event_methods(py);
+    });
+}
 
+#[test]
+fn test_llm_stream_wrapper_covers_remaining_methods() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
         fn assert_llm_stream_methods(py: Python<'_>) {
             with_event_loop(py, |event_loop| {
                 let runner = PyModule::from_code(
