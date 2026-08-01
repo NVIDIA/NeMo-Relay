@@ -131,7 +131,7 @@ fn response(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
 }
 
 fn target(url: String, headers: BTreeMap<String, String>) -> LlmDispatchTargetContext {
-    LlmDispatchTargetContext::try_new("POST".into(), url, "openai_chat".into(), headers)
+    LlmDispatchTargetContext::try_new("POST".into(), url, headers)
         .expect("test target should be valid")
 }
 
@@ -367,15 +367,7 @@ fn target_validation_rejects_unsafe_transport_inputs() {
             ]),
         ),
     ] {
-        assert!(
-            LlmDispatchTargetContext::try_new(
-                method.into(),
-                url.into(),
-                "openai_chat".into(),
-                headers,
-            )
-            .is_err()
-        );
+        assert!(LlmDispatchTargetContext::try_new(method.into(), url.into(), headers,).is_err());
     }
 }
 
@@ -384,7 +376,6 @@ fn target_validation_reports_malformed_method_and_headers() {
     let error = LlmDispatchTargetContext::try_new(
         "P OST".into(),
         "https://provider.example/v1".into(),
-        "openai_chat".into(),
         BTreeMap::new(),
     )
     .expect_err("method token containing a space should be rejected");
@@ -396,7 +387,6 @@ fn target_validation_reports_malformed_method_and_headers() {
     let error = LlmDispatchTargetContext::try_new(
         "POST".into(),
         "https://provider.example/v1".into(),
-        "openai_chat".into(),
         BTreeMap::from([("bad header".into(), "value".into())]),
     )
     .expect_err("header name containing a space should be rejected");
@@ -411,7 +401,6 @@ fn target_validation_reports_malformed_method_and_headers() {
     let error = LlmDispatchTargetContext::try_new(
         "POST".into(),
         "https://provider.example/v1".into(),
-        "openai_chat".into(),
         BTreeMap::from([("x-target".into(), "line one\nline two".into())]),
     )
     .expect_err("header value containing a newline should be rejected");

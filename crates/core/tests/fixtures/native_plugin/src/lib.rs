@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::StreamExt;
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
-    Json, LlmContinuationInvocationV2, LlmContinuationRouteV2, LlmContinuationTargetV2,
-    LlmJsonAsyncStreamV2, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome,
+    Json, LlmContinuationInvocationV2, LlmContinuationTargetV2, LlmJsonAsyncStreamV2,
+    LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome,
     LlmStreamExecutionOutcomeV2, NativePlugin, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind,
     NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
@@ -380,7 +380,6 @@ fn targeted_fixture_invocation(
         target: LlmContinuationTargetV2 {
             method: "POST".into(),
             url,
-            route: LlmContinuationRouteV2::OpenaiChat,
             headers: std::collections::BTreeMap::from([(
                 "authorization".into(),
                 "Bearer fixture-target".into(),

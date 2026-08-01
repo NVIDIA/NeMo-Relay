@@ -2559,7 +2559,6 @@ fn prepare_llm_continuation_invocation(
     let target = LlmDispatchTargetContext::try_new(
         invocation.target.method,
         invocation.target.url,
-        invocation.target.route.as_str().into(),
         invocation.target.headers,
     )
     .map_err(|error| {

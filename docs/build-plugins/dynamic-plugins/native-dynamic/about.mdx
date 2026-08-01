@@ -133,10 +133,10 @@ and doctor output report the selected manifest API.
 Native API v2 is intended for in-process orchestrators that decide which LLM
 call to make while Relay still owns provider transport. The plugin supplies a
 replacement `LlmRequest` and a target containing the HTTP method, absolute
-HTTP(S) URL, provider route (`openai_chat`, `openai_responses`, or
-`anthropic_messages`), and explicit outbound headers. Target headers may
-contain provider credentials. Relay validates and transports them but never
-places their values in diagnostics or observability.
+HTTP(S) URL, and explicit outbound headers. Target headers may contain provider
+credentials. Relay validates and transports them but never places their values
+in diagnostics or observability. Protocol selection and request translation
+remain plugin concerns; Relay sends the supplied JSON to the selected target.
 
 The typed target is invocation-scoped continuation context. It is not encoded
 into `LlmRequest.headers`, and target credentials are not visible to downstream
@@ -156,11 +156,10 @@ host that calls `llm_call_execute` or `llm_stream_call_execute` directly.
 Remaining LLM execution intercepts still run before core dispatches the target;
 the host's original provider callback is used only when no target is bound.
 
-HTTP retryability is derived by the SDK from status alone: `408`, `425`, `429`,
-`500`, `502`, `503`, and `504` are retryable. Transport and timeout failures
-are retryable; other non-HTTP failures are not. Relay does not inspect provider
-bodies to infer context-window or model-availability errors, so ordinary `400`
-and `404` responses do not trigger automatic reselection.
+Relay reports neutral HTTP status and non-HTTP failure data. Each plugin owns
+its retry, reselection, and fallback policy; the SDK does not classify failures
+as retryable. Relay does not inspect provider bodies to infer context-window or
+model-availability errors.
 
 Targeted dispatch does not follow redirects. Relay rejects embedded URL
 credentials, hop-by-hop headers, host-owned framing headers, and

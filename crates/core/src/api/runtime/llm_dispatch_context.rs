@@ -39,7 +39,6 @@ tokio::task_local! {
 pub struct LlmDispatchTargetContext {
     method: Method,
     url: Url,
-    route: String,
     headers: HeaderMap,
 }
 
@@ -48,7 +47,6 @@ impl LlmDispatchTargetContext {
     pub(crate) fn try_new(
         method: String,
         url: String,
-        route: String,
         headers: BTreeMap<String, String>,
     ) -> Result<Self> {
         let method = Method::from_bytes(method.as_bytes()).map_err(|_| {
@@ -97,7 +95,6 @@ impl LlmDispatchTargetContext {
         Ok(Self {
             method,
             url,
-            route,
             headers: validated_headers,
         })
     }
@@ -114,11 +111,6 @@ impl LlmDispatchTargetContext {
     #[must_use]
     pub(crate) fn url(&self) -> &Url {
         &self.url
-    }
-
-    #[cfg(test)]
-    pub(crate) fn route(&self) -> &str {
-        &self.route
     }
 
     /// Explicit provider headers selected for this invocation.
@@ -138,7 +130,6 @@ impl fmt::Debug for LlmDispatchTargetContext {
             .debug_struct("LlmDispatchTargetContext")
             .field("method", &self.method)
             .field("url", &redacted_url)
-            .field("route", &self.route)
             .field(
                 "header_names",
                 &self

@@ -919,29 +919,6 @@ pub type NemoRelayNativeAsyncNextResultCb = unsafe extern "C" fn(
     error: *const NemoRelayNativeString,
 );
 
-/// Provider protocol selected for one targeted LLM continuation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LlmContinuationRouteV2 {
-    /// OpenAI Chat Completions.
-    OpenaiChat,
-    /// OpenAI Responses.
-    OpenaiResponses,
-    /// Anthropic Messages.
-    AnthropicMessages,
-}
-
-impl LlmContinuationRouteV2 {
-    /// Returns the stable Relay gateway route identifier.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenaiChat => "openai_chat",
-            Self::OpenaiResponses => "openai_responses",
-            Self::AnthropicMessages => "anthropic_messages",
-        }
-    }
-}
-
 /// Explicit provider target for one native API v2 LLM continuation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct LlmContinuationTargetV2 {
@@ -949,8 +926,6 @@ pub struct LlmContinuationTargetV2 {
     pub method: String,
     /// Absolute HTTP(S) provider URL including the selected endpoint.
     pub url: String,
-    /// Provider protocol used by the selected endpoint.
-    pub route: LlmContinuationRouteV2,
     /// Explicit outbound provider headers, including target credentials.
     ///
     /// Relay validates and transports these headers but never records their
@@ -1019,28 +994,6 @@ pub enum LlmContinuationFailureV2 {
         /// Bounded non-HTTP failure details.
         failure: LlmNonHttpFailureV2,
     },
-}
-
-impl LlmContinuationFailureV2 {
-    /// Return Relay's provider-neutral retry disposition.
-    ///
-    /// The disposition is derived rather than serialized so the wire contract
-    /// contains only HTTP semantics and the minimal non-HTTP failure kind.
-    pub const fn is_retryable(&self) -> bool {
-        match self {
-            Self::Http { failure } => is_retryable_http_status_v2(failure.status),
-            Self::NonHttp { failure } => matches!(
-                failure.kind,
-                LlmNonHttpFailureKindV2::Transport | LlmNonHttpFailureKindV2::Timeout
-            ),
-        }
-    }
-}
-
-/// Return Relay's provider-neutral retry disposition for an HTTP status.
-#[must_use]
-pub const fn is_retryable_http_status_v2(status: u16) -> bool {
-    matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
 }
 
 /// Unary LLM continuation outcome delivered through native API v2.

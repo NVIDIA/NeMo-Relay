@@ -153,12 +153,12 @@ return `LlmStreamExecutionOutcomeV2::Passthrough(request)`. Relay then pumps
 the original downstream stream directly through its bounded queue; provider
 events do not cross into the plugin merely to be forwarded.
 
-The plugin provides JSON plus an HTTP method, absolute target URL, protocol
-route, and explicit target headers. Relay binds that transport target to the
-current LLM continuation without storing it in `LlmRequest.headers`. Successful
-calls return provider JSON. Provider rejections return an HTTP status, bounded
-body, and safe response headers; failures without an HTTP response use a small
-transport-oriented kind.
+The plugin provides JSON plus an HTTP method, absolute target URL, and explicit
+target headers. Relay binds that transport target to the current LLM
+continuation without storing it in `LlmRequest.headers`. Successful calls return
+provider JSON. Provider rejections return an HTTP status, bounded body, and safe
+response headers; failures without an HTTP response use a small
+transport-oriented kind. The plugin owns its retry and fallback policy.
 
 Relay core performs the terminal targeted HTTP request after the remaining LLM
 execution intercepts run. This contract is host-independent: it works through

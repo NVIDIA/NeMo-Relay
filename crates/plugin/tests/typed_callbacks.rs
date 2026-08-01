@@ -17,13 +17,12 @@ use futures::{StreamExt, stream};
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
     Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmContinuationFailureV2,
-    LlmContinuationInvocationV2, LlmContinuationOutcomeV2, LlmContinuationRouteV2,
-    LlmContinuationStreamEventV2, LlmContinuationTargetV2, LlmContinuationV2, LlmHttpFailureV2,
-    LlmJsonStream, LlmNext, LlmNonHttpFailureKindV2, LlmNonHttpFailureV2, LlmRequest,
-    LlmRequestInterceptOutcome, LlmStream, LlmStreamContinuationV2, LlmStreamExecutionOutcomeV2,
-    LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION,
-    NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS, NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
+    LlmContinuationInvocationV2, LlmContinuationOutcomeV2, LlmContinuationStreamEventV2,
+    LlmContinuationTargetV2, LlmContinuationV2, LlmHttpFailureV2, LlmJsonStream, LlmNext,
+    LlmNonHttpFailureKindV2, LlmNonHttpFailureV2, LlmRequest, LlmRequestInterceptOutcome,
+    LlmStream, LlmStreamContinuationV2, LlmStreamExecutionOutcomeV2, LlmStreamNext,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS,
+    NativePlugin, NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
     NemoRelayNativeAsyncLlmResultCbV2, NemoRelayNativeAsyncLlmStreamForwardCbV2,
     NemoRelayNativeAsyncLlmStreamNextCbV2, NemoRelayNativeAsyncLlmStreamOpenCbV2,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
@@ -43,68 +42,6 @@ use nemo_relay_plugin::{
     PluginContext, PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
-
-#[test]
-fn native_api_v2_retry_policy_is_derived_from_http_semantics() {
-    for status in [408, 425, 429, 500, 502, 503, 504] {
-        assert!(
-            LlmContinuationFailureV2::Http {
-                failure: LlmHttpFailureV2 {
-                    status,
-                    body: String::new(),
-                    headers: Default::default(),
-                },
-            }
-            .is_retryable(),
-            "status={status}"
-        );
-    }
-    for status in [400, 401, 404, 409, 422, 501] {
-        assert!(
-            !LlmContinuationFailureV2::Http {
-                failure: LlmHttpFailureV2 {
-                    status,
-                    body: String::new(),
-                    headers: Default::default(),
-                },
-            }
-            .is_retryable(),
-            "status={status}"
-        );
-    }
-    for kind in [
-        LlmNonHttpFailureKindV2::Transport,
-        LlmNonHttpFailureKindV2::Timeout,
-    ] {
-        assert!(
-            LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind,
-                    message: String::new(),
-                },
-            }
-            .is_retryable(),
-            "kind={kind:?}"
-        );
-    }
-    for kind in [
-        LlmNonHttpFailureKindV2::Cancelled,
-        LlmNonHttpFailureKindV2::InvalidRequest,
-        LlmNonHttpFailureKindV2::Guardrail,
-        LlmNonHttpFailureKindV2::Internal,
-    ] {
-        assert!(
-            !LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind,
-                    message: String::new(),
-                },
-            }
-            .is_retryable(),
-            "kind={kind:?}"
-        );
-    }
-}
 
 #[test]
 fn async_abi_discriminants_reject_unknown_values() {
@@ -6584,7 +6521,6 @@ fn safe_v2_target() -> LlmContinuationTargetV2 {
     LlmContinuationTargetV2 {
         method: "POST".into(),
         url: "https://provider.example/v1/chat/completions".into(),
-        route: LlmContinuationRouteV2::OpenaiChat,
         headers: Default::default(),
     }
 }
@@ -6784,15 +6720,6 @@ fn native_api_v2_raw_registration_remains_an_advanced_escape_hatch() {
         NemoRelayStatus::InvalidArg
     );
 
-    assert_eq!(LlmContinuationRouteV2::OpenaiChat.as_str(), "openai_chat");
-    assert_eq!(
-        LlmContinuationRouteV2::OpenaiResponses.as_str(),
-        "openai_responses"
-    );
-    assert_eq!(
-        LlmContinuationRouteV2::AnthropicMessages.as_str(),
-        "anthropic_messages"
-    );
     assert_eq!(live_host_strings(), 0);
 }
 
@@ -7206,7 +7133,6 @@ fn safe_v2_stream_open_preserves_structured_failure() {
                     Err(error) => error,
                 };
                 assert_eq!(error, expected);
-                assert!(error.is_retryable());
                 Err("observed typed stream-open failure".into())
             }
         },
