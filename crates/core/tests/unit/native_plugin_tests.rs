@@ -4900,6 +4900,7 @@ unsafe extern "C" fn tool_json_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn tool_conditional_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
@@ -4911,6 +4912,7 @@ unsafe extern "C" fn tool_conditional_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn tool_conditional_reason(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
@@ -4921,6 +4923,7 @@ unsafe extern "C" fn tool_conditional_reason(
     NemoRelayStatus::Ok
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_conditional_error(
     _user_data: *mut c_void,
     _request_json: *const NemoRelayNativeString,
@@ -4931,6 +4934,7 @@ unsafe extern "C" fn llm_conditional_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_conditional_reason(
     _user_data: *mut c_void,
     _request_json: *const NemoRelayNativeString,
@@ -4962,6 +4966,7 @@ unsafe extern "C" fn llm_response_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn tool_execution_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
@@ -4975,6 +4980,7 @@ unsafe extern "C" fn tool_execution_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_request_intercept_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
@@ -4987,6 +4993,7 @@ unsafe extern "C" fn llm_request_intercept_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_execution_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
@@ -5000,6 +5007,7 @@ unsafe extern "C" fn llm_execution_error(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_stream_execution_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
