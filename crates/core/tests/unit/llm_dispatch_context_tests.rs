@@ -228,6 +228,33 @@ async fn buffered_http_failure_is_bounded_and_filters_headers() {
 }
 
 #[tokio::test]
+async fn streaming_http_failure_is_structured_and_filters_headers() {
+    let provider = FakeProvider::spawn(response(
+        "503 Service Unavailable",
+        &[("Retry-After", "3"), ("Set-Cookie", "secret=true")],
+        b"provider unavailable",
+    ));
+
+    let error =
+        match dispatch_stream(&target(provider.url.clone(), BTreeMap::new()), request()).await {
+            Ok(_) => panic!("503 should fail before opening a stream"),
+            Err(error) => error,
+        };
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure");
+    };
+    assert_eq!(failure.status, Some(503));
+    assert_eq!(failure.class, UpstreamFailureClass::RetryableStatus);
+    assert_eq!(failure.body, "provider unavailable");
+    assert_eq!(
+        failure.headers.get("retry-after").map(String::as_str),
+        Some("3")
+    );
+    assert!(!failure.headers.contains_key("set-cookie"));
+    let _ = provider.request();
+}
+
+#[tokio::test]
 async fn redirects_are_returned_without_following() {
     let provider = FakeProvider::spawn(response(
         "302 Found",
@@ -350,6 +377,63 @@ fn target_validation_rejects_unsafe_transport_inputs() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn target_validation_reports_malformed_method_and_headers() {
+    let error = LlmDispatchTargetContext::try_new(
+        "P OST".into(),
+        "https://provider.example/v1".into(),
+        "openai_chat".into(),
+        BTreeMap::new(),
+    )
+    .expect_err("method token containing a space should be rejected");
+    let FlowError::InvalidArgument(message) = error else {
+        panic!("expected invalid method argument");
+    };
+    assert_eq!(message, "LLM continuation method was invalid or prohibited");
+
+    let error = LlmDispatchTargetContext::try_new(
+        "POST".into(),
+        "https://provider.example/v1".into(),
+        "openai_chat".into(),
+        BTreeMap::from([("bad header".into(), "value".into())]),
+    )
+    .expect_err("header name containing a space should be rejected");
+    let FlowError::InvalidArgument(message) = error else {
+        panic!("expected invalid header name argument");
+    };
+    assert_eq!(
+        message,
+        "LLM continuation contained an invalid target header name"
+    );
+
+    let error = LlmDispatchTargetContext::try_new(
+        "POST".into(),
+        "https://provider.example/v1".into(),
+        "openai_chat".into(),
+        BTreeMap::from([("x-target".into(), "line one\nline two".into())]),
+    )
+    .expect_err("header value containing a newline should be rejected");
+    let FlowError::InvalidArgument(message) = error else {
+        panic!("expected invalid header value argument");
+    };
+    assert_eq!(
+        message,
+        "LLM continuation target header x-target had an invalid value"
+    );
+}
+
+#[test]
+fn bounded_utf8_truncates_long_multibyte_value_at_character_boundary() {
+    let expected = "a".repeat(MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES - 1);
+    let value = format!("{expected}\u{e9}");
+    assert_eq!(value.len(), MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES + 1);
+
+    let bounded = bounded_utf8(value, MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES);
+
+    assert_eq!(bounded, expected);
+    assert_eq!(bounded.len(), MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES - 1);
 }
 
 #[tokio::test]

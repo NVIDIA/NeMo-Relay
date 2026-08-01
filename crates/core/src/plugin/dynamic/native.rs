@@ -3619,6 +3619,13 @@ fn wrap_native_async_llm_execution_v2(
     free_fn: NemoRelayNativeFreeFn,
 ) -> LlmExecutionFn {
     let user_data = make_user_data(instance, user_data, free_fn);
+    wrap_native_async_llm_execution_v2_with_user_data(cb, user_data)
+}
+
+fn wrap_native_async_llm_execution_v2_with_user_data(
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: Arc<NativeCallbackUserData>,
+) -> LlmExecutionFn {
     Arc::new(move |name, request, next| {
         let user_data = user_data.clone();
         let name = name.to_owned();
@@ -3729,6 +3736,13 @@ fn wrap_native_incremental_llm_stream_execution_v2(
     free_fn: NemoRelayNativeFreeFn,
 ) -> LlmStreamExecutionFn {
     let user_data = make_user_data(instance, user_data, free_fn);
+    wrap_native_incremental_llm_stream_execution_v2_with_user_data(cb, user_data)
+}
+
+fn wrap_native_incremental_llm_stream_execution_v2_with_user_data(
+    cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+    user_data: Arc<NativeCallbackUserData>,
+) -> LlmStreamExecutionFn {
     Arc::new(move |name, request, next| {
         let user_data = user_data.clone();
         let name = name.to_owned();
@@ -3756,6 +3770,7 @@ fn wrap_native_incremental_llm_stream_execution_v2(
                             "failed to allocate native API v2 stream invocation".into(),
                         )
                     })? as usize;
+            let invocation_guard = NativeInvocationStringGuard(invocation);
             let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
                 FlowError::Internal(format!(
                     "native API v2 stream intercept requires a Tokio runtime: {error}"
@@ -3769,7 +3784,6 @@ fn wrap_native_incremental_llm_stream_execution_v2(
             let stream_ref = Arc::into_raw(stream.clone()) as usize;
             let callback_user_data = user_data.ptr as usize;
             let callback_scope_stack = current_scope_stack();
-            let invocation_guard = NativeInvocationStringGuard(invocation);
             let next_handoff = NativeNextHandoff {
                 raw: Some(next_ref),
                 armed: true,
