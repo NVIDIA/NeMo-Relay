@@ -104,8 +104,11 @@ fn test_decode_full_response() {
     assert_eq!(usage.cache_read_tokens, Some(10));
     assert_eq!(usage.cache_write_tokens, None);
 
-    // API specific fields
-    match resp.api_specific.unwrap() {
+    assert_full_response_api_specific(resp.api_specific.unwrap());
+}
+
+fn assert_full_response_api_specific(api_specific: ApiSpecificResponse) {
+    match api_specific {
         ApiSpecificResponse::OpenAIResponses {
             output_items,
             status,
@@ -1150,6 +1153,12 @@ fn test_helper_and_error_paths_cover_remaining_responses_branches() {
 
 #[test]
 fn responses_request_component_branch_matrix() {
+    assert_responses_decode_component_branches();
+    assert_responses_encode_content_and_item_branches();
+    assert_responses_tool_and_choice_branches();
+}
+
+fn assert_responses_decode_component_branches() {
     assert!(decode_responses_content(&json!({})).is_err());
     for invalid in [
         json!(42),
@@ -1205,7 +1214,9 @@ fn responses_request_component_branch_matrix() {
             Message::ProviderNative { .. }
         ));
     }
+}
 
+fn assert_responses_encode_content_and_item_branches() {
     let content = MessageContent::Parts(vec![
         ContentPart::Text {
             text: "hello".into(),
@@ -1326,7 +1337,9 @@ fn responses_request_component_branch_matrix() {
         })
         .is_err()
     );
+}
 
+fn assert_responses_tool_and_choice_branches() {
     for invalid in [
         json!(42),
         json!({"type": "function"}),
@@ -1605,4 +1618,36 @@ fn openai_responses_streaming_codec_ignores_per_token_deltas() {
         annotated.message,
         Some(MessageContent::Text("Hello".to_string()))
     );
+}
+
+#[test]
+fn responses_helpers_cover_invalid_and_provider_edge_values() {
+    let codec = OpenAIResponsesCodec;
+    for invalid_request in [
+        json!({}),
+        json!({"input": false}),
+        json!({"input": [], "instructions": false}),
+    ] {
+        assert!(codec.decode(&make_request(invalid_request)).is_err());
+    }
+
+    assert!(matches!(
+        decode_openai_or_anthropic_tool_choice(&json!({
+            "type": "function",
+            "function": {"name": "lookup"}
+        })),
+        ToolChoice::Specific(_)
+    ));
+    assert_eq!(
+        encode_responses_tool_choice(&ToolChoice::Required).unwrap(),
+        json!("required")
+    );
+
+    let mut object = serde_json::Map::from_iter([("remove".into(), json!(true))]);
+    set_or_remove_json(&mut object, "remove", None);
+    assert!(!object.contains_key("remove"));
+    set_or_remove_json(&mut object, "insert", Some(json!(42)));
+    assert_eq!(object["insert"], json!(42));
+
+    assert!(OpenAIResponsesStreamingCodec::default().finalizer()().is_object());
 }

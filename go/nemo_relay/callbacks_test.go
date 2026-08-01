@@ -68,18 +68,37 @@ func TestRegisterAndUnregisterClosure(t *testing.T) {
 	}
 }
 
+type codecIdentityTestCase struct {
+	name string
+	kind uint32
+	id   *string
+	want LLMCodecKind
+}
+
+func assertCodecIdentity(t *testing.T, test codecIdentityTestCase) {
+	t.Helper()
+	codec := llmCodecIdentity(test.kind, test.id)
+	if codec.CodecKind != test.want {
+		t.Fatalf("codec kind = %q, want %q", codec.CodecKind, test.want)
+	}
+	if codec.CodecID == nil && test.id != nil {
+		t.Fatal("codec ID was lost")
+	}
+	if codec.CodecID != nil && test.id == nil {
+		t.Fatalf("unexpected codec ID %q", *codec.CodecID)
+	}
+	if codec.CodecID != nil && test.id != nil && *codec.CodecID != *test.id {
+		t.Fatalf("codec ID = %q, want %q", *codec.CodecID, *test.id)
+	}
+}
+
 func TestLlmSanitizeDirectionalContextsPreserveEveryCodecIdentity(t *testing.T) {
 	openAIChat := "openai_chat"
 	openAIResponses := "openai_responses"
 	anthropicMessages := "anthropic_messages"
 	runtimeCodec := "com.example.chat.v1"
 
-	cases := []struct {
-		name string
-		kind uint32
-		id   *string
-		want LLMCodecKind
-	}{
+	cases := []codecIdentityTestCase{
 		{"none", 0, nil, LLMCodecNone},
 		{"openai chat", 1, &openAIChat, LLMCodecBuiltin},
 		{"openai responses", 1, &openAIResponses, LLMCodecBuiltin},
@@ -91,19 +110,7 @@ func TestLlmSanitizeDirectionalContextsPreserveEveryCodecIdentity(t *testing.T) 
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			codec := llmCodecIdentity(test.kind, test.id)
-			if codec.CodecKind != test.want {
-				t.Fatalf("codec kind = %q, want %q", codec.CodecKind, test.want)
-			}
-			if codec.CodecID == nil && test.id != nil {
-				t.Fatal("codec ID was lost")
-			}
-			if codec.CodecID != nil && test.id == nil {
-				t.Fatalf("unexpected codec ID %q", *codec.CodecID)
-			}
-			if codec.CodecID != nil && test.id != nil && *codec.CodecID != *test.id {
-				t.Fatalf("codec ID = %q, want %q", *codec.CodecID, *test.id)
-			}
+			assertCodecIdentity(t, test)
 		})
 	}
 }

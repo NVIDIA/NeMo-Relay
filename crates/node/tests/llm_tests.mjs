@@ -1337,7 +1337,7 @@ describe('LLM intercepts', () => {
     let providerSideEffects = 0;
     registerLlmExecutionIntercept('node_llm_exec_abort_started_provider', 10, async (native, next) => {
       downstream = next(native);
-      void downstream.catch(() => {});
+      downstream.catch(() => undefined);
       await started;
       return { source: 'intercept' };
     });
@@ -1950,7 +1950,9 @@ describe('LLM intercepts', () => {
     ];
 
     for (const registration of registrations) {
-      const declaration = declarations.match(new RegExp(`export declare function ${registration}\\([^\\n]+`))?.[0];
+      const declaration = declarations.match(
+        new RegExp(String.raw`export declare function ${registration}\([^\n]+`),
+      )?.[0];
       assert.ok(declaration, `missing declaration for ${registration}`);
       assert.doesNotMatch(declaration, /\.\.\.args: any\[\]/, `${registration} must not expose an any callback`);
       assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);

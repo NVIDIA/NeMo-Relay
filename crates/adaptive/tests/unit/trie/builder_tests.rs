@@ -348,6 +348,36 @@ fn test_score_to_sensitivity_no_samples() {
     assert_eq!(score_to_sensitivity(&acc, 5), None);
 }
 
+#[test]
+fn sensitivity_helpers_cover_empty_zero_duration_and_parallel_edges() {
+    let mut contexts = Vec::new();
+    compute_sensitivity_scores(&mut contexts, &SensitivityConfig::default());
+    assert!(compute_logical_positions(&contexts).is_empty());
+
+    let context = LlmCallContext {
+        path: vec!["edge".into()],
+        call_index: 0,
+        remaining_calls: 0,
+        time_to_next_ms: None,
+        output_tokens: 0,
+        call_duration_s: 0.0,
+        workflow_duration_s: 0.0,
+        parallel_slack_ratio: 0.4,
+        sensitivity_score: 0.0,
+        span_start_time: 0.0,
+        span_end_time: 0.0,
+    };
+    assert_eq!(critical_path_weight(&context), 1.0);
+    assert_eq!(fanout_score(0, 0), 0.0);
+    assert_eq!(position_score(0, 1), 1.0);
+    assert_eq!(parallel_penalty(0.4, &HashMap::from([(0, 2)]), 0), 0.45);
+
+    let mut run = make_test_run(1, 0);
+    run.ended_at = None;
+    run.calls[0].ended_at = None;
+    assert!(extract_llm_contexts(&run).is_empty());
+}
+
 // -----------------------------------------------------------------------
 // PredictionTrieBuilder integration tests
 // -----------------------------------------------------------------------

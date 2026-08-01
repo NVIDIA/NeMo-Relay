@@ -1918,21 +1918,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         .as_deref()
         .expect("managed environment should be persisted");
     let environment_path = PathBuf::from(environment_ref);
-    assert!(environment_path.is_absolute());
-    let expected_environment_name = Sha256::digest(b"acme.python")
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    assert_eq!(
-        environment_path.file_name(),
-        Some(OsStr::new(&expected_environment_name))
-    );
-    assert!(
-        environment_path
-            .parent()
-            .is_some_and(|parent| parent.ends_with(".dynamic-plugin-environments"))
-    );
-    assert!(environment::environment_python_path(&environment_path).is_file());
+    assert_managed_environment_path(&environment_path);
     assert_eq!(
         added.record.status.validation.environment,
         DynamicPluginCheckState::Valid
@@ -1956,39 +1942,8 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         inspect["data"]["source"]["environment_ref"],
         serde_json::json!(environment_ref)
     );
-    let calls = runner.calls();
-    assert_eq!(calls.len(), 2);
-    assert_eq!(
-        calls[0].0,
-        OsString::from(if cfg!(windows) { "python" } else { "python3" })
-    );
-    assert_eq!(
-        calls[0].1,
-        vec![
-            OsString::from("-m"),
-            OsString::from("venv"),
-            environment_path.as_os_str().to_owned(),
-        ]
-    );
-    assert_eq!(
-        PathBuf::from(&calls[1].0),
-        environment::environment_python_path(&environment_path)
-    );
-    assert_eq!(
-        calls[1].1,
-        vec![
-            OsString::from("-m"),
-            OsString::from("pip"),
-            OsString::from("install"),
-            plugin_dir.canonicalize().unwrap().into_os_string(),
-        ]
-    );
-    assert!(
-        !calls[1]
-            .1
-            .iter()
-            .any(|arg| arg == "-e" || arg == "--editable")
-    );
+    assert_python_environment_runner_calls(&runner.calls(), &environment_path, &plugin_dir);
+
     enable(
         PluginsEnableRequest {
             id: "acme.python".into(),
@@ -2029,6 +1984,63 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     .unwrap();
     assert!(environment::environment_python_path(&environment_path).is_file());
     assert!(!stale_marker.exists());
+}
+
+fn assert_managed_environment_path(environment_path: &Path) {
+    assert!(environment_path.is_absolute());
+    let expected_environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        environment_path.file_name(),
+        Some(OsStr::new(&expected_environment_name))
+    );
+    assert!(
+        environment_path
+            .parent()
+            .is_some_and(|parent| parent.ends_with(".dynamic-plugin-environments"))
+    );
+    assert!(environment::environment_python_path(environment_path).is_file());
+}
+
+fn assert_python_environment_runner_calls(
+    calls: &[(OsString, Vec<OsString>)],
+    environment_path: &Path,
+    plugin_dir: &Path,
+) {
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0].0,
+        OsString::from(if cfg!(windows) { "python" } else { "python3" })
+    );
+    assert_eq!(
+        calls[0].1,
+        vec![
+            OsString::from("-m"),
+            OsString::from("venv"),
+            environment_path.as_os_str().to_owned(),
+        ]
+    );
+    assert_eq!(
+        PathBuf::from(&calls[1].0),
+        environment::environment_python_path(environment_path)
+    );
+    assert_eq!(
+        calls[1].1,
+        vec![
+            OsString::from("-m"),
+            OsString::from("pip"),
+            OsString::from("install"),
+            plugin_dir.canonicalize().unwrap().into_os_string(),
+        ]
+    );
+    assert!(
+        !calls[1]
+            .1
+            .iter()
+            .any(|arg| arg == "-e" || arg == "--editable")
+    );
 }
 
 #[test]

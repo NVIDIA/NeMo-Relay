@@ -320,6 +320,12 @@ fn typed_editor_model_contains_nemo_guardrails_options() {
 #[test]
 fn typed_editor_model_contains_pii_redaction_options() {
     let schema = PiiRedactionConfig::editor_schema();
+    assert_pii_root_editor_fields(schema);
+    assert_pii_builtin_editor_fields(schema.field("builtin").unwrap().schema().unwrap());
+    assert_pii_local_editor_fields(schema.field("local").unwrap().schema().unwrap());
+}
+
+fn assert_pii_root_editor_fields(schema: &EditorSchema) {
     assert!(!schema.fields.iter().any(|field| field.name == "version"));
     assert_eq!(
         schema.field("mode").unwrap().enum_values,
@@ -331,8 +337,9 @@ fn typed_editor_model_contains_pii_redaction_options() {
         schema.field("tool_output").unwrap().kind,
         EditorFieldKind::Boolean
     );
+}
 
-    let builtin = schema.field("builtin").unwrap().schema().unwrap();
+fn assert_pii_builtin_editor_fields(builtin: &EditorSchema) {
     assert_eq!(builtin.field("preset").unwrap().kind, EditorFieldKind::Enum);
     assert!(
         builtin
@@ -398,8 +405,9 @@ fn typed_editor_model_contains_pii_redaction_options() {
         builtin.field("unmasked_suffix").unwrap().kind,
         EditorFieldKind::Integer
     );
+}
 
-    let local = schema.field("local").unwrap().schema().unwrap();
+fn assert_pii_local_editor_fields(local: &EditorSchema) {
     assert_eq!(
         local.field("backend").unwrap().kind,
         EditorFieldKind::String
@@ -1660,6 +1668,10 @@ value = "preserve-host-section"
     document.write().unwrap();
     let rendered = std::fs::read_to_string(&path).unwrap();
     let root = rendered.parse::<toml::Table>().unwrap();
+    assert_preserved_plugin_document(&root);
+}
+
+fn assert_preserved_plugin_document(root: &toml::Table) {
     assert_eq!(root["host_setting"].as_str(), Some("preserve-me"));
     assert_eq!(
         root["host"]["extra"]["value"].as_str(),
@@ -1846,6 +1858,41 @@ config = {}
 
     let document = PluginConfigDocument::read(&path).unwrap();
     let mut states = load_dynamic_plugin_states(&document).unwrap();
+    assert_dynamic_editor_initial_states(&states);
+
+    states[2].clear_top_level_field("optional");
+    states[2].reset_top_level_field("optional").unwrap();
+    assert_eq!(states[2].config(), None);
+
+    let mut preview = document.clone();
+    for state in &states {
+        state.apply_to_document(&mut preview, true).unwrap();
+    }
+    assert_dynamic_editor_redacted_preview(&preview.render().unwrap());
+
+    states[0].reset_top_level_field("retries").unwrap();
+    assert_eq!(states[0].config().unwrap().get("retries"), Some(&json!(3)));
+    assert_eq!(
+        states[0].config().unwrap().get("unknown"),
+        Some(&json!({"nested": "keep"}))
+    );
+    let mut touched = document.clone();
+    states[0].apply_to_document(&mut touched, false).unwrap();
+    assert_dynamic_editor_touched_document(&touched);
+    for field in ["token", "retries", "unknown", "observed_at", "records"] {
+        states[0].clear_top_level_field(field);
+    }
+    assert_eq!(states[0].config(), Some(&Map::new()));
+
+    states[0].reset();
+    let mut persisted = document.clone();
+    for state in &states {
+        state.apply_to_document(&mut persisted, false).unwrap();
+    }
+    assert_dynamic_editor_persisted_document(&persisted);
+}
+
+fn assert_dynamic_editor_initial_states(states: &[DynamicPluginEditorState]) {
     assert_eq!(states.len(), 4);
     assert_eq!(states[0].label(), "Structured Plugin (acme.structured)");
     assert_eq!(states[1].label(), "acme.raw");
@@ -1863,16 +1910,9 @@ config = {}
     let labels = states[0].top_level_field_labels();
     assert!(labels.iter().any(|label| label.contains("<redacted>")));
     assert!(labels.iter().all(|label| !label.contains("super-secret")));
+}
 
-    states[2].clear_top_level_field("optional");
-    states[2].reset_top_level_field("optional").unwrap();
-    assert_eq!(states[2].config(), None);
-
-    let mut preview = document.clone();
-    for state in &states {
-        state.apply_to_document(&mut preview, true).unwrap();
-    }
-    let rendered = preview.render().unwrap();
+fn assert_dynamic_editor_redacted_preview(rendered: &str) {
     assert!(rendered.contains("<redacted>"));
     assert!(!rendered.contains("super-secret"));
     assert!(!rendered.contains("nested-secret"));
@@ -1890,15 +1930,9 @@ config = {}
             .get("config")
             .is_none()
     );
+}
 
-    states[0].reset_top_level_field("retries").unwrap();
-    assert_eq!(states[0].config().unwrap().get("retries"), Some(&json!(3)));
-    assert_eq!(
-        states[0].config().unwrap().get("unknown"),
-        Some(&json!({"nested": "keep"}))
-    );
-    let mut touched = document.clone();
-    states[0].apply_to_document(&mut touched, false).unwrap();
+fn assert_dynamic_editor_touched_document(touched: &PluginConfigDocument) {
     assert_eq!(
         touched.dynamic_entries().unwrap()[0]
             .config
@@ -1912,18 +1946,9 @@ config = {}
         touched_root["plugins"]["dynamic"].as_array().unwrap()[0]["config"]["observed_at"]
             .is_datetime()
     );
-    states[0].clear_top_level_field("token");
-    states[0].clear_top_level_field("retries");
-    states[0].clear_top_level_field("unknown");
-    states[0].clear_top_level_field("observed_at");
-    states[0].clear_top_level_field("records");
-    assert_eq!(states[0].config(), Some(&Map::new()));
+}
 
-    states[0].reset();
-    let mut persisted = document.clone();
-    for state in &states {
-        state.apply_to_document(&mut persisted, false).unwrap();
-    }
+fn assert_dynamic_editor_persisted_document(persisted: &PluginConfigDocument) {
     let entries = persisted.dynamic_entries().unwrap();
     assert_eq!(entries[0].config, None);
     assert_eq!(entries[2].config, None);

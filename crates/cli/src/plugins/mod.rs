@@ -442,37 +442,23 @@ fn prompt_menu(
             selected = next;
             continue;
         }
-        match key {
-            Key::Enter | Key::Char(' ') => {
-                clear_menu(&term, rendered_lines)?;
-                return Ok(MenuResponse::Selected(selected));
-            }
-            Key::Char('p') => {
-                clear_menu(&term, rendered_lines)?;
-                return Ok(MenuResponse::Shortcut(MenuShortcut::Preview, selected));
-            }
-            Key::Char('s') => {
-                clear_menu(&term, rendered_lines)?;
-                return Ok(MenuResponse::Shortcut(MenuShortcut::Save, selected));
-            }
-            Key::Char('r') => {
-                clear_menu(&term, rendered_lines)?;
-                return Ok(MenuResponse::Shortcut(MenuShortcut::Reset, selected));
-            }
-            Key::Backspace | Key::Del => {
-                clear_menu(&term, rendered_lines)?;
-                return Ok(MenuResponse::Shortcut(MenuShortcut::Clear, selected));
-            }
-            Key::Char('?') => {
-                clear_menu(&term, rendered_lines)?;
-                return Ok(MenuResponse::Shortcut(MenuShortcut::Help, selected));
-            }
-            Key::Escape | Key::CtrlC | Key::Char('q') => {
-                clear_menu(&term, rendered_lines)?;
-                return Ok(MenuResponse::Cancel);
-            }
-            _ => {}
+        if let Some(response) = menu_response_for_key(&key, selected) {
+            clear_menu(&term, rendered_lines)?;
+            return Ok(response);
         }
+    }
+}
+
+fn menu_response_for_key(key: &Key, selected: usize) -> Option<MenuResponse> {
+    match key {
+        Key::Enter | Key::Char(' ') => Some(MenuResponse::Selected(selected)),
+        Key::Char('p') => Some(MenuResponse::Shortcut(MenuShortcut::Preview, selected)),
+        Key::Char('s') => Some(MenuResponse::Shortcut(MenuShortcut::Save, selected)),
+        Key::Char('r') => Some(MenuResponse::Shortcut(MenuShortcut::Reset, selected)),
+        Key::Backspace | Key::Del => Some(MenuResponse::Shortcut(MenuShortcut::Clear, selected)),
+        Key::Char('?') => Some(MenuResponse::Shortcut(MenuShortcut::Help, selected)),
+        Key::Escape | Key::CtrlC | Key::Char('q') => Some(MenuResponse::Cancel),
+        _ => None,
     }
 }
 

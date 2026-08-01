@@ -17,7 +17,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_empty_specs_without_outputs() {
         let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
         let mut report_json = std::ptr::dangling_mut::<c_char>();
         unsafe {
-            assert_eq!(
+            assert_status!(
                 nemo_relay_initialize_with_dynamic_plugins(
                     config.as_ptr(),
                     specs.as_ptr(),
@@ -48,7 +48,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
     let invalid = cstring("not-json");
     unsafe {
         let mut report = std::ptr::dangling_mut::<c_char>();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
@@ -60,7 +60,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
         assert!(report.is_null());
 
         let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
@@ -77,7 +77,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
         ] {
             let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
             let mut report = std::ptr::dangling_mut::<c_char>();
-            assert_eq!(
+            assert_status!(
                 nemo_relay_initialize_with_dynamic_plugins(
                     config_json,
                     specs_json,
@@ -98,7 +98,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
         let invalid_shape = cstring(r#"{"plugin_id":"not-an-array"}"#);
         let mut activation = ptr::null_mut();
         let mut report = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 invalid_shape.as_ptr(),
@@ -139,7 +139,7 @@ fn test_ffi_dynamic_plugin_activation_surfaces_load_failures_and_releases_owner(
     unsafe {
         let mut activation = ptr::null_mut();
         let mut report = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
@@ -158,7 +158,7 @@ fn test_ffi_dynamic_plugin_activation_surfaces_load_failures_and_releases_owner(
 
         let mut retry_activation = ptr::null_mut();
         let mut retry_report = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
@@ -194,7 +194,7 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
     let user_data = Box::into_raw(Box::new(7usize)) as *mut libc::c_void;
 
     unsafe {
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_plugin(
                 plugin_kind_c.as_ptr(),
                 Some(plugin_validate_warn),
@@ -206,7 +206,7 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
         );
 
         let mut report_json = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
             NemoRelayStatus::Ok
         );
@@ -220,7 +220,7 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
         );
 
         let mut init_json = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_plugins(config.as_ptr(), &mut init_json),
             NemoRelayStatus::Ok
         );
@@ -234,19 +234,19 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
         );
 
         let mut active_json = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_active_plugin_report_json(&mut active_json),
             NemoRelayStatus::Ok
         );
         let active = returned_json(active_json);
         assert_eq!(active["diagnostics"], initialized["diagnostics"]);
 
-        assert_eq!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
-        assert_eq!(
+        assert_status!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
+        assert_status!(
             nemo_relay_deregister_plugin(plugin_kind_c.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_plugin(plugin_kind_c.as_ptr()),
             NemoRelayStatus::NotFound
         );
@@ -289,7 +289,7 @@ fn test_ffi_plugin_validation_failure_modes_are_reported() {
         let user_data = Box::into_raw(Box::new(9usize)) as *mut libc::c_void;
 
         unsafe {
-            assert_eq!(
+            assert_status!(
                 nemo_relay_register_plugin(
                     plugin_kind_c.as_ptr(),
                     validate_cb,
@@ -301,7 +301,7 @@ fn test_ffi_plugin_validation_failure_modes_are_reported() {
             );
 
             let mut report_json = ptr::null_mut();
-            assert_eq!(
+            assert_status!(
                 nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
                 NemoRelayStatus::Ok
             );
@@ -317,7 +317,7 @@ fn test_ffi_plugin_validation_failure_modes_are_reported() {
                 "missing expected plugin validation diagnostic: {expected_fragment}"
             );
 
-            assert_eq!(
+            assert_status!(
                 nemo_relay_deregister_plugin(plugin_kind_c.as_ptr()),
                 NemoRelayStatus::Ok
             );
@@ -349,7 +349,7 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
     let user_data = Box::into_raw(Box::new(11usize)) as *mut libc::c_void;
 
     unsafe {
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_plugin(
                 plugin_kind_c.as_ptr(),
                 None,
@@ -361,7 +361,7 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
         );
 
         let mut report_json = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
             NemoRelayStatus::Ok
         );
@@ -369,7 +369,7 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
         assert_eq!(report["diagnostics"], json!([]));
 
         let mut init_json = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_plugins(config.as_ptr(), &mut init_json),
             NemoRelayStatus::Internal
         );
@@ -377,13 +377,13 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
         assert!(err.contains("register callback failed with status Internal"));
 
         let mut active_json = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_active_plugin_report_json(&mut active_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(active_json), Json::Null);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_plugin(plugin_kind_c.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -414,7 +414,7 @@ fn test_ffi_plugin_registration_failure_prefers_last_error_message() {
     let user_data = Box::into_raw(Box::new(13usize)) as *mut libc::c_void;
 
     unsafe {
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_plugin(
                 plugin_kind_c.as_ptr(),
                 None,
@@ -426,7 +426,7 @@ fn test_ffi_plugin_registration_failure_prefers_last_error_message() {
         );
 
         let mut init_json = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_initialize_plugins(config.as_ptr(), &mut init_json),
             NemoRelayStatus::Internal
         );
@@ -436,7 +436,7 @@ fn test_ffi_plugin_registration_failure_prefers_last_error_message() {
                 .contains("plugin register callback set last error explicitly")
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_plugin(plugin_kind_c.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -455,7 +455,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
     let tool_name = cstring("tool");
 
     unsafe {
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_subscriber(
                 ptr::null_mut(),
                 name.as_ptr(),
@@ -465,7 +465,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
                 ptr::null_mut(),
                 tool_name.as_ptr(),
@@ -476,7 +476,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(
                 ptr::null_mut(),
                 tool_name.as_ptr(),
@@ -487,7 +487,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(
                 ptr::null_mut(),
                 tool_name.as_ptr(),
@@ -498,7 +498,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(
                 ptr::null_mut(),
                 llm_name.as_ptr(),
@@ -509,7 +509,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(
                 ptr::null_mut(),
                 llm_name.as_ptr(),
@@ -520,7 +520,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_conditional_execution_guardrail(
                 ptr::null_mut(),
                 llm_name.as_ptr(),
@@ -531,7 +531,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_request_intercept(
                 ptr::null_mut(),
                 llm_name.as_ptr(),
@@ -543,7 +543,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_request_intercept(
                 ptr::null_mut(),
                 tool_name.as_ptr(),
@@ -555,7 +555,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_execution_intercept(
                 ptr::null_mut(),
                 llm_name.as_ptr(),
@@ -566,7 +566,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_stream_execution_intercept(
                 ptr::null_mut(),
                 llm_name.as_ptr(),
@@ -577,7 +577,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_execution_intercept(
                 ptr::null_mut(),
                 tool_name.as_ptr(),
@@ -594,7 +594,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
     let mut ctx = FfiPluginContext(&mut inner as *mut _);
 
     unsafe {
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_subscriber(
                 &mut ctx,
                 name.as_ptr(),
@@ -604,7 +604,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -615,7 +615,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -626,7 +626,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -637,7 +637,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -648,7 +648,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -659,7 +659,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_conditional_execution_guardrail(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -670,7 +670,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_request_intercept(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -682,7 +682,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_request_intercept(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -694,7 +694,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_execution_intercept(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -705,7 +705,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_stream_execution_intercept(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -716,7 +716,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_execution_intercept(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -768,7 +768,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
     let mut ctx = FfiPluginContext(&mut inner as *mut _);
 
     unsafe {
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_subscriber(
                 &mut ctx,
                 subscriber_name.as_ptr(),
@@ -778,7 +778,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_subscriber(
                 &mut ctx,
                 subscriber_name.as_ptr(),
@@ -794,7 +794,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
                 .contains("already exists")
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -805,7 +805,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -822,7 +822,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
                 .contains("already exists")
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_request_intercept(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -834,7 +834,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_request_intercept(
                 &mut ctx,
                 llm_name.as_ptr(),
@@ -852,7 +852,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
                 .contains("already exists")
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_execution_intercept(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -863,7 +863,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_execution_intercept(
                 &mut ctx,
                 tool_name.as_ptr(),
@@ -895,7 +895,7 @@ fn test_ffi_plugin_context_helpers_reject_invalid_utf8_names_in_bulk() {
 
     macro_rules! assert_invalid_name_status {
         ($call:expr) => {{
-            assert_eq!($call, NemoRelayStatus::InvalidUtf8);
+            assert_status!($call, NemoRelayStatus::InvalidUtf8);
             assert!(read_last_error().unwrap_or_default().contains("utf-8"));
         }};
     }
@@ -1028,7 +1028,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
 
     macro_rules! assert_duplicate {
         ($call:expr) => {{
-            assert_eq!($call, NemoRelayStatus::Internal);
+            assert_status!($call, NemoRelayStatus::Internal);
             assert!(
                 read_last_error()
                     .unwrap_or_default()
@@ -1039,7 +1039,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
 
     unsafe {
         let subscriber_name = cstring("duplicate-subscriber-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_subscriber(
                 &mut ctx,
                 subscriber_name.as_ptr(),
@@ -1058,7 +1058,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         ));
 
         let tool_sanitize_req = cstring("duplicate-tool-sanitize-req-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
                 &mut ctx,
                 tool_sanitize_req.as_ptr(),
@@ -1081,7 +1081,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         );
 
         let tool_sanitize_resp = cstring("duplicate-tool-sanitize-resp-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(
                 &mut ctx,
                 tool_sanitize_resp.as_ptr(),
@@ -1104,7 +1104,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         );
 
         let tool_conditional = cstring("duplicate-tool-conditional-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(
                 &mut ctx,
                 tool_conditional.as_ptr(),
@@ -1127,7 +1127,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         );
 
         let llm_sanitize_req = cstring("duplicate-llm-sanitize-req-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(
                 &mut ctx,
                 llm_sanitize_req.as_ptr(),
@@ -1150,7 +1150,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         );
 
         let llm_sanitize_resp = cstring("duplicate-llm-sanitize-resp-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(
                 &mut ctx,
                 llm_sanitize_resp.as_ptr(),
@@ -1173,7 +1173,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         );
 
         let llm_conditional = cstring("duplicate-llm-conditional-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_conditional_execution_guardrail(
                 &mut ctx,
                 llm_conditional.as_ptr(),
@@ -1196,7 +1196,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         );
 
         let llm_request = cstring("duplicate-llm-request-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_request_intercept(
                 &mut ctx,
                 llm_request.as_ptr(),
@@ -1219,7 +1219,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         ));
 
         let tool_request = cstring("duplicate-tool-request-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_request_intercept(
                 &mut ctx,
                 tool_request.as_ptr(),
@@ -1242,7 +1242,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         ));
 
         let llm_exec = cstring("duplicate-llm-exec-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_execution_intercept(
                 &mut ctx,
                 llm_exec.as_ptr(),
@@ -1263,7 +1263,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         ));
 
         let llm_stream_exec = cstring("duplicate-llm-stream-exec-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_llm_stream_execution_intercept(
                 &mut ctx,
                 llm_stream_exec.as_ptr(),
@@ -1286,7 +1286,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
         );
 
         let tool_exec = cstring("duplicate-tool-exec-bulk");
-        assert_eq!(
+        assert_status!(
             nemo_relay_plugin_context_register_tool_execution_intercept(
                 &mut ctx,
                 tool_exec.as_ptr(),
@@ -1323,7 +1323,7 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
         let endpoint = c"http://localhost:4318/v1/traces";
 
         let mut otel_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -1340,42 +1340,42 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
             NemoRelayStatus::Ok
         );
         let otel_name = cstring(&unique_name("ffi_otel_defaults"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(otel_subscriber, invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(otel_subscriber, otel_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(otel_subscriber, otel_name.as_ptr()),
             NemoRelayStatus::Internal
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(otel_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_force_flush(otel_subscriber),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(otel_subscriber),
             NemoRelayStatus::Ok
         );
         nemo_relay_otel_subscriber_free(otel_subscriber);
 
         let mut oi_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 ptr::null(),
@@ -1392,35 +1392,35 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
             NemoRelayStatus::Ok
         );
         let oi_name = cstring(&unique_name("ffi_oi_defaults"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(oi_subscriber, invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(oi_subscriber, oi_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_register(oi_subscriber, oi_name.as_ptr()),
             NemoRelayStatus::Internal
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_deregister(oi_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_force_flush(oi_subscriber),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(oi_subscriber),
             NemoRelayStatus::Ok
         );
@@ -1430,7 +1430,7 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
         let agent = cstring("specialized-agent");
         let version = cstring("1.0.0");
         let mut exporter = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_create(
                 session.as_ptr(),
                 agent.as_ptr(),
@@ -1441,27 +1441,27 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
             NemoRelayStatus::Ok
         );
         let exporter_name = cstring(&unique_name("ffi_exporter_defaults"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_register(exporter, invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_register(exporter, exporter_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_register(exporter, exporter_name.as_ptr()),
             NemoRelayStatus::AlreadyExists
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atif_exporter_deregister(exporter_name.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -1479,7 +1479,7 @@ fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
         let exclusions = c"[\"custom.mark\"]";
         let mappings = c"[{\"key\":\"nemo_relay.model_name\",\"alias\":\"model.alias\"}]";
         let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create_with_projection_options(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -1502,7 +1502,7 @@ fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
 
         let invalid_mappings = c"[{\"key\":\"\",\"alias\":\"model.alias\"}]";
         let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create_with_projection_options(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -1544,7 +1544,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
         let grpc = cstring("grpc");
 
         let mut otel = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -1560,7 +1560,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
             ),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
@@ -1626,7 +1626,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                 invalid,
             ),
         ] {
-            assert_eq!(
+            assert_status!(
                 nemo_relay_otel_subscriber_create(
                     c"full".as_ptr(),
                     transport,
@@ -1645,7 +1645,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
         }
 
         let mut openinference = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 ptr::null(),
@@ -1661,7 +1661,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
             ),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_otel_subscriber_create(
                 c"openinference".as_ptr(),
                 ptr::null(),
@@ -1727,7 +1727,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                 invalid,
             ),
         ] {
-            assert_eq!(
+            assert_status!(
                 nemo_relay_otel_subscriber_create(
                     c"openinference".as_ptr(),
                     transport,
@@ -1765,7 +1765,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                 invalid,
             ),
         ] {
-            assert_eq!(
+            assert_status!(
                 nemo_relay_atif_exporter_create(
                     session_ptr,
                     agent_ptr,
@@ -1778,7 +1778,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
         }
 
         let plugin_kind = invalid;
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_plugin(
                 plugin_kind,
                 None,
@@ -1788,7 +1788,7 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_plugin(plugin_kind),
             NemoRelayStatus::InvalidUtf8
         );

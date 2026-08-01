@@ -1107,7 +1107,10 @@ impl LlmStreamInner for GuardedProviderStream {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "stream cancellation, monitoring, delivery, and cleanup must remain ordered in one coordinator"
+)]
 async fn forward_guarded_provider_stream(
     mut provider_stream: LlmJsonStream,
     codec: LocalGuardrailsCodec,
@@ -1130,51 +1133,132 @@ async fn forward_guarded_provider_stream(
         let Some(item) = item else {
             break;
         };
-        let chunk = match item {
-            Ok(chunk) => chunk,
-            Err(err) => {
-                let _ = chunk_tx.send(Err(err)).await;
-                let _ = text_tx.send(None).await;
-                let _ = monitor.take().expect("monitor available").await;
-                break;
-            }
+        let Some(chunk) =
+            receive_guarded_provider_chunk(item, &text_tx, &chunk_tx, &mut monitor).await
+        else {
+            break;
         };
 
-        if let Some(message) = blocked_message(&blocked) {
-            let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
-            let _ = text_tx.send(None).await;
-            let _ = monitor.take().expect("monitor available").await;
+        if stop_blocked_provider_stream(&text_tx, &chunk_tx, &blocked, &mut monitor).await {
             break;
         }
-        if let Some(text) = extract_stream_text(codec, &chunk)
-            && text_tx.send(Some(text)).await.is_err()
+        if !forward_guarded_stream_text(codec, &chunk, &text_tx, &chunk_tx, &blocked, &mut monitor)
+            .await
         {
-            send_stream_monitor_error(
-                monitor.take().expect("monitor available"),
-                &chunk_tx,
-                &blocked,
-            )
-            .await;
             break;
         }
 
-        let sent = tokio::select! {
-            _ = cancel.changed() => break,
-            sent = chunk_tx.send(Ok(chunk)) => sent,
-        };
-        if sent.is_err() {
-            let _ = text_tx.send(None).await;
-            let _ = monitor.take().expect("monitor available").await;
+        if !send_guarded_provider_chunk(chunk, &text_tx, &chunk_tx, &mut monitor, &mut cancel).await
+        {
             break;
         }
     }
+    finish_guarded_provider_stream(
+        &mut provider_stream,
+        &text_tx,
+        &chunk_tx,
+        &blocked,
+        &mut monitor,
+        &cancel,
+        &closed,
+    )
+    .await;
+}
+
+async fn receive_guarded_provider_chunk(
+    item: FlowResult<Json>,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+) -> Option<Json> {
+    match item {
+        Ok(chunk) => Some(chunk),
+        Err(err) => {
+            let _ = chunk_tx.send(Err(err)).await;
+            let _ = text_tx.send(None).await;
+            let _ = monitor.take().expect("monitor available").await;
+            None
+        }
+    }
+}
+
+async fn stop_blocked_provider_stream(
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    blocked: &Arc<Mutex<Option<String>>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+) -> bool {
+    let Some(message) = blocked_message(blocked) else {
+        return false;
+    };
+    let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
+    let _ = text_tx.send(None).await;
+    let _ = monitor.take().expect("monitor available").await;
+    true
+}
+
+async fn forward_guarded_stream_text(
+    codec: LocalGuardrailsCodec,
+    chunk: &Json,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    blocked: &Arc<Mutex<Option<String>>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+) -> bool {
+    let Some(text) = extract_stream_text(codec, chunk) else {
+        return true;
+    };
+    if text_tx.send(Some(text)).await.is_ok() {
+        return true;
+    }
+    send_stream_monitor_error(
+        monitor.take().expect("monitor available"),
+        chunk_tx,
+        blocked,
+    )
+    .await;
+    false
+}
+
+async fn send_guarded_provider_chunk(
+    chunk: Json,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+    cancel: &mut watch::Receiver<bool>,
+) -> bool {
+    let sent = tokio::select! {
+        _ = cancel.changed() => return false,
+        sent = chunk_tx.send(Ok(chunk)) => sent,
+    };
+    if sent.is_ok() {
+        return true;
+    }
+    let _ = text_tx.send(None).await;
+    let _ = monitor.take().expect("monitor available").await;
+    false
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "stream cleanup needs all channels and lifecycle handles"
+)]
+async fn finish_guarded_provider_stream(
+    provider_stream: &mut LlmJsonStream,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    blocked: &Arc<Mutex<Option<String>>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+    cancel: &watch::Receiver<bool>,
+    closed: &watch::Sender<Option<FlowResult<()>>>,
+) {
     let _ = text_tx.send(None).await;
     if *cancel.borrow() {
         if let Some(monitor) = monitor.take() {
             monitor.abort();
         }
     } else if let Some(monitor) = monitor.take() {
-        let _ = send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
+        let _ = send_stream_monitor_error(monitor, chunk_tx, blocked).await;
     }
     closed.send_replace(Some(provider_stream.close().await));
 }

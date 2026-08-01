@@ -514,6 +514,200 @@ async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
     assert!(chunk_rx.recv().await.is_none());
 }
 
+#[tokio::test]
+async fn stream_monitor_errors_are_forwarded_to_the_provider_stream() {
+    async fn panicking_monitor() -> FlowResult<()> {
+        panic!("monitor panicked");
+    }
+
+    let blocked = Arc::new(Mutex::new(None));
+
+    for monitor in [
+        tokio::spawn(async { Err(FlowError::Internal("monitor failed".into())) }),
+        tokio::spawn(panicking_monitor()),
+    ] {
+        let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+        assert!(send_stream_monitor_error(monitor, &chunk_tx, &blocked).await);
+        assert!(chunk_rx.recv().await.unwrap().is_err());
+    }
+
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+    *blocked.lock().unwrap() = Some("blocked output".into());
+    assert!(send_stream_monitor_error(tokio::spawn(async { Ok(()) }), &chunk_tx, &blocked).await);
+    assert!(
+        chunk_rx
+            .recv()
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("blocked output")
+    );
+
+    *blocked.lock().unwrap() = None;
+    assert!(!send_stream_monitor_error(tokio::spawn(async { Ok(()) }), &chunk_tx, &blocked).await);
+}
+
+#[tokio::test]
+async fn guarded_provider_stream_forwards_provider_and_channel_failures() {
+    let provider_error = FlowError::Internal("provider failed".into());
+    let provider_stream = LlmJsonStream::new(tokio_stream::iter(vec![Err(provider_error)]));
+    let (text_tx, mut text_rx) = mpsc::channel(2);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        provider_stream,
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Ok(()) }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert!(chunk_rx.recv().await.unwrap().is_err());
+    assert_eq!(text_rx.recv().await, Some(None));
+    assert!(closed_rx.borrow().as_ref().unwrap().is_ok());
+
+    let provider_stream = LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+        "choices": [{"delta": {"content": "hello"}}]
+    }))]));
+    let (text_tx, text_rx) = mpsc::channel(1);
+    drop(text_rx);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        provider_stream,
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Err(FlowError::Internal("monitor closed".into())) }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert!(chunk_rx.recv().await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn guarded_provider_stream_handles_preblocked_dropped_and_cancelled_consumers() {
+    let stream_chunk = || {
+        LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+            "choices": [{"delta": {"content": "hello"}}]
+        }))]))
+    };
+
+    let (text_tx, _text_rx) = mpsc::channel(3);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(2);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        stream_chunk(),
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Ok(()) }),
+        Arc::new(Mutex::new(Some("already blocked".into()))),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert!(chunk_rx.recv().await.unwrap().is_err());
+
+    let (text_tx, _text_rx) = mpsc::channel(3);
+    let (chunk_tx, chunk_rx) = mpsc::channel(1);
+    drop(chunk_rx);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        stream_chunk(),
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Ok(()) }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+
+    let (text_tx, mut text_rx) = mpsc::channel(1);
+    let (chunk_tx, _chunk_rx) = mpsc::channel(1);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    cancel_tx.send_replace(true);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        stream_chunk(),
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { std::future::pending::<FlowResult<()>>().await }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert_eq!(text_rx.recv().await, Some(None));
+}
+
+#[test]
+fn local_codec_and_rewrite_helpers_cover_all_provider_surfaces() {
+    for (codec, surface) in [
+        (
+            LocalGuardrailsCodec::OpenAIChat,
+            ProviderSurface::OpenAIChat,
+        ),
+        (
+            LocalGuardrailsCodec::OpenAIResponses,
+            ProviderSurface::OpenAIResponses,
+        ),
+        (
+            LocalGuardrailsCodec::AnthropicMessages,
+            ProviderSurface::AnthropicMessages,
+        ),
+    ] {
+        assert_eq!(codec.provider_surface(), surface);
+        assert_eq!(
+            LocalGuardrailsCodec::from_provider_surface(surface).provider_surface(),
+            surface
+        );
+    }
+
+    let mut config = NeMoGuardrailsConfig {
+        input: false,
+        output: false,
+        ..Default::default()
+    };
+    assert!(resolve_codec(&config).unwrap().is_none());
+    config.input = true;
+    assert!(resolve_codec(&config).is_err());
+    config.codec = Some("unsupported".into());
+    assert!(resolve_codec(&config).is_err());
+
+    let mut annotated = AnnotatedLlmRequest {
+        messages: vec![Message::Assistant {
+            content: None,
+            tool_calls: None,
+            name: None,
+        }],
+        ..Default::default()
+    };
+    replace_last_role_content(&mut annotated, "assistant", "rewritten".into()).unwrap();
+    assert!(matches!(
+        &annotated.messages[0],
+        Message::Assistant {
+            content: Some(MessageContent::Text(content)),
+            ..
+        } if content == "rewritten"
+    ));
+    assert!(replace_last_role_content(&mut annotated, "user", "missing".into()).is_err());
+    assert!(modified_tool_payload("[]", "arguments").is_err());
+}
+
 #[test]
 fn parse_check_result_rejects_unknown_status() {
     assert!(matches!(

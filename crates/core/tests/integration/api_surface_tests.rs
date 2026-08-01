@@ -894,6 +894,13 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     reset_global();
     setup_isolated_thread();
 
+    assert_global_event_guardrail_registry();
+    assert_global_tool_registry();
+    assert_global_llm_registry();
+    assert_global_subscriber_registry();
+}
+
+fn assert_global_event_guardrail_registry() {
     register_mark_sanitize_guardrail(
         "mark-sanitize",
         1,
@@ -929,7 +936,9 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     .unwrap();
     assert!(deregister_scope_sanitize_end_guardrail("scope-end-sanitize").unwrap());
     assert!(!deregister_scope_sanitize_end_guardrail("scope-end-sanitize").unwrap());
+}
 
+fn assert_global_tool_registry() {
     register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
@@ -980,7 +989,9 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     )
     .unwrap();
     assert!(deregister_tool_execution_intercept("tool-execution").unwrap());
+}
 
+fn assert_global_llm_registry() {
     register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
@@ -1039,7 +1050,9 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     )
     .unwrap();
     assert!(deregister_llm_stream_execution_intercept("llm-stream").unwrap());
+}
 
+fn assert_global_subscriber_registry() {
     register_subscriber("global-subscriber", Arc::new(|_event| {})).unwrap();
     expect_already_exists(
         register_subscriber("global-subscriber", Arc::new(|_event| {})).unwrap_err(),
@@ -1097,8 +1110,24 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     )
     .unwrap();
 
+    assert_scope_event_guardrail_registry(&scope.uuid);
+    assert_scope_tool_registry(&scope.uuid);
+    assert_scope_llm_registry(&scope.uuid);
+    assert_scope_subscriber_registry(&scope.uuid);
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    assert_missing_scope_registry_errors(&scope.uuid);
+}
+
+fn assert_scope_event_guardrail_registry(scope_uuid: &uuid::Uuid) {
     scope_register_mark_sanitize_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "mark-sanitize",
         1,
         Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
@@ -1106,7 +1135,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     .unwrap();
     expect_already_exists(
         scope_register_mark_sanitize_guardrail(
-            &scope.uuid,
+            scope_uuid,
             "mark-sanitize",
             1,
             Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
@@ -1114,41 +1143,43 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         .unwrap_err(),
         "mark-sanitize",
     );
-    assert!(scope_deregister_mark_sanitize_guardrail(&scope.uuid, "mark-sanitize").unwrap());
-    assert!(!scope_deregister_mark_sanitize_guardrail(&scope.uuid, "mark-sanitize").unwrap());
+    assert!(scope_deregister_mark_sanitize_guardrail(scope_uuid, "mark-sanitize").unwrap());
+    assert!(!scope_deregister_mark_sanitize_guardrail(scope_uuid, "mark-sanitize").unwrap());
 
     scope_register_scope_sanitize_start_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "scope-start-sanitize",
         1,
         Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     assert!(
-        scope_deregister_scope_sanitize_start_guardrail(&scope.uuid, "scope-start-sanitize")
+        scope_deregister_scope_sanitize_start_guardrail(scope_uuid, "scope-start-sanitize")
             .unwrap()
     );
     assert!(
-        !scope_deregister_scope_sanitize_start_guardrail(&scope.uuid, "scope-start-sanitize")
+        !scope_deregister_scope_sanitize_start_guardrail(scope_uuid, "scope-start-sanitize")
             .unwrap()
     );
 
     scope_register_scope_sanitize_end_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "scope-end-sanitize",
         1,
         Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     assert!(
-        scope_deregister_scope_sanitize_end_guardrail(&scope.uuid, "scope-end-sanitize").unwrap()
+        scope_deregister_scope_sanitize_end_guardrail(scope_uuid, "scope-end-sanitize").unwrap()
     );
     assert!(
-        !scope_deregister_scope_sanitize_end_guardrail(&scope.uuid, "scope-end-sanitize").unwrap()
+        !scope_deregister_scope_sanitize_end_guardrail(scope_uuid, "scope-end-sanitize").unwrap()
     );
+}
 
+fn assert_scope_tool_registry(scope_uuid: &uuid::Uuid) {
     scope_register_tool_sanitize_request_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "tool-sanitize-request",
         1,
         Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
@@ -1156,7 +1187,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     .unwrap();
     expect_already_exists(
         scope_register_tool_sanitize_request_guardrail(
-            &scope.uuid,
+            scope_uuid,
             "tool-sanitize-request",
             1,
             Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
@@ -1165,91 +1196,93 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         "tool-sanitize-request",
     );
     assert!(
-        scope_deregister_tool_sanitize_request_guardrail(&scope.uuid, "tool-sanitize-request")
+        scope_deregister_tool_sanitize_request_guardrail(scope_uuid, "tool-sanitize-request")
             .unwrap()
     );
 
     scope_register_tool_sanitize_response_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "tool-sanitize-response",
         1,
         Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     assert!(
-        scope_deregister_tool_sanitize_response_guardrail(&scope.uuid, "tool-sanitize-response")
+        scope_deregister_tool_sanitize_response_guardrail(scope_uuid, "tool-sanitize-response")
             .unwrap()
     );
 
     scope_register_tool_conditional_execution_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "tool-conditional",
         1,
         Arc::new(|_name, _args| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     assert!(
-        scope_deregister_tool_conditional_execution_guardrail(&scope.uuid, "tool-conditional")
+        scope_deregister_tool_conditional_execution_guardrail(scope_uuid, "tool-conditional")
             .unwrap()
     );
 
     scope_register_tool_request_intercept(
-        &scope.uuid,
+        scope_uuid,
         "tool-request",
         1,
         false,
         Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
-    assert!(scope_deregister_tool_request_intercept(&scope.uuid, "tool-request").unwrap());
+    assert!(scope_deregister_tool_request_intercept(scope_uuid, "tool-request").unwrap());
 
     scope_register_tool_execution_intercept(
-        &scope.uuid,
+        scope_uuid,
         "tool-execution",
         1,
         Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
-    assert!(scope_deregister_tool_execution_intercept(&scope.uuid, "tool-execution").unwrap());
+    assert!(scope_deregister_tool_execution_intercept(scope_uuid, "tool-execution").unwrap());
+}
 
+fn assert_scope_llm_registry(scope_uuid: &uuid::Uuid) {
     scope_register_llm_sanitize_request_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "llm-sanitize-request",
         1,
         Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     assert!(
-        scope_deregister_llm_sanitize_request_guardrail(&scope.uuid, "llm-sanitize-request")
+        scope_deregister_llm_sanitize_request_guardrail(scope_uuid, "llm-sanitize-request")
             .unwrap()
     );
 
     scope_register_llm_sanitize_response_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "llm-sanitize-response",
         1,
         Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
     assert!(
-        scope_deregister_llm_sanitize_response_guardrail(&scope.uuid, "llm-sanitize-response")
+        scope_deregister_llm_sanitize_response_guardrail(scope_uuid, "llm-sanitize-response")
             .unwrap()
     );
 
     scope_register_llm_conditional_execution_guardrail(
-        &scope.uuid,
+        scope_uuid,
         "llm-conditional",
         1,
         Arc::new(|_request| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     assert!(
-        scope_deregister_llm_conditional_execution_guardrail(&scope.uuid, "llm-conditional")
+        scope_deregister_llm_conditional_execution_guardrail(scope_uuid, "llm-conditional")
             .unwrap()
     );
 
     scope_register_llm_request_intercept(
-        &scope.uuid,
+        scope_uuid,
         "llm-request",
         1,
         false,
@@ -1260,19 +1293,19 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         }),
     )
     .unwrap();
-    assert!(scope_deregister_llm_request_intercept(&scope.uuid, "llm-request").unwrap());
+    assert!(scope_deregister_llm_request_intercept(scope_uuid, "llm-request").unwrap());
 
     scope_register_llm_execution_intercept(
-        &scope.uuid,
+        scope_uuid,
         "llm-execution",
         1,
         Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
-    assert!(scope_deregister_llm_execution_intercept(&scope.uuid, "llm-execution").unwrap());
+    assert!(scope_deregister_llm_execution_intercept(scope_uuid, "llm-execution").unwrap());
 
     scope_register_llm_stream_execution_intercept(
-        &scope.uuid,
+        scope_uuid,
         "llm-stream",
         1,
         Arc::new(|_name, request, _next| {
@@ -1284,27 +1317,24 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         }),
     )
     .unwrap();
-    assert!(scope_deregister_llm_stream_execution_intercept(&scope.uuid, "llm-stream").unwrap());
+    assert!(scope_deregister_llm_stream_execution_intercept(scope_uuid, "llm-stream").unwrap());
+}
 
-    scope_register_subscriber(&scope.uuid, "scope-subscriber", Arc::new(|_event| {})).unwrap();
+fn assert_scope_subscriber_registry(scope_uuid: &uuid::Uuid) {
+    scope_register_subscriber(scope_uuid, "scope-subscriber", Arc::new(|_event| {})).unwrap();
     expect_already_exists(
-        scope_register_subscriber(&scope.uuid, "scope-subscriber", Arc::new(|_event| {}))
+        scope_register_subscriber(scope_uuid, "scope-subscriber", Arc::new(|_event| {}))
             .unwrap_err(),
         "scope-subscriber",
     );
-    assert!(scope_deregister_subscriber(&scope.uuid, "scope-subscriber").unwrap());
-    assert!(!scope_deregister_subscriber(&scope.uuid, "scope-subscriber").unwrap());
+    assert!(scope_deregister_subscriber(scope_uuid, "scope-subscriber").unwrap());
+    assert!(!scope_deregister_subscriber(scope_uuid, "scope-subscriber").unwrap());
+}
 
-    pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
-            .handle_uuid(&scope.uuid)
-            .build(),
-    )
-    .unwrap();
-
+fn assert_missing_scope_registry_errors(scope_uuid: &uuid::Uuid) {
     expect_not_found(
         scope_register_mark_sanitize_guardrail(
-            &scope.uuid,
+            scope_uuid,
             "missing-mark-sanitize",
             1,
             Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
@@ -1314,7 +1344,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     );
     expect_not_found(
         scope_register_scope_sanitize_start_guardrail(
-            &scope.uuid,
+            scope_uuid,
             "missing-scope-start-sanitize",
             1,
             Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
@@ -1324,7 +1354,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     );
     expect_not_found(
         scope_register_scope_sanitize_end_guardrail(
-            &scope.uuid,
+            scope_uuid,
             "missing-scope-end-sanitize",
             1,
             Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
@@ -1334,7 +1364,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     );
     expect_not_found(
         scope_register_tool_sanitize_request_guardrail(
-            &scope.uuid,
+            scope_uuid,
             "missing-tool-sanitize",
             1,
             Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
@@ -1344,7 +1374,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     );
     expect_not_found(
         scope_register_tool_request_intercept(
-            &scope.uuid,
+            scope_uuid,
             "missing-tool-request",
             1,
             false,
@@ -1355,7 +1385,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     );
     expect_not_found(
         scope_register_tool_execution_intercept(
-            &scope.uuid,
+            scope_uuid,
             "missing-tool-exec",
             1,
             Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
@@ -1364,7 +1394,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         "scope",
     );
     expect_not_found(
-        scope_register_subscriber(&scope.uuid, "missing-subscriber", Arc::new(|_event| {}))
+        scope_register_subscriber(scope_uuid, "missing-subscriber", Arc::new(|_event| {}))
             .unwrap_err(),
         "scope",
     );

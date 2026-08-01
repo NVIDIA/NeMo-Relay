@@ -408,16 +408,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(!atof.enabled);
     assert!(atof.sinks.is_empty());
 
-    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
-        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
-    }))
-    .unwrap();
-    let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
-        panic!("expected stream sink");
-    };
-    assert_eq!(stream.name.as_deref(), Some("switchyard"));
-    assert_eq!(stream.transport, "http_post");
-    assert_eq!(stream.field_name_policy, "preserve");
+    assert_default_stream_sink_shape();
 
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
@@ -457,6 +448,19 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(3));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
+}
+
+fn assert_default_stream_sink_shape() {
+    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
+        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
+    }))
+    .unwrap();
+    let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
+        panic!("expected stream sink");
+    };
+    assert_eq!(stream.name.as_deref(), Some("switchyard"));
+    assert_eq!(stream.transport, "http_post");
+    assert_eq!(stream.field_name_policy, "preserve");
 }
 
 #[test]
@@ -3284,5 +3288,38 @@ fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
         std::env::remove_var(empty);
         std::env::remove_var(secret);
         std::env::remove_var(token);
+    }
+}
+
+#[test]
+fn observability_private_editor_and_validation_helpers_cover_edge_configs() {
+    assert_eq!(
+        default_atof_file_sink_editor_value(),
+        json!({
+            "type": "file",
+            "mode": "append"
+        })
+    );
+    assert_eq!(
+        default_atof_stream_sink_editor_value()["transport"],
+        json!("http_post")
+    );
+    assert_eq!(
+        default_opentelemetry_endpoint_editor_value()["service_name"],
+        json!("unknown_service")
+    );
+    let field = otel_editor_field("optional", EditorFieldKind::String, &[], true);
+    assert_eq!(field.name, "optional");
+    assert!(field.optional);
+
+    let plugin = ObservabilityPlugin;
+    assert!(!plugin.allows_multiple_components());
+    for value in [
+        json!({"atof": {"enabled": true, "filename": "removed.jsonl"}}),
+        json!({"atof": {"enabled": true, "sinks": []}}),
+        json!({"opentelemetry": {"enabled": true, "endpoints": []}}),
+    ] {
+        let config = value.as_object().unwrap();
+        assert!(!plugin.validate(config).is_empty());
     }
 }

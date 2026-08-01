@@ -124,6 +124,26 @@ fn python_worker_launch_clears_host_python_environment() {
 fn empty_worker_endpoint_announcement_is_retried() {
     let temp = tempfile::tempdir().unwrap();
     let announcement = temp.path().join("worker-endpoint");
+    let missing = temp.path().join("missing-endpoint");
+    let directory = temp.path().join("endpoint-directory");
+    std::fs::create_dir(&directory).unwrap();
+
+    assert_eq!(
+        normalize_worker_tcp_endpoint(" tcp://127.0.0.1:50051 ").unwrap(),
+        "http://127.0.0.1:50051"
+    );
+    assert_eq!(
+        normalize_worker_tcp_endpoint("http://127.0.0.1:50051").unwrap(),
+        "http://127.0.0.1:50051"
+    );
+    assert!(normalize_worker_tcp_endpoint("tcp://").is_err());
+    assert!(normalize_worker_tcp_endpoint("https://127.0.0.1").is_err());
+    assert!(
+        resolve_worker_connect_endpoint(&WorkerConnectEndpoint::Announced(missing))
+            .unwrap()
+            .is_none()
+    );
+    assert!(resolve_worker_connect_endpoint(&WorkerConnectEndpoint::Announced(directory)).is_err());
     std::fs::write(&announcement, "").unwrap();
 
     let endpoint = WorkerConnectEndpoint::Announced(announcement);
@@ -419,6 +439,16 @@ fn worker_endpoints_fail_when_host_socket_cannot_bind() {
     );
 
     let _ = std::fs::remove_dir_all(&activation_dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn worker_unix_connection_reports_a_missing_socket() {
+    let missing = std::env::temp_dir().join(format!("nmrw-missing-{}", Uuid::now_v7()));
+    let error = connect_worker(&WorkerConnectEndpoint::Unix(missing.clone()))
+        .await
+        .expect_err("a missing worker socket should fail to connect");
+    assert!(error.to_string().contains(&missing.display().to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1851,6 +1881,18 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
         .await
         .expect_err("a capability cannot be reused by another invocation");
     assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
+    let wrong_invocation = state
+        .response_codec(&response_capability, "another-invocation")
+        .err()
+        .expect("response capability must remain invocation-bound");
+    assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
+    let wrong_direction = state
+        .response_codec(&request_capability, invocation_id)
+        .err()
+        .expect("request capability cannot decode responses");
+    assert_eq!(wrong_direction.code(), tonic::Code::InvalidArgument);
 
     let decoded = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
