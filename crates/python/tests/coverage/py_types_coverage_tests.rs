@@ -54,6 +54,20 @@ fn base_event(
         .build()
 }
 
+fn py_scope_event(event: Event) -> PyScopeEvent {
+    match event {
+        Event::Scope(inner) => PyScopeEvent { inner },
+        _ => panic!("expected scope event"),
+    }
+}
+
+fn py_mark_event(event: Event) -> PyMarkEvent {
+    match event {
+        Event::Mark(inner) => PyMarkEvent { inner },
+        _ => panic!("expected mark event"),
+    }
+}
+
 #[test]
 fn test_register_exposes_all_type_bindings() {
     let _python = crate::test_support::init_python_test();
@@ -688,7 +702,7 @@ fn test_event_wrappers_cover_remaining_methods() {
             };
 
             fn assert_scope_and_tool_event_methods(py: Python<'_>, parent_uuid: Uuid) {
-                let scope_start = match Event::Scope(ScopeEvent::new(
+                let scope_start = py_scope_event(Event::Scope(ScopeEvent::new(
                     base_event(
                         parent_uuid,
                         "scope-start",
@@ -699,17 +713,14 @@ fn test_event_wrappers_cover_remaining_methods() {
                     scope_attributes_to_strings(ScopeAttributes::PARALLEL),
                     EventCategory::agent(),
                     None,
-                )) {
-                    Event::Scope(inner) => PyScopeEvent { inner },
-                    _ => unreachable!(),
-                };
+                )));
                 assert_eq!(scope_start.kind(), "scope");
                 assert_eq!(scope_start.scope_category(), "start");
                 assert_eq!(scope_start.name(), "scope-start");
                 assert_eq!(scope_start.category(), "agent");
                 assert_eq!(scope_start.attributes(), vec!["parallel".to_string()]);
 
-                let scope_end = match Event::Scope(ScopeEvent::new(
+                let scope_end = py_scope_event(Event::Scope(ScopeEvent::new(
                     base_event(
                         parent_uuid,
                         "scope-end",
@@ -720,15 +731,12 @@ fn test_event_wrappers_cover_remaining_methods() {
                     scope_attributes_to_strings(ScopeAttributes::RELOCATABLE),
                     EventCategory::tool(),
                     None,
-                )) {
-                    Event::Scope(inner) => PyScopeEvent { inner },
-                    _ => unreachable!(),
-                };
+                )));
                 assert_eq!(scope_end.kind(), "scope");
                 assert_eq!(scope_end.scope_category(), "end");
                 assert_eq!(scope_end.category(), "tool");
 
-                let tool_end = match Event::Scope(ScopeEvent::new(
+                let tool_end = py_scope_event(Event::Scope(ScopeEvent::new(
                     base_event(
                         parent_uuid,
                         "tool-end",
@@ -739,10 +747,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                     tool_attributes_to_strings(ToolAttributes::REMOTE),
                     EventCategory::tool(),
                     Some(CategoryProfile::builder().tool_call_id("call-1").build()),
-                )) {
-                    Event::Scope(inner) => PyScopeEvent { inner },
-                    _ => unreachable!(),
-                };
+                )));
                 assert_eq!(tool_end.kind(), "scope");
                 assert_eq!(tool_end.scope_category(), "end");
                 assert_eq!(
@@ -756,7 +761,7 @@ fn test_event_wrappers_cover_remaining_methods() {
             }
             assert_scope_and_tool_event_methods(py, parent_uuid);
 
-            let llm_start = match Event::Scope(ScopeEvent::new(
+            let llm_start = py_scope_event(Event::Scope(ScopeEvent::new(
                 base_event(
                     parent_uuid,
                     "llm-start",
@@ -772,10 +777,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                         .annotated_request(std::sync::Arc::new(annotated_request.clone()))
                         .build(),
                 ),
-            )) {
-                Event::Scope(inner) => PyScopeEvent { inner },
-                _ => unreachable!(),
-            };
+            )));
             let mut expected_start_profile = json!({"model_name": "demo-model"});
             expected_start_profile.as_object_mut().unwrap().insert(
                 "annotated_request".into(),
@@ -786,7 +788,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                 expected_start_profile
             );
 
-            let llm_end = match Event::Scope(ScopeEvent::new(
+            let llm_end = py_scope_event(Event::Scope(ScopeEvent::new(
                 base_event(
                     parent_uuid,
                     "llm-end",
@@ -802,10 +804,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                         .annotated_response(std::sync::Arc::new(annotated_response.clone()))
                         .build(),
                 ),
-            )) {
-                Event::Scope(inner) => PyScopeEvent { inner },
-                _ => unreachable!(),
-            };
+            )));
             let mut expected_end_profile = json!({"model_name": "demo-model"});
             expected_end_profile.as_object_mut().unwrap().insert(
                 "annotated_response".into(),
@@ -816,7 +815,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                 expected_end_profile
             );
 
-            let mark = match Event::Mark(MarkEvent::new(
+            let mark = py_mark_event(Event::Mark(MarkEvent::new(
                 base_event(
                     parent_uuid,
                     "mark",
@@ -825,10 +824,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                 ),
                 None,
                 None,
-            )) {
-                Event::Mark(inner) => PyMarkEvent { inner },
-                _ => unreachable!(),
-            };
+            )));
             assert_eq!(mark.kind(), "mark");
             assert_eq!(mark.name(), "mark");
         }
