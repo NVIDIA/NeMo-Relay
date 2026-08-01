@@ -147,7 +147,8 @@ Use this when:
 Fork a scope stack before starting concurrent work when the child should remain
 part of the parent's event tree without sharing its mutable stack. The fork
 preserves the immediate parent but does not transfer scope-local middleware or
-subscribers.
+subscribers. This is Relay event-tree continuity: the rootless fork starts a
+new OpenTelemetry trace from its first local span.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -214,6 +215,12 @@ only for request handling. Its first local event becomes a child of
 The transport is application-owned: authenticate and authorize inbound context
 before importing it. Relay does not send headers, make IPC connections, or
 trust remote identifiers automatically.
+
+A rootless context, including the value returned by the default
+`capture_propagation_context()` API, preserves this Relay event parentage but
+does not assert OpenTelemetry trace continuity. The first local span starts a
+new trace. Supply a stable `root_uuid` when the receiver should participate in
+the Relay-derived trace rooted at that UUID.
 
 Relay context is distinct from W3C propagation. An integration may carry
 `traceparent` and `tracestate` alongside Relay's JSON context when it needs to

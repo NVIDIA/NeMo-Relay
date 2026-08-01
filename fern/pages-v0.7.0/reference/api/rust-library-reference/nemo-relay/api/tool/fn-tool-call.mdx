@@ -36,4 +36,4 @@ Returns an error when the runtime owner check fails or when internal state canno
 
 ## Notes
 
-Sanitize-request guardrails affect only the emitted start-event payload, not the caller-owned `args` value.
+Sanitize-request guardrails affect only the emitted start-event payload, not the caller-owned `args` value. If a sanitizer errors or panics, Relay omits that observability payload and does not run remaining sanitizers.

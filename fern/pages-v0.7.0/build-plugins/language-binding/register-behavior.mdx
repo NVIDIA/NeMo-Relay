@@ -278,7 +278,7 @@ async def main() -> None:
         print("Activation report:", active_report)
         print("Available kinds:", nemo_relay.plugin.list_kinds())
     finally:
-        nemo_relay.plugin.clear()
+        await nemo_relay.plugin.clear_async()
 
 
 if __name__ == "__main__":

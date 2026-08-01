@@ -202,8 +202,8 @@ Node.js guardrail and request-intercept callbacks can return direct values or
 Promises. A thrown error or rejected Promise from a conditional-execution
 guardrail or request intercept rejects the managed call before protected
 execution or later middleware runs. A thrown error or rejected Promise from a
-sanitize guardrail or event sanitizer fails open, preserving the current emitted
-payload and recording the error for `getLastCallbackError()`.
+sanitize guardrail or event sanitizer fails closed, withholding the governed
+emitted payload and recording the error for `getLastCallbackError()`.
 
 Scope-local variants are available through `nemo_relay.scope_local.register_*`, Node.js `scopeRegister*` helpers, and Rust `scope_register_*` functions.
 

@@ -85,7 +85,8 @@ Use the barrier that matches how you manage the exporter lifecycle:
 - For a manual exporter, call its documented `force_flush()`, `export()`, or
   `shutdown()` operation.
 - For plugin-managed export, call `plugin.clear()` or
-  `clear_plugin_configuration()` during graceful shutdown.
+  `clear_plugin_configuration()` during graceful shutdown. From a Python
+  `asyncio` task, await `plugin.clear_async()` instead.
 
 If the process terminates before those operations complete, the output can omit
 queued telemetry even when the instrumented application work completed

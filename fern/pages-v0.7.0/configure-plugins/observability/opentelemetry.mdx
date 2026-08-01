@@ -29,6 +29,11 @@ with collector or backend schemas.
 NeMo Relay uses OpenTelemetry Rust `0.32`. It deterministically derives
 compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
 receive the same event stream use the same identifiers and parentage.
+Rooted Relay propagation continues the Relay-derived trace across the import
+boundary. Rootless propagation retains Relay event parentage but starts a new
+OpenTelemetry trace from the first local event. Carry W3C `traceparent` and
+`tracestate` alongside Relay propagation when an integration also needs to
+preserve upstream OpenTelemetry sampling or vendor state.
 
 ## `plugins.toml` Example
 
@@ -86,6 +91,34 @@ work or delivery to the other exporters.
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 
+## Batch Processor Environment Variables
+
+OpenTelemetry's standard batch processor settings apply process-wide to every
+configured endpoint. Set them before the plugin activates; endpoint-specific
+batch sizing is not supported.
+
+| Variable | Default | Notes |
+|---|---:|---|
+| `OTEL_BSP_MAX_QUEUE_SIZE` | `2048` | Maximum completed spans buffered per endpoint. |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | `512` | Maximum spans exported in one batch; capped at the queue size. |
+| `OTEL_BSP_SCHEDULE_DELAY` | `5000` ms | Maximum delay before exporting a non-full batch. |
+
+Use positive integer values. The SDK falls back to its defaults for malformed
+values but accepts zero; do not use zero values. Queue capacity counts spans,
+not bytes. A full queue drops completed spans rather than applying backpressure
+to application work.
+
+## Endpoint Capacity and Sizing
+
+NeMo Relay does not impose a maximum number of OpenTelemetry endpoints. Each
+endpoint owns an exporter, tracer provider, batch queue, and exporter runtime.
+Queue capacity and memory are per endpoint, and total export traffic grows
+approximately with endpoint count and trace payload size.
+
+Use only the endpoints required by your deployment. Validate configurations
+with tens or hundreds of endpoints against the process thread, memory, and
+network limits.
+
 Use `header_env` for secrets so configuration files contain only environment
 variable names. Each variable contains the complete header value. NeMo Relay
 validates variable names without reading their values, then resolves and
@@ -122,6 +155,36 @@ Rerankers, marks, and unsupported scope types are omitted. Supported
 descendants remain attached to their nearest exported ancestor. This
 projection never emits `nemo_relay.*` fields and does not export message
 content, tool payloads, or retrieval content.
+
+### Error Type Mapping
+
+For managed LLM, tool, and stream failures, NeMo Relay maps structured
+`FlowError` values to the OpenTelemetry `error.type` attribute:
+
+| Relay error | `error.type` |
+|---|---|
+| `AlreadyExists` | `already_exists` |
+| `NotFound` | `not_found` |
+| `InvalidArgument` | `invalid_argument` |
+| `ScopeStackEmpty` | `scope_stack_empty` |
+| `GuardrailRejected` | `guardrail_rejected` |
+| Upstream connection failure | `connection_error` |
+| Upstream timeout | `timeout` |
+| Upstream retryable status | `retryable_status` |
+| Upstream context-window failure | `context_window` |
+| Upstream model unavailable | `model_unavailable` |
+| Upstream authentication failure | `authentication` |
+| Upstream invalid request | `invalid_request` |
+| Other upstream failure | `upstream_error` |
+| `Internal` | `internal_error` |
+
+External application and callback exceptions that do not have a more specific
+`FlowError` classification are represented as `Internal` and emit
+`internal_error`. NeMo Relay does not inspect error messages to recover Python,
+JavaScript, or application-defined exception class names. When no structured
+`FlowError` is available, such as a cancellation or dropped execution, the
+GenAI projection emits `_OTHER`. Caller-provided `error.type` metadata takes
+precedence over the derived mapping.
 
 ## Direct Subscriber
 
