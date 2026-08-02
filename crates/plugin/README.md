@@ -166,14 +166,20 @@ the CLI gateway and through SDK-embedded Relay hosts that call the managed LLM
 execution APIs directly.
 
 Streaming dispatch returns `LlmProviderStreamV2`, which implements Rust
-`Stream` and cancels unfinished provider work on drop. Safe callback futures
-and returned streams run to completion on Relay's reusable blocking callback
-lane, outside an entered Tokio runtime. No Rust future, trait object,
-`serde_json::Value`, or allocator-owned Rust string crosses the C ABI boundary.
+`Stream` and cancels unfinished provider work on drop. Safe callbacks register
+through the generic V3 completion API and return `Pending`; Relay then polls
+their Rust futures and returned streams cooperatively on its Tokio runtime.
+Each resumed poll restores the captured Relay continuation and scope context,
+and a pending callback does not occupy a blocking worker. Output backpressure
+parks the task until the bounded host queue can accept more data. No Rust
+future, trait object, `serde_json::Value`, or allocator-owned Rust string
+crosses the C ABI boundary.
 
-The raw `PluginContext::host_api_v4` table and `_raw` v2 registration methods
-remain available for advanced ABI consumers and non-Rust bindings. Code using
-them is responsible for every callback lifetime, host string, completion,
+The raw `PluginContext::host_api_v4` table and generic V3 `Pending`
+registration methods remain available for advanced ABI consumers and non-Rust
+bindings. V4 adds targeted LLM continuation and host-task operations; it does
+not define a separate blocking registration model. Code using the raw tables is
+responsible for every callback lifetime, host string, completion, task and
 stream settlement, cancellation, and release operation.
 
 The manifest API number is distinct from the internal host-table ABI number:
@@ -181,6 +187,12 @@ native API v1 negotiates the V3 host table and native API v2 negotiates V4.
 Native plugins are trusted in-process extensions. A v2 plugin owns its target
 credentials; Relay transports them but excludes their values from diagnostics
 and observability.
+
+Clean plugin teardown unloads the native library normally. If teardown finds
+an opaque callback, task, continuation, or stream handle that still owns plugin
+code, Relay conservatively keeps only that library mapping loaded for the rest
+of the process. All descriptor and handle state is still released. This avoids
+unmapping a plugin while an escaped handle is returning through its own code.
 
 ## Documentation
 

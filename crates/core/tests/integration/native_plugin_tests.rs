@@ -42,6 +42,9 @@ use uuid::Uuid;
 
 static NATIVE_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const PLUGIN_DISCOVERY_TEST_CHILD: &str = "NEMO_RELAY_PLUGIN_DISCOVERY_TEST_CHILD";
+const NATIVE_V2_UNLOAD_TEST_CHILD: &str = "NEMO_RELAY_NATIVE_V2_UNLOAD_TEST_CHILD";
+const NATIVE_V2_UNLOAD_TEST_MANIFEST: &str = "NEMO_RELAY_NATIVE_V2_UNLOAD_TEST_MANIFEST";
+const NATIVE_V2_UNLOAD_TEST_LIBRARY: &str = "NEMO_RELAY_NATIVE_V2_UNLOAD_TEST_LIBRARY";
 
 struct ReplacementRegistryPlugin;
 
@@ -1301,62 +1304,238 @@ fn native_api_v2_plugin_requires_the_v2_manifest_contract() {
     assert!(error.contains("entry symbol"), "{error}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_api_v2_fixture_dispatches_through_core_without_a_cli_gateway() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let provider =
-        EmbeddedFakeProvider::spawn(br#"{"id":"embedded-target-response"}"#, "application/json");
-    let manifest_ref = write_raw_manifest(
-        fixture.manifest_dir.path(),
-        &native_manifest_text(
-            "fixture_native",
-            &format!("={}", env!("CARGO_PKG_VERSION")),
-            "2",
-            &fixture.library_path.to_string_lossy(),
-            "nemo_relay_fixture_targeted_v2_plugin",
-        ),
-    );
-    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("targeted native API v2 fixture should load");
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native".into(),
-        enabled: true,
-        config: Map::from_iter([("target_url".into(), json!(provider.url))]),
+#[test]
+fn native_api_v2_fixture_dispatches_cooperatively_without_a_cli_gateway() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("fixture runtime should build");
+    runtime.block_on(async {
+        let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+        let fixture = build_fixture_plugin();
+        let provider = EmbeddedFakeProvider::spawn(
+            br#"{"id":"embedded-target-response"}"#,
+            "application/json",
+        );
+        let manifest_ref = write_raw_manifest(
+            fixture.manifest_dir.path(),
+            &native_manifest_text(
+                "fixture_native",
+                &format!("={}", env!("CARGO_PKG_VERSION")),
+                "2",
+                &fixture.library_path.to_string_lossy(),
+                "nemo_relay_fixture_targeted_v2_plugin",
+            ),
+        );
+        let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+            .expect("targeted native API v2 fixture should load");
+        let mut plugin_config = PluginConfig::default();
+        plugin_config.components.push(PluginComponentSpec {
+            kind: "fixture_native".into(),
+            enabled: true,
+            config: Map::from_iter([("target_url".into(), json!(provider.url))]),
+        });
+        initialize_plugins_exact(plugin_config)
+            .await
+            .expect("targeted native API v2 fixture should initialize");
+        let mut cleanup = NativePluginTestCleanup::new();
+        cleanup.mark_plugin_configuration_active();
+
+        let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+        let captured_events = events.clone();
+        register_subscriber(
+            "native_plugin_v2_cooperative_events",
+            Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+        )
+        .expect("cooperative v2 event subscriber should register");
+        cleanup.mark_subscriber_registered("native_plugin_v2_cooperative_events");
+
+        let (blocking_entered_tx, blocking_entered_rx) = tokio::sync::oneshot::channel();
+        let (blocking_release_tx, blocking_release_rx) = std::sync::mpsc::channel();
+        let blocking_worker = tokio::task::spawn_blocking(move || {
+            let _ = blocking_entered_tx.send(());
+            let _ = blocking_release_rx.recv();
+        });
+        blocking_entered_rx
+            .await
+            .expect("the only blocking worker should be occupied");
+
+        let original_provider_called = Arc::new(AtomicBool::new(false));
+        let original_provider_called_for_fn = original_provider_called.clone();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name("embedded-targeted-native-v2")
+                    .request(LlmRequest {
+                        headers: Map::new(),
+                        content: json!({"model": "caller-model", "prompt": "hello"}),
+                    })
+                    .func(Arc::new(move |_| {
+                        original_provider_called_for_fn.store(true, Ordering::SeqCst);
+                        Box::pin(async { Ok(json!({"id": "wrong-provider"})) })
+                    }))
+                    .build(),
+            ),
+        )
+        .await;
+        let _ = blocking_release_tx.send(());
+        blocking_worker
+            .await
+            .expect("occupied blocking worker should exit cleanly");
+        let response = response
+            .expect("safe v2 callback must not wait for the occupied blocking worker")
+            .expect("embedded targeted dispatch should succeed");
+
+        assert_eq!(response, json!({"id": "embedded-target-response"}));
+        assert!(!original_provider_called.load(Ordering::SeqCst));
+        let captured =
+            String::from_utf8(provider.request()).expect("captured request should be UTF-8");
+        assert!(captured.contains("authorization: Bearer fixture-target\r\n"));
+        assert!(captured.contains("\"fixture_targeted\":true"));
+
+        flush_subscribers().expect("cooperative v2 events should flush");
+        let events = events.lock().unwrap();
+        let llm_start = find_event(
+            &events,
+            "embedded-targeted-native-v2",
+            Some(ScopeCategory::Start),
+        );
+        let resumed_mark = find_event(&events, "fixture.native.v2.after_await", None);
+        assert_eq!(
+            resumed_mark.parent_uuid(),
+            llm_start.parent_uuid(),
+            "a resumed safe callback must retain the LLM invocation's active scope"
+        );
+        assert_eq!(resumed_mark.data().unwrap()["phase"], "resumed");
+        drop(events);
+
+        drop(cleanup);
+        activation.clear();
     });
-    initialize_plugins_exact(plugin_config)
+}
+
+#[test]
+fn native_api_v2_escaped_continuation_release_keeps_library_mapped() {
+    if std::env::var_os(NATIVE_V2_UNLOAD_TEST_CHILD).is_none() {
+        let fixture = build_fixture_plugin();
+        let manifest_ref = write_raw_manifest(
+            fixture.manifest_dir.path(),
+            &native_manifest_text(
+                "fixture_native",
+                &format!("={}", env!("CARGO_PKG_VERSION")),
+                "2",
+                &fixture.library_path.to_string_lossy(),
+                "nemo_relay_fixture_targeted_v2_plugin",
+            ),
+        );
+        let output = Command::new(std::env::current_exe().expect("test executable should resolve"))
+            .args([
+                "--exact",
+                "native_api_v2_escaped_continuation_release_keeps_library_mapped",
+                "--nocapture",
+            ])
+            .env(NATIVE_V2_UNLOAD_TEST_CHILD, "1")
+            .env(NATIVE_V2_UNLOAD_TEST_MANIFEST, &manifest_ref)
+            .env(NATIVE_V2_UNLOAD_TEST_LIBRARY, &fixture.library_path)
+            .output()
+            .expect("native unload-safety child process should run");
+        assert!(
+            output.status.success(),
+            "native unload-safety child process failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("fixture runtime should build");
+    runtime.block_on(async {
+        let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+        let manifest_ref = std::env::var(NATIVE_V2_UNLOAD_TEST_MANIFEST)
+            .expect("child manifest path should be provided");
+        let library_path = std::env::var(NATIVE_V2_UNLOAD_TEST_LIBRARY)
+            .expect("child library path should be provided");
+        let activation = load_native_plugins([NativePluginLoadSpec {
+            plugin_id: "fixture_native".into(),
+            manifest_ref,
+        }])
+        .expect("targeted native API v2 fixture should load");
+
+        type ReleaseContinuation = unsafe extern "C" fn() -> bool;
+        type LibraryProbe = unsafe extern "C" fn() -> u64;
+        type PluginDropped = unsafe extern "C" fn() -> bool;
+        let fixture_library = unsafe { libloading::Library::new(library_path) }
+            .expect("targeted fixture should open for lifecycle probes");
+        let release_continuation = unsafe {
+            *fixture_library
+                .get::<ReleaseContinuation>(b"nemo_relay_fixture_release_escaped_v2_continuation\0")
+                .expect("fixture should export its continuation release probe")
+        };
+        let library_probe = unsafe {
+            *fixture_library
+                .get::<LibraryProbe>(b"nemo_relay_fixture_v2_library_probe\0")
+                .expect("fixture should export its library probe")
+        };
+        let plugin_dropped = unsafe {
+            *fixture_library
+                .get::<PluginDropped>(b"nemo_relay_fixture_targeted_v2_plugin_dropped\0")
+                .expect("fixture should export its descriptor-drop probe")
+        };
+        assert!(!unsafe { release_continuation() });
+        assert!(!unsafe { plugin_dropped() });
+        // Do not retain an independent libloading handle across activation
+        // teardown; that would mask the self-unload bug under test.
+        drop(fixture_library);
+
+        let provider =
+            EmbeddedFakeProvider::spawn(br#"{"id":"escaped-handle-response"}"#, "application/json");
+        let mut plugin_config = PluginConfig::default();
+        plugin_config.components.push(PluginComponentSpec {
+            kind: "fixture_native".into(),
+            enabled: true,
+            config: Map::from_iter([
+                ("target_url".into(), json!(provider.url)),
+                ("escape_continuation".into(), json!(true)),
+            ]),
+        });
+        initialize_plugins_exact(plugin_config)
+            .await
+            .expect("targeted native API v2 fixture should initialize");
+
+        let response = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("escaped-v2-continuation")
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"model": "caller-model", "prompt": "hello"}),
+                })
+                .func(Arc::new(|_| {
+                    Box::pin(async { Ok(json!({"id": "wrong-provider"})) })
+                }))
+                .build(),
+        )
         .await
-        .expect("targeted native API v2 fixture should initialize");
-    let mut cleanup = NativePluginTestCleanup::new();
-    cleanup.mark_plugin_configuration_active();
+        .expect("targeted dispatch should succeed before teardown");
+        assert_eq!(response, json!({"id": "escaped-handle-response"}));
+        let _ = provider.request();
 
-    let original_provider_called = Arc::new(AtomicBool::new(false));
-    let original_provider_called_for_fn = original_provider_called.clone();
-    let response = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("embedded-targeted-native-v2")
-            .request(LlmRequest {
-                headers: Map::new(),
-                content: json!({"model": "caller-model", "prompt": "hello"}),
-            })
-            .func(Arc::new(move |_| {
-                original_provider_called_for_fn.store(true, Ordering::SeqCst);
-                Box::pin(async { Ok(json!({"id": "wrong-provider"})) })
-            }))
-            .build(),
-    )
-    .await
-    .expect("embedded targeted dispatch should succeed");
+        clear_plugin_configuration().expect("plugin callbacks should clear before activation");
+        activation.clear();
 
-    assert_eq!(response, json!({"id": "embedded-target-response"}));
-    assert!(!original_provider_called.load(Ordering::SeqCst));
-    let captured = String::from_utf8(provider.request()).expect("captured request should be UTF-8");
-    assert!(captured.contains("authorization: Bearer fixture-target\r\n"));
-    assert!(captured.contains("\"fixture_targeted\":true"));
-
-    drop(cleanup);
-    activation.clear();
+        // Dropping the escaped safe wrapper calls back into Relay. Before the
+        // unload-safety fix, that host release could drop the final library
+        // guard and unmap this function before it returned.
+        assert!(unsafe { release_continuation() });
+        assert!(unsafe { plugin_dropped() });
+        assert_eq!(unsafe { library_probe() }, 0x4e52_5632_u64);
+    });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

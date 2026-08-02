@@ -881,6 +881,28 @@ pub struct NemoRelayNativeAsyncStream {
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
+/// Opaque host-scheduled cooperative task for native API v2 callbacks.
+///
+/// A task is polled on Relay's Tokio runtime with the middleware invocation's
+/// full continuation context restored. The task pointer passed to its poll
+/// callback is borrowed. A plugin that stores it in a Rust `Waker` must retain
+/// one reference for every stored clone and release those references exactly
+/// once.
+#[repr(C)]
+pub struct NemoRelayNativeAsyncTaskV2 {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Polls one host-scheduled native API v2 task.
+///
+/// The callback returns [`NemoRelayNativeAsyncCallbackState::Pending`] after
+/// arranging for a later `async_task_wake_v2`, or `Complete` after settling its
+/// associated completion or output stream. Relay serializes polls and restores
+/// the invocation context before every call.
+pub type NemoRelayNativeAsyncTaskPollCbV2 =
+    unsafe extern "C" fn(user_data: *mut c_void, task: *const NemoRelayNativeAsyncTaskV2) -> u32;
+
 /// Opaque host-owned provider stream returned by a native API v2 LLM continuation.
 ///
 /// The plugin requests one item at a time with the v2 host table, then cancels
@@ -1227,7 +1249,8 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
 }
 
-/// ABI-v4 host extension implementing native API v2 targeted LLM continuations.
+/// ABI-v4 host extension implementing native API v2 targeted LLM continuations
+/// and cooperative plugin-task scheduling.
 ///
 /// Its first field is the complete ABI-v3 table. Native API v1 plugins
 /// continue to receive ABI-v3 or ABI-v2 tables during entry-point negotiation.
@@ -1267,37 +1290,37 @@ pub struct NemoRelayNativeHostApiV4 {
     /// Releases the plugin-owned provider-stream reference.
     pub async_llm_stream_release_v2:
         unsafe extern "C" fn(stream: *const NemoRelayNativeLlmStreamV2),
-    /// Registers a native API v2 unary LLM execution callback.
+    /// Starts a cooperative task associated with an async completion.
     ///
-    /// Relay invokes the callback on its reusable blocking executor with the
-    /// active scope stack bound to that worker. Provider continuations invoked
-    /// through this table continue to execute on Relay's Tokio runtime. Once
-    /// invoked, the host consumes `user_data` and calls `free_fn` exactly once,
-    /// including when registration fails.
-    pub plugin_context_register_async_llm_execution_v2: unsafe extern "C" fn(
-        ctx: *mut NemoRelayNativePluginContext,
-        name: *const NemoRelayNativeString,
-        priority: i32,
-        cb: NemoRelayNativeAsyncMiddlewareCb,
+    /// Relay polls the task on its Tokio runtime and wakes it when the owning
+    /// completion is cancelled. A successful call consumes `user_data` and
+    /// invokes `free_fn` exactly once after completion or cancellation. A
+    /// failed call does not consume either value.
+    pub async_completion_spawn_task_v2: unsafe extern "C" fn(
+        completion: *const NemoRelayNativeAsyncCompletion,
+        cb: NemoRelayNativeAsyncTaskPollCbV2,
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
-    )
-        -> NemoRelayStatus,
-    /// Registers a native API v2 incremental LLM stream execution callback.
+    ) -> NemoRelayStatus,
+    /// Starts a cooperative task associated with an incremental output stream.
     ///
-    /// Relay starts the callback on its reusable blocking executor and exposes
-    /// the bounded output stream to the caller concurrently. Once invoked, the
-    /// host consumes `user_data` and calls `free_fn` exactly once, including
-    /// when registration fails.
-    pub plugin_context_register_async_llm_stream_execution_v2:
-        unsafe extern "C" fn(
-            ctx: *mut NemoRelayNativePluginContext,
-            name: *const NemoRelayNativeString,
-            priority: i32,
-            cb: NemoRelayNativeAsyncStreamMiddlewareCb,
-            user_data: *mut c_void,
-            free_fn: NemoRelayNativeFreeFn,
-        ) -> NemoRelayStatus,
+    /// Relay polls the task on its Tokio runtime and wakes it when the consumer
+    /// cancels or when bounded output backpressure clears. A successful call
+    /// consumes `user_data` and invokes `free_fn` exactly once after settlement
+    /// or cancellation. A failed call does not consume either value.
+    pub async_stream_spawn_task_v2: unsafe extern "C" fn(
+        stream: *const NemoRelayNativeAsyncStream,
+        cb: NemoRelayNativeAsyncTaskPollCbV2,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus,
+    /// Retains one reference to a cooperative task for a stored waker clone.
+    pub async_task_retain_v2: unsafe extern "C" fn(task: *const NemoRelayNativeAsyncTaskV2),
+    /// Schedules a cooperative task for another serialized poll.
+    pub async_task_wake_v2:
+        unsafe extern "C" fn(task: *const NemoRelayNativeAsyncTaskV2) -> NemoRelayStatus,
+    /// Releases one previously retained cooperative-task reference.
+    pub async_task_release_v2: unsafe extern "C" fn(task: *const NemoRelayNativeAsyncTaskV2),
     /// Forwards the ordinary downstream LLM stream directly into a native
     /// interceptor's output stream.
     ///
@@ -2874,56 +2897,6 @@ impl<'a> PluginContext<'a> {
         let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
         self.with_name(name, |_, name| unsafe {
             (host.plugin_context_register_async_stream_middleware)(
-                self.raw, name, priority, cb, user_data, free_fn,
-            )
-        })
-    }
-
-    /// Registers a native API v2 unary LLM execution callback.
-    ///
-    /// # Safety
-    /// The host consumes `user_data` as soon as the registration function is
-    /// invoked and calls `free_fn` exactly once on registration failure or
-    /// eventual deregistration. The callback owns its completion and `next`
-    /// handles and must settle/release them exactly once.
-    pub unsafe fn register_async_llm_execution_v2_raw(
-        &mut self,
-        name: &str,
-        priority: i32,
-        cb: NemoRelayNativeAsyncMiddlewareCb,
-        user_data: *mut c_void,
-        free_fn: NemoRelayNativeFreeFn,
-    ) -> NemoRelayStatus {
-        let Some(host) = self.host_api_v4() else {
-            return NemoRelayStatus::InvalidArg;
-        };
-        self.with_name(name, |_, name| unsafe {
-            (host.plugin_context_register_async_llm_execution_v2)(
-                self.raw, name, priority, cb, user_data, free_fn,
-            )
-        })
-    }
-
-    /// Registers a native API v2 incremental LLM stream execution callback.
-    ///
-    /// # Safety
-    /// The host consumes `user_data` as soon as the registration function is
-    /// invoked and calls `free_fn` exactly once on registration failure or
-    /// eventual deregistration. Callback-owned `next` and stream handles must
-    /// each be released exactly once.
-    pub unsafe fn register_async_llm_stream_execution_v2_raw(
-        &mut self,
-        name: &str,
-        priority: i32,
-        cb: NemoRelayNativeAsyncStreamMiddlewareCb,
-        user_data: *mut c_void,
-        free_fn: NemoRelayNativeFreeFn,
-    ) -> NemoRelayStatus {
-        let Some(host) = self.host_api_v4() else {
-            return NemoRelayStatus::InvalidArg;
-        };
-        self.with_name(name, |_, name| unsafe {
-            (host.plugin_context_register_async_llm_stream_execution_v2)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
         })

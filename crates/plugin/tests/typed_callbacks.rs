@@ -27,10 +27,11 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncLlmStreamNextCbV2, NemoRelayNativeAsyncLlmStreamOpenCbV2,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
     NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
-    NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmCodecKind,
-    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
+    NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeAsyncTaskPollCbV2,
+    NemoRelayNativeAsyncTaskV2, NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb,
+    NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
+    NemoRelayNativeHostApiV4, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
     NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
     NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
@@ -389,6 +390,7 @@ static SAFE_V2_HOLD_TARGETED_CALLBACK: AtomicBool = AtomicBool::new(false);
 static SAFE_V2_HELD_TARGETED_CALLBACK: Mutex<Option<(NemoRelayNativeAsyncLlmResultCbV2, usize)>> =
     Mutex::new(None);
 static SAFE_V2_NEXT_RELEASES: AtomicUsize = AtomicUsize::new(0);
+static SAFE_V2_COMPLETION_RELEASES: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_OUTPUT_RELEASES: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_PROVIDER_CANCELS: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_PROVIDER_RELEASES: AtomicUsize = AtomicUsize::new(0);
@@ -409,6 +411,24 @@ static SAFE_V2_OUTPUT_PUSH_STATUSES: Mutex<VecDeque<NemoRelayStatus>> = Mutex::n
 static SAFE_V2_OUTPUT_FINISH_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SAFE_V2_OUTPUT_REJECT_STATUSES: Mutex<VecDeque<NemoRelayStatus>> =
     Mutex::new(VecDeque::new());
+static SAFE_V2_TASKS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+static SAFE_V2_TASK_SPAWN_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
+static SAFE_V2_TASK_RETAINS: AtomicUsize = AtomicUsize::new(0);
+static SAFE_V2_TASK_RELEASES: AtomicUsize = AtomicUsize::new(0);
+static SAFE_V2_HELD_TASK_WAKER: Mutex<Option<std::task::Waker>> = Mutex::new(None);
+
+thread_local! {
+    static SAFE_V2_CURRENT_TASK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct SafeV2Task {
+    refs: AtomicUsize,
+    woken: AtomicBool,
+    completed: AtomicBool,
+    cb: NemoRelayNativeAsyncTaskPollCbV2,
+    user_data: usize,
+    free_fn: NemoRelayNativeFreeFn,
+}
 
 #[test]
 fn native_abi_v3_struct_sizes_are_self_describing() {
@@ -449,10 +469,10 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 504);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 528);
         assert_eq!(
             host_api_v4_offsets(),
-            [0, 440, 448, 456, 464, 472, 480, 488, 496]
+            [0, 440, 448, 456, 464, 472, 480, 488, 496, 504, 512, 520]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
@@ -483,10 +503,10 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 248);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
         assert_eq!(
             host_api_v4_offsets(),
-            [0, 216, 220, 224, 228, 232, 236, 240, 244]
+            [0, 216, 220, 224, 228, 232, 236, 240, 244, 248, 252, 256]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
@@ -497,7 +517,7 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_v4_offsets() -> [usize; 9] {
+fn host_api_v4_offsets() -> [usize; 12] {
     [
         offset_of!(NemoRelayNativeHostApiV4, v3),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_next_invoke_result_v2),
@@ -505,14 +525,11 @@ fn host_api_v4_offsets() -> [usize; 9] {
         offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_next_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_cancel_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_release_v2),
-        offset_of!(
-            NemoRelayNativeHostApiV4,
-            plugin_context_register_async_llm_execution_v2
-        ),
-        offset_of!(
-            NemoRelayNativeHostApiV4,
-            plugin_context_register_async_llm_stream_execution_v2
-        ),
+        offset_of!(NemoRelayNativeHostApiV4, async_completion_spawn_task_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_stream_spawn_task_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_task_retain_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_task_wake_v2),
+        offset_of!(NemoRelayNativeHostApiV4, async_task_release_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_next_forward_stream_v2),
     ]
 }
@@ -1438,6 +1455,10 @@ fn reset_state() {
     clear_registration(&LLM_REQUEST_INTERCEPT_REGISTRATION);
     clear_registration(&ASYNC_V2_REGISTRATION);
     clear_registration(&ASYNC_STREAM_V2_REGISTRATION);
+    assert!(
+        SAFE_V2_TASKS.lock().unwrap().is_empty(),
+        "previous test leaked cooperative host tasks"
+    );
     assert_eq!(
         STRING_LIVE_COUNT.load(Ordering::SeqCst),
         0,
@@ -1475,6 +1496,7 @@ fn reset_state() {
     SAFE_V2_HOLD_TARGETED_CALLBACK.store(false, Ordering::SeqCst);
     assert!(SAFE_V2_HELD_TARGETED_CALLBACK.lock().unwrap().is_none());
     SAFE_V2_NEXT_RELEASES.store(0, Ordering::SeqCst);
+    SAFE_V2_COMPLETION_RELEASES.store(0, Ordering::SeqCst);
     SAFE_V2_OUTPUT_RELEASES.store(0, Ordering::SeqCst);
     SAFE_V2_PROVIDER_CANCELS.store(0, Ordering::SeqCst);
     SAFE_V2_PROVIDER_RELEASES.store(0, Ordering::SeqCst);
@@ -1494,6 +1516,10 @@ fn reset_state() {
     SAFE_V2_OUTPUT_PUSH_STATUSES.lock().unwrap().clear();
     *SAFE_V2_OUTPUT_FINISH_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     SAFE_V2_OUTPUT_REJECT_STATUSES.lock().unwrap().clear();
+    *SAFE_V2_TASK_SPAWN_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
+    SAFE_V2_TASK_RETAINS.store(0, Ordering::SeqCst);
+    SAFE_V2_TASK_RELEASES.store(0, Ordering::SeqCst);
+    assert!(SAFE_V2_HELD_TASK_WAKER.lock().unwrap().is_none());
 }
 
 fn test_context(host: &NemoRelayNativeHostApiV1) -> PluginContext<'_> {
@@ -6140,6 +6166,7 @@ unsafe extern "C" fn safe_v2_completion_is_cancelled(
 unsafe extern "C" fn safe_v2_completion_release(
     _completion: *const NemoRelayNativeAsyncCompletion,
 ) {
+    SAFE_V2_COMPLETION_RELEASES.fetch_add(1, Ordering::SeqCst);
 }
 
 unsafe extern "C" fn safe_v2_async_next_invoke(
@@ -6156,15 +6183,48 @@ unsafe extern "C" fn safe_v2_next_release(_next: *const NemoRelayNativeAsyncNext
 
 unsafe extern "C" fn safe_v2_register_generic_async(
     _ctx: *mut NemoRelayNativePluginContext,
-    _kind: u32,
-    _name: *const NemoRelayNativeString,
-    _priority: i32,
+    kind: u32,
+    name: *const NemoRelayNativeString,
+    priority: i32,
     _break_chain: bool,
-    _cb: NemoRelayNativeAsyncMiddlewareCb,
-    _user_data: *mut c_void,
-    _free_fn: NemoRelayNativeFreeFn,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
-    NemoRelayStatus::InvalidArg
+    if kind != NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept as u32 {
+        if let Some(free_fn) = free_fn {
+            unsafe { free_fn(user_data) };
+        }
+        return NemoRelayStatus::InvalidArg;
+    }
+    let status = *SAFE_V2_REGISTRATION_STATUS.lock().unwrap();
+    if status != NemoRelayStatus::Ok {
+        if let Some(free_fn) = free_fn {
+            unsafe { free_fn(user_data) };
+        }
+        return status;
+    }
+    let host = test_host();
+    let name = match required_host_string(&host, name) {
+        Ok(name) => name,
+        Err(status) => {
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
+            return status;
+        }
+    };
+    replace_registration(
+        &ASYNC_V2_REGISTRATION,
+        RegisteredAsyncV2 {
+            name,
+            priority,
+            cb,
+            user_data: user_data as usize,
+            free_fn,
+        },
+    );
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn safe_v2_stream_push(
@@ -6186,6 +6246,13 @@ unsafe extern "C" fn safe_v2_stream_push(
         .unwrap_or(NemoRelayStatus::Ok);
     if status == NemoRelayStatus::Ok {
         SAFE_V2_OUTPUT.lock().unwrap().push(Ok(chunk));
+    } else if status == NemoRelayStatus::Internal {
+        SAFE_V2_CURRENT_TASK.with(|current| {
+            let task = current.get();
+            if task != 0 {
+                let _ = unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
+            }
+        });
     }
     status
 }
@@ -6211,6 +6278,13 @@ unsafe extern "C" fn safe_v2_stream_reject(
         .unwrap_or(NemoRelayStatus::Ok);
     if status == NemoRelayStatus::Ok {
         SAFE_V2_OUTPUT.lock().unwrap().push(Err(message));
+    } else if status == NemoRelayStatus::Internal {
+        SAFE_V2_CURRENT_TASK.with(|current| {
+            let task = current.get();
+            if task != 0 {
+                let _ = unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
+            }
+        });
     }
     status
 }
@@ -6237,13 +6311,40 @@ unsafe extern "C" fn safe_v2_async_next_invoke_stream(
 
 unsafe extern "C" fn safe_v2_register_generic_stream(
     _ctx: *mut NemoRelayNativePluginContext,
-    _name: *const NemoRelayNativeString,
-    _priority: i32,
-    _cb: NemoRelayNativeAsyncStreamMiddlewareCb,
-    _user_data: *mut c_void,
-    _free_fn: NemoRelayNativeFreeFn,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
-    NemoRelayStatus::InvalidArg
+    let status = *SAFE_V2_REGISTRATION_STATUS.lock().unwrap();
+    if status != NemoRelayStatus::Ok {
+        if let Some(free_fn) = free_fn {
+            unsafe { free_fn(user_data) };
+        }
+        return status;
+    }
+    let host = test_host();
+    let name = match required_host_string(&host, name) {
+        Ok(name) => name,
+        Err(status) => {
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
+            return status;
+        }
+    };
+    replace_registration(
+        &ASYNC_STREAM_V2_REGISTRATION,
+        RegisteredAsyncStreamV2 {
+            name,
+            priority,
+            cb,
+            user_data: user_data as usize,
+            free_fn,
+        },
+    );
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn safe_v2_passthrough_result(
@@ -6386,70 +6487,121 @@ unsafe extern "C" fn safe_v2_provider_release(_stream: *const NemoRelayNativeLlm
     SAFE_V2_PROVIDER_RELEASES.fetch_add(1, Ordering::SeqCst);
 }
 
-unsafe extern "C" fn safe_v2_register_buffered(
-    _ctx: *mut NemoRelayNativePluginContext,
-    name: *const NemoRelayNativeString,
-    priority: i32,
-    cb: NemoRelayNativeAsyncMiddlewareCb,
+unsafe extern "C" fn safe_v2_spawn_task(
+    _owner: *const c_void,
+    cb: NemoRelayNativeAsyncTaskPollCbV2,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
-    let status = *SAFE_V2_REGISTRATION_STATUS.lock().unwrap();
+    let status = *SAFE_V2_TASK_SPAWN_STATUS.lock().unwrap();
     if status != NemoRelayStatus::Ok {
-        if let Some(free_fn) = free_fn {
-            unsafe { free_fn(user_data) };
-        }
         return status;
     }
-    let host = test_host();
-    let name = match required_host_string(&host, name) {
-        Ok(name) => name,
-        Err(status) => return status,
-    };
-    replace_registration(
-        &ASYNC_V2_REGISTRATION,
-        RegisteredAsyncV2 {
-            name,
-            priority,
-            cb,
-            user_data: user_data as usize,
-            free_fn,
-        },
-    );
+    let task = Box::new(SafeV2Task {
+        refs: AtomicUsize::new(1),
+        woken: AtomicBool::new(true),
+        completed: AtomicBool::new(false),
+        cb,
+        user_data: user_data as usize,
+        free_fn,
+    });
+    let task = Box::into_raw(task) as usize;
+    SAFE_V2_TASKS.lock().unwrap().push(task);
     NemoRelayStatus::Ok
 }
 
-unsafe extern "C" fn safe_v2_register_streaming(
-    _ctx: *mut NemoRelayNativePluginContext,
-    name: *const NemoRelayNativeString,
-    priority: i32,
-    cb: NemoRelayNativeAsyncStreamMiddlewareCb,
+unsafe extern "C" fn safe_v2_completion_spawn_task(
+    completion: *const NemoRelayNativeAsyncCompletion,
+    cb: NemoRelayNativeAsyncTaskPollCbV2,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
-    let status = *SAFE_V2_REGISTRATION_STATUS.lock().unwrap();
-    if status != NemoRelayStatus::Ok {
-        if let Some(free_fn) = free_fn {
-            unsafe { free_fn(user_data) };
-        }
-        return status;
+    unsafe { safe_v2_spawn_task(completion.cast(), cb, user_data, free_fn) }
+}
+
+unsafe extern "C" fn safe_v2_stream_spawn_task(
+    stream: *const NemoRelayNativeAsyncStream,
+    cb: NemoRelayNativeAsyncTaskPollCbV2,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    unsafe { safe_v2_spawn_task(stream.cast(), cb, user_data, free_fn) }
+}
+
+unsafe extern "C" fn safe_v2_task_retain(task: *const NemoRelayNativeAsyncTaskV2) {
+    if let Some(task) = unsafe { task.cast::<SafeV2Task>().as_ref() } {
+        task.refs.fetch_add(1, Ordering::Relaxed);
+        SAFE_V2_TASK_RETAINS.fetch_add(1, Ordering::SeqCst);
     }
-    let host = test_host();
-    let name = match required_host_string(&host, name) {
-        Ok(name) => name,
-        Err(status) => return status,
+}
+
+unsafe extern "C" fn safe_v2_task_wake(task: *const NemoRelayNativeAsyncTaskV2) -> NemoRelayStatus {
+    let Some(task) = (unsafe { task.cast::<SafeV2Task>().as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
     };
-    replace_registration(
-        &ASYNC_STREAM_V2_REGISTRATION,
-        RegisteredAsyncStreamV2 {
-            name,
-            priority,
-            cb,
-            user_data: user_data as usize,
-            free_fn,
-        },
-    );
+    if task.completed.load(Ordering::Acquire) {
+        return NemoRelayStatus::Ok;
+    }
+    task.woken.store(true, Ordering::Release);
     NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn safe_v2_task_release(task: *const NemoRelayNativeAsyncTaskV2) {
+    let Some(task_ref) = (unsafe { task.cast::<SafeV2Task>().as_ref() }) else {
+        return;
+    };
+    SAFE_V2_TASK_RELEASES.fetch_add(1, Ordering::SeqCst);
+    if task_ref.refs.fetch_sub(1, Ordering::AcqRel) == 1 {
+        unsafe { drop(Box::from_raw(task.cast_mut().cast::<SafeV2Task>())) };
+    }
+}
+
+fn wake_safe_v2_tasks() {
+    for task in SAFE_V2_TASKS.lock().unwrap().iter().copied() {
+        let _ = unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
+    }
+}
+
+fn drive_safe_v2_tasks() {
+    loop {
+        let tasks = SAFE_V2_TASKS.lock().unwrap().clone();
+        let mut made_progress = false;
+        for raw in tasks {
+            let task_ptr = raw as *const SafeV2Task;
+            let Some(task) = (unsafe { task_ptr.as_ref() }) else {
+                continue;
+            };
+            if !task.woken.swap(false, Ordering::AcqRel) {
+                continue;
+            }
+            made_progress = true;
+            unsafe {
+                safe_v2_task_retain(task_ptr.cast());
+            }
+            SAFE_V2_CURRENT_TASK.with(|current| current.set(raw));
+            let state = unsafe {
+                (task.cb)(
+                    task.user_data as *mut c_void,
+                    task_ptr.cast::<NemoRelayNativeAsyncTaskV2>(),
+                )
+            };
+            SAFE_V2_CURRENT_TASK.with(|current| current.set(0));
+            if NemoRelayNativeAsyncCallbackState::try_from(state)
+                == Ok(NemoRelayNativeAsyncCallbackState::Complete)
+            {
+                task.completed.store(true, Ordering::Release);
+                if let Some(free_fn) = task.free_fn {
+                    unsafe { free_fn(task.user_data as *mut c_void) };
+                }
+                SAFE_V2_TASKS.lock().unwrap().retain(|task| *task != raw);
+                unsafe { safe_v2_task_release(task_ptr.cast()) };
+            }
+            unsafe { safe_v2_task_release(task_ptr.cast()) };
+        }
+        if !made_progress {
+            return;
+        }
+    }
 }
 
 unsafe extern "C" fn safe_v2_forward_stream(
@@ -6511,8 +6663,11 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_llm_stream_next_v2: safe_v2_provider_next,
         async_llm_stream_cancel_v2: safe_v2_provider_cancel,
         async_llm_stream_release_v2: safe_v2_provider_release,
-        plugin_context_register_async_llm_execution_v2: safe_v2_register_buffered,
-        plugin_context_register_async_llm_stream_execution_v2: safe_v2_register_streaming,
+        async_completion_spawn_task_v2: safe_v2_completion_spawn_task,
+        async_stream_spawn_task_v2: safe_v2_stream_spawn_task,
+        async_task_retain_v2: safe_v2_task_retain,
+        async_task_wake_v2: safe_v2_task_wake,
+        async_task_release_v2: safe_v2_task_release,
         async_llm_next_forward_stream_v2: safe_v2_forward_stream,
     }
 }
@@ -6593,6 +6748,11 @@ where
         NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
     );
     unsafe { registration.free() };
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    drive_safe_v2_tasks();
     state
 }
 
@@ -6612,6 +6772,11 @@ where
         NonNull::<NemoRelayNativeAsyncStream>::dangling().as_ptr(),
     );
     unsafe { registration.free() };
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    drive_safe_v2_tasks();
     state
 }
 
@@ -6650,16 +6815,18 @@ unsafe extern "C" fn raw_v2_streaming_probe(
 }
 
 #[test]
-fn native_api_v2_raw_registration_remains_an_advanced_escape_hatch() {
+fn native_api_v2_uses_generic_raw_registration_as_advanced_escape_hatch() {
     let _guard = begin_test();
     let host = test_host_v4();
     let mut ctx = test_context(&host.v3.v1);
 
     assert_eq!(
         unsafe {
-            ctx.register_async_llm_execution_v2_raw(
+            ctx.register_async_middleware_raw(
+                NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
                 "raw-buffered",
                 11,
+                false,
                 raw_v2_buffered_probe,
                 ptr::null_mut(),
                 None,
@@ -6676,7 +6843,7 @@ fn native_api_v2_raw_registration_remains_an_advanced_escape_hatch() {
 
     assert_eq!(
         unsafe {
-            ctx.register_async_llm_stream_execution_v2_raw(
+            ctx.register_async_stream_middleware_raw(
                 "raw-streaming",
                 12,
                 raw_v2_streaming_probe,
@@ -6697,9 +6864,11 @@ fn native_api_v2_raw_registration_remains_an_advanced_escape_hatch() {
     let mut v1_ctx = test_context(&v1);
     assert_eq!(
         unsafe {
-            v1_ctx.register_async_llm_execution_v2_raw(
+            v1_ctx.register_async_middleware_raw(
+                NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
                 "unsupported-buffered",
                 0,
+                false,
                 raw_v2_buffered_probe,
                 ptr::null_mut(),
                 None,
@@ -6709,7 +6878,7 @@ fn native_api_v2_raw_registration_remains_an_advanced_escape_hatch() {
     );
     assert_eq!(
         unsafe {
-            v1_ctx.register_async_llm_stream_execution_v2_raw(
+            v1_ctx.register_async_stream_middleware_raw(
                 "unsupported-streaming",
                 0,
                 raw_v2_streaming_probe,
@@ -6760,8 +6929,9 @@ fn safe_v2_buffered_registration_wraps_targeted_and_passthrough_calls() {
     unsafe { (host.v3.v1.string_free)(invocation) };
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(state),
-        Ok(NemoRelayNativeAsyncCallbackState::Complete)
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
     );
+    drive_safe_v2_tasks();
     assert_eq!(
         SAFE_V2_COMPLETION.lock().unwrap().take(),
         Some(Ok(json!({
@@ -6770,6 +6940,71 @@ fn safe_v2_buffered_registration_wraps_targeted_and_passthrough_calls() {
         })))
     );
     assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
+    assert_eq!(SAFE_V2_COMPLETION_RELEASES.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
+fn safe_v2_buffered_continuation_supports_repeated_concurrent_calls() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_async_llm_execution_v2(
+        "safe-buffered-concurrent",
+        0,
+        |_, request, next| async move {
+            let calls = (0..8).map(|index| {
+                let next = next.clone();
+                let mut request = request.clone();
+                request.content["index"] = json!(index);
+                async move {
+                    next.call(LlmContinuationInvocationV2 {
+                        request,
+                        target: safe_v2_target(),
+                    })
+                    .await
+                    .map_err(|error| format!("{error:?}"))
+                }
+            });
+            let results = futures::future::join_all(calls)
+                .await
+                .into_iter()
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(json!(results))
+        },
+    )
+    .unwrap();
+    let registration = take_safe_v2_buffered_registration();
+
+    let state = invoke_safe_v2_buffered(
+        &host,
+        &registration,
+        NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+        NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
+    );
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    drive_safe_v2_tasks();
+
+    let outcome = SAFE_V2_COMPLETION.lock().unwrap().take().unwrap().unwrap();
+    let results = outcome
+        .as_array()
+        .expect("callback returns one result per call");
+    assert_eq!(results.len(), 8);
+    assert!(
+        results
+            .iter()
+            .all(|result| result == &json!({ "targeted": true }))
+    );
+    assert_eq!(
+        SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst),
+        1,
+        "all continuation clones share one retained host handle"
+    );
+    assert_eq!(SAFE_V2_COMPLETION_RELEASES.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
     assert_eq!(live_host_strings(), 0);
 }
@@ -6787,36 +7022,84 @@ fn safe_v2_buffered_callback_stops_when_the_caller_cancels() {
     let invocation = json_host_string(
         &host.v3.v1,
         json!({ "name": "managed", "request": test_llm_request() }),
-    ) as usize;
-    let user_data = registration.user_data;
-    let callback = registration.cb;
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let callback_thread = std::thread::spawn(move || {
-        let state = unsafe {
-            callback(
-                user_data as *mut c_void,
-                invocation as *const NemoRelayNativeString,
-                NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
-                NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
-            )
-        };
-        done_tx.send(state).unwrap();
-    });
-
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    SAFE_V2_COMPLETION_CANCELLED.store(true, Ordering::SeqCst);
-    let state = done_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("caller cancellation must wake a pending safe buffered callback");
-    callback_thread.join().unwrap();
-    unsafe { (host.v3.v1.string_free)(invocation as *mut NemoRelayNativeString) };
-
+    );
+    let state = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+            NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(state),
-        Ok(NemoRelayNativeAsyncCallbackState::Complete)
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
     );
+    drive_safe_v2_tasks();
+    SAFE_V2_COMPLETION_CANCELLED.store(true, Ordering::SeqCst);
+    wake_safe_v2_tasks();
+    drive_safe_v2_tasks();
     assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
+    assert_eq!(SAFE_V2_COMPLETION_RELEASES.load(Ordering::SeqCst), 1);
     assert!(SAFE_V2_COMPLETION.lock().unwrap().is_none());
+    unsafe { registration.free() };
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
+fn safe_v2_cancelled_buffered_task_releases_completion_when_future_drop_panics() {
+    let _guard = begin_test();
+
+    struct PendingFutureWithPanickingDrop;
+
+    impl Future for PendingFutureWithPanickingDrop {
+        type Output = std::result::Result<Json, String>;
+
+        fn poll(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            std::task::Poll::Pending
+        }
+    }
+
+    impl Drop for PendingFutureWithPanickingDrop {
+        fn drop(&mut self) {
+            panic!("safe callback future drop panic");
+        }
+    }
+
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_async_llm_execution_v2("panic-on-cancel", 0, |_, _, _| {
+        PendingFutureWithPanickingDrop
+    })
+    .unwrap();
+    let registration = take_safe_v2_buffered_registration();
+    let state = invoke_safe_v2_buffered(
+        &host,
+        &registration,
+        NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+        NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
+    );
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    drive_safe_v2_tasks();
+
+    SAFE_V2_COMPLETION_CANCELLED.store(true, Ordering::SeqCst);
+    wake_safe_v2_tasks();
+    drive_safe_v2_tasks();
+
+    assert!(SAFE_V2_TASKS.lock().unwrap().is_empty());
+    assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
+    assert_eq!(SAFE_V2_COMPLETION_RELEASES.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        LAST_ERROR.lock().unwrap().as_deref(),
+        Some("native API v2 host task state drop panicked")
+    );
     unsafe { registration.free() };
     assert_eq!(live_host_strings(), 0);
 }
@@ -6840,34 +7123,27 @@ fn safe_v2_cancelled_targeted_call_releases_next_before_the_host_callback() {
     let invocation = json_host_string(
         &host.v3.v1,
         json!({ "name": "managed", "request": test_llm_request() }),
-    ) as usize;
-    let user_data = registration.user_data;
-    let callback = registration.cb;
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let callback_thread = std::thread::spawn(move || {
-        let state = unsafe {
-            callback(
-                user_data as *mut c_void,
-                invocation as *const NemoRelayNativeString,
-                NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
-                NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
-            )
-        };
-        done_tx.send(state).unwrap();
-    });
+    );
+    let state = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+            NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    drive_safe_v2_tasks();
     while SAFE_V2_HELD_TARGETED_CALLBACK.lock().unwrap().is_none() {
         std::thread::yield_now();
     }
     SAFE_V2_COMPLETION_CANCELLED.store(true, Ordering::SeqCst);
-    let state = done_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("cancelling the managed call must stop the targeted callback");
-    callback_thread.join().unwrap();
-
-    assert_eq!(
-        NemoRelayNativeAsyncCallbackState::try_from(state),
-        Ok(NemoRelayNativeAsyncCallbackState::Complete)
-    );
+    wake_safe_v2_tasks();
+    drive_safe_v2_tasks();
     assert_eq!(
         SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst),
         1,
@@ -6893,7 +7169,6 @@ fn safe_v2_cancelled_targeted_call_releases_next_before_the_host_callback() {
     unsafe { targeted_callback(targeted_user_data as *mut c_void, outcome) };
     unsafe {
         (host.v3.v1.string_free)(outcome);
-        (host.v3.v1.string_free)(invocation as *mut NemoRelayNativeString);
         registration.free();
     }
     assert_eq!(live_host_strings(), 0);
@@ -6954,8 +7229,9 @@ fn safe_v2_stream_registration_pumps_provider_stream_and_releases_handles() {
     unsafe { (host.v3.v1.string_free)(invocation) };
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(state),
-        Ok(NemoRelayNativeAsyncCallbackState::Complete)
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
     );
+    drive_safe_v2_tasks();
     assert_eq!(
         *SAFE_V2_OUTPUT.lock().unwrap(),
         vec![Ok(json!({ "delta": "hello" }))]
@@ -6999,8 +7275,9 @@ fn safe_v2_stream_passthrough_uses_host_owned_forwarding() {
     unsafe { (host.v3.v1.string_free)(invocation) };
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(state),
-        Ok(NemoRelayNativeAsyncCallbackState::Complete)
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
     );
+    drive_safe_v2_tasks();
     assert_eq!(*SAFE_V2_FORWARDED_REQUESTS.lock().unwrap(), vec![request]);
     assert!(SAFE_V2_OUTPUT.lock().unwrap().is_empty());
     assert_eq!(SAFE_V2_OUTPUT_FINISHES.load(Ordering::SeqCst), 1);
@@ -7049,6 +7326,7 @@ fn safe_v2_provider_stream_drop_cancels_unfinished_production() {
         )
     };
     unsafe { (host.v3.v1.string_free)(invocation) };
+    drive_safe_v2_tasks();
     assert_eq!(SAFE_V2_PROVIDER_CANCELS.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_PROVIDER_RELEASES.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
@@ -7068,34 +7346,24 @@ fn safe_v2_stream_callback_stops_when_the_caller_cancels() {
     let invocation = json_host_string(
         &host.v3.v1,
         json!({ "name": "managed", "request": test_llm_request() }),
-    ) as usize;
-    let user_data = registration.user_data;
-    let callback = registration.cb;
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let callback_thread = std::thread::spawn(move || {
-        let state = unsafe {
-            callback(
-                user_data as *mut c_void,
-                invocation as *const NemoRelayNativeString,
-                NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
-                NonNull::<NemoRelayNativeAsyncStream>::dangling().as_ptr(),
-            )
-        };
-        done_tx.send(state).unwrap();
-    });
-
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    SAFE_V2_OUTPUT_CANCELLED.store(true, Ordering::SeqCst);
-    let state = done_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("caller cancellation must wake a pending safe stream callback");
-    callback_thread.join().unwrap();
-    unsafe { (host.v3.v1.string_free)(invocation as *mut NemoRelayNativeString) };
-
+    );
+    let state = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+            NonNull::<NemoRelayNativeAsyncStream>::dangling().as_ptr(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(state),
-        Ok(NemoRelayNativeAsyncCallbackState::Complete)
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
     );
+    drive_safe_v2_tasks();
+    SAFE_V2_OUTPUT_CANCELLED.store(true, Ordering::SeqCst);
+    wake_safe_v2_tasks();
+    drive_safe_v2_tasks();
     assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_OUTPUT_RELEASES.load(Ordering::SeqCst), 1);
     assert!(SAFE_V2_OUTPUT.lock().unwrap().is_empty());
@@ -7152,6 +7420,7 @@ fn safe_v2_stream_open_preserves_structured_failure() {
         )
     };
     unsafe { (host.v3.v1.string_free)(invocation) };
+    drive_safe_v2_tasks();
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
         [Err(error)] if error == "observed typed stream-open failure"
@@ -7207,6 +7476,7 @@ fn safe_v2_malformed_stream_open_cancels_and_releases_the_owned_stream() {
         )
     };
     unsafe { (host.v3.v1.string_free)(invocation) };
+    drive_safe_v2_tasks();
 
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
@@ -7290,6 +7560,63 @@ fn safe_v2_failed_host_registration_frees_callback_state_exactly_once() {
 }
 
 #[test]
+fn safe_v2_task_spawn_failures_settle_synchronously_and_release_handles() {
+    let _guard = begin_test();
+    *SAFE_V2_TASK_SPAWN_STATUS.lock().unwrap() = NemoRelayStatus::Internal;
+    let host = test_host_v4();
+
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_async_llm_execution_v2("spawn-failure", 0, |_, _, _| async {
+        panic!("a failed spawn must not poll the buffered callback")
+    })
+    .unwrap();
+    let buffered = take_safe_v2_buffered_registration();
+    let state = invoke_safe_v2_buffered(
+        &host,
+        &buffered,
+        NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+        NonNull::<NemoRelayNativeAsyncCompletion>::dangling().as_ptr(),
+    );
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Complete)
+    );
+    assert!(matches!(
+        SAFE_V2_COMPLETION.lock().unwrap().take(),
+        Some(Err(error)) if error.contains("task spawn failed: Internal")
+    ));
+    assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
+    assert_eq!(SAFE_V2_COMPLETION_RELEASES.load(Ordering::SeqCst), 0);
+    unsafe { buffered.free() };
+
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_async_llm_stream_execution_v2("stream-spawn-failure", 0, |_, _, _| async {
+        panic!("a failed spawn must not poll the streaming callback")
+    })
+    .unwrap();
+    let streaming = take_safe_v2_stream_registration();
+    let state = invoke_safe_v2_streaming(
+        &host,
+        &streaming,
+        NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+        NonNull::<NemoRelayNativeAsyncStream>::dangling().as_ptr(),
+    );
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Complete)
+    );
+    assert!(matches!(
+        SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
+        [Err(error)] if error.contains("task spawn failed: Internal")
+    ));
+    assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 2);
+    assert_eq!(SAFE_V2_OUTPUT_RELEASES.load(Ordering::SeqCst), 1);
+    assert!(SAFE_V2_TASKS.lock().unwrap().is_empty());
+    unsafe { streaming.free() };
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
 fn safe_v2_malformed_invocations_settle_and_release_callback_handles() {
     let _guard = begin_test();
     let host = test_host_v4();
@@ -7343,7 +7670,7 @@ fn safe_v2_malformed_invocations_settle_and_release_callback_handles() {
 }
 
 #[test]
-fn safe_v2_executor_honors_wakes_without_plugin_thread_local_state() {
+fn safe_v2_host_task_honors_wakes_without_plugin_thread_local_state() {
     let _guard = begin_test();
     let host = test_host_v4();
     run_safe_v2_buffered(&host, "self-waking", |_, _, _| async move {
@@ -7363,6 +7690,29 @@ fn safe_v2_executor_honors_wakes_without_plugin_thread_local_state() {
         SAFE_V2_COMPLETION.lock().unwrap().take(),
         Some(Ok(json!({ "woke": true })))
     );
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
+fn safe_v2_stale_waker_after_completion_is_a_silent_noop() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    run_safe_v2_buffered(&host, "retained-waker", |_, _, _| async {
+        std::future::poll_fn(|context| {
+            *SAFE_V2_HELD_TASK_WAKER.lock().unwrap() = Some(context.waker().clone());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        Ok(json!({ "done": true }))
+    });
+    assert!(SAFE_V2_TASKS.lock().unwrap().is_empty());
+    *LAST_ERROR.lock().unwrap() = None;
+    let waker = SAFE_V2_HELD_TASK_WAKER.lock().unwrap().take().unwrap();
+    waker.wake_by_ref();
+    assert!(LAST_ERROR.lock().unwrap().is_none());
+    drop(waker);
+    assert_eq!(SAFE_V2_TASK_RETAINS.load(Ordering::SeqCst), 2);
+    assert_eq!(SAFE_V2_TASK_RELEASES.load(Ordering::SeqCst), 3);
     assert_eq!(live_host_strings(), 0);
 }
 

@@ -168,10 +168,19 @@ each use bounded 32-event queues. Dropping or cancelling a stream stops provider
 production, and the library stays loaded until all callbacks and streams
 release their handles.
 
-V2 callbacks run on Relay's blocking executor with the active scope stack
-restored. Continuations run on Relay's existing Tokio runtime; Relay does not
-create an OS thread per continuation. Separate callback invocations can run
-concurrently and have no stable OS-thread affinity.
+A clean activation unloads its native library normally. If activation teardown
+finds an opaque callback, task, continuation, or stream handle that still owns
+plugin code, Relay releases the descriptor and handle state but conservatively
+keeps that library mapping loaded for the rest of the process. This prevents a
+final release made from plugin code from unmapping its own caller before the FFI
+operation returns.
+
+Safe v2 callbacks register through the generic V3 completion API and return
+`Pending`. Relay polls their Rust futures cooperatively on its existing Tokio
+runtime, restoring the captured continuation and scope context for every poll.
+A pending callback does not occupy a blocking worker or create an OS thread.
+Separate callback invocations can run concurrently and have no stable
+OS-thread affinity.
 
 Rust authors use the safe SDK facade. Buffered callbacks receive
 `LlmContinuationV2`; streaming callbacks receive `LlmStreamContinuationV2`
@@ -219,10 +228,11 @@ an unmanaged stream, return
 original downstream stream directly to the caller through its bounded queue,
 so pass-through events do not cross the plugin boundary.
 
-The SDK drives safe callback futures and returned streams to completion on the
-blocking callback lane. It does not enter Relay's Tokio runtime on that thread.
-`LlmProviderStreamV2` implements `Stream`, enforces one pending pull, and
-cancels unfinished provider production on drop.
+The SDK returns `Pending` to the host, which drives safe callback futures and
+returned streams as cooperative tasks. `LlmProviderStreamV2` implements
+`Stream`, enforces one pending pull, and cancels unfinished provider production
+on drop. If the bounded plugin-output queue fills, Relay wakes the task when
+the consumer makes room instead of tying up a worker while waiting.
 
 Export a v2-only plugin with:
 
@@ -252,13 +262,15 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-`PluginContext::host_api_v4` and the `_raw` v2 registration methods are the
-advanced escape hatch for raw ABI consumers and non-Rust bindings. They expose
-opaque callbacks and handles intentionally: the caller must own host strings,
-completion settlement, stream backpressure, cancellation, panic fencing, and
-every release operation. The safe Rust facade is implemented on top of these
-same C functions; Rust futures, streams, trait objects, and allocator-owned
-strings never cross the shared-library boundary.
+`PluginContext::host_api_v4` and the generic V3 raw registration methods are
+the advanced escape hatch for raw ABI consumers and non-Rust bindings. The
+safe Rust facade registers callbacks through V3's completion-based `Pending`
+contract. V4 contributes the targeted LLM continuation operations and general
+opaque host-task hooks needed to poll Rust-side futures cooperatively; it does
+not add an LLM-specific execution lane. Raw callers must own host strings,
+completion settlement, task and stream backpressure, cancellation, panic
+fencing, and every release operation. Rust futures, streams, trait objects, and
+allocator-owned strings never cross the shared-library boundary.
 
 The V3 host table used by manifest native API v1 retains the frozen legacy prefix and appends a
 completion-based asynchronous middleware extension. An entry that rejects the

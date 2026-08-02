@@ -7,12 +7,11 @@ use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
 use std::ptr;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::thread;
-use std::time::Duration;
 
 use futures::channel::oneshot;
+use futures::future::FutureExt;
 use futures::task::{ArcWake, waker_ref};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
@@ -21,14 +20,12 @@ use super::{
     HostString, Json, LlmContinuationFailureV2, LlmContinuationInvocationV2,
     LlmContinuationOutcomeV2, LlmContinuationStreamEventV2, LlmNonHttpFailureKindV2,
     LlmNonHttpFailureV2, LlmRequest, NemoRelayNativeAsyncCallbackState,
-    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
-    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV4, NemoRelayNativeLlmStreamV2,
-    NemoRelayNativeString, NemoRelayStatus, PluginContext, Result, read_json_value,
-    read_required_host_string, set_last_error,
+    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncStream, NemoRelayNativeAsyncTaskV2, NemoRelayNativeHostApiV1,
+    NemoRelayNativeHostApiV4, NemoRelayNativeLlmStreamV2, NemoRelayNativeString, NemoRelayStatus,
+    PluginContext, Result, read_json_value, read_required_host_string, set_last_error,
 };
 
-const BACKPRESSURE_RETRY_DELAY: Duration = Duration::from_millis(1);
-const CANCELLATION_POLL_DELAY: Duration = Duration::from_millis(10);
 const MAX_SDK_ERROR_BYTES: usize = 4 * 1024;
 
 /// Asynchronous JSON stream returned by a safe native API v2 stream callback.
@@ -86,59 +83,225 @@ struct ContinuationInner {
     next: *const NemoRelayNativeAsyncNext,
 }
 
-// Do not use `thread::current()` here. Safe callbacks run on reusable host
-// threads, and Rust's thread handle installs a TLS destructor in this plugin
-// library. Relay may unload the library before that host thread exits.
-struct BlockingCallbackWaker {
-    notified: Mutex<bool>,
-    ready: Condvar,
+enum HostTaskCancellation {
+    Completion(*const NemoRelayNativeAsyncCompletion),
+    Stream(*const NemoRelayNativeAsyncStream),
 }
 
-impl BlockingCallbackWaker {
-    fn wait_timeout(&self, timeout: Duration) {
-        let notified = self
-            .notified
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let (mut notified, _) = self
-            .ready
-            .wait_timeout_while(notified, timeout, |notified| !*notified)
-            .unwrap_or_else(|error| error.into_inner());
-        *notified = false;
-    }
+#[derive(Clone, Copy)]
+struct CompletionHandle(*const NemoRelayNativeAsyncCompletion);
+
+#[derive(Clone, Copy)]
+struct OutputHandle(*const NemoRelayNativeAsyncStream);
+
+struct TaskHostString {
+    host: NemoRelayNativeHostApiV1,
+    raw: usize,
 }
 
-impl ArcWake for BlockingCallbackWaker {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        let mut notified = arc_self
-            .notified
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        *notified = true;
-        arc_self.ready.notify_one();
-    }
-}
+// The host owns these opaque handles and documents their operations as
+// thread-safe for a pending callback's lifetime.
+unsafe impl Send for CompletionHandle {}
+unsafe impl Sync for CompletionHandle {}
+unsafe impl Send for OutputHandle {}
+unsafe impl Sync for OutputHandle {}
 
-fn block_on_complete_callback<F, C>(future: F, is_cancelled: C) -> Option<F::Output>
-where
-    F: Future,
-    C: Fn() -> bool,
-{
-    let mut future = Box::pin(future);
-    let callback_waker = Arc::new(BlockingCallbackWaker {
-        notified: Mutex::new(false),
-        ready: Condvar::new(),
-    });
-    let waker = waker_ref(&callback_waker);
-    let mut context = Context::from_waker(&waker);
-    loop {
-        if is_cancelled() {
+impl TaskHostString {
+    fn new(host: &NemoRelayNativeHostApiV1, value: &str) -> Option<Self> {
+        let mut raw = ptr::null_mut();
+        let status = unsafe { (host.string_new)(value.as_ptr(), value.len(), &mut raw) };
+        if status != NemoRelayStatus::Ok || raw.is_null() {
             return None;
         }
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return Some(output),
-            Poll::Pending => callback_waker.wait_timeout(CANCELLATION_POLL_DELAY),
+        Some(Self {
+            host: *host,
+            raw: raw as usize,
+        })
+    }
+
+    fn from_json(host: &NemoRelayNativeHostApiV1, value: &Json) -> Option<Self> {
+        Self::new(host, &serde_json::to_string(value).ok()?)
+    }
+
+    fn as_ptr(&self) -> *const NemoRelayNativeString {
+        self.raw as *const NemoRelayNativeString
+    }
+}
+
+impl Drop for TaskHostString {
+    fn drop(&mut self) {
+        unsafe { (self.host.string_free)(self.raw as *mut NemoRelayNativeString) };
+    }
+}
+
+impl CompletionHandle {
+    fn as_ptr(&self) -> *const NemoRelayNativeAsyncCompletion {
+        self.0
+    }
+}
+
+impl OutputHandle {
+    fn as_ptr(&self) -> *const NemoRelayNativeAsyncStream {
+        self.0
+    }
+}
+
+struct HostFutureTask {
+    host: NemoRelayNativeHostApiV4,
+    cancellation: HostTaskCancellation,
+    completion_to_release: Option<*const NemoRelayNativeAsyncCompletion>,
+    future: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    waker: Option<Arc<HostTaskWaker>>,
+}
+
+struct CompletionReleaseGuard {
+    host: NemoRelayNativeHostApiV4,
+    completion: *const NemoRelayNativeAsyncCompletion,
+}
+
+struct HostTaskWaker {
+    host: NemoRelayNativeHostApiV4,
+    raw: *const NemoRelayNativeAsyncTaskV2,
+}
+
+// Relay serializes task polling and documents retained task handles as safe to
+// wake from any thread.
+unsafe impl Send for HostFutureTask {}
+unsafe impl Send for HostTaskWaker {}
+unsafe impl Sync for HostTaskWaker {}
+
+impl HostFutureTask {
+    fn is_cancelled(&self) -> bool {
+        unsafe {
+            match self.cancellation {
+                HostTaskCancellation::Completion(completion) => {
+                    (self.host.v3.async_completion_is_cancelled)(completion)
+                }
+                HostTaskCancellation::Stream(stream) => {
+                    (self.host.v3.async_stream_is_cancelled)(stream)
+                }
+            }
         }
+    }
+}
+
+impl Drop for HostFutureTask {
+    fn drop(&mut self) {
+        // Keep the callback-owned completion (and therefore the host's plugin
+        // library guard) alive until every plugin-owned destructor has run.
+        // User futures and streams may panic from Drop, so catch those panics
+        // long enough for the completion release guard to run exactly once,
+        // then resume unwinding for the outer FFI panic fence to report it.
+        let completion_release =
+            self.completion_to_release
+                .take()
+                .map(|completion| CompletionReleaseGuard {
+                    host: self.host,
+                    completion,
+                });
+        let future_panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(self.future.take())))
+                .err();
+        let waker_panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(self.waker.take())))
+                .err();
+        drop(completion_release);
+        if let Some(payload) = future_panic.or(waker_panic) {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+impl Drop for CompletionReleaseGuard {
+    fn drop(&mut self) {
+        unsafe { (self.host.v3.async_completion_release)(self.completion) };
+    }
+}
+
+impl HostTaskWaker {
+    unsafe fn new(
+        host: NemoRelayNativeHostApiV4,
+        raw: *const NemoRelayNativeAsyncTaskV2,
+    ) -> Option<Arc<Self>> {
+        if raw.is_null() {
+            return None;
+        }
+        unsafe { (host.async_task_retain_v2)(raw) };
+        Some(Arc::new(Self { host, raw }))
+    }
+}
+
+impl ArcWake for HostTaskWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        let status = unsafe { (arc_self.host.async_task_wake_v2)(arc_self.raw) };
+        if status != NemoRelayStatus::Ok {
+            set_last_error(
+                &arc_self.host.v3.v1,
+                &format!("native API v2 host task wake failed: {status:?}"),
+            );
+        }
+    }
+}
+
+impl Drop for HostTaskWaker {
+    fn drop(&mut self) {
+        unsafe { (self.host.async_task_release_v2)(self.raw) };
+    }
+}
+
+unsafe extern "C" fn poll_host_future_task(
+    user_data: *mut c_void,
+    task: *const NemoRelayNativeAsyncTaskV2,
+) -> u32 {
+    if user_data.is_null() || task.is_null() {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    }
+    let state = unsafe { &mut *user_data.cast::<HostFutureTask>() };
+    if state.is_cancelled() {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    }
+    if state.waker.is_none() {
+        let waker = match unsafe { HostTaskWaker::new(state.host, task) } {
+            Some(waker) => waker,
+            None => {
+                set_last_error(&state.host.v3.v1, "native API v2 host task was null");
+                return NemoRelayNativeAsyncCallbackState::Complete as u32;
+            }
+        };
+        state.waker = Some(waker);
+    }
+    let waker = waker_ref(
+        state
+            .waker
+            .as_ref()
+            .expect("host task waker was initialized"),
+    );
+    let mut context = Context::from_waker(&waker);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state
+            .future
+            .as_mut()
+            .expect("host task future was initialized")
+            .as_mut()
+            .poll(&mut context)
+    })) {
+        Ok(Poll::Ready(())) => NemoRelayNativeAsyncCallbackState::Complete as u32,
+        Ok(Poll::Pending) => NemoRelayNativeAsyncCallbackState::Pending as u32,
+        Err(_) => {
+            set_last_error(&state.host.v3.v1, "native API v2 host task panicked");
+            NemoRelayNativeAsyncCallbackState::Complete as u32
+        }
+    }
+}
+
+unsafe extern "C" fn drop_host_future_task(user_data: *mut c_void) {
+    if user_data.is_null() {
+        return;
+    }
+    let state = unsafe { Box::from_raw(user_data.cast::<HostFutureTask>()) };
+    let host = state.host.v3.v1;
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(state))).is_err() {
+        set_last_error(&host, "native API v2 host task state drop panicked");
     }
 }
 
@@ -435,7 +598,7 @@ struct LlmCallbackInvocation {
 
 struct SafeV2Callback<F> {
     host: NemoRelayNativeHostApiV4,
-    callback: F,
+    callback: Arc<F>,
 }
 
 unsafe extern "C" fn drop_safe_v2_callback<F>(user_data: *mut c_void) {
@@ -453,9 +616,8 @@ impl PluginContext<'_> {
     /// Registers a safe asynchronous native API v2 buffered LLM execution callback.
     ///
     /// The callback receives owned Rust values and a cloneable continuation.
-    /// Its future is driven by a cancellation-aware local executor on Relay's
-    /// reusable blocking callback lane. It is not polled inside an entered
-    /// Tokio runtime; runtime-specific APIs should not be assumed.
+    /// Relay cooperatively polls its future on the host runtime with the
+    /// invocation's active scope stack restored for every poll.
     pub fn register_async_llm_execution_v2<F, Fut>(
         &mut self,
         name: &str,
@@ -473,16 +635,21 @@ impl PluginContext<'_> {
         let name = HostString::try_new(&host.v3.v1, name).map_err(|status| {
             format!("native API v2 buffered LLM registration name failed: {status:?}")
         })?;
-        let state = Box::new(SafeV2Callback { host, callback });
+        let state = Box::new(SafeV2Callback {
+            host,
+            callback: Arc::new(callback),
+        });
         let user_data = Box::into_raw(state).cast::<c_void>();
         let status = unsafe {
             // Once invoked, the host consumes `user_data` on both success and
             // failure and calls `free_fn` exactly once. Allocate the fallible
             // name first so local ownership is never ambiguous.
-            (host.plugin_context_register_async_llm_execution_v2)(
+            (host.v3.plugin_context_register_async_middleware)(
                 self.raw,
+                NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept as u32,
                 name.as_ptr(),
                 priority,
+                false,
                 safe_buffered_trampoline::<F, Fut>,
                 user_data,
                 Some(drop_safe_v2_callback::<F>),
@@ -502,8 +669,8 @@ impl PluginContext<'_> {
     /// Registers a safe asynchronous native API v2 streaming LLM callback.
     ///
     /// The callback may return a Rust stream or request host-owned direct
-    /// pass-through. Its future and returned stream are driven on Relay's
-    /// reusable blocking callback lane, outside an entered Tokio runtime.
+    /// pass-through. Relay cooperatively polls its future and returned stream
+    /// and wakes them when bounded output backpressure clears.
     pub fn register_async_llm_stream_execution_v2<F, Fut>(
         &mut self,
         name: &str,
@@ -521,12 +688,13 @@ impl PluginContext<'_> {
         let name = HostString::try_new(&host.v3.v1, name).map_err(|status| {
             format!("native API v2 streaming LLM registration name failed: {status:?}")
         })?;
-        let state = Box::new(SafeV2Callback { host, callback });
+        let state = Box::new(SafeV2Callback {
+            host,
+            callback: Arc::new(callback),
+        });
         let user_data = Box::into_raw(state).cast::<c_void>();
         let status = unsafe {
-            // The V4 host has the same consume-on-invocation ownership
-            // contract as buffered registration.
-            (host.plugin_context_register_async_llm_stream_execution_v2)(
+            (host.v3.plugin_context_register_async_stream_middleware)(
                 self.raw,
                 name.as_ptr(),
                 priority,
@@ -578,30 +746,72 @@ where
             return NemoRelayNativeAsyncCallbackState::Complete as u32;
         }
     };
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let invocation: LlmCallbackInvocation = read_json_value(
-            &state.host.v3.v1,
-            invocation_json,
-            "native API v2 LLM invocation",
-        )
-        .map_err(|status| format!("invalid native API v2 LLM invocation: {status:?}"))?;
-        let execution = (state.callback)(invocation.name, invocation.request, continuation.clone());
-        block_on_complete_callback(execution, || unsafe {
-            (state.host.v3.async_completion_is_cancelled)(completion)
+    let invocation: LlmCallbackInvocation = match read_json_value(
+        &state.host.v3.v1,
+        invocation_json,
+        "native API v2 LLM invocation",
+    ) {
+        Ok(invocation) => invocation,
+        Err(status) => {
+            reject_completion(
+                &state.host,
+                completion,
+                &format!("invalid native API v2 LLM invocation: {status:?}"),
+            );
+            drop(continuation);
+            return NemoRelayNativeAsyncCallbackState::Complete as u32;
+        }
+    };
+    let host = state.host;
+    let completion_handle = CompletionHandle(completion);
+    let callback = Arc::clone(&state.callback);
+    let callback_continuation = continuation.clone();
+    let future = async move {
+        let result = std::panic::AssertUnwindSafe(async move {
+            callback(invocation.name, invocation.request, callback_continuation).await
         })
-        .unwrap_or_else(|| Err("native API v2 callback was cancelled".into()))
-    }));
-    match result {
-        Ok(Ok(value)) => resolve_completion(&state.host, completion, &value),
-        Ok(Err(error)) => reject_completion(&state.host, completion, &error),
-        Err(_) => reject_completion(
-            &state.host,
+        .catch_unwind()
+        .await;
+        drop(continuation);
+        match result {
+            Ok(Ok(value)) => resolve_completion(&host, completion_handle.as_ptr(), &value),
+            Ok(Err(error)) => reject_completion(&host, completion_handle.as_ptr(), &error),
+            Err(_) => reject_completion(
+                &host,
+                completion_handle.as_ptr(),
+                "native API v2 buffered LLM callback panicked",
+            ),
+        }
+    };
+    let task = Box::new(HostFutureTask {
+        host,
+        cancellation: HostTaskCancellation::Completion(completion),
+        completion_to_release: Some(completion),
+        future: Some(Box::pin(future)),
+        waker: None,
+    });
+    let task = Box::into_raw(task).cast::<c_void>();
+    let status = unsafe {
+        (host.async_completion_spawn_task_v2)(
             completion,
-            "native API v2 buffered LLM callback panicked",
-        ),
+            poll_host_future_task,
+            task,
+            Some(drop_host_future_task),
+        )
+    };
+    if status == NemoRelayStatus::Ok {
+        NemoRelayNativeAsyncCallbackState::Pending as u32
+    } else {
+        let mut task = unsafe { Box::from_raw(task.cast::<HostFutureTask>()) };
+        task.completion_to_release = None;
+        drop(task);
+        reject_completion(
+            &host,
+            completion,
+            &format!("native API v2 buffered task spawn failed: {status:?}"),
+        );
+        NemoRelayNativeAsyncCallbackState::Complete as u32
     }
-    drop(continuation);
-    NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 
 unsafe extern "C" fn safe_streaming_trampoline<F, Fut>(
@@ -628,7 +838,7 @@ where
     {
         Ok(continuation) => continuation,
         Err(status) => {
-            reject_output(
+            reject_output_once(
                 &state.host,
                 output,
                 &format!("invalid native API v2 stream continuation: {status:?}"),
@@ -637,16 +847,30 @@ where
             return NemoRelayNativeAsyncCallbackState::Complete as u32;
         }
     };
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let invocation: LlmCallbackInvocation = read_json_value(
-            &state.host.v3.v1,
-            invocation_json,
-            "native API v2 streaming LLM invocation",
-        )
-        .map_err(|status| format!("invalid native API v2 stream invocation: {status:?}"))?;
-        let execution = async {
+    let invocation: LlmCallbackInvocation = match read_json_value(
+        &state.host.v3.v1,
+        invocation_json,
+        "native API v2 streaming LLM invocation",
+    ) {
+        Ok(invocation) => invocation,
+        Err(status) => {
+            reject_output_once(
+                &state.host,
+                output,
+                &format!("invalid native API v2 stream invocation: {status:?}"),
+            );
+            drop(continuation);
+            return NemoRelayNativeAsyncCallbackState::Complete as u32;
+        }
+    };
+    let host = state.host;
+    let output_handle = OutputHandle(output);
+    let callback = Arc::clone(&state.callback);
+    let callback_continuation = continuation.clone();
+    let future = async move {
+        let result = std::panic::AssertUnwindSafe(async move {
             let outcome =
-                (state.callback)(invocation.name, invocation.request, continuation.clone()).await?;
+                callback(invocation.name, invocation.request, callback_continuation).await?;
             match outcome {
                 LlmStreamExecutionOutcomeV2::Stream(stream) => {
                     pump_output_stream(&continuation, stream).await
@@ -655,23 +879,49 @@ where
                     continuation.forward_passthrough(request).await
                 }
             }
-        };
-        block_on_complete_callback(execution, || unsafe {
-            (state.host.v3.async_stream_is_cancelled)(continuation.inner.output)
         })
-        .unwrap_or_else(|| Err("native API v2 output stream was cancelled".into()))
-    }));
-    match result {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => reject_output(&state.host, output, &error),
-        Err(_) => reject_output(
-            &state.host,
+        .catch_unwind()
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => reject_output(&host, output_handle, &error).await,
+            Err(_) => {
+                reject_output(
+                    &host,
+                    output_handle,
+                    "native API v2 streaming LLM callback panicked",
+                )
+                .await;
+            }
+        }
+    };
+    let task = Box::new(HostFutureTask {
+        host,
+        cancellation: HostTaskCancellation::Stream(output),
+        completion_to_release: None,
+        future: Some(Box::pin(future)),
+        waker: None,
+    });
+    let task = Box::into_raw(task).cast::<c_void>();
+    let status = unsafe {
+        (host.async_stream_spawn_task_v2)(
             output,
-            "native API v2 streaming LLM callback panicked",
-        ),
+            poll_host_future_task,
+            task,
+            Some(drop_host_future_task),
+        )
+    };
+    if status == NemoRelayStatus::Ok {
+        NemoRelayNativeAsyncCallbackState::Pending as u32
+    } else {
+        reject_output_once(
+            &host,
+            output,
+            &format!("native API v2 streaming task spawn failed: {status:?}"),
+        );
+        unsafe { drop(Box::from_raw(task.cast::<HostFutureTask>())) };
+        NemoRelayNativeAsyncCallbackState::Complete as u32
     }
-    drop(continuation);
-    NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 
 async fn pump_output_stream(
@@ -680,30 +930,31 @@ async fn pump_output_stream(
 ) -> Result<()> {
     while let Some(item) = stream.next().await {
         let chunk = item?;
-        push_output_json(continuation, &chunk)?;
+        push_output_json(continuation, &chunk).await?;
     }
     finish_output(continuation)
 }
 
-fn push_output_json(continuation: &LlmStreamContinuationV2, chunk: &Json) -> Result<()> {
+async fn push_output_json(continuation: &LlmStreamContinuationV2, chunk: &Json) -> Result<()> {
     let host = &continuation.inner.continuation.host;
-    let chunk = HostString::from_json(&host.v3.v1, chunk)
+    let chunk = TaskHostString::from_json(&host.v3.v1, chunk)
         .ok_or_else(|| "failed to serialize native API v2 output chunk".to_string())?;
-    loop {
+    std::future::poll_fn(move |_context| {
         if unsafe { (host.v3.async_stream_is_cancelled)(continuation.inner.output) } {
-            return Err("native API v2 output stream was cancelled".into());
+            return Poll::Ready(Err("native API v2 output stream was cancelled".into()));
         }
         let status =
             unsafe { (host.v3.async_stream_push_json)(continuation.inner.output, chunk.as_ptr()) };
         match status {
-            NemoRelayStatus::Ok => return Ok(()),
+            NemoRelayStatus::Ok => Poll::Ready(Ok(())),
             // For this operation the V3 ABI contract reserves `Internal` for
             // a full bounded queue. Serialization and lifecycle faults use
             // distinct statuses, so retrying cannot mask another ABI error.
-            NemoRelayStatus::Internal => thread::sleep(BACKPRESSURE_RETRY_DELAY),
-            status => return Err(format!("native API v2 output push failed: {status:?}")),
+            NemoRelayStatus::Internal => Poll::Pending,
+            status => Poll::Ready(Err(format!("native API v2 output push failed: {status:?}"))),
         }
-    }
+    })
+    .await
 }
 
 fn finish_output(continuation: &LlmStreamContinuationV2) -> Result<()> {
@@ -719,7 +970,40 @@ fn finish_output(continuation: &LlmStreamContinuationV2) -> Result<()> {
     }
 }
 
-fn reject_output(
+async fn reject_output(host: &NemoRelayNativeHostApiV4, output: OutputHandle, error: &str) {
+    if unsafe { (host.v3.async_stream_is_cancelled)(output.as_ptr()) } {
+        return;
+    }
+    let error = bounded_error(error);
+    let Some(message) = TaskHostString::new(&host.v3.v1, &error) else {
+        set_last_error(
+            &host.v3.v1,
+            "failed to allocate native API v2 stream rejection",
+        );
+        return;
+    };
+    std::future::poll_fn(move |_context| {
+        if unsafe { (host.v3.async_stream_is_cancelled)(output.as_ptr()) } {
+            return Poll::Ready(());
+        }
+        let status = unsafe { (host.v3.async_stream_reject)(output.as_ptr(), message.as_ptr()) };
+        match status {
+            NemoRelayStatus::Ok => Poll::Ready(()),
+            // `Internal` has the same queue-full-only contract for rejection.
+            NemoRelayStatus::Internal => Poll::Pending,
+            status => {
+                set_last_error(
+                    &host.v3.v1,
+                    &format!("native API v2 output rejection failed: {status:?}"),
+                );
+                Poll::Ready(())
+            }
+        }
+    })
+    .await
+}
+
+fn reject_output_once(
     host: &NemoRelayNativeHostApiV4,
     output: *const NemoRelayNativeAsyncStream,
     error: &str,
@@ -735,23 +1019,12 @@ fn reject_output(
         );
         return;
     };
-    loop {
-        if unsafe { (host.v3.async_stream_is_cancelled)(output) } {
-            return;
-        }
-        let status = unsafe { (host.v3.async_stream_reject)(output, message.as_ptr()) };
-        match status {
-            NemoRelayStatus::Ok => return,
-            // `Internal` has the same queue-full-only contract for rejection.
-            NemoRelayStatus::Internal => thread::sleep(BACKPRESSURE_RETRY_DELAY),
-            status => {
-                set_last_error(
-                    &host.v3.v1,
-                    &format!("native API v2 output rejection failed: {status:?}"),
-                );
-                return;
-            }
-        }
+    let status = unsafe { (host.v3.async_stream_reject)(output, message.as_ptr()) };
+    if status != NemoRelayStatus::Ok {
+        set_last_error(
+            &host.v3.v1,
+            &format!("native API v2 output rejection failed: {status:?}"),
+        );
     }
 }
 
