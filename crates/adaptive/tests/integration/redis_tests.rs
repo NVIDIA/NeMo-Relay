@@ -534,6 +534,14 @@ async fn redis_integration_persists_scaffold_profile_across_backend_restart() {
         assert_eq!(guard.acg_profiles.len(), 1);
         guard.acg_profiles.keys().next().unwrap().clone()
     };
+    // Both requests carry the same scaffold and differ only in the first user
+    // task, so the surviving record must be the scaffold-keyed profile rather
+    // than the plain agent seed `process_run` also writes for rehydration.
+    assert_ne!(learning_key, agent_id);
+    assert!(
+        learning_key.contains("::seed=stable-scaffold::"),
+        "expected a scaffold-keyed profile, got {learning_key}"
+    );
     drop(backend);
 
     let restarted = RedisBackend::new("redis://127.0.0.1/", prefix)
