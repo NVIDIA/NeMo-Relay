@@ -828,6 +828,9 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
 
 #[test]
 fn opentelemetry_endpoint_rejects_invalid_attribute_mappings() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let invalid_mappings = [
         (
             json!([{"key": "", "alias": "some.alias"}]),
