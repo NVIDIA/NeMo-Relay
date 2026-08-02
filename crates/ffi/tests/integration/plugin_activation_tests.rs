@@ -139,7 +139,7 @@ source = "project-file"
         "config": {}
     }]));
 
-    assert_discovered_activation(&report, &plugins_toml);
+    write_and_assert_discovered_activation(&report, &plugins_toml);
 
     unsafe {
         assert_eq!(
@@ -160,6 +160,7 @@ source = "project-file"
     );
 }
 
+#[track_caller]
 fn assert_empty_dynamic_specs_rejected(config: &CString, empty_specs: &CString) {
     let mut empty_activation = ptr::null_mut();
     let mut empty_report = ptr::null_mut();
@@ -183,7 +184,8 @@ fn assert_empty_dynamic_specs_rejected(config: &CString, empty_specs: &CString) 
     );
 }
 
-fn assert_discovered_activation(report: &Json, plugins_toml: &Path) {
+#[track_caller]
+fn write_and_assert_discovered_activation(report: &Json, plugins_toml: &Path) {
     // The file-only component and its config must survive the merge.
     assert_eq!(report["diagnostics"], json!([]));
     assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);

@@ -249,7 +249,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
         assert_llm_request_fields(py);
 
         fn assert_mark_and_tool_event_fields(py: Python<'_>, parent_uuid: Uuid) {
-            let event = match Event::Mark(MarkEvent::new(
+            let event = py_mark_event(Event::Mark(MarkEvent::new(
                 base_event(
                     parent_uuid,
                     "event",
@@ -258,10 +258,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
                 ),
                 None,
                 None,
-            )) {
-                Event::Mark(inner) => PyMarkEvent { inner },
-                _ => unreachable!(),
-            };
+            )));
             assert_eq!(event.kind(), "mark");
             assert_eq!(event.parent_uuid(), Some(parent_uuid.to_string()));
             assert_eq!(
@@ -274,7 +271,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
             );
             assert!(event.timestamp().contains('T'));
 
-            let tool_event = match Event::Scope(ScopeEvent::new(
+            let tool_event = py_scope_event(Event::Scope(ScopeEvent::new(
                 base_event(
                     parent_uuid,
                     "tool-event",
@@ -285,10 +282,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
                 tool_attributes_to_strings(ToolAttributes::REMOTE),
                 EventCategory::tool(),
                 Some(CategoryProfile::builder().tool_call_id("tool-1").build()),
-            )) {
-                Event::Scope(inner) => PyScopeEvent { inner },
-                _ => unreachable!(),
-            };
+            )));
             assert_eq!(tool_event.kind(), "scope");
             assert_eq!(tool_event.scope_category(), "start");
             assert_eq!(tool_event.category(), "tool");
@@ -305,7 +299,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
         assert_mark_and_tool_event_fields(py, parent_uuid);
 
         fn assert_llm_event_fields(py: Python<'_>, parent_uuid: Uuid) {
-            let llm_event = match Event::Scope(ScopeEvent::new(
+            let llm_event = py_scope_event(Event::Scope(ScopeEvent::new(
                 base_event(
                     parent_uuid,
                     "llm-event",
@@ -316,10 +310,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
                 llm_attributes_to_strings(LlmAttributes::STATEFUL),
                 EventCategory::llm(),
                 Some(CategoryProfile::builder().model_name("model").build()),
-            )) {
-                Event::Scope(inner) => PyScopeEvent { inner },
-                _ => unreachable!(),
-            };
+            )));
             assert_eq!(llm_event.kind(), "scope");
             assert_eq!(llm_event.scope_category(), "end");
             assert_eq!(llm_event.category(), "llm");

@@ -708,6 +708,7 @@ fn atof_stream_header_validation_reports_invalid_values_and_environment_names() 
 #[test]
 fn atif_dispatcher_surfaces_fatal_and_disabled_local_sink_states() {
     let mut dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
+    assert_eq!(dispatcher.sink_targets(), vec![SinkLabel::Local]);
     dispatcher.fatal_error = Some("fatal export failure".into());
     assert!(
         dispatcher
@@ -726,7 +727,9 @@ fn atif_dispatcher_surfaces_fatal_and_disabled_local_sink_states() {
 
 #[test]
 fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
-    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let variable = "NEMO_RELAY_TEST_MISSING_OTEL_HEADER_ENV";
     unsafe { std::env::remove_var(variable) };
     let report = validate_plugin_config(&plugin_config(json!({
@@ -3028,6 +3031,9 @@ fn atif_storage_http_invalid_literal_header_value_is_rejected() {
 
 #[test]
 fn atif_storage_http_header_env_missing_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_MISSING_ZZZZ";
     // SAFETY: tests in this binary do not concurrently observe this uniquely
     // named env var, so removing it is safe.
@@ -3058,6 +3064,9 @@ fn atif_storage_http_header_env_missing_env_is_rejected() {
 
 #[test]
 fn atif_storage_http_header_env_empty_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_EMPTY_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -3114,6 +3123,9 @@ fn atif_storage_http_header_env_whitespace_name_is_rejected() {
 
 #[test]
 fn atif_storage_http_header_env_present_env_is_accepted() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_OK_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -3185,6 +3197,9 @@ fn atif_storage_s3_parses_full_credential_block() {
 
 #[test]
 fn atif_storage_secret_var_missing_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_S3_SECRET_MISSING_ZZZZ";
     // SAFETY: tests in this binary do not concurrently observe this uniquely
     // named env var, so removing it is safe.
@@ -3215,6 +3230,9 @@ fn atif_storage_secret_var_missing_env_is_rejected() {
 
 #[test]
 fn atif_storage_secret_var_empty_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_S3_SECRET_EMPTY_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -3248,6 +3266,9 @@ fn atif_storage_secret_var_empty_env_is_rejected() {
 
 #[test]
 fn atif_storage_secret_var_present_env_is_accepted() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_S3_SECRET_OK_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -3302,6 +3323,9 @@ fn atif_storage_secret_var_empty_name_is_rejected() {
 #[test]
 #[cfg(feature = "object-store")]
 fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let missing = "NEMO_RELAY_TEST_ATIF_HELPER_MISSING_ZZZZ";
     let empty = "NEMO_RELAY_TEST_ATIF_HELPER_EMPTY_ZZZZ";
     let secret = "NEMO_RELAY_TEST_ATIF_HELPER_SECRET_ZZZZ";
@@ -3455,7 +3479,9 @@ async fn post_atif_http_reports_transport_failure() {
 #[test]
 #[cfg(feature = "object-store")]
 fn s3_remote_storage_uploads_to_a_custom_http_endpoint() {
-    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let variable = "NEMO_RELAY_TEST_S3_UPLOAD_SECRET_ZZZZ";
     // SAFETY: the observability mutex serializes access to this test-only variable.
     unsafe { std::env::set_var(variable, "secret") };

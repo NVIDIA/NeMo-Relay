@@ -170,5 +170,6 @@ fn assert_error_response_and_bypass_detection() {
     assert!(!is_error_response(&json!({"status": "completed"})));
     assert!(!should_bypass(0.0));
     assert!(should_bypass(1.0));
-    assert!(next_unit_f64().is_finite());
+    let unit = next_unit_f64();
+    assert!((0.0..1.0).contains(&unit), "{unit}");
 }

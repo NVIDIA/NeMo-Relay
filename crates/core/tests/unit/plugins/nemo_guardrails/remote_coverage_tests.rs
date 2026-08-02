@@ -238,7 +238,9 @@ fn request_body_and_guardrails_config_helpers_cover_defaults() {
         "does not support OpenAI tool definitions",
     );
     runtime.record_access_status(reqwest::StatusCode::OK);
+    assert_eq!(runtime.access_state.load(Ordering::Acquire), 2);
     runtime.record_access_status(reqwest::StatusCode::OK);
+    assert_eq!(runtime.access_state.load(Ordering::Acquire), 2);
 
     let defaults = RequestDefaultsConfig {
         context: Some(json!({"tenant": "test"})),
