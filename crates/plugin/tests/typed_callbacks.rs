@@ -3,7 +3,7 @@
 
 //! Public-API tests for typed native plugin callback registration.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::c_void;
 use std::future::Future;
 use std::mem::{align_of, offset_of, size_of};
@@ -41,6 +41,7 @@ use nemo_relay_plugin::{
     NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec,
     PluginContext, PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
 };
+use serde::de::DeserializeOwned;
 use serde_json::{Map, json};
 
 #[test]
@@ -1572,6 +1573,14 @@ fn required_host_string(
         return Err(NemoRelayStatus::NullPointer);
     }
     read_host_string(host, value).ok_or(NemoRelayStatus::InvalidArg)
+}
+
+fn required_host_json<T: DeserializeOwned>(
+    host: &NemoRelayNativeHostApiV1,
+    value: *const NemoRelayNativeString,
+) -> std::result::Result<T, NemoRelayStatus> {
+    let value = required_host_string(host, value)?;
+    serde_json::from_str(&value).map_err(|_| NemoRelayStatus::InvalidJson)
 }
 
 fn optional_host_string(
@@ -6148,12 +6157,9 @@ unsafe extern "C" fn safe_v2_completion_resolve(
     value_json: *const NemoRelayNativeString,
 ) -> NemoRelayStatus {
     let host = test_host();
-    let value = match required_host_string(&host, value_json)
-        .ok()
-        .and_then(|value| serde_json::from_str(&value).ok())
-    {
-        Some(value) => value,
-        None => return NemoRelayStatus::InvalidJson,
+    let value = match required_host_json(&host, value_json) {
+        Ok(value) => value,
+        Err(status) => return status,
     };
     *SAFE_V2_COMPLETION.lock().unwrap() = Some(Ok(value));
     *SAFE_V2_COMPLETION_RESOLVE_STATUS.lock().unwrap()
@@ -6194,6 +6200,27 @@ unsafe extern "C" fn safe_v2_next_release(_next: *const NemoRelayNativeAsyncNext
     SAFE_V2_NEXT_RELEASES.fetch_add(1, Ordering::SeqCst);
 }
 
+unsafe fn safe_v2_reject_registration(
+    status: NemoRelayStatus,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    if let Some(free_fn) = free_fn {
+        unsafe { free_fn(user_data) };
+    }
+    status
+}
+
+fn safe_v2_registration_name(
+    name: *const NemoRelayNativeString,
+) -> std::result::Result<String, NemoRelayStatus> {
+    let status = *SAFE_V2_REGISTRATION_STATUS.lock().unwrap();
+    if status != NemoRelayStatus::Ok {
+        return Err(status);
+    }
+    required_host_string(&test_host(), name)
+}
+
 unsafe extern "C" fn safe_v2_register_generic_async(
     _ctx: *mut NemoRelayNativePluginContext,
     kind: u32,
@@ -6205,27 +6232,13 @@ unsafe extern "C" fn safe_v2_register_generic_async(
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
     if kind != NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept as u32 {
-        if let Some(free_fn) = free_fn {
-            unsafe { free_fn(user_data) };
-        }
-        return NemoRelayStatus::InvalidArg;
+        return unsafe {
+            safe_v2_reject_registration(NemoRelayStatus::InvalidArg, user_data, free_fn)
+        };
     }
-    let status = *SAFE_V2_REGISTRATION_STATUS.lock().unwrap();
-    if status != NemoRelayStatus::Ok {
-        if let Some(free_fn) = free_fn {
-            unsafe { free_fn(user_data) };
-        }
-        return status;
-    }
-    let host = test_host();
-    let name = match required_host_string(&host, name) {
+    let name = match safe_v2_registration_name(name) {
         Ok(name) => name,
-        Err(status) => {
-            if let Some(free_fn) = free_fn {
-                unsafe { free_fn(user_data) };
-            }
-            return status;
-        }
+        Err(status) => return unsafe { safe_v2_reject_registration(status, user_data, free_fn) },
     };
     replace_registration(
         &ASYNC_V2_REGISTRATION,
@@ -6245,21 +6258,24 @@ unsafe extern "C" fn safe_v2_stream_push(
     chunk_json: *const NemoRelayNativeString,
 ) -> NemoRelayStatus {
     let host = test_host();
-    let chunk = match required_host_string(&host, chunk_json)
-        .ok()
-        .and_then(|value| serde_json::from_str(&value).ok())
-    {
-        Some(chunk) => chunk,
-        None => return NemoRelayStatus::InvalidJson,
+    let chunk = match required_host_json(&host, chunk_json) {
+        Ok(chunk) => chunk,
+        Err(status) => return status,
     };
-    let status = SAFE_V2_OUTPUT_PUSH_STATUSES
+    let status = safe_v2_output_status(&SAFE_V2_OUTPUT_PUSH_STATUSES);
+    if status == NemoRelayStatus::Ok {
+        SAFE_V2_OUTPUT.lock().unwrap().push(Ok(chunk));
+    }
+    status
+}
+
+fn safe_v2_output_status(statuses: &Mutex<VecDeque<NemoRelayStatus>>) -> NemoRelayStatus {
+    let status = statuses
         .lock()
         .unwrap()
         .pop_front()
         .unwrap_or(NemoRelayStatus::Ok);
-    if status == NemoRelayStatus::Ok {
-        SAFE_V2_OUTPUT.lock().unwrap().push(Ok(chunk));
-    } else if status == NemoRelayStatus::WouldBlock {
+    if status == NemoRelayStatus::WouldBlock {
         SAFE_V2_CURRENT_TASK.with(|current| {
             let task = current.get();
             if task != 0 {
@@ -6284,20 +6300,9 @@ unsafe extern "C" fn safe_v2_stream_reject(
     let host = test_host();
     let message = required_host_string(&host, message)
         .unwrap_or_else(|status| format!("invalid rejection: {status:?}"));
-    let status = SAFE_V2_OUTPUT_REJECT_STATUSES
-        .lock()
-        .unwrap()
-        .pop_front()
-        .unwrap_or(NemoRelayStatus::Ok);
+    let status = safe_v2_output_status(&SAFE_V2_OUTPUT_REJECT_STATUSES);
     if status == NemoRelayStatus::Ok {
         SAFE_V2_OUTPUT.lock().unwrap().push(Err(message));
-    } else if status == NemoRelayStatus::WouldBlock {
-        SAFE_V2_CURRENT_TASK.with(|current| {
-            let task = current.get();
-            if task != 0 {
-                let _ = unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
-            }
-        });
     }
     status
 }
@@ -6330,22 +6335,9 @@ unsafe extern "C" fn safe_v2_register_generic_stream(
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> NemoRelayStatus {
-    let status = *SAFE_V2_REGISTRATION_STATUS.lock().unwrap();
-    if status != NemoRelayStatus::Ok {
-        if let Some(free_fn) = free_fn {
-            unsafe { free_fn(user_data) };
-        }
-        return status;
-    }
-    let host = test_host();
-    let name = match required_host_string(&host, name) {
+    let name = match safe_v2_registration_name(name) {
         Ok(name) => name,
-        Err(status) => {
-            if let Some(free_fn) = free_fn {
-                unsafe { free_fn(user_data) };
-            }
-            return status;
-        }
+        Err(status) => return unsafe { safe_v2_reject_registration(status, user_data, free_fn) },
     };
     replace_registration(
         &ASYNC_STREAM_V2_REGISTRATION,
@@ -6371,12 +6363,8 @@ unsafe extern "C" fn safe_v2_passthrough_result(
         return status;
     }
     let host = test_host();
-    if required_host_string(&host, invocation_json)
-        .ok()
-        .and_then(|value| serde_json::from_str::<LlmRequest>(&value).ok())
-        .is_none()
-    {
-        return NemoRelayStatus::InvalidJson;
+    if let Err(status) = required_host_json::<LlmRequest>(&host, invocation_json) {
+        return status;
     }
     if let Some(error) = SAFE_V2_PASSTHROUGH_ERROR.lock().unwrap().clone() {
         let error = host_string(&host, &error);
@@ -6401,12 +6389,8 @@ unsafe extern "C" fn safe_v2_targeted_result(
         return status;
     }
     let host = test_host();
-    if required_host_string(&host, invocation_json)
-        .ok()
-        .and_then(|value| serde_json::from_str::<LlmContinuationInvocationV2>(&value).ok())
-        .is_none()
-    {
-        return NemoRelayStatus::InvalidJson;
+    if let Err(status) = required_host_json::<LlmContinuationInvocationV2>(&host, invocation_json) {
+        return status;
     }
     if SAFE_V2_HOLD_TARGETED_CALLBACK.load(Ordering::SeqCst) {
         *SAFE_V2_HELD_TARGETED_CALLBACK.lock().unwrap() = Some((cb, user_data as usize));
@@ -6440,12 +6424,8 @@ unsafe extern "C" fn safe_v2_stream_open(
         return status;
     }
     let host = test_host();
-    if required_host_string(&host, invocation_json)
-        .ok()
-        .and_then(|value| serde_json::from_str::<LlmContinuationInvocationV2>(&value).ok())
-        .is_none()
-    {
-        return NemoRelayStatus::InvalidJson;
+    if let Err(status) = required_host_json::<LlmContinuationInvocationV2>(&host, invocation_json) {
+        return status;
     }
     if SAFE_V2_HOLD_STREAM_OPEN_CALLBACK.load(Ordering::SeqCst) {
         *SAFE_V2_HELD_STREAM_OPEN_CALLBACK.lock().unwrap() = Some((cb, user_data as usize));
@@ -6646,12 +6626,9 @@ unsafe extern "C" fn safe_v2_forward_stream(
         return status;
     }
     let host = test_host();
-    let request = match required_host_string(&host, request_json)
-        .ok()
-        .and_then(|value| serde_json::from_str::<LlmRequest>(&value).ok())
-    {
-        Some(request) => request,
-        None => return NemoRelayStatus::InvalidJson,
+    let request = match required_host_json(&host, request_json) {
+        Ok(request) => request,
+        Err(status) => return status,
     };
     SAFE_V2_FORWARDED_REQUESTS.lock().unwrap().push(request);
     SAFE_V2_OUTPUT_FINISHES.fetch_add(1, Ordering::SeqCst);
@@ -6699,6 +6676,67 @@ fn safe_v2_target() -> LlmContinuationTargetV2 {
     LlmContinuationTargetV2 {
         url: "https://provider.example/v1/chat/completions".into(),
         headers: Default::default(),
+    }
+}
+
+#[test]
+fn native_v2_debug_output_redacts_requests_targets_and_credentials() {
+    let invocation = LlmContinuationInvocationV2 {
+        request: LlmRequest {
+            headers: Map::from_iter([("authorization".into(), json!("Bearer request-secret"))]),
+            content: json!({"prompt": "request-body-secret"}),
+        },
+        target: LlmContinuationTargetV2 {
+            url: "https://provider.example/v1?api_key=url-secret".into(),
+            headers: BTreeMap::from([("authorization".into(), "Bearer target-secret".into())]),
+        },
+    };
+
+    let debug = format!("{invocation:?}");
+    assert!(debug.contains("LlmContinuationInvocationV2"));
+    assert!(debug.contains("authorization"));
+    for secret in [
+        "request-secret",
+        "request-body-secret",
+        "target-secret",
+        "url-secret",
+    ] {
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[test]
+fn native_v2_retry_helper_uses_provider_neutral_status_semantics() {
+    let http_failure = |status| LlmContinuationFailureV2::Http {
+        status,
+        body: String::new(),
+        headers: BTreeMap::new(),
+    };
+    for status in [408, 425, 429, 500, 502, 503, 504] {
+        assert!(LlmContinuationFailureV2::http_status_is_retryable(status));
+        assert!(http_failure(status).is_retryable(), "status={status}");
+    }
+    for status in [400, 401, 404, 409, 422, 501] {
+        assert!(!LlmContinuationFailureV2::http_status_is_retryable(status));
+        assert!(!http_failure(status).is_retryable(), "status={status}");
+    }
+
+    let non_http_failure = |kind| LlmContinuationFailureV2::NonHttp {
+        kind,
+        message: String::new(),
+    };
+    assert!(LlmNonHttpFailureKindV2::Transport.is_retryable());
+    assert!(non_http_failure(LlmNonHttpFailureKindV2::Transport).is_retryable());
+    assert!(LlmNonHttpFailureKindV2::Timeout.is_retryable());
+    assert!(non_http_failure(LlmNonHttpFailureKindV2::Timeout).is_retryable());
+    for kind in [
+        LlmNonHttpFailureKindV2::Cancelled,
+        LlmNonHttpFailureKindV2::InvalidRequest,
+        LlmNonHttpFailureKindV2::Guardrail,
+        LlmNonHttpFailureKindV2::Internal,
+    ] {
+        assert!(!kind.is_retryable(), "kind={kind:?}");
+        assert!(!non_http_failure(kind).is_retryable(), "kind={kind:?}");
     }
 }
 
@@ -6816,6 +6854,18 @@ async fn safe_v2_targeted_provider_stream(
     Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(
         provider.map(|item| item.map_err(|error| format!("{error:?}"))),
     )))
+}
+
+fn run_safe_v2_targeted_stream(host: &NemoRelayNativeHostApiV4, name: &str) {
+    run_safe_v2_streaming(host, name, |_, request, next| {
+        safe_v2_targeted_provider_stream(request, next)
+    });
+}
+
+fn safe_v2_one_chunk_stream() -> LlmStreamExecutionOutcomeV2 {
+    LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream::once(async {
+        Ok(json!({ "chunk": true }))
+    })))
 }
 
 unsafe extern "C" fn raw_v2_buffered_probe(
@@ -7559,7 +7609,7 @@ fn safe_v2_stream_open_preserves_structured_failure() {
 }
 
 #[test]
-fn safe_v2_malformed_stream_open_releases_the_owned_stream() {
+fn safe_v2_malformed_stream_open_releases_the_provider_stream() {
     let _guard = begin_test();
     *SAFE_V2_OPEN_FAILURE.lock().unwrap() = Some(LlmContinuationFailureV2::NonHttp {
         kind: LlmNonHttpFailureKindV2::Internal,
@@ -8072,9 +8122,7 @@ fn safe_v2_provider_stream_preserves_late_and_boundary_failures() {
     let host = test_host_v4();
 
     *SAFE_V2_STREAM_OPEN_STATUS.lock().unwrap() = NemoRelayStatus::InvalidArg;
-    run_safe_v2_streaming(&host, "open-status", |_, request, next| {
-        safe_v2_targeted_provider_stream(request, next)
-    });
+    run_safe_v2_targeted_stream(&host, "open-status");
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
         [Err(error)] if error.contains("InvalidArg")
@@ -8083,9 +8131,7 @@ fn safe_v2_provider_stream_preserves_late_and_boundary_failures() {
     SAFE_V2_OUTPUT.lock().unwrap().clear();
 
     *SAFE_V2_PROVIDER_NEXT_STATUS.lock().unwrap() = NemoRelayStatus::InvalidArg;
-    run_safe_v2_streaming(&host, "poll-status", |_, request, next| {
-        safe_v2_targeted_provider_stream(request, next)
-    });
+    run_safe_v2_targeted_stream(&host, "poll-status");
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
         [Err(error)] if error.contains("InvalidArg")
@@ -8102,9 +8148,7 @@ fn safe_v2_provider_stream_preserves_late_and_boundary_failures() {
                 message: "late provider failure".into(),
             },
         ));
-    run_safe_v2_streaming(&host, "late-failure", |_, request, next| {
-        safe_v2_targeted_provider_stream(request, next)
-    });
+    run_safe_v2_targeted_stream(&host, "late-failure");
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
         [Err(error)] if error.contains("late provider failure")
@@ -8112,9 +8156,7 @@ fn safe_v2_provider_stream_preserves_late_and_boundary_failures() {
     SAFE_V2_OUTPUT.lock().unwrap().clear();
 
     *SAFE_V2_PROVIDER_EVENT_JSON.lock().unwrap() = Some("not-json".into());
-    run_safe_v2_streaming(&host, "malformed-event", |_, request, next| {
-        safe_v2_targeted_provider_stream(request, next)
-    });
+    run_safe_v2_targeted_stream(&host, "malformed-event");
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
         [Err(error)] if error.contains("stream chunk")
@@ -8122,9 +8164,7 @@ fn safe_v2_provider_stream_preserves_late_and_boundary_failures() {
     SAFE_V2_OUTPUT.lock().unwrap().clear();
 
     SAFE_V2_PROVIDER_INVALID_EVENT.store(true, Ordering::SeqCst);
-    run_safe_v2_streaming(&host, "invalid-event", |_, request, next| {
-        safe_v2_targeted_provider_stream(request, next)
-    });
+    run_safe_v2_targeted_stream(&host, "invalid-event");
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
         [Err(error)] if error.contains("invalid event")
@@ -8142,9 +8182,7 @@ fn safe_v2_stream_output_handles_backpressure_cancellation_and_settlement_errors
         .unwrap()
         .extend([NemoRelayStatus::WouldBlock, NemoRelayStatus::Ok]);
     run_safe_v2_streaming(&host, "push-backpressure", |_, _, _| async {
-        Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream::once(
-            async { Ok(json!({ "chunk": true })) },
-        ))))
+        Ok(safe_v2_one_chunk_stream())
     });
     assert_eq!(
         *SAFE_V2_OUTPUT.lock().unwrap(),
@@ -8152,35 +8190,31 @@ fn safe_v2_stream_output_handles_backpressure_cancellation_and_settlement_errors
     );
     SAFE_V2_OUTPUT.lock().unwrap().clear();
 
-    SAFE_V2_OUTPUT_PUSH_STATUSES
-        .lock()
-        .unwrap()
-        .push_back(NemoRelayStatus::Internal);
-    run_safe_v2_streaming(&host, "push-internal", |_, _, _| async {
-        Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream::once(
-            async { Ok(json!({ "chunk": true })) },
-        ))))
-    });
-    assert!(matches!(
-        SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
-        [Err(error)] if error.contains("output push failed: Internal")
-    ));
-    SAFE_V2_OUTPUT.lock().unwrap().clear();
-
-    SAFE_V2_OUTPUT_PUSH_STATUSES
-        .lock()
-        .unwrap()
-        .push_back(NemoRelayStatus::InvalidArg);
-    run_safe_v2_streaming(&host, "push-failure", |_, _, _| async {
-        Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream::once(
-            async { Ok(json!({ "chunk": true })) },
-        ))))
-    });
-    assert!(matches!(
-        SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
-        [Err(error)] if error.contains("output push failed")
-    ));
-    SAFE_V2_OUTPUT.lock().unwrap().clear();
+    for (name, status, expected) in [
+        (
+            "push-internal",
+            NemoRelayStatus::Internal,
+            "output push failed: Internal",
+        ),
+        (
+            "push-failure",
+            NemoRelayStatus::InvalidArg,
+            "output push failed",
+        ),
+    ] {
+        SAFE_V2_OUTPUT_PUSH_STATUSES
+            .lock()
+            .unwrap()
+            .push_back(status);
+        run_safe_v2_streaming(&host, name, |_, _, _| async {
+            Ok(safe_v2_one_chunk_stream())
+        });
+        assert!(matches!(
+            SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
+            [Err(error)] if error.contains(expected)
+        ));
+        SAFE_V2_OUTPUT.lock().unwrap().clear();
+    }
 
     *SAFE_V2_OUTPUT_FINISH_STATUS.lock().unwrap() = NemoRelayStatus::InvalidArg;
     run_safe_v2_streaming(&host, "finish-failure", |_, _, _| async {

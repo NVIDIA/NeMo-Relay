@@ -259,6 +259,63 @@ fn typed_llm_stream_event(
     }
 }
 
+fn start_typed_llm_call(
+    next: *const NemoRelayNativeAsyncNext,
+    invocation: *const NemoRelayNativeString,
+) -> tokio::sync::oneshot::Receiver<LlmContinuationOutcomeV2> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    assert_eq!(
+        unsafe {
+            native_async_llm_next_invoke_result_v2(
+                next,
+                invocation,
+                complete_typed_llm_result,
+                Box::into_raw(Box::new(sender)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    receiver
+}
+
+fn start_typed_llm_stream(
+    next: *const NemoRelayNativeAsyncNext,
+    invocation: *const NemoRelayNativeString,
+    output: *const NemoRelayNativeAsyncStream,
+) -> tokio::sync::oneshot::Receiver<Result<usize, LlmContinuationFailureV2>> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    assert_eq!(
+        unsafe {
+            native_async_llm_next_open_stream_v2(
+                next,
+                invocation,
+                output,
+                record_typed_llm_stream_open,
+                Box::into_raw(Box::new(sender)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    receiver
+}
+
+fn pull_typed_llm_stream(
+    stream: *const NemoRelayNativeLlmStreamV2,
+) -> tokio::sync::oneshot::Receiver<LlmContinuationStreamEventV2> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_next_v2(
+                stream,
+                record_typed_llm_stream_next,
+                Box::into_raw(Box::new(sender)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    receiver
+}
+
 #[derive(Default)]
 struct TypedLlmResultCallbackState {
     callbacks: AtomicUsize,
@@ -1944,18 +2001,7 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
         .unwrap(),
     )
     .unwrap();
-    let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
-    assert_eq!(
-        unsafe {
-            native_async_llm_next_invoke_result_v2(
-                next_ref,
-                dispatch,
-                complete_typed_llm_result,
-                Box::into_raw(Box::new(sender)).cast(),
-            )
-        },
-        NemoRelayStatus::Ok
-    );
+    let receiver = start_typed_llm_call(next_ref, dispatch);
     let outcome = runtime.block_on(receiver).unwrap();
     assert_eq!(
         outcome,
@@ -2015,18 +2061,7 @@ fn native_api_v2_releasing_next_cancels_a_pending_targeted_call() {
         .unwrap(),
     )
     .unwrap();
-    let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
-    assert_eq!(
-        unsafe {
-            native_async_llm_next_invoke_result_v2(
-                next_ref,
-                dispatch,
-                complete_typed_llm_result,
-                Box::into_raw(Box::new(sender)).cast(),
-            )
-        },
-        NemoRelayStatus::Ok
-    );
+    let receiver = start_typed_llm_call(next_ref, dispatch);
     runtime
         .block_on(async { tokio::task::spawn_blocking(move || started_rx.recv()).await })
         .unwrap()
@@ -2286,19 +2321,7 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let output_stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (output_stream, receiver) = test_native_output_stream(1);
     let output_stream_ref =
         Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
     let dispatch = native_string_from_json(
@@ -2313,20 +2336,7 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     )
     .unwrap();
 
-    let (open_sender, open_receiver) =
-        tokio::sync::oneshot::channel::<std::result::Result<usize, LlmContinuationFailureV2>>();
-    assert_eq!(
-        unsafe {
-            native_async_llm_next_open_stream_v2(
-                next_ref,
-                dispatch,
-                output_stream_ref,
-                record_typed_llm_stream_open,
-                Box::into_raw(Box::new(open_sender)).cast(),
-            )
-        },
-        NemoRelayStatus::Ok
-    );
+    let open_receiver = start_typed_llm_stream(next_ref, dispatch, output_stream_ref);
     let provider_stream = runtime.block_on(async {
         tokio::time::timeout(Duration::from_secs(1), open_receiver)
             .await
@@ -2341,17 +2351,7 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
     );
     let mut events = Vec::new();
     loop {
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        assert_eq!(
-            unsafe {
-                native_async_llm_stream_next_v2(
-                    provider_stream,
-                    record_typed_llm_stream_next,
-                    Box::into_raw(Box::new(sender)).cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
+        let receiver = pull_typed_llm_stream(provider_stream);
         let event = runtime.block_on(async {
             tokio::time::timeout(Duration::from_secs(1), receiver)
                 .await
@@ -2457,17 +2457,7 @@ fn native_api_v2_provider_pulls_restore_scope_and_target_after_pending_wakes() {
     let provider_ref = Arc::into_raw(provider) as *const NemoRelayNativeLlmStreamV2;
 
     for index in 0..2 {
-        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationStreamEventV2>();
-        assert_eq!(
-            unsafe {
-                native_async_llm_stream_next_v2(
-                    provider_ref,
-                    record_typed_llm_stream_next,
-                    Box::into_raw(Box::new(sender)).cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
+        let receiver = pull_typed_llm_stream(provider_ref);
         assert_eq!(
             runtime.block_on(async {
                 tokio::time::timeout(Duration::from_secs(1), receiver)
@@ -2519,19 +2509,7 @@ fn native_api_v2_direct_stream_forwarding_is_bounded_and_settles_once() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(1);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let mut output = NativeAsyncStreamReceiver {
         receiver,
@@ -2614,19 +2592,7 @@ fn native_api_v2_direct_stream_forwarding_preserves_downstream_failure() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(2);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(2);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let mut output = NativeAsyncStreamReceiver {
         receiver,
@@ -2708,19 +2674,7 @@ fn native_api_v2_direct_stream_forwarding_cancels_with_the_consumer() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(1);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let output = NativeAsyncStreamReceiver {
         receiver,
@@ -2974,19 +2928,7 @@ fn native_api_v2_handles_256_concurrent_buffered_dispatches() {
 
     let mut receivers = Vec::with_capacity(DISPATCH_COUNT);
     for _ in 0..DISPATCH_COUNT {
-        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
-        assert_eq!(
-            unsafe {
-                native_async_llm_next_invoke_result_v2(
-                    next_ref,
-                    dispatch,
-                    complete_typed_llm_result,
-                    Box::into_raw(Box::new(sender)).cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
-        receivers.push(receiver);
+        receivers.push(start_typed_llm_call(next_ref, dispatch));
     }
 
     let outcomes = runtime.block_on(async {
@@ -3061,18 +3003,7 @@ fn native_api_v2_isolates_concurrent_dispatch_targets() {
             .unwrap(),
         )
         .unwrap();
-        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
-        assert_eq!(
-            unsafe {
-                native_async_llm_next_invoke_result_v2(
-                    next_ref,
-                    dispatch,
-                    complete_typed_llm_result,
-                    Box::into_raw(Box::new(sender)).cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
+        let receiver = start_typed_llm_call(next_ref, dispatch);
         unsafe { native_string_free(dispatch) };
         receivers.push((index, receiver));
     }
@@ -3119,20 +3050,8 @@ fn native_api_v2_direct_pulls_64_concurrent_100_event_provider_streams_without_d
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (output_sender, output_receiver) =
-        tokio::sync::mpsc::channel(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2);
-    let output_stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(output_sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (output_stream, output_receiver) =
+        test_native_output_stream(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2);
     let output_stream_ref =
         Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
     let dispatch = native_string_from_json(
@@ -3149,21 +3068,11 @@ fn native_api_v2_direct_pulls_64_concurrent_100_event_provider_streams_without_d
 
     let mut open_receivers = Vec::with_capacity(STREAM_COUNT);
     for _ in 0..STREAM_COUNT {
-        let (sender, receiver) =
-            tokio::sync::oneshot::channel::<std::result::Result<usize, LlmContinuationFailureV2>>();
-        assert_eq!(
-            unsafe {
-                native_async_llm_next_open_stream_v2(
-                    next_ref,
-                    dispatch,
-                    output_stream_ref,
-                    record_typed_llm_stream_open,
-                    Box::into_raw(Box::new(sender)).cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
-        open_receivers.push(receiver);
+        open_receivers.push(start_typed_llm_stream(
+            next_ref,
+            dispatch,
+            output_stream_ref,
+        ));
     }
 
     let event_counts = runtime.block_on(async {
@@ -3184,17 +3093,7 @@ fn native_api_v2_direct_pulls_64_concurrent_100_event_provider_streams_without_d
         let drains = streams.into_iter().map(|provider_stream| async move {
             let mut chunks = 0;
             loop {
-                let (sender, receiver) = tokio::sync::oneshot::channel();
-                assert_eq!(
-                    unsafe {
-                        native_async_llm_stream_next_v2(
-                            provider_stream,
-                            record_typed_llm_stream_next,
-                            Box::into_raw(Box::new(sender)).cast(),
-                        )
-                    },
-                    NemoRelayStatus::Ok
-                );
+                let receiver = pull_typed_llm_stream(provider_stream);
                 match receiver.await.expect("next callback should be delivered") {
                     LlmContinuationStreamEventV2::Chunk { .. } => chunks += 1,
                     LlmContinuationStreamEventV2::Done => break,
@@ -3937,18 +3836,7 @@ fn native_api_v2_unary_entrypoint_reports_validation_panics_and_typed_failures()
             None,
         ));
         let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        assert_eq!(
-            unsafe {
-                native_async_llm_next_invoke_result_v2(
-                    next_ref,
-                    dispatch,
-                    complete_typed_llm_result,
-                    Box::into_raw(Box::new(sender)).cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
+        let receiver = start_typed_llm_call(next_ref, dispatch);
         let outcome = runtime.block_on(receiver).unwrap();
         match outcome {
             LlmContinuationOutcomeV2::Failure {
@@ -3972,18 +3860,7 @@ fn native_api_v2_unary_entrypoint_reports_validation_panics_and_typed_failures()
         None,
     ));
     let panicking_ref = Arc::into_raw(panicking) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationOutcomeV2>();
-    assert_eq!(
-        unsafe {
-            native_async_llm_next_invoke_result_v2(
-                panicking_ref,
-                dispatch,
-                complete_typed_llm_result,
-                Box::into_raw(Box::new(sender)).cast(),
-            )
-        },
-        NemoRelayStatus::Ok
-    );
+    let receiver = start_typed_llm_call(panicking_ref, dispatch);
     assert!(matches!(
         runtime.block_on(receiver).unwrap(),
         LlmContinuationOutcomeV2::Failure {
@@ -4112,20 +3989,7 @@ fn native_api_v2_stream_open_reports_validation_setup_and_provider_failures() {
         let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
         let (output, receiver) = test_native_output_stream(1);
         let output_ref = Arc::into_raw(Arc::clone(&output)) as *const NemoRelayNativeAsyncStream;
-        let (sender, open_receiver) =
-            tokio::sync::oneshot::channel::<std::result::Result<usize, LlmContinuationFailureV2>>();
-        assert_eq!(
-            unsafe {
-                native_async_llm_next_open_stream_v2(
-                    next_ref,
-                    dispatch,
-                    output_ref,
-                    record_typed_llm_stream_open,
-                    Box::into_raw(Box::new(sender)).cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
+        let open_receiver = start_typed_llm_stream(next_ref, dispatch, output_ref);
         assert!(runtime.block_on(open_receiver).unwrap().is_err());
         drop(receiver);
         unsafe {
@@ -4147,20 +4011,7 @@ fn native_api_v2_stream_open_reports_validation_setup_and_provider_failures() {
     let (panic_output, panic_receiver) = test_native_output_stream(1);
     let panic_output_ref =
         Arc::into_raw(Arc::clone(&panic_output)) as *const NemoRelayNativeAsyncStream;
-    let (sender, open_receiver) =
-        tokio::sync::oneshot::channel::<std::result::Result<usize, LlmContinuationFailureV2>>();
-    assert_eq!(
-        unsafe {
-            native_async_llm_next_open_stream_v2(
-                panicking_ref,
-                dispatch,
-                panic_output_ref,
-                record_typed_llm_stream_open,
-                Box::into_raw(Box::new(sender)).cast(),
-            )
-        },
-        NemoRelayStatus::Ok
-    );
+    let open_receiver = start_typed_llm_stream(panicking_ref, dispatch, panic_output_ref);
     assert!(matches!(
         runtime.block_on(open_receiver).unwrap(),
         Err(LlmContinuationFailureV2::NonHttp {
@@ -4360,17 +4211,7 @@ fn native_api_v2_provider_stream_reports_terminal_and_release_states() {
     let (stream, _output_receiver) =
         test_native_provider_stream(&runtime, LlmJsonStream::new(tokio_stream::empty()));
     let stream_ref = Arc::into_raw(stream) as *const NemoRelayNativeLlmStreamV2;
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    assert_eq!(
-        unsafe {
-            native_async_llm_stream_next_v2(
-                stream_ref,
-                record_typed_llm_stream_next,
-                Box::into_raw(Box::new(sender)).cast(),
-            )
-        },
-        NemoRelayStatus::Ok
-    );
+    let receiver = pull_typed_llm_stream(stream_ref);
     assert!(matches!(
         runtime.block_on(receiver).unwrap(),
         LlmContinuationStreamEventV2::Done
@@ -4884,19 +4725,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                             ));
                             let stream_next_ref =
                                 Arc::into_raw(stream_next) as *const NemoRelayNativeAsyncNext;
-                            let (sender, receiver) = tokio::sync::mpsc::channel(1);
-                            let stream = Arc::new(NativeAsyncStream {
-                                runtime: native_runtime().handle().clone(),
-                                context: MiddlewareContinuationContext::capture(),
-                                task: Mutex::new(None),
-                                sender: Mutex::new(Some(sender)),
-                                cancelled: AtomicBool::new(false),
-                                settled: AtomicBool::new(false),
-                                downstream_aborts: Mutex::new(HashMap::new()),
-                                settlement: Mutex::new(()),
-                                before_settlement_lock: None,
-                                _callback_user_data: None,
-                            });
+                            let (stream, receiver) = test_native_output_stream(1);
                             let stream_ref = Arc::into_raw(Arc::clone(&stream))
                                 as *const NemoRelayNativeAsyncStream;
                             let invocation = native_string_from_json(
@@ -5116,19 +4945,7 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, _receiver) = tokio::sync::mpsc::channel(1);
-    let output_stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (output_stream, _receiver) = test_native_output_stream(1);
     let output_stream_ref =
         Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
     let callback_state = Arc::new(NativeStreamCallbackState::default());
@@ -5398,19 +5215,7 @@ fn native_async_stream_next_supports_repeated_concurrent_calls() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(1);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let invocation = native_string_from_json(
         &serde_json::to_value(LlmRequest {
@@ -5517,19 +5322,7 @@ fn native_async_stream_settlement_rejects_late_next_and_aborts_in_flight_next() 
             None,
         ));
         let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-        let (sender, receiver) = tokio::sync::mpsc::channel(1);
-        let stream = Arc::new(NativeAsyncStream {
-            runtime: native_runtime().handle().clone(),
-            context: MiddlewareContinuationContext::capture(),
-            task: Mutex::new(None),
-            sender: Mutex::new(Some(sender)),
-            cancelled: AtomicBool::new(false),
-            settled: AtomicBool::new(false),
-            downstream_aborts: Mutex::new(HashMap::new()),
-            settlement: Mutex::new(()),
-            before_settlement_lock: None,
-            _callback_user_data: None,
-        });
+        let (stream, receiver) = test_native_output_stream(1);
         let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
         let invocation = native_string_from_json(
             &serde_json::to_value(LlmRequest {
@@ -5640,19 +5433,7 @@ fn native_async_stream_next_stops_callbacks_after_false() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(1);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let invocation = native_string_from_json(
         &serde_json::to_value(LlmRequest {
@@ -5716,19 +5497,7 @@ fn native_async_stream_in_flight_cancellation_releases_callback_state() {
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(1);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let invocation = native_string_from_json(
         &serde_json::to_value(LlmRequest {
@@ -5800,19 +5569,7 @@ fn native_async_stream_cancellation_before_first_poll_releases_callback_state() 
         None,
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(1);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let invocation = native_string_from_json(
         &serde_json::to_value(LlmRequest {
@@ -6812,19 +6569,7 @@ fn native_async_stream_backpressure_preserves_v3_internal_and_v4_would_block() {
         .enable_all()
         .build()
         .unwrap();
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let stream = Arc::new(NativeAsyncStream {
-        runtime: native_runtime().handle().clone(),
-        context: MiddlewareContinuationContext::capture(),
-        task: Mutex::new(None),
-        sender: Mutex::new(Some(sender)),
-        cancelled: AtomicBool::new(false),
-        settled: AtomicBool::new(false),
-        downstream_aborts: Mutex::new(HashMap::new()),
-        settlement: Mutex::new(()),
-        before_settlement_lock: None,
-        _callback_user_data: None,
-    });
+    let (stream, receiver) = test_native_output_stream(1);
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let first_chunk = native_string(r#"{"chunk":1}"#);
     let second_chunk = native_string(r#"{"chunk":2}"#);

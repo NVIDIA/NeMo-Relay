@@ -1952,12 +1952,6 @@ struct NativeLlmProviderNextCallbackGuardV2 {
     active: bool,
 }
 
-enum NativeLlmProviderNextOutcomeV2 {
-    Chunk(Json),
-    Done,
-    Failure(LlmContinuationFailureV2),
-}
-
 impl NativeLlmProviderNextCallbackGuardV2 {
     fn complete_pull(&self, terminal: bool) -> bool {
         let output_live = !self.provider.output.cancelled.load(Ordering::Acquire)
@@ -2040,13 +2034,13 @@ impl NativeLlmProviderNextCallbackGuardV2 {
         }
     }
 
-    fn complete(&mut self, outcome: NativeLlmProviderNextOutcomeV2) {
+    fn complete(&mut self, outcome: std::result::Result<Option<Json>, LlmContinuationFailureV2>) {
         if !self.active {
             return;
         }
         self.active = false;
         match outcome {
-            NativeLlmProviderNextOutcomeV2::Chunk(chunk) => {
+            Ok(Some(chunk)) => {
                 let chunk = native_string_from_json(&chunk);
                 let allowed = self.complete_pull(chunk.is_none());
                 if !allowed {
@@ -2068,7 +2062,7 @@ impl NativeLlmProviderNextCallbackGuardV2 {
                     }
                 }
             }
-            NativeLlmProviderNextOutcomeV2::Done => {
+            Ok(None) => {
                 if self.complete_pull(true) {
                     unsafe {
                         (self.cb)(
@@ -2085,7 +2079,7 @@ impl NativeLlmProviderNextCallbackGuardV2 {
                     ));
                 }
             }
-            NativeLlmProviderNextOutcomeV2::Failure(error) => {
+            Err(error) => {
                 if self.complete_pull(true) {
                     self.invoke_failure(&error);
                 } else {
@@ -3863,17 +3857,17 @@ unsafe extern "C" fn native_async_llm_stream_next_v2(
         let result = AssertUnwindSafe(context.invoke_with_llm_dispatch_target(target, || async {
             let mut stream = provider_for_task.stream.lock().await;
             let Some(provider_stream) = stream.as_mut() else {
-                return NativeLlmProviderNextOutcomeV2::Done;
+                return Ok(None);
             };
             match provider_stream.next().await {
-                Some(Ok(chunk)) => NativeLlmProviderNextOutcomeV2::Chunk(chunk),
+                Some(Ok(chunk)) => Ok(Some(chunk)),
                 Some(Err(error)) => {
                     stream.take();
-                    NativeLlmProviderNextOutcomeV2::Failure(typed_llm_failure(error))
+                    Err(typed_llm_failure(error))
                 }
                 None => {
                     stream.take();
-                    NativeLlmProviderNextOutcomeV2::Done
+                    Ok(None)
                 }
             }
         }))
@@ -3883,7 +3877,7 @@ unsafe extern "C" fn native_async_llm_stream_next_v2(
             Ok(outcome) => outcome,
             Err(payload) => {
                 provider_for_task.stream.lock().await.take();
-                NativeLlmProviderNextOutcomeV2::Failure(non_http_llm_failure(
+                Err(non_http_llm_failure(
                     LlmNonHttpFailureKindV2::Internal,
                     format!(
                         "typed native LLM provider stream panicked: {}",

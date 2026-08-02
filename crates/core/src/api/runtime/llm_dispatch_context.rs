@@ -209,8 +209,8 @@ pub(crate) fn targeted_llm_stream_execution(
 async fn dispatch_buffered(target: &LlmDispatchTargetContext, request: LlmRequest) -> Result<Json> {
     let response = send(target, request, Some(HTTP_REQUEST_TIMEOUT)).await?;
     let status = response.status();
-    let headers = safe_failure_headers(response.headers());
     if !status.is_success() {
+        let headers = safe_failure_headers(response.headers());
         let bytes = bounded_response_body(target, response).await?;
         return Err(http_error(status, headers, &bytes));
     }
@@ -218,7 +218,9 @@ async fn dispatch_buffered(target: &LlmDispatchTargetContext, request: LlmReques
         .bytes()
         .await
         .map_err(|error| transport_error(target, error))?;
-    serde_json::from_slice(&bytes).map_err(|_| http_error(status, headers, &bytes))
+    serde_json::from_slice(&bytes).map_err(|_| {
+        FlowError::Internal("targeted LLM provider returned malformed response JSON".into())
+    })
 }
 
 async fn dispatch_stream(

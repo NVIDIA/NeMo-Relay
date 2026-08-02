@@ -6,7 +6,6 @@
 use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
-use std::ptr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -87,45 +86,12 @@ struct CompletionHandle(*const NemoRelayNativeAsyncCompletion);
 #[derive(Clone, Copy)]
 struct OutputHandle(*const NemoRelayNativeAsyncStream);
 
-struct TaskHostString {
-    host: NemoRelayNativeHostApiV1,
-    raw: usize,
-}
-
 // The host owns these opaque handles and documents their operations as
 // thread-safe for a pending callback's lifetime.
 unsafe impl Send for CompletionHandle {}
 unsafe impl Sync for CompletionHandle {}
 unsafe impl Send for OutputHandle {}
 unsafe impl Sync for OutputHandle {}
-
-impl TaskHostString {
-    fn new(host: &NemoRelayNativeHostApiV1, value: &str) -> Option<Self> {
-        let mut raw = ptr::null_mut();
-        let status = unsafe { (host.string_new)(value.as_ptr(), value.len(), &mut raw) };
-        if status != NemoRelayStatus::Ok || raw.is_null() {
-            return None;
-        }
-        Some(Self {
-            host: *host,
-            raw: raw as usize,
-        })
-    }
-
-    fn from_json(host: &NemoRelayNativeHostApiV1, value: &Json) -> Option<Self> {
-        Self::new(host, &serde_json::to_string(value).ok()?)
-    }
-
-    fn as_ptr(&self) -> *const NemoRelayNativeString {
-        self.raw as *const NemoRelayNativeString
-    }
-}
-
-impl Drop for TaskHostString {
-    fn drop(&mut self) {
-        unsafe { (self.host.string_free)(self.raw as *mut NemoRelayNativeString) };
-    }
-}
 
 impl CompletionHandle {
     fn as_ptr(&self) -> *const NemoRelayNativeAsyncCompletion {
@@ -456,16 +422,10 @@ impl LlmStreamContinuationV2 {
             unsafe { drop(Box::from_raw(state.cast::<StreamOpenCallback>())) };
             return Err(status_failure("targeted LLM stream setup", status));
         }
-        let provider = receiver.await.unwrap_or_else(|_| {
+        receiver.await.unwrap_or_else(|_| {
             Err(internal_failure(
                 "targeted LLM stream setup callback closed without an outcome",
             ))
-        })?;
-        Ok(LlmProviderStreamV2 {
-            host,
-            raw: provider.into_raw(),
-            pending: None,
-            finished: false,
         })
     }
 
@@ -918,7 +878,7 @@ async fn pump_output_stream(
 
 async fn push_output_json(continuation: &LlmStreamContinuationV2, chunk: &Json) -> Result<()> {
     let host = &continuation.inner.host;
-    let chunk = TaskHostString::from_json(&host.v3.v1, chunk)
+    let chunk = HostString::from_json(&host.v3.v1, chunk)
         .ok_or_else(|| "failed to serialize native API v2 output chunk".to_string())?;
     std::future::poll_fn(move |_context| {
         if unsafe { (host.v3.async_stream_is_cancelled)(continuation.inner.output) } {
@@ -953,7 +913,7 @@ async fn reject_output(host: &NemoRelayNativeHostApiV4, output: OutputHandle, er
         return;
     }
     let error = bounded_error(error);
-    let Some(message) = TaskHostString::new(&host.v3.v1, &error) else {
+    let Some(message) = HostString::new(&host.v3.v1, &error) else {
         set_last_error(
             &host.v3.v1,
             "failed to allocate native API v2 stream rejection",
@@ -1124,36 +1084,8 @@ unsafe extern "C" fn passthrough_result_callback(
 
 struct StreamOpenCallback {
     host: NemoRelayNativeHostApiV4,
-    sender: oneshot::Sender<std::result::Result<OwnedProviderStream, LlmContinuationFailureV2>>,
+    sender: oneshot::Sender<std::result::Result<LlmProviderStreamV2, LlmContinuationFailureV2>>,
 }
-
-struct OwnedProviderStream {
-    host: NemoRelayNativeHostApiV4,
-    raw: *const NemoRelayNativeLlmStreamV2,
-}
-
-impl OwnedProviderStream {
-    fn new(host: NemoRelayNativeHostApiV4, raw: *const NemoRelayNativeLlmStreamV2) -> Self {
-        debug_assert!(!raw.is_null());
-        Self { host, raw }
-    }
-
-    fn into_raw(mut self) -> *const NemoRelayNativeLlmStreamV2 {
-        std::mem::replace(&mut self.raw, ptr::null())
-    }
-}
-
-impl Drop for OwnedProviderStream {
-    fn drop(&mut self) {
-        if !self.raw.is_null() {
-            unsafe { (self.host.async_llm_stream_release_v2)(self.raw) };
-        }
-    }
-}
-
-// The host owns the opaque stream and documents release as thread-safe for a
-// plugin-owned reference.
-unsafe impl Send for OwnedProviderStream {}
 
 unsafe extern "C" fn stream_open_callback(
     user_data: *mut c_void,
@@ -1164,8 +1096,12 @@ unsafe extern "C" fn stream_open_callback(
         return;
     }
     let state = unsafe { Box::from_raw(user_data.cast::<StreamOpenCallback>()) };
-    let mut owned_stream =
-        (!stream.is_null()).then(|| OwnedProviderStream::new(state.host, stream));
+    let mut provider = (!stream.is_null()).then(|| LlmProviderStreamV2 {
+        host: state.host,
+        raw: stream,
+        pending: None,
+        finished: false,
+    });
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match (stream.is_null(), error_json.is_null()) {
             (false, true) => Ok(()),
@@ -1189,7 +1125,7 @@ unsafe extern "C" fn stream_open_callback(
         ))
     });
     let result = result.and_then(|()| {
-        owned_stream
+        provider
             .take()
             .ok_or_else(|| internal_failure("targeted LLM stream setup returned a null stream"))
     });

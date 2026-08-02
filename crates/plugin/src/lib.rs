@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void};
+use std::fmt;
 use std::marker::{PhantomData, PhantomPinned};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
@@ -949,7 +950,7 @@ pub type NemoRelayNativeAsyncNextResultCb = unsafe extern "C" fn(
 /// Explicit provider target for one native API v2 LLM continuation.
 ///
 /// Relay sends LLM continuation requests with HTTP `POST`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct LlmContinuationTargetV2 {
     /// Absolute HTTP(S) provider URL including the selected endpoint.
     pub url: String,
@@ -960,13 +961,33 @@ pub struct LlmContinuationTargetV2 {
     pub headers: BTreeMap<String, String>,
 }
 
+impl fmt::Debug for LlmContinuationTargetV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LlmContinuationTargetV2")
+            .field("url", &"<redacted>")
+            .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 /// Typed LLM continuation invocation supplied through native API v2.
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct LlmContinuationInvocationV2 {
     /// Replacement request passed to the Relay execution continuation.
     pub request: LlmRequest,
     /// Explicit provider target selected by the plugin.
     pub target: LlmContinuationTargetV2,
+}
+
+impl fmt::Debug for LlmContinuationInvocationV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LlmContinuationInvocationV2")
+            .field("request", &"<redacted>")
+            .field("target", &self.target)
+            .finish()
+    }
 }
 
 /// Stable non-HTTP failure classification exposed through native API v2.
@@ -985,6 +1006,14 @@ pub enum LlmNonHttpFailureKindV2 {
     Guardrail,
     /// Relay could not complete the operation.
     Internal,
+}
+
+impl LlmNonHttpFailureKindV2 {
+    /// Whether the provider-neutral retry policy retries this failure kind.
+    #[must_use]
+    pub const fn is_retryable(self) -> bool {
+        matches!(self, Self::Transport | Self::Timeout)
+    }
 }
 
 /// Structured LLM continuation failure exposed through native API v2.
@@ -1007,6 +1036,23 @@ pub enum LlmContinuationFailureV2 {
         /// Bounded human-readable context.
         message: String,
     },
+}
+
+impl LlmContinuationFailureV2 {
+    /// Whether the provider-neutral retry policy retries an HTTP status.
+    #[must_use]
+    pub const fn http_status_is_retryable(status: u16) -> bool {
+        matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
+    }
+
+    /// Whether a provider-neutral routing policy should retry this failure.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Http { status, .. } => Self::http_status_is_retryable(*status),
+            Self::NonHttp { kind, .. } => kind.is_retryable(),
+        }
+    }
 }
 
 /// Receives one typed unary LLM continuation outcome.
@@ -3456,6 +3502,11 @@ struct HostString<'a> {
     host: &'a NemoRelayNativeHostApiV1,
     ptr: *mut NemoRelayNativeString,
 }
+
+// The string is an exclusively owned host allocation. Native API string
+// allocation and release are thread-safe, and the borrowed immutable host
+// table remains valid for this value's lifetime.
+unsafe impl Send for HostString<'_> {}
 
 impl<'a> HostString<'a> {
     fn try_new(

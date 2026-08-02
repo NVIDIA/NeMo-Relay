@@ -212,6 +212,26 @@ async fn buffered_target_runs_after_downstream_middleware_and_ignores_host_callb
 }
 
 #[tokio::test]
+async fn malformed_success_json_is_an_internal_provider_failure() {
+    let provider = FakeProvider::spawn(response(
+        "200 OK",
+        &[("Content-Type", "application/json")],
+        b"not-json",
+    ));
+
+    let error = dispatch_buffered(&target(provider.url.clone(), BTreeMap::new()), request())
+        .await
+        .expect_err("malformed successful response should fail");
+
+    assert!(matches!(
+        error,
+        FlowError::Internal(message)
+            if message == "targeted LLM provider returned malformed response JSON"
+    ));
+    let _ = provider.request();
+}
+
+#[tokio::test]
 async fn buffered_http_failure_is_bounded_and_filters_headers() {
     let body = vec![b'x'; MAX_UPSTREAM_FAILURE_BODY_BYTES + 1024];
     let provider = FakeProvider::spawn(response(
