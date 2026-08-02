@@ -282,7 +282,7 @@ fn native_config_field<'a>(schema: &'a PluginConfigSchema, key: &str) -> &'a Dyn
         .fields()
         .iter()
         .find(|field| field.key == key)
-        .unwrap()
+        .unwrap_or_else(|| panic!("missing native config field {key:?}"))
 }
 
 fn assert_native_raw_and_scalar_fields(schema: &PluginConfigSchema) {

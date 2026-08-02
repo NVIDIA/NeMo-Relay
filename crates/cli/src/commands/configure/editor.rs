@@ -556,10 +556,17 @@ fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
 }
 
 fn project_config_path(start: &Path) -> PathBuf {
+    project_config_path_with_boundary(start, None)
+}
+
+fn project_config_path_with_boundary(start: &Path, boundary: Option<&Path>) -> PathBuf {
     for ancestor in start.ancestors() {
         let candidate = ancestor.join(".nemo-relay/config.toml");
         if candidate.exists() {
             return candidate;
+        }
+        if boundary == Some(ancestor) {
+            break;
         }
     }
     start.join(".nemo-relay/config.toml")

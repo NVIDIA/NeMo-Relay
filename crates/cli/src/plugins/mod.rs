@@ -564,7 +564,12 @@ fn collection_shortcut_value(
     shortcut: MenuShortcut,
 ) -> Value {
     match shortcut {
-        MenuShortcut::Reset => default.cloned().unwrap_or(empty),
+        MenuShortcut::Reset => default
+            .filter(|value| {
+                value.is_array() == empty.is_array() && value.is_object() == empty.is_object()
+            })
+            .cloned()
+            .unwrap_or(empty),
         MenuShortcut::Clear => empty,
         _ => unreachable!("only reset and clear shortcuts are collection shortcuts"),
     }

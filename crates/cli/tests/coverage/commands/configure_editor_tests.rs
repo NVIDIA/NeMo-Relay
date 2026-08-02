@@ -337,6 +337,7 @@ fn document_accessors_cover_inline_values_defaults_and_invalid_shapes() {
         Some("https://changed.test")
     );
     document.clear_key("missing", "value").unwrap();
+    assert!(!document.has_key("missing", "value"));
 }
 
 #[test]
@@ -360,6 +361,7 @@ fn sink_accessors_report_invalid_and_incomplete_entries() {
         .set_sink_string(0, "path", "relay.log".into())
         .unwrap();
     document.clear_sink_key(0, "level").unwrap();
+    assert!(!document.sink_has_key(0, "level").unwrap());
     assert_eq!(
         document.sink_string(0, "path").as_deref(),
         Some("relay.log")
@@ -373,7 +375,7 @@ fn project_path_defaults_to_start_when_no_ancestor_config_exists() {
     std::fs::create_dir_all(&nested).unwrap();
 
     assert_eq!(
-        project_config_path(&nested),
+        project_config_path_with_boundary(&nested, Some(root.path())),
         nested.join(".nemo-relay/config.toml")
     );
 }

@@ -132,8 +132,8 @@ pub(crate) fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
 /// When `merge_scope` is `Some(agent)`, an existing `config.toml` at the target path is parsed
 /// and only the single `[agents.<agent>]` block owned by THIS wizard run is replaced. Other
 /// `[agents.*]` blocks are preserved when omitted from the wizard output. When `merge_scope` is
-/// `None`, the file is overwritten outright with the wizard's full output (the user explicitly
-/// chose which agents to include).
+/// `None`, the full `[agents]` table is replaced while unrelated configuration sections are
+/// preserved.
 ///
 /// Returns the list of paths written. `home` and `cwd` are explicit so tests can drive this with
 /// tempdirs.
@@ -174,16 +174,13 @@ pub(crate) fn global_config_dir(home: &Path) -> PathBuf {
 
 // Writes the wizard-built `doc` to `path`. When `merge_scope` is `Some(agent)` and the file
 // already exists, preserves any `[agents.<other>]` blocks while replacing the shared sections
-// and the target agent's block. When `merge_scope` is `None`, just overwrites the file.
+// and the target agent's block. When `merge_scope` is `None`, replaces the complete agents table
+// while preserving sections owned by other configuration commands.
 pub(crate) fn write_or_merge(
     path: &Path,
     doc: &DocumentMut,
     merge_scope: Option<CodingAgent>,
 ) -> Result<(), CliError> {
-    let Some(agent) = merge_scope else {
-        std::fs::write(path, doc.to_string())?;
-        return Ok(());
-    };
     if !path.exists() {
         std::fs::write(path, doc.to_string())?;
         return Ok(());
@@ -192,10 +189,22 @@ pub(crate) fn write_or_merge(
     let mut existing: DocumentMut = existing_raw
         .parse()
         .map_err(|err| CliError::Config(format!("could not parse existing config: {err}")))?;
+    existing.remove("plugins");
+    let Some(agent) = merge_scope else {
+        match doc.get("agents") {
+            Some(agents) => {
+                existing["agents"] = agents.clone();
+            }
+            None => {
+                existing.remove("agents");
+            }
+        }
+        std::fs::write(path, existing.to_string())?;
+        return Ok(());
+    };
     let agent_key = agent_key_and_command(agent).0;
     // Remove the legacy plugin configuration block so the merged config remains loadable after
     // plugin configuration moved to plugins.toml.
-    existing.remove("plugins");
     merge_agents_entry(&mut existing, doc, agent_key);
     std::fs::write(path, existing.to_string())?;
     Ok(())

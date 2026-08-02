@@ -630,6 +630,18 @@ fn menu_keys_cover_selection_shortcuts_and_cancellation() {
         menu_response_for_key(&Key::Escape, 1),
         Some(MenuResponse::Cancel)
     );
+    assert_eq!(
+        menu_response_for_key(&Key::Del, 1),
+        Some(MenuResponse::Shortcut(MenuShortcut::Clear, 1))
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::CtrlC, 1),
+        Some(MenuResponse::Cancel)
+    );
+    assert_eq!(
+        menu_response_for_key(&Key::Char('q'), 1),
+        Some(MenuResponse::Cancel)
+    );
     assert_eq!(menu_response_for_key(&Key::Char('x'), 1), None);
 }
 
@@ -748,6 +760,7 @@ fn component_shortcut_fallbacks_are_safe_noops() {
     let mut config = PluginConfig::default();
     ensure_observability_component(&mut config).unwrap();
     let mut components = editable_components(&config).unwrap();
+    let before = format!("{components:?}");
 
     assert_eq!(
         handle_reset_or_clear_shortcut(&mut components, None, MenuShortcut::Reset).unwrap(),
@@ -755,6 +768,7 @@ fn component_shortcut_fallbacks_are_safe_noops() {
     );
     reset_component_menu_item(&mut components[0], None).unwrap();
     clear_component_menu_item(&mut components[0], Some(ComponentMenuAction::Back)).unwrap();
+    assert_eq!(format!("{components:?}"), before);
 }
 
 #[test]
@@ -2166,11 +2180,11 @@ fn dynamic_editor_raw_menu_and_nested_value_paths_are_deterministic() {
     assert!(matches!(actions[0], DynamicMenuAction::EditRawConfig));
 
     let mut config = None;
-    let path = vec!["outer".to_owned(), "inner".to_owned()];
-    set_value_at_path(&mut config, &path, json!(7));
-    assert_eq!(value_at_path(config.as_ref(), &path), Some(&json!(7)));
+    let field_path = vec!["outer".to_owned(), "inner".to_owned()];
+    set_value_at_path(&mut config, &field_path, json!(7));
+    assert_eq!(value_at_path(config.as_ref(), &field_path), Some(&json!(7)));
     assert_eq!(value_at_path(config.as_ref(), &[]), None);
-    assert!(remove_value_at_path(config.as_mut().unwrap(), &path));
+    assert!(remove_value_at_path(config.as_mut().unwrap(), &field_path));
     set_value_at_path(&mut config, &[], json!(9));
     assert!(config.as_ref().unwrap().is_empty());
 }
@@ -3041,6 +3055,14 @@ fn collection_shortcuts_reset_to_defaults_and_clear_to_empty() {
     );
     assert_eq!(
         collection_shortcut_value(Some(&default), json!([]), MenuShortcut::Clear),
+        json!([])
+    );
+    assert_eq!(
+        collection_shortcut_value(
+            Some(&json!({"malformed": true})),
+            json!([]),
+            MenuShortcut::Reset
+        ),
         json!([])
     );
 }

@@ -15,6 +15,14 @@ use super::{
 };
 use crate::error::CliError;
 
+fn require_nonempty(value: &str) -> Result<(), &'static str> {
+    if value.trim().is_empty() {
+        Err("value must not be empty")
+    } else {
+        Ok(())
+    }
+}
+
 const EDIT_CANCELLED_MESSAGE: &str = "configuration edit cancelled — no config saved";
 pub(super) fn edit(
     command: ConfigEditCommand,
@@ -210,13 +218,7 @@ fn edit_string(
             let value = Input::<String>::with_theme(theme)
                 .with_prompt("Value")
                 .with_initial_text(default)
-                .validate_with(|value: &String| {
-                    if value.trim().is_empty() {
-                        Err("value must not be empty; use Clear to remove it")
-                    } else {
-                        Ok(())
-                    }
-                })
+                .validate_with(|value: &String| require_nonempty(value))
                 .interact_text()
                 .map_err(prompt_error)?;
             document.set_string(section, key, value)?;
@@ -292,13 +294,7 @@ fn edit_sinks(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result<()
             index if index == sink_count => {
                 let path = Input::<String>::with_theme(theme)
                     .with_prompt("File path")
-                    .validate_with(|value: &String| {
-                        if value.trim().is_empty() {
-                            Err("value must not be empty".to_owned())
-                        } else {
-                            Ok(())
-                        }
-                    })
+                    .validate_with(|value: &String| require_nonempty(value))
                     .interact_text()
                     .map_err(prompt_error)?;
                 document.add_sink(path)?;
@@ -350,13 +346,7 @@ fn edit_sink_path(
     let value = Input::<String>::with_theme(theme)
         .with_prompt("File path")
         .with_initial_text(current)
-        .validate_with(|value: &String| {
-            if value.trim().is_empty() {
-                Err("value must not be empty".to_owned())
-            } else {
-                Ok(())
-            }
-        })
+        .validate_with(|value: &String| require_nonempty(value))
         .interact_text()
         .map_err(prompt_error)?;
     document.set_sink_string(index, "path", value)
