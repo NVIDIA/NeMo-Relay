@@ -2453,8 +2453,8 @@ impl<'a> PluginContext<'a> {
 
     /// Registers a typed LLM stream execution intercept.
     ///
-    /// Native ABI v2 represents stream execution as one JSON result. The host
-    /// wraps that result as a one-chunk stream.
+    /// The host pulls the returned [`LlmJsonStream`] incrementally through an
+    /// opaque native stream handle.
     pub fn register_llm_stream_execution_intercept<F>(
         &mut self,
         name: &str,

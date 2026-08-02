@@ -49,7 +49,7 @@ the dynamic-library boundary on the stable C-compatible ABI.
   [0.7 migration guide](https://docs.nvidia.com/nemo/relay/reference/migration-guides#upgrade-to-nemo-relay-07).
 - **Raw async middleware**: Completion-based raw registrations for plugins
   that need asynchronous guardrails, intercepts, or event sanitizers. Typed
-  Rust callbacks remain synchronous convenience APIs.
+  Rust callbacks on native API v1 remain synchronous convenience APIs.
 - **Safe native API v2 LLM continuations**: Register future-returning Rust
   callbacks, dispatch explicit provider targets, and consume provider events
   as Rust streams without writing C callback or handle-management code.
@@ -147,18 +147,20 @@ ctx.register_async_llm_stream_execution_v2("route-stream", 0, move |_name, reque
 })?;
 ```
 
-For an unmanaged buffered request, call
-`LlmContinuationV2::call_passthrough`. For an unmanaged streaming request,
-return `LlmStreamExecutionOutcomeV2::Passthrough(request)`. Relay then pumps
-the original downstream stream directly through its bounded queue; provider
-events do not cross into the plugin merely to be forwarded.
+To invoke the ordinary untargeted downstream continuation for a buffered
+request, call `LlmContinuationV2::call_passthrough`. For streaming, return
+`LlmStreamExecutionOutcomeV2::Passthrough(request)`. The call remains inside
+its managed Relay LLM lifecycle, but Relay pumps the downstream stream directly
+through its bounded queue; provider events do not cross into the plugin merely
+to be forwarded.
 
-The plugin provides JSON plus an HTTP method, absolute target URL, and explicit
-target headers. Relay binds that transport target to the current LLM
-continuation without storing it in `LlmRequest.headers`. Successful calls return
-provider JSON. Provider rejections return an HTTP status, bounded body, and safe
-response headers; failures without an HTTP response use a small
-transport-oriented kind. The plugin owns its retry and fallback policy.
+The plugin provides JSON, an absolute target URL, and explicit target headers.
+Relay sends the request with HTTP `POST` and binds that transport target to the
+current LLM continuation without storing it in `LlmRequest.headers`.
+Successful calls return provider JSON. Provider rejections return an HTTP
+status, bounded body, and safe response headers; failures without an HTTP
+response use a small transport-oriented kind. The plugin owns its retry and
+fallback policy.
 
 Relay core performs the terminal targeted HTTP request after the remaining LLM
 execution intercepts run. This contract is host-independent: it works through
@@ -166,14 +168,17 @@ the CLI gateway and through SDK-embedded Relay hosts that call the managed LLM
 execution APIs directly.
 
 Streaming dispatch returns `LlmProviderStreamV2`, which implements Rust
-`Stream` and cancels unfinished provider work on drop. Safe callbacks register
-through the generic V3 completion API and return `Pending`; Relay then polls
-their Rust futures and returned streams cooperatively on its Tokio runtime.
-Each resumed poll restores the captured Relay continuation and scope context,
-and a pending callback does not occupy a blocking worker. Output backpressure
-parks the task until the bounded host queue can accept more data. No Rust
-future, trait object, `serde_json::Value`, or allocator-owned Rust string
-crosses the C ABI boundary.
+`Stream` and cancels unfinished provider work on drop. Targeted streaming
+endpoints must return SSE with a JSON value in each `data` frame; the plugin
+receives those JSON events rather than raw SSE framing. Provider streams permit
+at most one outstanding pull; plugin output and direct pass-through use bounded
+32-event queues. Safe callbacks register through the generic V3
+asynchronous-middleware APIs and return `Pending`. Relay then polls their Rust
+futures and returned streams cooperatively on its Tokio runtime. Each resumed
+poll restores the captured Relay continuation and scope context, and a pending
+callback does not occupy a blocking worker. Output backpressure parks the task
+until the bounded host queue can accept more data. No Rust future, trait object,
+`serde_json::Value`, or allocator-owned Rust string crosses the C ABI boundary.
 
 Callback futures and streams must be executor-neutral. A native plugin shared
 library can link a different copy of an async runtime than the Relay host, so

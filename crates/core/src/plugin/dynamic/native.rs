@@ -1517,9 +1517,10 @@ fn make_user_data(
     })
 }
 
-// Native API v1's V3 incremental stream contract shipped with a 64-event
-// queue. Keep that observable backpressure boundary stable for existing
-// plugins while native API v2 uses the documented tighter bound.
+// Native API v1's V3 incremental plugin-output stream shipped with a 64-event
+// queue. Keep that boundary stable for existing plugins. Native API v2 uses a
+// 32-event queue for plugin output and direct pass-through; targeted provider
+// streams are pull-based instead.
 const NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V1: usize = 64;
 const NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2: usize = 32;
 
