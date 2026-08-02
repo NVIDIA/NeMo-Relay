@@ -60,6 +60,20 @@ struct SpanObservations {
 /// sequence index at which that span appeared, and derives the length of the
 /// stable prefix at the start of the prompt.
 ///
+/// The result must not depend on the per-process seed `s` that Rust draws for
+/// [`HashMap`] iteration, because a profile persisted by one process is read
+/// back by another. Over `N` processes producing outcomes with multiplicities
+/// `c_1..c_k`, the cross-process agreement rate is
+///
+/// ```text
+/// A = sum_i c_i * (c_i - 1) / (N * (N - 1))
+/// ```
+///
+/// the probability that two independent processes agree, and equivalently the
+/// probability that a persisted profile satisfies the reuse gate elsewhere.
+/// `A = 1` exactly when the analysis is seed-independent, which is what
+/// [`canonical_scores`] and [`dominant_prefix_length`] each establish.
+///
 /// # Parameters
 /// - `observations`: Prompt observations to compare.
 /// - `thresholds`: Thresholds used for stability classification and confidence.
@@ -153,18 +167,12 @@ fn block_key(block: &PromptBlock) -> Option<String> {
 /// Length of the longest exact block prefix shared by a dominant share of the
 /// observation window.
 ///
-/// Under the prefix metric `d(x, y) = 2^-lcp(x, y)` the window is an
-/// ultrametric space, whose closed balls are exactly the sets of observations
-/// agreeing on a block prefix. Every point of such a ball is a center, so a ball
-/// is fixed by its members and not by the order they were enumerated in, and
-/// descending from the root ball into the dominant child at each depth reaches
-/// one radius no matter how the window is traversed.
-///
-/// Descent requires the child to hold a strict majority as well as the
-/// configured share. Two disjoint children cannot both hold a strict majority,
-/// so the dominant child is unique wherever it exists and the descent never
-/// needs a tie-break. Where no child dominates, the prefix stops rather than
-/// picking between them.
+/// Under `d(x, y) = 2^-lcp(x, y)` the window is ultrametric: closed balls are
+/// the sets agreeing on a prefix, and every point of a ball is a center, so a
+/// ball is fixed by its members rather than by traversal order. Descent also
+/// requires a strict majority, which two disjoint children cannot both hold, so
+/// the dominant child is unique where it exists and no tie-break is reachable.
+/// Where none dominates, the prefix stops.
 ///
 /// # Parameters
 /// - `observations`: Prompt observations to compare.
@@ -180,20 +188,19 @@ fn dominant_prefix_length(observations: &[PromptIR], threshold: f64) -> usize {
     for depth in 0.. {
         let mut children: HashMap<String, Vec<&PromptIR>> = HashMap::new();
         for observation in &members {
-            // An observation that ends here joins no child, so its mass simply
-            // stops contributing.
+            // An observation that ends here joins no child, so its mass stops
+            // contributing and the descent terminates at the longest window.
             if let Some(key) = observation.blocks.get(depth).and_then(block_key) {
                 children.entry(key).or_default().push(observation);
             }
         }
-
-        match children.into_values().find(|child| child.len() >= required) {
-            Some(dominant) => members = dominant,
-            None => return depth,
-        }
+        let Some(dominant) = children.into_values().find(|child| child.len() >= required) else {
+            return depth;
+        };
+        members = dominant;
     }
 
-    unreachable!("descent returns once no child holds the required mass")
+    unreachable!("descent returns at the first depth where no child dominates")
 }
 
 /// Fingerprint an observation's stable prefix as stored against a learning key.
@@ -299,26 +306,20 @@ fn stability_rank(classification: StabilityClass) -> u8 {
 
 /// Order span scores into the one canonical sequence for a given span set.
 ///
-/// The first-seen sequence index alone does not order the span set. Span ids
-/// carry the role and the tool suffix, so `assistant-3-search` and
-/// `assistant-3-fetch` are distinct spans that share index 3, and a first-seen
-/// index is a minimum across observations, which collides further. Sorting on
-/// that key alone leaves tied spans in the order [`HashMap`] iteration produced,
-/// which is seeded per process, so the stable prefix and its fingerprint would
-/// vary between runs on identical input.
+/// The sequence index alone does not order the set: span ids carry the role and
+/// the tool suffix, so `assistant-3-search` and `assistant-3-fetch` share index
+/// 3, and the index is a minimum across observations. Tied spans would keep the
+/// per-process order [`HashMap`] iteration produced. Extending the key to
+/// `(index, stability rank, span id)` makes it injective, because span ids are
+/// unique within one analysis, and a total order admits one sorted sequence.
 ///
-/// Extending the key to `(index, stability rank, span id)` makes it injective,
-/// because span ids are unique within one analysis. A total order over a finite
-/// set admits exactly one sorted sequence, so the result depends only on the set
-/// of spans and not on how it was enumerated.
-///
-/// Prefix economics walks this vector in order and stops pricing at the first
-/// span that is not stable, so ranking the least stable span first makes a
-/// contested position end the priced prefix rather than sit inside it.
+/// Prefix economics walks this vector and stops pricing at the first span that
+/// is not stable, so ranking the least stable first ends the priced prefix at a
+/// contested position rather than pricing across it.
 ///
 /// # Parameters
 /// - `indexed`: Span scores paired with the sequence index each span was first
-///   seen at, in the order [`HashMap`] iteration produced them.
+///   seen at, in [`HashMap`] iteration order.
 ///
 /// # Returns
 /// The scores in prompt order.
