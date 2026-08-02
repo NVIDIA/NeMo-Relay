@@ -133,3 +133,84 @@ fn profile_fingerprint_requires_source_hash_beyond_the_scaffold() {
         None
     );
 }
+
+fn scored(span_id: &str, classification: StabilityClass) -> BlockStabilityScore {
+    BlockStabilityScore {
+        span_id: SpanId(span_id.to_string()),
+        classification,
+        score: 1.0,
+        confidence: 1.0,
+        observation_count: 1,
+    }
+}
+
+/// Two spans differing only in role or tool suffix share a sequence index, so
+/// the index alone is not a total order over the span set. `canonical_scores`
+/// must therefore map any permutation of the same span set onto one sequence.
+#[test]
+fn stability_internal_canonical_scores_are_invariant_under_input_permutation() {
+    let tied = vec![
+        (1_u32, scored("assistant-1-search", StabilityClass::Stable)),
+        (1, scored("assistant-1-fetch", StabilityClass::Variable)),
+        (1, scored("assistant-1-write", StabilityClass::SemiStable)),
+        // Shares the index and the rank of `assistant-1-search`, so only the
+        // span id separates them.
+        (1, scored("assistant-1-annotate", StabilityClass::Stable)),
+        (0, scored("system-0", StabilityClass::Stable)),
+        (2, scored("tool-2-search", StabilityClass::Stable)),
+    ];
+
+    // Every rotation is a distinct HashMap iteration order over the same set.
+    let expected = canonical_scores(tied.clone());
+    for rotation in 1..tied.len() {
+        let mut permuted = tied.clone();
+        permuted.rotate_left(rotation);
+        assert_eq!(canonical_scores(permuted), expected, "rotation {rotation}");
+    }
+}
+
+/// At a contested sequence index the least stable span sorts first, so the
+/// stable prefix stops before the position rather than extending across it.
+#[test]
+fn stability_internal_canonical_scores_put_the_least_stable_span_first() {
+    let contested = vec![
+        (0_u32, scored("system-0", StabilityClass::Stable)),
+        (1, scored("assistant-1-search", StabilityClass::Stable)),
+        (1, scored("assistant-1-fetch", StabilityClass::Variable)),
+    ];
+
+    let ordered = canonical_scores(contested);
+    assert_eq!(ordered[1].span_id, SpanId("assistant-1-fetch".to_string()));
+    assert_eq!(find_stable_prefix_length(&ordered), 1);
+}
+
+/// The observation window is a multiset: the analysis aggregates it with `min`,
+/// summation, and multiset counts, all symmetric, so reordering the window must
+/// not move the stable prefix or its fingerprint.
+#[test]
+fn stability_internal_analysis_is_invariant_under_observation_permutation() {
+    let thresholds = StabilityThresholds::default();
+    let turn = |span: &str, content: &str| {
+        prompt(vec![
+            block("system-0", 0, "Follow policy"),
+            block(span, 1, content),
+        ])
+    };
+    let observations = vec![
+        turn("assistant-1-search", "search(alpha)"),
+        turn("assistant-1-search", "search(alpha)"),
+        turn("assistant-1-fetch", "fetch(beta)"),
+        turn("assistant-1-search", "search(gamma)"),
+    ];
+
+    let expected = analyze_stability(&observations, &thresholds);
+    for rotation in 1..observations.len() {
+        let mut permuted = observations.clone();
+        permuted.rotate_left(rotation);
+        assert_eq!(
+            analyze_stability(&permuted, &thresholds),
+            expected,
+            "rotation {rotation}"
+        );
+    }
+}

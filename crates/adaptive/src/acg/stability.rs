@@ -86,29 +86,17 @@ pub fn analyze_stability(
         record_observation(observation, &mut span_map);
     }
 
-    let mut indexed_scores: Vec<(u32, BlockStabilityScore)> = span_map
+    let indexed_scores: Vec<(u32, BlockStabilityScore)> = span_map
         .into_iter()
         .map(|(span_id, obs)| build_stability_score(span_id, obs, total_observations, thresholds))
         .collect();
 
-    indexed_scores.sort_by_key(|(idx, _)| *idx);
-    let scores: Vec<BlockStabilityScore> =
-        indexed_scores.into_iter().map(|(_, score)| score).collect();
+    let scores = canonical_scores(indexed_scores);
     let stable_prefix_length = find_stable_prefix_length(&scores);
-    let stable_prefix_fingerprint = observations
-        .iter()
-        .filter_map(|observation| prompt_prefix_fingerprint(observation, stable_prefix_length))
-        .fold(HashMap::new(), |mut counts, fingerprint| {
-            *counts.entry(fingerprint).or_insert(0_u32) += 1;
-            counts
-        })
-        .into_iter()
-        .max_by(|(left_hash, left_count), (right_hash, right_count)| {
-            left_count
-                .cmp(right_count)
-                .then_with(|| right_hash.cmp(left_hash))
-        })
-        .map(|(fingerprint, _)| fingerprint);
+    let stable_prefix_fingerprint =
+        dominant_fingerprint(observations.iter().filter_map(|observation| {
+            prompt_prefix_fingerprint(observation, stable_prefix_length)
+        }));
 
     StabilityAnalysisResult {
         scores,
@@ -223,11 +211,18 @@ pub(crate) fn dominant_profile_prefix_fingerprint(
     prefix_length: usize,
     learning_key: &str,
 ) -> Option<String> {
-    observations
-        .iter()
-        .filter_map(|observation| {
-            profile_prefix_fingerprint(observation, prefix_length, learning_key)
-        })
+    dominant_fingerprint(observations.iter().filter_map(|observation| {
+        profile_prefix_fingerprint(observation, prefix_length, learning_key)
+    }))
+}
+
+/// Pick the most frequent digest, breaking ties on the smallest digest.
+///
+/// Counting into a [`HashMap`] loses the input order, so the winner is selected
+/// by a total order over `(count, digest)` rather than by iteration position.
+/// Digests are unique map keys, so that order has exactly one maximum.
+fn dominant_fingerprint(fingerprints: impl Iterator<Item = String>) -> Option<String> {
+    fingerprints
         .fold(HashMap::new(), |mut counts, fingerprint| {
             *counts.entry(fingerprint).or_insert(0_u32) += 1;
             counts
@@ -239,6 +234,50 @@ pub(crate) fn dominant_profile_prefix_fingerprint(
                 .then_with(|| right_hash.cmp(left_hash))
         })
         .map(|(fingerprint, _)| fingerprint)
+}
+
+/// Rank a classification so the least stable span sorts first.
+fn stability_rank(classification: StabilityClass) -> u8 {
+    match classification {
+        StabilityClass::Variable => 0,
+        StabilityClass::SemiStable => 1,
+        StabilityClass::Stable => 2,
+    }
+}
+
+/// Order span scores into the one canonical sequence for a given span set.
+///
+/// The first-seen sequence index alone does not order the span set. Span ids
+/// carry the role and the tool suffix, so `assistant-3-search` and
+/// `assistant-3-fetch` are distinct spans that share index 3, and a first-seen
+/// index is a minimum across observations, which collides further. Sorting on
+/// that key alone leaves tied spans in the order [`HashMap`] iteration produced,
+/// which is seeded per process, so the stable prefix and its fingerprint would
+/// vary between runs on identical input.
+///
+/// Extending the key to `(index, stability rank, span id)` makes it injective,
+/// because span ids are unique within one analysis. A total order over a finite
+/// set admits exactly one sorted sequence, so the result depends only on the set
+/// of spans and not on how it was enumerated. Ranking the least stable span
+/// first means [`find_stable_prefix_length`] stops before a contested position
+/// instead of extending across it.
+///
+/// # Parameters
+/// - `indexed`: Span scores paired with the sequence index each span was first
+///   seen at, in the order [`HashMap`] iteration produced them.
+///
+/// # Returns
+/// The scores in prompt order.
+fn canonical_scores(mut indexed: Vec<(u32, BlockStabilityScore)>) -> Vec<BlockStabilityScore> {
+    indexed.sort_by(|(left_index, left), (right_index, right)| {
+        left_index
+            .cmp(right_index)
+            .then_with(|| {
+                stability_rank(left.classification).cmp(&stability_rank(right.classification))
+            })
+            .then_with(|| left.span_id.0.cmp(&right.span_id.0))
+    });
+    indexed.into_iter().map(|(_, score)| score).collect()
 }
 
 fn record_observation(observation: &PromptIR, span_map: &mut HashMap<SpanId, SpanObservations>) {
