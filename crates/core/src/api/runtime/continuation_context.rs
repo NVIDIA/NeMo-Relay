@@ -9,7 +9,7 @@ use crate::api::optimization::{
     LlmOptimizationRecorder, current_llm_optimization_recorder, scope_llm_optimization_recorder,
 };
 use crate::api::runtime::llm_dispatch_context::{
-    LlmDispatchTargetContext, scope_llm_dispatch_target,
+    LlmDispatchTargetContext, current_llm_dispatch_target, scope_llm_dispatch_target,
 };
 use crate::api::runtime::scope_stack::{
     ScopeStackHandle, TASK_SCOPE_STACK, active_event_uuid, current_context_scope_stack,
@@ -34,6 +34,7 @@ pub struct MiddlewareContinuationContext {
     publication_context: Option<PublicationContext>,
     publication_buffer: Option<PublicationBuffer>,
     optimization_recorder: Option<LlmOptimizationRecorder>,
+    llm_dispatch_target: Option<LlmDispatchTargetContext>,
 }
 
 impl MiddlewareContinuationContext {
@@ -47,6 +48,7 @@ impl MiddlewareContinuationContext {
             publication_context: capture_publication_context(),
             publication_buffer: capture_nested_publication_buffer(),
             optimization_recorder: current_llm_optimization_recorder(),
+            llm_dispatch_target: current_llm_dispatch_target(),
         }
     }
 
@@ -72,6 +74,7 @@ impl MiddlewareContinuationContext {
             publication_context: self.publication_context.clone(),
             publication_buffer: self.publication_buffer.clone(),
             optimization_recorder: self.optimization_recorder.clone(),
+            llm_dispatch_target: self.llm_dispatch_target.clone(),
         })
     }
 
@@ -100,9 +103,17 @@ impl MiddlewareContinuationContext {
                 None => published.await,
             }
         };
-        match &self.optimization_recorder {
-            Some(recorder) => scope_llm_optimization_recorder(recorder.clone(), active).await,
-            None => active.await,
+        let optimized = async {
+            match &self.optimization_recorder {
+                Some(recorder) => scope_llm_optimization_recorder(recorder.clone(), active).await,
+                None => active.await,
+            }
+        };
+        match &self.llm_dispatch_target {
+            Some(target) => {
+                scope_llm_dispatch_target(self.active_event_uuid, target.clone(), optimized).await
+            }
+            None => optimized.await,
         }
     }
 
@@ -117,7 +128,9 @@ impl MiddlewareContinuationContext {
         C: FnOnce() -> F,
         F: Future,
     {
-        scope_llm_dispatch_target(self.active_event_uuid, target, self.invoke(callback)).await
+        let mut context = self.clone();
+        context.llm_dispatch_target = Some(target);
+        context.invoke(callback).await
     }
 
     /// Invoke a callback and poll its future with the captured Relay context.
