@@ -1008,14 +1008,6 @@ pub enum LlmNonHttpFailureKindV2 {
     Internal,
 }
 
-impl LlmNonHttpFailureKindV2 {
-    /// Whether the provider-neutral retry policy retries this failure kind.
-    #[must_use]
-    pub const fn is_retryable(self) -> bool {
-        matches!(self, Self::Transport | Self::Timeout)
-    }
-}
-
 /// Structured LLM continuation failure exposed through native API v2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(tag = "failure_type", rename_all = "snake_case")]
@@ -1036,23 +1028,6 @@ pub enum LlmContinuationFailureV2 {
         /// Bounded human-readable context.
         message: String,
     },
-}
-
-impl LlmContinuationFailureV2 {
-    /// Whether the provider-neutral retry policy retries an HTTP status.
-    #[must_use]
-    pub const fn http_status_is_retryable(status: u16) -> bool {
-        matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
-    }
-
-    /// Whether a provider-neutral routing policy should retry this failure.
-    #[must_use]
-    pub fn is_retryable(&self) -> bool {
-        match self {
-            Self::Http { status, .. } => Self::http_status_is_retryable(*status),
-            Self::NonHttp { kind, .. } => kind.is_retryable(),
-        }
-    }
 }
 
 /// Receives one typed unary LLM continuation outcome.
@@ -1330,8 +1305,7 @@ pub struct NemoRelayNativeHostApiV4 {
     /// Retains one reference to a cooperative task for a stored waker clone.
     pub async_task_retain_v2: unsafe extern "C" fn(task: *const NemoRelayNativeAsyncTaskV2),
     /// Schedules a cooperative task for another serialized poll.
-    pub async_task_wake_v2:
-        unsafe extern "C" fn(task: *const NemoRelayNativeAsyncTaskV2) -> NemoRelayStatus,
+    pub async_task_wake_v2: unsafe extern "C" fn(task: *const NemoRelayNativeAsyncTaskV2),
     /// Releases one previously retained cooperative-task reference.
     pub async_task_release_v2: unsafe extern "C" fn(task: *const NemoRelayNativeAsyncTaskV2),
     /// Forwards the ordinary downstream LLM stream directly into a native
@@ -1348,9 +1322,6 @@ pub struct NemoRelayNativeHostApiV4 {
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
 }
-
-unsafe impl Send for NemoRelayNativeHostApiV4 {}
-unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}

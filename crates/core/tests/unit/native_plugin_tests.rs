@@ -1965,15 +1965,12 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
             Box::pin(async move {
                 assert!(request.headers.is_empty());
                 assert_eq!(
-                    target.url().as_str(),
-                    "https://provider.example/v1/chat/completions"
-                );
-                assert_eq!(
-                    target
-                        .headers()
-                        .get("authorization")
-                        .and_then(|value| value.to_str().ok()),
-                    Some("Bearer target-secret")
+                    target,
+                    LlmDispatchTargetContext::try_new(
+                        "https://provider.example/v1/chat/completions".into(),
+                        BTreeMap::from([("authorization".into(), "Bearer target-secret".into(),)]),
+                    )
+                    .unwrap()
                 );
                 Err(FlowError::Upstream(crate::error::UpstreamFailure {
                     status: Some(429),
@@ -2293,11 +2290,12 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
                 assert!(request.headers.is_empty());
                 Box::pin(async move {
                     assert_eq!(
-                        current_llm_dispatch_target()
-                            .expect("typed target is bound")
-                            .url()
-                            .as_str(),
-                        "https://provider.example/v1/messages"
+                        current_llm_dispatch_target().expect("typed target is bound"),
+                        LlmDispatchTargetContext::try_new(
+                            "https://provider.example/v1/messages".into(),
+                            BTreeMap::new(),
+                        )
+                        .unwrap()
                     );
                     let mut events = VecDeque::from(vec![
                         Ok(json!({"type": "content_block_delta", "delta": {"text": "hi"}})),
@@ -2433,10 +2431,7 @@ fn native_api_v2_provider_pulls_restore_scope_and_target_after_pending_wakes() {
         pending = true;
         let scope = crate::api::runtime::task_scope_top().uuid;
         let target = current_llm_dispatch_target()
-            .expect("provider pull should restore its dispatch target")
-            .url()
-            .as_str()
-            .to_owned();
+            .expect("provider pull should restore its dispatch target");
         observations_for_stream
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -2478,8 +2473,14 @@ fn native_api_v2_provider_pulls_restore_scope_and_target_after_pending_wakes() {
             .lock()
             .unwrap_or_else(|error| error.into_inner()),
         vec![
-            (captured_scope, target_url.into()),
-            (captured_scope, target_url.into()),
+            (
+                captured_scope,
+                LlmDispatchTargetContext::try_new(target_url.into(), BTreeMap::new()).unwrap(),
+            ),
+            (
+                captured_scope,
+                LlmDispatchTargetContext::try_new(target_url.into(), BTreeMap::new()).unwrap(),
+            ),
         ]
     );
     unsafe { native_async_llm_stream_release_v2(provider_ref) };
@@ -2967,13 +2968,25 @@ fn native_api_v2_isolates_concurrent_dispatch_targets() {
             Box::pin(async move {
                 tokio::task::yield_now().await;
                 let target = current_llm_dispatch_target().expect("typed target is bound");
+                let index = request
+                    .content
+                    .get("index")
+                    .and_then(|index| index.as_u64())
+                    .expect("test request should contain an integer index");
+                let url = format!("https://provider-{index}.example/v1/chat/completions");
+                let authorization = format!("Bearer target-{index}");
+                assert_eq!(
+                    target,
+                    LlmDispatchTargetContext::try_new(
+                        url.clone(),
+                        BTreeMap::from([("authorization".into(), authorization.clone())]),
+                    )
+                    .unwrap()
+                );
                 Ok(json!({
                     "request": request.content,
-                    "url": target.url().as_str(),
-                    "authorization": target
-                        .headers()
-                        .get("authorization")
-                        .and_then(|value| value.to_str().ok()),
+                    "url": url,
+                    "authorization": authorization,
                 }))
             })
         })),
@@ -5690,10 +5703,7 @@ fn native_async_task_pending_wake_settles_and_frees_once() {
         .recv_timeout(Duration::from_secs(1))
         .expect("first poll should retain a task waker")
         as *const NemoRelayNativeAsyncTaskV2;
-    assert_eq!(
-        unsafe { native_async_task_wake_v2(task) },
-        NemoRelayStatus::Ok
-    );
+    unsafe { native_async_task_wake_v2(task) };
     unsafe { native_async_task_release_v2(task) };
     let result = runtime
         .block_on(async { tokio::time::timeout(Duration::from_secs(1), receiver).await })

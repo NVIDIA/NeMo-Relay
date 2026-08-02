@@ -6279,7 +6279,7 @@ fn safe_v2_output_status(statuses: &Mutex<VecDeque<NemoRelayStatus>>) -> NemoRel
         SAFE_V2_CURRENT_TASK.with(|current| {
             let task = current.get();
             if task != 0 {
-                let _ = unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
+                unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
             }
         });
     }
@@ -6545,15 +6545,14 @@ unsafe extern "C" fn safe_v2_task_retain(task: *const NemoRelayNativeAsyncTaskV2
     }
 }
 
-unsafe extern "C" fn safe_v2_task_wake(task: *const NemoRelayNativeAsyncTaskV2) -> NemoRelayStatus {
+unsafe extern "C" fn safe_v2_task_wake(task: *const NemoRelayNativeAsyncTaskV2) {
     let Some(task) = (unsafe { task.cast::<SafeV2Task>().as_ref() }) else {
-        return NemoRelayStatus::NullPointer;
+        return;
     };
     if task.completed.load(Ordering::Acquire) {
-        return NemoRelayStatus::Ok;
+        return;
     }
     task.woken.store(true, Ordering::Release);
-    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn safe_v2_task_release(task: *const NemoRelayNativeAsyncTaskV2) {
@@ -6568,7 +6567,7 @@ unsafe extern "C" fn safe_v2_task_release(task: *const NemoRelayNativeAsyncTaskV
 
 fn wake_safe_v2_tasks() {
     for task in SAFE_V2_TASKS.lock().unwrap().iter().copied() {
-        let _ = unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
+        unsafe { safe_v2_task_wake(task as *const NemoRelayNativeAsyncTaskV2) };
     }
 }
 
@@ -6702,41 +6701,6 @@ fn native_v2_debug_output_redacts_requests_targets_and_credentials() {
         "url-secret",
     ] {
         assert!(!debug.contains(secret));
-    }
-}
-
-#[test]
-fn native_v2_retry_helper_uses_provider_neutral_status_semantics() {
-    let http_failure = |status| LlmContinuationFailureV2::Http {
-        status,
-        body: String::new(),
-        headers: BTreeMap::new(),
-    };
-    for status in [408, 425, 429, 500, 502, 503, 504] {
-        assert!(LlmContinuationFailureV2::http_status_is_retryable(status));
-        assert!(http_failure(status).is_retryable(), "status={status}");
-    }
-    for status in [400, 401, 404, 409, 422, 501] {
-        assert!(!LlmContinuationFailureV2::http_status_is_retryable(status));
-        assert!(!http_failure(status).is_retryable(), "status={status}");
-    }
-
-    let non_http_failure = |kind| LlmContinuationFailureV2::NonHttp {
-        kind,
-        message: String::new(),
-    };
-    assert!(LlmNonHttpFailureKindV2::Transport.is_retryable());
-    assert!(non_http_failure(LlmNonHttpFailureKindV2::Transport).is_retryable());
-    assert!(LlmNonHttpFailureKindV2::Timeout.is_retryable());
-    assert!(non_http_failure(LlmNonHttpFailureKindV2::Timeout).is_retryable());
-    for kind in [
-        LlmNonHttpFailureKindV2::Cancelled,
-        LlmNonHttpFailureKindV2::InvalidRequest,
-        LlmNonHttpFailureKindV2::Guardrail,
-        LlmNonHttpFailureKindV2::Internal,
-    ] {
-        assert!(!kind.is_retryable(), "kind={kind:?}");
-        assert!(!non_http_failure(kind).is_retryable(), "kind={kind:?}");
     }
 }
 

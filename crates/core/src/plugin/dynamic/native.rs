@@ -1713,7 +1713,6 @@ struct NativeAsyncTaskStateV2 {
 }
 
 struct NativeAsyncTaskV2 {
-    runtime: tokio::runtime::Handle,
     context: MiddlewareContinuationContext,
     owner: NativeAsyncTaskOwnerV2,
     wake: tokio::sync::Notify,
@@ -2752,7 +2751,6 @@ fn spawn_native_async_task_v2(
     }
     let (cb, user_data, free_fn) = callback;
     let task = Arc::new(NativeAsyncTaskV2 {
-        runtime,
         context,
         owner,
         wake: tokio::sync::Notify::new(),
@@ -2770,7 +2768,7 @@ fn spawn_native_async_task_v2(
     });
     *slot = Some(Arc::downgrade(&task));
     drop(slot);
-    task.runtime.spawn(Arc::clone(&task).run());
+    runtime.spawn(Arc::clone(&task).run());
     NativeAsyncTaskV2::wake(&task);
     NemoRelayStatus::Ok
 }
@@ -2781,16 +2779,13 @@ unsafe extern "C" fn native_async_task_retain_v2(task: *const NemoRelayNativeAsy
     }
 }
 
-unsafe extern "C" fn native_async_task_wake_v2(
-    task: *const NemoRelayNativeAsyncTaskV2,
-) -> NemoRelayStatus {
+unsafe extern "C" fn native_async_task_wake_v2(task: *const NemoRelayNativeAsyncTaskV2) {
     if task.is_null() {
-        return NemoRelayStatus::NullPointer;
+        return;
     }
     unsafe { Arc::increment_strong_count(task as *const NativeAsyncTaskV2) };
     let task = unsafe { Arc::from_raw(task as *const NativeAsyncTaskV2) };
     NativeAsyncTaskV2::wake(&task);
-    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn native_async_task_release_v2(task: *const NemoRelayNativeAsyncTaskV2) {

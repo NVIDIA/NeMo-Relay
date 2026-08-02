@@ -181,24 +181,15 @@ impl HostTaskWaker {
     unsafe fn new(
         host: NemoRelayNativeHostApiV4,
         raw: *const NemoRelayNativeAsyncTaskV2,
-    ) -> Option<Arc<Self>> {
-        if raw.is_null() {
-            return None;
-        }
+    ) -> Arc<Self> {
         unsafe { (host.async_task_retain_v2)(raw) };
-        Some(Arc::new(Self { host, raw }))
+        Arc::new(Self { host, raw })
     }
 }
 
 impl ArcWake for HostTaskWaker {
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        let status = unsafe { (arc_self.host.async_task_wake_v2)(arc_self.raw) };
-        if status != NemoRelayStatus::Ok {
-            set_last_error(
-                &arc_self.host.v3.v1,
-                &format!("native API v2 host task wake failed: {status:?}"),
-            );
-        }
+        unsafe { (arc_self.host.async_task_wake_v2)(arc_self.raw) };
     }
 }
 
@@ -220,14 +211,7 @@ unsafe extern "C" fn poll_host_future_task(
         return NemoRelayNativeAsyncCallbackState::Complete as u32;
     }
     if state.waker.is_none() {
-        let waker = match unsafe { HostTaskWaker::new(state.host, task) } {
-            Some(waker) => waker,
-            None => {
-                set_last_error(&state.host.v3.v1, "native API v2 host task was null");
-                return NemoRelayNativeAsyncCallbackState::Complete as u32;
-            }
-        };
-        state.waker = Some(waker);
+        state.waker = Some(unsafe { HostTaskWaker::new(state.host, task) });
     }
     let waker = waker_ref(
         state

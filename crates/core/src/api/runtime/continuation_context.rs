@@ -108,7 +108,7 @@ impl MiddlewareContinuationContext {
 
     /// Invoke a callback and poll its future with the captured Relay context and typed LLM target.
     #[doc(hidden)]
-    pub async fn invoke_with_llm_dispatch_target<C, F>(
+    pub(crate) async fn invoke_with_llm_dispatch_target<C, F>(
         &self,
         target: LlmDispatchTargetContext,
         callback: C,

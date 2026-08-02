@@ -45,7 +45,8 @@ struct LlmDispatchTargetBinding {
 /// transport routing cannot leak into provider JSON or observability payloads.
 #[doc(hidden)]
 #[derive(Clone)]
-pub struct LlmDispatchTargetContext {
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub(crate) struct LlmDispatchTargetContext {
     url: Url,
     headers: HeaderMap,
 }
@@ -92,20 +93,6 @@ impl LlmDispatchTargetContext {
             url,
             headers: validated_headers,
         })
-    }
-
-    /// Absolute provider URL selected for this invocation.
-    #[doc(hidden)]
-    #[must_use]
-    pub(crate) fn url(&self) -> &Url {
-        &self.url
-    }
-
-    /// Explicit provider headers selected for this invocation.
-    #[doc(hidden)]
-    #[must_use]
-    pub(crate) fn headers(&self) -> &HeaderMap {
-        &self.headers
     }
 }
 
@@ -273,8 +260,8 @@ async fn send(
 ) -> Result<reqwest::Response> {
     let body = serde_json::to_vec(&request.content)
         .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
-    let mut outbound = targeted_http_client().post(target.url().clone()).body(body);
-    for (name, value) in target.headers() {
+    let mut outbound = targeted_http_client().post(target.url.clone()).body(body);
+    for (name, value) in &target.headers {
         outbound = outbound.header(name, value);
     }
     if let Some(timeout) = timeout {
@@ -321,7 +308,7 @@ fn transport_error(target: &LlmDispatchTargetContext, error: reqwest::Error) -> 
     log::warn!(
         target: "nemo_relay.runtime",
         event = "targeted_llm_transport_failed",
-        provider_host = target.url().host_str().unwrap_or("<unknown>"),
+        provider_host = target.url.host_str().unwrap_or("<unknown>"),
         failure_kind = if timeout { "timeout" } else { "transport" };
         "Targeted LLM provider request failed: {diagnostic}"
     );
