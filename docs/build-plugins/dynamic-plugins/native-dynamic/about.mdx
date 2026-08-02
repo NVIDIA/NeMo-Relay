@@ -143,7 +143,7 @@ The typed target is invocation-scoped continuation context. It is not encoded
 into `LlmRequest.headers`, and target credentials are not visible to downstream
 request middleware. Relay returns either:
 
-- buffered response JSON;
+- buffered response JSON, bounded to 16 MiB;
 - an HTTP failure with status, a body bounded to 16 KiB, and a conservative
   safe-header allowlist;
 - a non-HTTP failure classified as transport, timeout, cancelled, invalid

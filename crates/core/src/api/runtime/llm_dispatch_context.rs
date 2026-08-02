@@ -27,6 +27,7 @@ use crate::json::Json;
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_BUFFERED_SUCCESS_BODY_BYTES: usize = 16 * 1024 * 1024;
 tokio::task_local! {
     static TASK_LLM_DISPATCH_TARGET: LlmDispatchTargetBinding;
 }
@@ -201,10 +202,7 @@ async fn dispatch_buffered(target: &LlmDispatchTargetContext, request: LlmReques
         let bytes = bounded_response_body(target, response).await?;
         return Err(http_error(status, headers, &bytes));
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| transport_error(target, error))?;
+    let bytes = bounded_success_body(target, response, MAX_BUFFERED_SUCCESS_BODY_BYTES).await?;
     serde_json::from_slice(&bytes).map_err(|_| {
         FlowError::Internal("targeted LLM provider returned malformed response JSON".into())
     })
@@ -283,6 +281,42 @@ fn targeted_http_client() -> &'static Client {
             .build()
             .expect("core targeted LLM HTTP client configuration is valid")
     })
+}
+
+async fn bounded_success_body(
+    target: &LlmDispatchTargetContext,
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(success_body_too_large(target, max_bytes));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| transport_error(target, error))?;
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(success_body_too_large(target, max_bytes));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn success_body_too_large(target: &LlmDispatchTargetContext, max_bytes: usize) -> FlowError {
+    log::warn!(
+        target: "nemo_relay.runtime",
+        event = "targeted_llm_response_too_large",
+        provider_host = target.url.host_str().unwrap_or("<unknown>"),
+        max_bytes;
+        "Targeted LLM provider response exceeded the buffered body limit"
+    );
+    FlowError::Internal(format!(
+        "targeted LLM provider response exceeded the {max_bytes}-byte buffered body limit"
+    ))
 }
 
 async fn bounded_response_body(

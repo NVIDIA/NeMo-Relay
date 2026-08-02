@@ -157,10 +157,10 @@ to be forwarded.
 The plugin provides JSON, an absolute target URL, and explicit target headers.
 Relay sends the request with HTTP `POST` and binds that transport target to the
 current LLM continuation without storing it in `LlmRequest.headers`.
-Successful calls return provider JSON. Provider rejections return an HTTP
-status, bounded body, and safe response headers; failures without an HTTP
-response use a small transport-oriented kind. The plugin owns its retry and
-fallback policy.
+Successful buffered calls return provider JSON up to 16 MiB. Provider
+rejections return an HTTP status, bounded body, and safe response headers;
+failures without an HTTP response use a small transport-oriented kind. The
+plugin owns its retry and fallback policy.
 
 Relay core performs the terminal targeted HTTP request after the remaining LLM
 execution intercepts run. This contract is host-independent: it works through

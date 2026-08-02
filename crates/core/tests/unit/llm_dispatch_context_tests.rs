@@ -232,6 +232,33 @@ async fn malformed_success_json_is_an_internal_provider_failure() {
 }
 
 #[tokio::test]
+async fn buffered_success_body_is_bounded_with_or_without_content_length() {
+    for response in [
+        response(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            b"123456789",
+        ),
+        b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n9\r\n123456789\r\n0\r\n\r\n".to_vec(),
+    ] {
+        let provider = FakeProvider::spawn(response);
+        let target = target(provider.url.clone(), BTreeMap::new());
+        let response = send(&target, request(), Some(HTTP_REQUEST_TIMEOUT))
+            .await
+            .expect("provider should return a successful HTTP response");
+        let error = bounded_success_body(&target, response, 8)
+            .await
+            .expect_err("oversized successful response should fail");
+        assert!(matches!(
+            error,
+            FlowError::Internal(message)
+                if message == "targeted LLM provider response exceeded the 8-byte buffered body limit"
+        ));
+        let _ = provider.request();
+    }
+}
+
+#[tokio::test]
 async fn buffered_http_failure_is_bounded_and_filters_headers() {
     let body = vec![b'x'; MAX_UPSTREAM_FAILURE_BODY_BYTES + 1024];
     let provider = FakeProvider::spawn(response(
