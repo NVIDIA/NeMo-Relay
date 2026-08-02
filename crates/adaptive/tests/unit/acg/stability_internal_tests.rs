@@ -181,7 +181,6 @@ fn stability_internal_canonical_scores_put_the_least_stable_span_first() {
 
     let ordered = canonical_scores(contested);
     assert_eq!(ordered[1].span_id, SpanId("assistant-1-fetch".to_string()));
-    assert_eq!(find_stable_prefix_length(&ordered), 1);
 }
 
 /// The observation window is a multiset: the analysis aggregates it with `min`,
@@ -213,4 +212,32 @@ fn stability_internal_analysis_is_invariant_under_observation_permutation() {
             "rotation {rotation}"
         );
     }
+}
+
+/// 19 of 20 observations share an exact two-block prefix, so a provider cache
+/// would hit on it for those 19. The per-span rule discards it: the minority
+/// span at index 1 is Variable and stops the leading run.
+#[test]
+fn stability_internal_keeps_a_prefix_shared_by_the_dominant_mass() {
+    let thresholds = StabilityThresholds::default();
+    let turn = |span: &str, content: &str| {
+        prompt(vec![
+            block("system-0", 0, "Follow policy"),
+            block(span, 1, content),
+        ])
+    };
+    let observations: Vec<_> = (0..20)
+        .map(|i| {
+            if i == 7 {
+                turn("assistant-1-fetch", "fetch(beta)")
+            } else {
+                turn("assistant-1-search", "search(alpha)")
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        analyze_stability(&observations, &thresholds).stable_prefix_length,
+        2
+    );
 }

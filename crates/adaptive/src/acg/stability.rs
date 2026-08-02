@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::acg::canonicalize::sha256_hex;
 use crate::acg::profile::{BlockStabilityScore, StabilityClass};
-use crate::acg::prompt_ir::{PromptIR, SpanId};
+use crate::acg::prompt_ir::{PromptBlock, PromptIR, SpanId};
 
 /// Thresholds controlling prompt-block stability classification.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,7 +92,7 @@ pub fn analyze_stability(
         .collect();
 
     let scores = canonical_scores(indexed_scores);
-    let stable_prefix_length = find_stable_prefix_length(&scores);
+    let stable_prefix_length = dominant_prefix_length(observations, thresholds.stable_threshold);
     let stable_prefix_fingerprint =
         dominant_fingerprint(observations.iter().filter_map(|observation| {
             prompt_prefix_fingerprint(observation, stable_prefix_length)
@@ -130,18 +130,70 @@ pub(crate) fn prompt_prefix_fingerprint(
         .blocks
         .iter()
         .take(prefix_length)
-        .map(|block| {
-            serde_json::to_string(&(
-                &block.span_id,
-                block.role,
-                block.content_type,
-                &block.content,
-            ))
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .ok()?
+        .map(block_key)
+        .collect::<Option<Vec<_>>>()?
         .join("\n");
     Some(sha256_hex(&prefix))
+}
+
+/// Identify a block by span, role, content type, and normalized content.
+///
+/// The prefix length rule and the prefix fingerprint must agree on when two
+/// blocks are the same block, so both read this one definition.
+fn block_key(block: &PromptBlock) -> Option<String> {
+    serde_json::to_string(&(
+        &block.span_id,
+        block.role,
+        block.content_type,
+        &block.content,
+    ))
+    .ok()
+}
+
+/// Length of the longest exact block prefix shared by a dominant share of the
+/// observation window.
+///
+/// Under the prefix metric `d(x, y) = 2^-lcp(x, y)` the window is an
+/// ultrametric space, whose closed balls are exactly the sets of observations
+/// agreeing on a block prefix. Every point of such a ball is a center, so a ball
+/// is fixed by its members and not by the order they were enumerated in, and
+/// descending from the root ball into the dominant child at each depth reaches
+/// one radius no matter how the window is traversed.
+///
+/// Descent requires the child to hold a strict majority as well as the
+/// configured share. Two disjoint children cannot both hold a strict majority,
+/// so the dominant child is unique wherever it exists and the descent never
+/// needs a tie-break. Where no child dominates, the prefix stops rather than
+/// picking between them.
+///
+/// # Parameters
+/// - `observations`: Prompt observations to compare.
+/// - `threshold`: Share of the window that must share the prefix.
+///
+/// # Returns
+/// The number of leading blocks shared by the dominant share of the window.
+fn dominant_prefix_length(observations: &[PromptIR], threshold: f64) -> usize {
+    let total = observations.len();
+    let required = ((threshold * total as f64).ceil() as usize).clamp(total / 2 + 1, total.max(1));
+    let mut members: Vec<&PromptIR> = observations.iter().collect();
+
+    for depth in 0.. {
+        let mut children: HashMap<String, Vec<&PromptIR>> = HashMap::new();
+        for observation in &members {
+            // An observation that ends here joins no child, so its mass simply
+            // stops contributing.
+            if let Some(key) = observation.blocks.get(depth).and_then(block_key) {
+                children.entry(key).or_default().push(observation);
+            }
+        }
+
+        match children.into_values().find(|child| child.len() >= required) {
+            Some(dominant) => members = dominant,
+            None => return depth,
+        }
+    }
+
+    unreachable!("descent returns once no child holds the required mass")
 }
 
 /// Fingerprint an observation's stable prefix as stored against a learning key.
@@ -258,9 +310,11 @@ fn stability_rank(classification: StabilityClass) -> u8 {
 /// Extending the key to `(index, stability rank, span id)` makes it injective,
 /// because span ids are unique within one analysis. A total order over a finite
 /// set admits exactly one sorted sequence, so the result depends only on the set
-/// of spans and not on how it was enumerated. Ranking the least stable span
-/// first means [`find_stable_prefix_length`] stops before a contested position
-/// instead of extending across it.
+/// of spans and not on how it was enumerated.
+///
+/// Prefix economics walks this vector in order and stops pricing at the first
+/// span that is not stable, so ranking the least stable span first makes a
+/// contested position end the priced prefix rather than sit inside it.
 ///
 /// # Parameters
 /// - `indexed`: Span scores paired with the sequence index each span was first
@@ -374,21 +428,6 @@ fn stability_confidence(present_count: u32, thresholds: &StabilityThresholds) ->
     }
 
     (present_count as f64 / thresholds.min_observations_for_full_confidence as f64).min(1.0)
-}
-
-/// Count the number of leading scores classified as stable.
-///
-/// # Parameters
-/// - `scores`: Span-level stability scores in prompt order.
-///
-/// # Returns
-/// The number of consecutive leading entries whose classification is
-/// [`StabilityClass::Stable`].
-pub fn find_stable_prefix_length(scores: &[BlockStabilityScore]) -> usize {
-    scores
-        .iter()
-        .take_while(|score| score.classification == StabilityClass::Stable)
-        .count()
 }
 
 #[cfg(test)]
