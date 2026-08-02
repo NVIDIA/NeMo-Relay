@@ -3064,7 +3064,7 @@ fn native_api_v2_direct_pulls_64_concurrent_100_event_provider_streams_without_d
     ));
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let (output_stream, output_receiver) =
-        test_native_output_stream(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2);
+        test_native_output_stream(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY);
     let output_stream_ref =
         Arc::into_raw(Arc::clone(&output_stream)) as *const NemoRelayNativeAsyncStream;
     let dispatch = native_string_from_json(
@@ -3136,12 +3136,6 @@ fn native_api_v2_direct_pulls_64_concurrent_100_event_provider_streams_without_d
         native_async_next_release(next_ref);
         native_async_stream_release(output_stream_ref);
     }
-}
-
-#[test]
-fn native_async_stream_capacity_preserves_v1_and_bounds_v2() {
-    assert_eq!(native_async_stream_channel_capacity(false), 64);
-    assert_eq!(native_async_stream_channel_capacity(true), 32);
 }
 
 fn test_v2_callback_user_data(ptr: *mut c_void) -> Arc<NativeCallbackUserData> {

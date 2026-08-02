@@ -307,7 +307,6 @@ struct NativePluginInstance {
     plugin_kind: String,
     relay_compat: String,
     allows_multiple_components: bool,
-    uses_native_api_v2: bool,
     plugin: Mutex<NemoRelayNativePluginV1>,
     library: Option<Library>,
     retain_library_on_drop: AtomicBool,
@@ -466,7 +465,6 @@ fn load_one_native_plugin(
         plugin_kind,
         relay_compat,
         allows_multiple_components: plugin.allows_multiple_components,
-        uses_native_api_v2: native_api == Some("2"),
         plugin: Mutex::new(plugin),
         library: Some(library),
         retain_library_on_drop: AtomicBool::new(false),
@@ -1517,20 +1515,9 @@ fn make_user_data(
     })
 }
 
-// Native API v1's V3 incremental plugin-output stream shipped with a 64-event
-// queue. Keep that boundary stable for existing plugins. Native API v2 uses a
-// 32-event queue for plugin output and direct pass-through; targeted provider
-// streams are pull-based instead.
-const NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V1: usize = 64;
-const NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2: usize = 32;
-
-fn native_async_stream_channel_capacity(uses_native_api_v2: bool) -> usize {
-    if uses_native_api_v2 {
-        NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2
-    } else {
-        NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V1
-    }
-}
+// Incremental plugin output is bounded for backpressure. Keep the established
+// native API v1 capacity for every native plugin API version.
+const NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY: usize = 64;
 
 struct NativeAsyncCompletion {
     sender: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>,
@@ -4176,12 +4163,11 @@ fn wrap_native_incremental_llm_stream_execution(
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> LlmStreamExecutionFn {
-    let channel_capacity = native_async_stream_channel_capacity(instance.uses_native_api_v2);
     let user_data = make_user_data(instance, user_data, free_fn);
     wrap_native_incremental_llm_stream_execution_with_user_data_and_capacity(
         cb,
         user_data,
-        channel_capacity,
+        NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY,
     )
 }
 
@@ -4193,7 +4179,7 @@ fn wrap_native_incremental_llm_stream_execution_with_user_data(
     wrap_native_incremental_llm_stream_execution_with_user_data_and_capacity(
         cb,
         user_data,
-        NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V1,
+        NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY,
     )
 }
 

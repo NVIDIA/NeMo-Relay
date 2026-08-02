@@ -172,7 +172,7 @@ Streaming dispatch returns `LlmProviderStreamV2`, which implements Rust
 endpoints must return SSE with a JSON value in each `data` frame; the plugin
 receives those JSON events rather than raw SSE framing. Provider streams permit
 at most one outstanding pull; plugin output and direct pass-through use bounded
-32-event queues. Safe callbacks register through the generic V3
+queues. Safe callbacks register through the generic V3
 asynchronous-middleware APIs and return `Pending`. Relay then polls their Rust
 futures and returned streams cooperatively on its Tokio runtime. Each resumed
 poll restores the captured Relay continuation and scope context, and a pending

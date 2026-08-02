@@ -170,8 +170,8 @@ model-availability errors.
 Targeted dispatch does not follow redirects. Relay rejects embedded URL
 credentials, hop-by-hop headers, host-owned framing headers, and
 `x-nemo-relay-internal-*` headers. Provider streams are pull-based and permit
-one pending poll; plugin output and direct pass-through use bounded 32-event
-queues. Dropping or cancelling a stream stops provider production, and the
+one pending poll; plugin output and direct pass-through use bounded queues.
+Dropping or cancelling a stream stops provider production, and the
 library stays loaded until all callbacks and streams release their handles.
 
 A clean activation unloads its native library normally. If activation teardown
