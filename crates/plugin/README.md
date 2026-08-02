@@ -175,6 +175,13 @@ parks the task until the bounded host queue can accept more data. No Rust
 future, trait object, `serde_json::Value`, or allocator-owned Rust string
 crosses the C ABI boundary.
 
+Callback futures and streams must be executor-neutral. A native plugin shared
+library can link a different copy of an async runtime than the Relay host, so
+host-side polling does not enter plugin-local runtime state. An integration may
+instead own and bridge its own runtime explicitly, but it must not assume that
+Tokio APIs such as `tokio::spawn` can discover Relay's runtime across the
+dynamic-library boundary. The SDK itself has no Tokio dependency.
+
 The raw `PluginContext::host_api_v4` table and generic V3 `Pending`
 registration methods remain available for advanced ABI consumers and non-Rust
 bindings. V4 adds targeted LLM continuation and host-task operations; it does

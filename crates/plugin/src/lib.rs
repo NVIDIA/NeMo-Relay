@@ -888,6 +888,10 @@ pub struct NemoRelayNativeAsyncStream {
 /// callback is borrowed. A plugin that stores it in a Rust `Waker` must retain
 /// one reference for every stored clone and release those references exactly
 /// once.
+///
+/// Host polling does not enter runtime-local state linked into a plugin shared
+/// library. The polled task must therefore be executor-neutral unless the
+/// plugin explicitly owns and bridges its own runtime.
 #[repr(C)]
 pub struct NemoRelayNativeAsyncTaskV2 {
     _private: [u8; 0],

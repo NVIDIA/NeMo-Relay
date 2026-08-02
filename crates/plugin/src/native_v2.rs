@@ -618,6 +618,9 @@ impl PluginContext<'_> {
     /// The callback receives owned Rust values and a cloneable continuation.
     /// Relay cooperatively polls its future on the host runtime with the
     /// invocation's active scope stack restored for every poll.
+    /// The future must remain executor-neutral: a plugin shared library may
+    /// link a different async-runtime instance, whose runtime-local state is
+    /// not entered merely because Relay polls the future on its host runtime.
     pub fn register_async_llm_execution_v2<F, Fut>(
         &mut self,
         name: &str,
@@ -671,6 +674,8 @@ impl PluginContext<'_> {
     /// The callback may return a Rust stream or request host-owned direct
     /// pass-through. Relay cooperatively polls its future and returned stream
     /// and wakes them when bounded output backpressure clears.
+    /// Both must remain executor-neutral because host runtime-local state does
+    /// not cross the dynamic-library boundary.
     pub fn register_async_llm_stream_execution_v2<F, Fut>(
         &mut self,
         name: &str,
