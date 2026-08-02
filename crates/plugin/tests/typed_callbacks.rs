@@ -17,10 +17,9 @@ use futures::{StreamExt, stream};
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
     Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmContinuationFailureV2,
-    LlmContinuationInvocationV2, LlmContinuationOutcomeV2, LlmContinuationStreamEventV2,
-    LlmContinuationTargetV2, LlmContinuationV2, LlmHttpFailureV2, LlmJsonStream, LlmNext,
-    LlmNonHttpFailureKindV2, LlmNonHttpFailureV2, LlmRequest, LlmRequestInterceptOutcome,
-    LlmStream, LlmStreamContinuationV2, LlmStreamExecutionOutcomeV2, LlmStreamNext,
+    LlmContinuationInvocationV2, LlmContinuationTargetV2, LlmContinuationV2, LlmJsonStream,
+    LlmNext, LlmNonHttpFailureKindV2, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
+    LlmStreamContinuationV2, LlmStreamExecutionOutcomeV2, LlmStreamNext,
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS,
     NativePlugin, NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
     NemoRelayNativeAsyncLlmResultCbV2, NemoRelayNativeAsyncLlmStreamForwardCbV2,
@@ -381,10 +380,20 @@ static ASYNC_STREAM_V2_REGISTRATION: Mutex<Option<RegisteredAsyncStreamV2>> = Mu
 static SAFE_V2_COMPLETION: Mutex<Option<std::result::Result<Json, String>>> = Mutex::new(None);
 static SAFE_V2_COMPLETION_CANCELLED: AtomicBool = AtomicBool::new(false);
 static SAFE_V2_OUTPUT: Mutex<Vec<std::result::Result<Json, String>>> = Mutex::new(Vec::new());
-static SAFE_V2_PROVIDER_EVENTS: Mutex<VecDeque<LlmContinuationStreamEventV2>> =
-    Mutex::new(VecDeque::new());
+#[derive(Clone)]
+enum SafeV2ProviderEvent {
+    Chunk(Json),
+    Done,
+    Failure(LlmContinuationFailureV2),
+}
+
+static SAFE_V2_PROVIDER_EVENTS: Mutex<VecDeque<SafeV2ProviderEvent>> = Mutex::new(VecDeque::new());
 static SAFE_V2_OPEN_FAILURE: Mutex<Option<LlmContinuationFailureV2>> = Mutex::new(None);
 static SAFE_V2_OPEN_RETURNS_STREAM_AND_ERROR: AtomicBool = AtomicBool::new(false);
+static SAFE_V2_HOLD_STREAM_OPEN_CALLBACK: AtomicBool = AtomicBool::new(false);
+static SAFE_V2_HELD_STREAM_OPEN_CALLBACK: Mutex<
+    Option<(NemoRelayNativeAsyncLlmStreamOpenCbV2, usize)>,
+> = Mutex::new(None);
 static SAFE_V2_FORWARDED_REQUESTS: Mutex<Vec<LlmRequest>> = Mutex::new(Vec::new());
 static SAFE_V2_HOLD_TARGETED_CALLBACK: AtomicBool = AtomicBool::new(false);
 static SAFE_V2_HELD_TARGETED_CALLBACK: Mutex<Option<(NemoRelayNativeAsyncLlmResultCbV2, usize)>> =
@@ -392,19 +401,20 @@ static SAFE_V2_HELD_TARGETED_CALLBACK: Mutex<Option<(NemoRelayNativeAsyncLlmResu
 static SAFE_V2_NEXT_RELEASES: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_COMPLETION_RELEASES: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_OUTPUT_RELEASES: AtomicUsize = AtomicUsize::new(0);
-static SAFE_V2_PROVIDER_CANCELS: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_PROVIDER_RELEASES: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_OUTPUT_FINISHES: AtomicUsize = AtomicUsize::new(0);
 static SAFE_V2_OUTPUT_CANCELLED: AtomicBool = AtomicBool::new(false);
 static SAFE_V2_REGISTRATION_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SAFE_V2_TARGETED_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
+static SAFE_V2_TARGETED_FAILURE: Mutex<Option<LlmContinuationFailureV2>> = Mutex::new(None);
+static SAFE_V2_TARGETED_INVALID_OUTCOME: AtomicBool = AtomicBool::new(false);
 static SAFE_V2_PASSTHROUGH_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SAFE_V2_PASSTHROUGH_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static SAFE_V2_STREAM_OPEN_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SAFE_V2_PROVIDER_NEXT_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SAFE_V2_PROVIDER_EVENT_JSON: Mutex<Option<String>> = Mutex::new(None);
+static SAFE_V2_PROVIDER_INVALID_EVENT: AtomicBool = AtomicBool::new(false);
 static SAFE_V2_FORWARD_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
-static SAFE_V2_FORWARD_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static SAFE_V2_COMPLETION_RESOLVE_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SAFE_V2_COMPLETION_REJECT_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SAFE_V2_OUTPUT_PUSH_STATUSES: Mutex<VecDeque<NemoRelayStatus>> = Mutex::new(VecDeque::new());
@@ -431,7 +441,7 @@ struct SafeV2Task {
 }
 
 #[test]
-fn native_abi_v3_struct_sizes_are_self_describing() {
+fn native_abi_struct_sizes_are_self_describing() {
     assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 3);
     assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS, 4);
     assert_eq!(
@@ -447,6 +457,7 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
         NemoRelayNativeLlmStreamV1::default().struct_size
     );
     assert_eq!(NemoRelayStatus::StreamEnd as i32, 10);
+    assert_eq!(NemoRelayStatus::WouldBlock as i32, 11);
 
     #[cfg(target_pointer_width = "64")]
     {
@@ -469,10 +480,10 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 528);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 520);
         assert_eq!(
             host_api_v4_offsets(),
-            [0, 440, 448, 456, 464, 472, 480, 488, 496, 504, 512, 520]
+            [0, 440, 448, 456, 464, 472, 480, 488, 496, 504, 512]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
@@ -503,10 +514,10 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 256);
         assert_eq!(
             host_api_v4_offsets(),
-            [0, 216, 220, 224, 228, 232, 236, 240, 244, 248, 252, 256]
+            [0, 216, 220, 224, 228, 232, 236, 240, 244, 248, 252]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
@@ -517,13 +528,12 @@ fn native_abi_v3_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_v4_offsets() -> [usize; 12] {
+fn host_api_v4_offsets() -> [usize; 11] {
     [
         offset_of!(NemoRelayNativeHostApiV4, v3),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_next_invoke_result_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_next_open_stream_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_next_v2),
-        offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_cancel_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_llm_stream_release_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_completion_spawn_task_v2),
         offset_of!(NemoRelayNativeHostApiV4, async_stream_spawn_task_v2),
@@ -1492,25 +1502,28 @@ fn reset_state() {
     SAFE_V2_PROVIDER_EVENTS.lock().unwrap().clear();
     *SAFE_V2_OPEN_FAILURE.lock().unwrap() = None;
     SAFE_V2_OPEN_RETURNS_STREAM_AND_ERROR.store(false, Ordering::SeqCst);
+    SAFE_V2_HOLD_STREAM_OPEN_CALLBACK.store(false, Ordering::SeqCst);
+    assert!(SAFE_V2_HELD_STREAM_OPEN_CALLBACK.lock().unwrap().is_none());
     SAFE_V2_FORWARDED_REQUESTS.lock().unwrap().clear();
     SAFE_V2_HOLD_TARGETED_CALLBACK.store(false, Ordering::SeqCst);
     assert!(SAFE_V2_HELD_TARGETED_CALLBACK.lock().unwrap().is_none());
     SAFE_V2_NEXT_RELEASES.store(0, Ordering::SeqCst);
     SAFE_V2_COMPLETION_RELEASES.store(0, Ordering::SeqCst);
     SAFE_V2_OUTPUT_RELEASES.store(0, Ordering::SeqCst);
-    SAFE_V2_PROVIDER_CANCELS.store(0, Ordering::SeqCst);
     SAFE_V2_PROVIDER_RELEASES.store(0, Ordering::SeqCst);
     SAFE_V2_OUTPUT_FINISHES.store(0, Ordering::SeqCst);
     SAFE_V2_OUTPUT_CANCELLED.store(false, Ordering::SeqCst);
     *SAFE_V2_REGISTRATION_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SAFE_V2_TARGETED_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
+    *SAFE_V2_TARGETED_FAILURE.lock().unwrap() = None;
+    SAFE_V2_TARGETED_INVALID_OUTCOME.store(false, Ordering::SeqCst);
     *SAFE_V2_PASSTHROUGH_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SAFE_V2_PASSTHROUGH_ERROR.lock().unwrap() = None;
     *SAFE_V2_STREAM_OPEN_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SAFE_V2_PROVIDER_NEXT_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SAFE_V2_PROVIDER_EVENT_JSON.lock().unwrap() = None;
+    SAFE_V2_PROVIDER_INVALID_EVENT.store(false, Ordering::SeqCst);
     *SAFE_V2_FORWARD_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
-    *SAFE_V2_FORWARD_ERROR.lock().unwrap() = None;
     *SAFE_V2_COMPLETION_RESOLVE_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SAFE_V2_COMPLETION_REJECT_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     SAFE_V2_OUTPUT_PUSH_STATUSES.lock().unwrap().clear();
@@ -6246,7 +6259,7 @@ unsafe extern "C" fn safe_v2_stream_push(
         .unwrap_or(NemoRelayStatus::Ok);
     if status == NemoRelayStatus::Ok {
         SAFE_V2_OUTPUT.lock().unwrap().push(Ok(chunk));
-    } else if status == NemoRelayStatus::Internal {
+    } else if status == NemoRelayStatus::WouldBlock {
         SAFE_V2_CURRENT_TASK.with(|current| {
             let task = current.get();
             if task != 0 {
@@ -6278,7 +6291,7 @@ unsafe extern "C" fn safe_v2_stream_reject(
         .unwrap_or(NemoRelayStatus::Ok);
     if status == NemoRelayStatus::Ok {
         SAFE_V2_OUTPUT.lock().unwrap().push(Err(message));
-    } else if status == NemoRelayStatus::Internal {
+    } else if status == NemoRelayStatus::WouldBlock {
         SAFE_V2_CURRENT_TASK.with(|current| {
             let task = current.get();
             if task != 0 {
@@ -6399,13 +6412,19 @@ unsafe extern "C" fn safe_v2_targeted_result(
         *SAFE_V2_HELD_TARGETED_CALLBACK.lock().unwrap() = Some((cb, user_data as usize));
         return NemoRelayStatus::Ok;
     }
-    let outcome = serde_json::to_value(LlmContinuationOutcomeV2::Success {
-        response: json!({ "targeted": true }),
-    })
-    .unwrap();
-    let outcome = json_host_string(&host, outcome);
-    unsafe { cb(user_data, outcome) };
-    unsafe { (host.string_free)(outcome) };
+    if SAFE_V2_TARGETED_INVALID_OUTCOME.swap(false, Ordering::SeqCst) {
+        unsafe { cb(user_data, ptr::null(), ptr::null()) };
+        return NemoRelayStatus::Ok;
+    }
+    if let Some(error) = SAFE_V2_TARGETED_FAILURE.lock().unwrap().take() {
+        let error = json_host_string(&host, serde_json::to_value(error).unwrap());
+        unsafe { cb(user_data, ptr::null(), error) };
+        unsafe { (host.string_free)(error) };
+        return NemoRelayStatus::Ok;
+    }
+    let response = json_host_string(&host, json!({ "targeted": true }));
+    unsafe { cb(user_data, response, ptr::null()) };
+    unsafe { (host.string_free)(response) };
     NemoRelayStatus::Ok
 }
 
@@ -6427,6 +6446,10 @@ unsafe extern "C" fn safe_v2_stream_open(
         .is_none()
     {
         return NemoRelayStatus::InvalidJson;
+    }
+    if SAFE_V2_HOLD_STREAM_OPEN_CALLBACK.load(Ordering::SeqCst) {
+        *SAFE_V2_HELD_STREAM_OPEN_CALLBACK.lock().unwrap() = Some((cb, user_data as usize));
+        return NemoRelayStatus::Ok;
     }
     if let Some(error) = SAFE_V2_OPEN_FAILURE.lock().unwrap().clone() {
         let error = json_host_string(&host, serde_json::to_value(error).unwrap());
@@ -6460,26 +6483,33 @@ unsafe extern "C" fn safe_v2_provider_next(
     }
     let host = test_host();
     if let Some(event) = SAFE_V2_PROVIDER_EVENT_JSON.lock().unwrap().take() {
-        let event = host_string(&host, &event);
-        unsafe { cb(user_data, event) };
-        unsafe { (host.string_free)(event) };
+        let chunk = host_string(&host, &event);
+        unsafe { cb(user_data, chunk, ptr::null(), false) };
+        unsafe { (host.string_free)(chunk) };
+        return NemoRelayStatus::Ok;
+    }
+    if SAFE_V2_PROVIDER_INVALID_EVENT.swap(false, Ordering::SeqCst) {
+        unsafe { cb(user_data, ptr::null(), ptr::null(), false) };
         return NemoRelayStatus::Ok;
     }
     let event = SAFE_V2_PROVIDER_EVENTS
         .lock()
         .unwrap()
         .pop_front()
-        .unwrap_or(LlmContinuationStreamEventV2::Done);
-    let event = json_host_string(&host, serde_json::to_value(event).unwrap());
-    unsafe { cb(user_data, event) };
-    unsafe { (host.string_free)(event) };
-    NemoRelayStatus::Ok
-}
-
-unsafe extern "C" fn safe_v2_provider_cancel(
-    _stream: *const NemoRelayNativeLlmStreamV2,
-) -> NemoRelayStatus {
-    SAFE_V2_PROVIDER_CANCELS.fetch_add(1, Ordering::SeqCst);
+        .unwrap_or(SafeV2ProviderEvent::Done);
+    match event {
+        SafeV2ProviderEvent::Chunk(chunk) => {
+            let chunk = json_host_string(&host, chunk);
+            unsafe { cb(user_data, chunk, ptr::null(), false) };
+            unsafe { (host.string_free)(chunk) };
+        }
+        SafeV2ProviderEvent::Done => unsafe { cb(user_data, ptr::null(), ptr::null(), true) },
+        SafeV2ProviderEvent::Failure(error) => {
+            let error = json_host_string(&host, serde_json::to_value(error).unwrap());
+            unsafe { cb(user_data, ptr::null(), error, true) };
+            unsafe { (host.string_free)(error) };
+        }
+    }
     NemoRelayStatus::Ok
 }
 
@@ -6625,13 +6655,7 @@ unsafe extern "C" fn safe_v2_forward_stream(
     };
     SAFE_V2_FORWARDED_REQUESTS.lock().unwrap().push(request);
     SAFE_V2_OUTPUT_FINISHES.fetch_add(1, Ordering::SeqCst);
-    if let Some(error) = SAFE_V2_FORWARD_ERROR.lock().unwrap().clone() {
-        let error = host_string(&host, &error);
-        unsafe { cb(user_data, error) };
-        unsafe { (host.string_free)(error) };
-    } else {
-        unsafe { cb(user_data, ptr::null()) };
-    }
+    unsafe { cb(user_data) };
     NemoRelayStatus::Ok
 }
 
@@ -6661,7 +6685,6 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_llm_next_invoke_result_v2: safe_v2_targeted_result,
         async_llm_next_open_stream_v2: safe_v2_stream_open,
         async_llm_stream_next_v2: safe_v2_provider_next,
-        async_llm_stream_cancel_v2: safe_v2_provider_cancel,
         async_llm_stream_release_v2: safe_v2_provider_release,
         async_completion_spawn_task_v2: safe_v2_completion_spawn_task,
         async_stream_spawn_task_v2: safe_v2_stream_spawn_task,
@@ -6674,7 +6697,6 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
 
 fn safe_v2_target() -> LlmContinuationTargetV2 {
     LlmContinuationTargetV2 {
-        method: "POST".into(),
         url: "https://provider.example/v1/chat/completions".into(),
         headers: Default::default(),
     }
@@ -6946,6 +6968,64 @@ fn safe_v2_buffered_registration_wraps_targeted_and_passthrough_calls() {
 }
 
 #[test]
+fn safe_v2_buffered_continuation_preserves_flattened_failure_and_rejects_invalid_outcome() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let expected = LlmContinuationFailureV2::Http {
+        status: 429,
+        body: "bounded".into(),
+        headers: Default::default(),
+    };
+    assert_eq!(
+        serde_json::to_value(&expected).unwrap(),
+        json!({
+            "failure_type": "http",
+            "status": 429,
+            "body": "bounded",
+            "headers": {},
+        })
+    );
+    *SAFE_V2_TARGETED_FAILURE.lock().unwrap() = Some(expected.clone());
+    run_safe_v2_buffered(&host, "typed-failure", move |_, request, next| {
+        let expected = expected.clone();
+        async move {
+            let error = next
+                .call(LlmContinuationInvocationV2 {
+                    request,
+                    target: safe_v2_target(),
+                })
+                .await
+                .expect_err("the host returned a structured failure");
+            assert_eq!(error, expected);
+            Ok(json!({ "observed": "typed failure" }))
+        }
+    });
+    assert_eq!(
+        SAFE_V2_COMPLETION.lock().unwrap().take(),
+        Some(Ok(json!({ "observed": "typed failure" })))
+    );
+
+    SAFE_V2_TARGETED_INVALID_OUTCOME.store(true, Ordering::SeqCst);
+    run_safe_v2_buffered(&host, "invalid-outcome", |_, request, next| async move {
+        let error = next
+            .call(LlmContinuationInvocationV2 {
+                request,
+                target: safe_v2_target(),
+            })
+            .await
+            .expect_err("two null callback values are not a valid outcome");
+        Ok(json!({ "error": format!("{error:?}") }))
+    });
+    let outcome = SAFE_V2_COMPLETION.lock().unwrap().take().unwrap().unwrap();
+    assert!(
+        outcome["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("invalid outcome"))
+    );
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
 fn safe_v2_buffered_continuation_supports_repeated_concurrent_calls() {
     let _guard = begin_test();
     let host = test_host_v4();
@@ -7154,21 +7234,17 @@ fn safe_v2_cancelled_targeted_call_releases_next_before_the_host_callback() {
         .unwrap()
         .take()
         .unwrap();
-    let outcome = json_host_string(
+    let error = json_host_string(
         &host.v3.v1,
-        serde_json::to_value(LlmContinuationOutcomeV2::Failure {
-            error: LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind: LlmNonHttpFailureKindV2::Cancelled,
-                    message: "cancelled by host".into(),
-                },
-            },
+        serde_json::to_value(LlmContinuationFailureV2::NonHttp {
+            kind: LlmNonHttpFailureKindV2::Cancelled,
+            message: "cancelled by host".into(),
         })
         .unwrap(),
     );
-    unsafe { targeted_callback(targeted_user_data as *mut c_void, outcome) };
+    unsafe { targeted_callback(targeted_user_data as *mut c_void, ptr::null(), error) };
     unsafe {
-        (host.v3.v1.string_free)(outcome);
+        (host.v3.v1.string_free)(error);
         registration.free();
     }
     assert_eq!(live_host_strings(), 0);
@@ -7178,10 +7254,8 @@ fn safe_v2_cancelled_targeted_call_releases_next_before_the_host_callback() {
 fn safe_v2_stream_registration_pumps_provider_stream_and_releases_handles() {
     let _guard = begin_test();
     SAFE_V2_PROVIDER_EVENTS.lock().unwrap().extend([
-        LlmContinuationStreamEventV2::Chunk {
-            chunk: json!({ "delta": "hello" }),
-        },
-        LlmContinuationStreamEventV2::Done,
+        SafeV2ProviderEvent::Chunk(json!({ "delta": "hello" })),
+        SafeV2ProviderEvent::Done,
     ]);
     let host = test_host_v4();
     let mut ctx = test_context(&host.v3.v1);
@@ -7237,7 +7311,6 @@ fn safe_v2_stream_registration_pumps_provider_stream_and_releases_handles() {
         vec![Ok(json!({ "delta": "hello" }))]
     );
     assert_eq!(SAFE_V2_OUTPUT_FINISHES.load(Ordering::SeqCst), 1);
-    assert_eq!(SAFE_V2_PROVIDER_CANCELS.load(Ordering::SeqCst), 0);
     assert_eq!(SAFE_V2_PROVIDER_RELEASES.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_OUTPUT_RELEASES.load(Ordering::SeqCst), 1);
@@ -7288,14 +7361,12 @@ fn safe_v2_stream_passthrough_uses_host_owned_forwarding() {
 }
 
 #[test]
-fn safe_v2_provider_stream_drop_cancels_unfinished_production() {
+fn safe_v2_provider_stream_drop_releases_unfinished_production() {
     let _guard = begin_test();
     SAFE_V2_PROVIDER_EVENTS
         .lock()
         .unwrap()
-        .push_back(LlmContinuationStreamEventV2::Chunk {
-            chunk: json!({ "unused": true }),
-        });
+        .push_back(SafeV2ProviderEvent::Chunk(json!({ "unused": true })));
     let host = test_host_v4();
     let mut ctx = test_context(&host.v3.v1);
     ctx.register_async_llm_stream_execution_v2("safe-drop", 0, |_name, request, next| async move {
@@ -7327,8 +7398,65 @@ fn safe_v2_provider_stream_drop_cancels_unfinished_production() {
     };
     unsafe { (host.v3.v1.string_free)(invocation) };
     drive_safe_v2_tasks();
-    assert_eq!(SAFE_V2_PROVIDER_CANCELS.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_PROVIDER_RELEASES.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
+fn safe_v2_stream_open_result_releases_when_waiter_is_cancelled_before_consumption() {
+    let _guard = begin_test();
+    SAFE_V2_HOLD_STREAM_OPEN_CALLBACK.store(true, Ordering::SeqCst);
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_async_llm_stream_execution_v2(
+        "safe-open-cancel",
+        0,
+        |_name, request, next| async move {
+            let provider = next
+                .open_stream(LlmContinuationInvocationV2 {
+                    request,
+                    target: safe_v2_target(),
+                })
+                .await
+                .map_err(|error| format!("{error:?}"))?;
+            Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(
+                provider.map(|item| item.map_err(|error| format!("{error:?}"))),
+            )))
+        },
+    )
+    .unwrap();
+    let registration = take_safe_v2_stream_registration();
+    let state = invoke_safe_v2_streaming(
+        &host,
+        &registration,
+        NonNull::<NemoRelayNativeAsyncNext>::dangling().as_ptr(),
+        NonNull::<NemoRelayNativeAsyncStream>::dangling().as_ptr(),
+    );
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    drive_safe_v2_tasks();
+
+    let (callback, user_data) = SAFE_V2_HELD_STREAM_OPEN_CALLBACK
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the stream-open continuation is pending");
+    unsafe {
+        callback(
+            user_data as *mut c_void,
+            NonNull::<NemoRelayNativeLlmStreamV2>::dangling().as_ptr(),
+            ptr::null(),
+        )
+    };
+    SAFE_V2_OUTPUT_CANCELLED.store(true, Ordering::SeqCst);
+    drive_safe_v2_tasks();
+
+    assert_eq!(SAFE_V2_PROVIDER_RELEASES.load(Ordering::SeqCst), 1);
+    assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
+    assert_eq!(SAFE_V2_OUTPUT_RELEASES.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
     assert_eq!(live_host_strings(), 0);
 }
@@ -7375,11 +7503,9 @@ fn safe_v2_stream_callback_stops_when_the_caller_cancels() {
 fn safe_v2_stream_open_preserves_structured_failure() {
     let _guard = begin_test();
     let expected = LlmContinuationFailureV2::Http {
-        failure: LlmHttpFailureV2 {
-            status: 429,
-            body: "bounded".into(),
-            headers: Default::default(),
-        },
+        status: 429,
+        body: "bounded".into(),
+        headers: Default::default(),
     };
     *SAFE_V2_OPEN_FAILURE.lock().unwrap() = Some(expected.clone());
     let host = test_host_v4();
@@ -7433,13 +7559,11 @@ fn safe_v2_stream_open_preserves_structured_failure() {
 }
 
 #[test]
-fn safe_v2_malformed_stream_open_cancels_and_releases_the_owned_stream() {
+fn safe_v2_malformed_stream_open_releases_the_owned_stream() {
     let _guard = begin_test();
     *SAFE_V2_OPEN_FAILURE.lock().unwrap() = Some(LlmContinuationFailureV2::NonHttp {
-        failure: LlmNonHttpFailureV2 {
-            kind: LlmNonHttpFailureKindV2::Internal,
-            message: "must not accompany a stream".into(),
-        },
+        kind: LlmNonHttpFailureKindV2::Internal,
+        message: "must not accompany a stream".into(),
     });
     SAFE_V2_OPEN_RETURNS_STREAM_AND_ERROR.store(true, Ordering::SeqCst);
     let host = test_host_v4();
@@ -7482,7 +7606,6 @@ fn safe_v2_malformed_stream_open_cancels_and_releases_the_owned_stream() {
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
         [Err(error)] if error.contains("invalid outcome")
     ));
-    assert_eq!(SAFE_V2_PROVIDER_CANCELS.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_PROVIDER_RELEASES.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_NEXT_RELEASES.load(Ordering::SeqCst), 1);
     assert_eq!(SAFE_V2_OUTPUT_RELEASES.load(Ordering::SeqCst), 1);
@@ -7973,14 +8096,12 @@ fn safe_v2_provider_stream_preserves_late_and_boundary_failures() {
     SAFE_V2_PROVIDER_EVENTS
         .lock()
         .unwrap()
-        .push_back(LlmContinuationStreamEventV2::Failure {
-            error: LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind: LlmNonHttpFailureKindV2::Transport,
-                    message: "late provider failure".into(),
-                },
+        .push_back(SafeV2ProviderEvent::Failure(
+            LlmContinuationFailureV2::NonHttp {
+                kind: LlmNonHttpFailureKindV2::Transport,
+                message: "late provider failure".into(),
             },
-        });
+        ));
     run_safe_v2_streaming(&host, "late-failure", |_, request, next| {
         safe_v2_targeted_provider_stream(request, next)
     });
@@ -7996,7 +8117,17 @@ fn safe_v2_provider_stream_preserves_late_and_boundary_failures() {
     });
     assert!(matches!(
         SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
-        [Err(error)] if error.contains("stream event")
+        [Err(error)] if error.contains("stream chunk")
+    ));
+    SAFE_V2_OUTPUT.lock().unwrap().clear();
+
+    SAFE_V2_PROVIDER_INVALID_EVENT.store(true, Ordering::SeqCst);
+    run_safe_v2_streaming(&host, "invalid-event", |_, request, next| {
+        safe_v2_targeted_provider_stream(request, next)
+    });
+    assert!(matches!(
+        SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
+        [Err(error)] if error.contains("invalid event")
     ));
     assert_eq!(live_host_strings(), 0);
 }
@@ -8009,7 +8140,7 @@ fn safe_v2_stream_output_handles_backpressure_cancellation_and_settlement_errors
     SAFE_V2_OUTPUT_PUSH_STATUSES
         .lock()
         .unwrap()
-        .extend([NemoRelayStatus::Internal, NemoRelayStatus::Ok]);
+        .extend([NemoRelayStatus::WouldBlock, NemoRelayStatus::Ok]);
     run_safe_v2_streaming(&host, "push-backpressure", |_, _, _| async {
         Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream::once(
             async { Ok(json!({ "chunk": true })) },
@@ -8019,6 +8150,21 @@ fn safe_v2_stream_output_handles_backpressure_cancellation_and_settlement_errors
         *SAFE_V2_OUTPUT.lock().unwrap(),
         vec![Ok(json!({ "chunk": true }))]
     );
+    SAFE_V2_OUTPUT.lock().unwrap().clear();
+
+    SAFE_V2_OUTPUT_PUSH_STATUSES
+        .lock()
+        .unwrap()
+        .push_back(NemoRelayStatus::Internal);
+    run_safe_v2_streaming(&host, "push-internal", |_, _, _| async {
+        Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream::once(
+            async { Ok(json!({ "chunk": true })) },
+        ))))
+    });
+    assert!(matches!(
+        SAFE_V2_OUTPUT.lock().unwrap().as_slice(),
+        [Err(error)] if error.contains("output push failed: Internal")
+    ));
     SAFE_V2_OUTPUT.lock().unwrap().clear();
 
     SAFE_V2_OUTPUT_PUSH_STATUSES
@@ -8052,7 +8198,7 @@ fn safe_v2_stream_output_handles_backpressure_cancellation_and_settlement_errors
     SAFE_V2_OUTPUT_REJECT_STATUSES
         .lock()
         .unwrap()
-        .extend([NemoRelayStatus::Internal, NemoRelayStatus::Ok]);
+        .extend([NemoRelayStatus::WouldBlock, NemoRelayStatus::Ok]);
     run_safe_v2_streaming(&host, "reject-backpressure", |_, _, _| async {
         Err("stream rejected".into())
     });
@@ -8117,17 +8263,6 @@ fn safe_v2_stream_cancellation_and_pass_through_failures_settle_once() {
     ));
     *SAFE_V2_FORWARD_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     SAFE_V2_OUTPUT.lock().unwrap().clear();
-
-    *SAFE_V2_FORWARD_ERROR.lock().unwrap() = Some("downstream stream failed".into());
-    *LAST_ERROR.lock().unwrap() = None;
-    run_safe_v2_streaming(&host, "forward-error", |_, request, _| async move {
-        Ok(LlmStreamExecutionOutcomeV2::Passthrough(request))
-    });
-    assert_eq!(
-        LAST_ERROR.lock().unwrap().as_deref(),
-        Some("downstream stream failed")
-    );
-    assert!(SAFE_V2_OUTPUT.lock().unwrap().is_empty());
 
     run_safe_v2_streaming(&host, "stream-panic", |_, _, _| async move {
         panic!("stream callback panic")

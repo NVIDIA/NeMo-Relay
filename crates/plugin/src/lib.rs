@@ -127,6 +127,8 @@ pub enum NemoRelayStatus {
     InvalidArg = 9,
     /// A stream reached end-of-stream and has no chunk to return.
     StreamEnd = 10,
+    /// The operation would block until host-side capacity becomes available.
+    WouldBlock = 11,
 }
 
 /// Opaque host-owned UTF-8 string or JSON byte buffer.
@@ -909,10 +911,9 @@ pub type NemoRelayNativeAsyncTaskPollCbV2 =
 
 /// Opaque host-owned provider stream returned by a native API v2 LLM continuation.
 ///
-/// The plugin requests one item at a time with the v2 host table, then cancels
-/// or releases the handle exactly once. Relay pumps provider output into a
-/// bounded queue so a plugin that consumes slowly applies backpressure without
-/// blocking a runtime worker.
+/// The plugin requests one item at a time with the v2 host table, then releases
+/// the handle exactly once. Releasing an unfinished stream cancels provider
+/// production.
 #[repr(C)]
 pub struct NemoRelayNativeLlmStreamV2 {
     _private: [u8; 0],
@@ -946,10 +947,10 @@ pub type NemoRelayNativeAsyncNextResultCb = unsafe extern "C" fn(
 );
 
 /// Explicit provider target for one native API v2 LLM continuation.
+///
+/// Relay sends LLM continuation requests with HTTP `POST`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct LlmContinuationTargetV2 {
-    /// HTTP method used for the provider call.
-    pub method: String,
     /// Absolute HTTP(S) provider URL including the selected endpoint.
     pub url: String,
     /// Explicit outbound provider headers, including target credentials.
@@ -966,17 +967,6 @@ pub struct LlmContinuationInvocationV2 {
     pub request: LlmRequest,
     /// Explicit provider target selected by the plugin.
     pub target: LlmContinuationTargetV2,
-}
-
-/// Bounded HTTP failure returned by a provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-pub struct LlmHttpFailureV2 {
-    /// Provider HTTP status.
-    pub status: u16,
-    /// Bounded provider response body.
-    pub body: String,
-    /// Safe response headers with credential-bearing fields removed.
-    pub headers: BTreeMap<String, String>,
 }
 
 /// Stable non-HTTP failure classification exposed through native API v2.
@@ -997,71 +987,38 @@ pub enum LlmNonHttpFailureKindV2 {
     Internal,
 }
 
-/// Bounded failure for an operation that produced no provider HTTP response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-pub struct LlmNonHttpFailureV2 {
-    /// Stable failure kind.
-    pub kind: LlmNonHttpFailureKindV2,
-    /// Bounded human-readable context.
-    pub message: String,
-}
-
 /// Structured LLM continuation failure exposed through native API v2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "failure_type", rename_all = "snake_case")]
 pub enum LlmContinuationFailureV2 {
     /// A provider returned a non-success HTTP response.
     Http {
-        /// Bounded HTTP failure details.
-        failure: LlmHttpFailureV2,
+        /// Provider HTTP status.
+        status: u16,
+        /// Bounded provider response body.
+        body: String,
+        /// Safe response headers with credential-bearing fields removed.
+        headers: BTreeMap<String, String>,
     },
     /// No provider HTTP response was available.
     NonHttp {
-        /// Bounded non-HTTP failure details.
-        failure: LlmNonHttpFailureV2,
-    },
-}
-
-/// Unary LLM continuation outcome delivered through native API v2.
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LlmContinuationOutcomeV2 {
-    /// Provider call completed successfully.
-    Success {
-        /// Provider response JSON.
-        response: Json,
-    },
-    /// Provider call failed before producing a response.
-    Failure {
-        /// Structured Relay/provider failure.
-        error: LlmContinuationFailureV2,
-    },
-}
-
-/// Streaming LLM continuation event delivered through native API v2.
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LlmContinuationStreamEventV2 {
-    /// One provider stream event.
-    Chunk {
-        /// Provider event JSON.
-        chunk: Json,
-    },
-    /// Provider stream completed successfully.
-    Done,
-    /// Provider stream failed before clean completion.
-    Failure {
-        /// Structured Relay/provider failure.
-        error: LlmContinuationFailureV2,
+        /// Stable failure kind.
+        kind: LlmNonHttpFailureKindV2,
+        /// Bounded human-readable context.
+        message: String,
     },
 }
 
 /// Receives one typed unary LLM continuation outcome.
 ///
-/// `outcome_json` contains one serialized [`LlmContinuationOutcomeV2`] and is borrowed
-/// for the callback.
-pub type NemoRelayNativeAsyncLlmResultCbV2 =
-    unsafe extern "C" fn(user_data: *mut c_void, outcome_json: *const NemoRelayNativeString);
+/// Exactly one of `response_json` and `error_json` is non-null. A response is
+/// provider JSON; an error is a serialized [`LlmContinuationFailureV2`]. Both
+/// strings are borrowed for the callback.
+pub type NemoRelayNativeAsyncLlmResultCbV2 = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    response_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+);
 
 /// Receives the result of opening one typed streaming LLM continuation.
 ///
@@ -1075,18 +1032,23 @@ pub type NemoRelayNativeAsyncLlmStreamOpenCbV2 = unsafe extern "C" fn(
 
 /// Receives one item from a native API v2 provider stream.
 ///
-/// `event_json` contains one serialized [`LlmContinuationStreamEventV2`] and is borrowed
-/// for the callback. Only one `next` operation may be active per stream.
-pub type NemoRelayNativeAsyncLlmStreamNextCbV2 =
-    unsafe extern "C" fn(user_data: *mut c_void, event_json: *const NemoRelayNativeString);
+/// A chunk has non-null `chunk_json`, null `error_json`, and `done = false`.
+/// Clean completion has both strings null and `done = true`. Failure has null
+/// `chunk_json`, a serialized [`LlmContinuationFailureV2`] in `error_json`, and
+/// `done = true`. Both strings are borrowed for the callback. Only one `next`
+/// operation may be active per stream.
+pub type NemoRelayNativeAsyncLlmStreamNextCbV2 = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    chunk_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+    done: bool,
+);
 
 /// Receives terminal settlement of a directly forwarded downstream stream.
 ///
-/// `error` is null after clean completion and contains a borrowed UTF-8 error
-/// message after downstream failure or cancellation. Relay settles the output
-/// stream before invoking this callback.
-pub type NemoRelayNativeAsyncLlmStreamForwardCbV2 =
-    unsafe extern "C" fn(user_data: *mut c_void, error: *const NemoRelayNativeString);
+/// Relay settles the output stream before invoking this callback, so the
+/// callback is only a wake-up that lets the plugin reclaim `user_data`.
+pub type NemoRelayNativeAsyncLlmStreamForwardCbV2 = unsafe extern "C" fn(user_data: *mut c_void);
 
 /// Incremental native LLM stream intercept callback.
 ///
@@ -1194,9 +1156,10 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
     /// Pushes one JSON chunk to an incremental native stream without blocking.
     ///
-    /// A full bounded host queue returns [`NemoRelayStatus::Internal`] and
-    /// records a backpressure message in the host's last-error slot. The
-    /// producer may retry the logical chunk after the consumer advances.
+    /// A full bounded host queue returns [`NemoRelayStatus::Internal`] for a
+    /// native API v1 host or [`NemoRelayStatus::WouldBlock`] through the ABI-v4
+    /// native API v2 table. The producer may retry the logical chunk after the
+    /// consumer advances.
     pub async_stream_push_json: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         chunk_json: *const NemoRelayNativeString,
@@ -1206,8 +1169,10 @@ pub struct NemoRelayNativeHostApiV3 {
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus,
     /// Rejects an incremental native stream without blocking.
     ///
-    /// A full bounded queue returns [`NemoRelayStatus::Internal`]; the caller
-    /// may retry the rejection after the consumer advances.
+    /// A full bounded host queue returns [`NemoRelayStatus::Internal`] for a
+    /// native API v1 host or [`NemoRelayStatus::WouldBlock`] through the ABI-v4
+    /// native API v2 table. The caller may retry the rejection after the
+    /// consumer advances.
     pub async_stream_reject: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         message: *const NemoRelayNativeString,
@@ -1288,10 +1253,8 @@ pub struct NemoRelayNativeHostApiV4 {
         cb: NemoRelayNativeAsyncLlmStreamNextCbV2,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
-    /// Cancels provider production for a native API v2 stream.
-    pub async_llm_stream_cancel_v2:
-        unsafe extern "C" fn(stream: *const NemoRelayNativeLlmStreamV2) -> NemoRelayStatus,
-    /// Releases the plugin-owned provider-stream reference.
+    /// Releases the plugin-owned provider-stream reference, cancelling provider
+    /// production first when the stream has not reached a terminal item.
     pub async_llm_stream_release_v2:
         unsafe extern "C" fn(stream: *const NemoRelayNativeLlmStreamV2),
     /// Starts a cooperative task associated with an async completion.
@@ -2879,12 +2842,12 @@ impl<'a> PluginContext<'a> {
     /// # Safety
     /// The callback and user data must remain valid until deregistration or
     /// `free_fn`; callback-owned `next` and `stream` handles must each be
-    /// released exactly once. Stream pushes and rejection are nonblocking:
-    /// `Internal` with a host last-error containing `backpressured` means the
-    /// bounded queue is full and the operation may be retried. The output
-    /// stream owns the callback lifetime. `next` may be invoked repeatedly or
-    /// concurrently until that stream settles; Relay then rejects or cancels
-    /// unfinished and later calls.
+    /// released exactly once. Stream pushes and rejection are nonblocking. A
+    /// full host queue returns [`NemoRelayStatus::Internal`] for native API v1
+    /// or [`NemoRelayStatus::WouldBlock`] for native API v2, and the operation
+    /// may be retried. The output stream owns the callback lifetime. `next` may
+    /// be invoked repeatedly or concurrently until that stream settles; Relay
+    /// then rejects or cancels unfinished and later calls.
     pub unsafe fn register_async_stream_middleware_raw(
         &mut self,
         name: &str,
@@ -3886,31 +3849,6 @@ pub unsafe fn export_plugin<P: NativePlugin>(
     )
 }
 
-/// Initializes a native API v2 plugin descriptor for a Rust SDK plugin value.
-///
-/// # Safety
-/// `host` must point to a complete [`NemoRelayNativeHostApiV4`] table for the
-/// duration of the call, and `out` must point to writable memory for one
-/// [`NemoRelayNativePluginV1`] descriptor.
-pub unsafe fn export_plugin_v2<P: NativePlugin>(
-    host: *const NemoRelayNativeHostApiV1,
-    out: *mut NemoRelayNativePluginV1,
-    plugin: P,
-) -> NemoRelayStatus {
-    if host.is_null() || out.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out = NemoRelayNativePluginV1::default() };
-    let host_ref = unsafe { &*host };
-    export_plugin_checked(
-        host_ref,
-        out,
-        NEMO_RELAY_NATIVE_ABI_VERSION_TARGETED_LLM_CONTINUATIONS,
-        std::mem::size_of::<NemoRelayNativeHostApiV4>(),
-        || plugin,
-    )
-}
-
 /// Initializes a native plugin descriptor from a constructor callback.
 ///
 /// # Safety
@@ -3944,7 +3882,9 @@ where
 /// Initializes a native API v2 plugin descriptor from a constructor callback.
 ///
 /// # Safety
-/// `host` and `out` must satisfy [`export_plugin_v2`]'s requirements.
+/// `host` must point to a complete [`NemoRelayNativeHostApiV4`] table for the
+/// duration of the call, and `out` must point to writable memory for one
+/// [`NemoRelayNativePluginV1`] descriptor.
 #[doc(hidden)]
 pub unsafe fn __export_plugin_v2_from_constructor<P, F>(
     host: *const NemoRelayNativeHostApiV1,

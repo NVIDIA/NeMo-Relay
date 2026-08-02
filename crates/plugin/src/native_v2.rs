@@ -18,8 +18,7 @@ use serde::Deserialize;
 
 use super::{
     HostString, Json, LlmContinuationFailureV2, LlmContinuationInvocationV2,
-    LlmContinuationOutcomeV2, LlmContinuationStreamEventV2, LlmNonHttpFailureKindV2,
-    LlmNonHttpFailureV2, LlmRequest, NemoRelayNativeAsyncCallbackState,
+    LlmNonHttpFailureKindV2, LlmRequest, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
     NemoRelayNativeAsyncStream, NemoRelayNativeAsyncTaskV2, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV4, NemoRelayNativeLlmStreamV2, NemoRelayNativeString, NemoRelayStatus,
@@ -68,14 +67,8 @@ pub struct LlmStreamContinuationV2 {
 pub struct LlmProviderStreamV2 {
     host: NemoRelayNativeHostApiV4,
     raw: *const NemoRelayNativeLlmStreamV2,
-    pending: Option<oneshot::Receiver<ProviderItem>>,
+    pending: Option<oneshot::Receiver<std::result::Result<Option<Json>, LlmContinuationFailureV2>>>,
     finished: bool,
-    terminal: bool,
-}
-
-struct ProviderItem {
-    value: std::result::Result<Option<Json>, LlmContinuationFailureV2>,
-    terminal: bool,
 }
 
 struct ContinuationInner {
@@ -317,7 +310,8 @@ impl Drop for ContinuationInner {
 }
 
 struct StreamContinuationInner {
-    continuation: Arc<ContinuationInner>,
+    host: NemoRelayNativeHostApiV4,
+    next: *const NemoRelayNativeAsyncNext,
     output: *const NemoRelayNativeAsyncStream,
 }
 
@@ -328,7 +322,10 @@ unsafe impl Sync for StreamContinuationInner {}
 
 impl Drop for StreamContinuationInner {
     fn drop(&mut self) {
-        unsafe { (self.continuation.host.v3.async_stream_release)(self.output) };
+        unsafe {
+            (self.host.v3.async_stream_release)(self.output);
+            (self.host.v3.async_next_release)(self.next);
+        }
     }
 }
 
@@ -424,12 +421,8 @@ impl LlmStreamContinuationV2 {
         if next.is_null() || output.is_null() {
             return Err(NemoRelayStatus::NullPointer);
         }
-        let continuation = unsafe { LlmContinuationV2::from_raw(host, next) }?;
         Ok(Self {
-            inner: Arc::new(StreamContinuationInner {
-                continuation: continuation.inner,
-                output,
-            }),
+            inner: Arc::new(StreamContinuationInner { host, next, output }),
         })
     }
 
@@ -438,14 +431,14 @@ impl LlmStreamContinuationV2 {
         &self,
         invocation: LlmContinuationInvocationV2,
     ) -> std::result::Result<LlmProviderStreamV2, LlmContinuationFailureV2> {
-        let host = self.inner.continuation.host;
+        let host = self.inner.host;
         let (sender, receiver) = oneshot::channel();
         let state = Box::new(StreamOpenCallback { host, sender });
         let state = Box::into_raw(state).cast::<c_void>();
         let status = match HostString::from_json(&host.v3.v1, &invocation) {
             Some(invocation) => unsafe {
                 (host.async_llm_next_open_stream_v2)(
-                    self.inner.continuation.next,
+                    self.inner.next,
                     invocation.as_ptr(),
                     self.inner.output,
                     stream_open_callback,
@@ -463,37 +456,28 @@ impl LlmStreamContinuationV2 {
             unsafe { drop(Box::from_raw(state.cast::<StreamOpenCallback>())) };
             return Err(status_failure("targeted LLM stream setup", status));
         }
-        let raw = receiver.await.unwrap_or_else(|_| {
+        let provider = receiver.await.unwrap_or_else(|_| {
             Err(internal_failure(
                 "targeted LLM stream setup callback closed without an outcome",
             ))
-        })? as *const NemoRelayNativeLlmStreamV2;
-        if raw.is_null() {
-            return Err(internal_failure(
-                "targeted LLM stream setup returned a null stream",
-            ));
-        }
+        })?;
         Ok(LlmProviderStreamV2 {
             host,
-            raw,
+            raw: provider.into_raw(),
             pending: None,
             finished: false,
-            terminal: false,
         })
     }
 
     async fn forward_passthrough(&self, request: LlmRequest) -> Result<()> {
-        let host = self.inner.continuation.host;
+        let host = self.inner.host;
         let (sender, receiver) = oneshot::channel();
-        let state = Box::new(ForwardStreamCallback {
-            host: host.v3.v1,
-            sender,
-        });
+        let state = Box::new(ForwardStreamCallback { sender });
         let state = Box::into_raw(state).cast::<c_void>();
         let status = match HostString::from_json(&host.v3.v1, &request) {
             Some(request) => unsafe {
                 (host.async_llm_next_forward_stream_v2)(
-                    self.inner.continuation.next,
+                    self.inner.next,
                     request.as_ptr(),
                     self.inner.output,
                     forward_stream_callback,
@@ -511,9 +495,9 @@ impl LlmStreamContinuationV2 {
                 "streaming pass-through continuation failed: {status:?}"
             ));
         }
-        receiver.await.unwrap_or_else(|_| {
-            Err("streaming pass-through callback closed before settlement".into())
-        })
+        receiver
+            .await
+            .map_err(|_| "streaming pass-through callback closed before settlement".into())
     }
 }
 
@@ -557,14 +541,12 @@ impl Stream for LlmProviderStreamV2 {
             Poll::Pending => Poll::Pending,
             Poll::Ready(result) => {
                 self.pending = None;
-                let item = result.unwrap_or_else(|_| ProviderItem {
-                    value: Err(internal_failure(
+                let item = result.unwrap_or_else(|_| {
+                    Err(internal_failure(
                         "provider stream callback closed without an event",
-                    )),
-                    terminal: false,
+                    ))
                 });
-                self.terminal = item.terminal;
-                match item.value {
+                match item {
                     Ok(Some(chunk)) => Poll::Ready(Some(Ok(chunk))),
                     Ok(None) => {
                         self.finished = true;
@@ -582,11 +564,7 @@ impl Stream for LlmProviderStreamV2 {
 
 impl Drop for LlmProviderStreamV2 {
     fn drop(&mut self) {
-        if !self.terminal {
-            let _ = unsafe { (self.host.async_llm_stream_cancel_v2)(self.raw) };
-        }
         unsafe { (self.host.async_llm_stream_release_v2)(self.raw) };
-        self.raw = ptr::null();
     }
 }
 
@@ -770,14 +748,12 @@ where
     let host = state.host;
     let completion_handle = CompletionHandle(completion);
     let callback = Arc::clone(&state.callback);
-    let callback_continuation = continuation.clone();
     let future = async move {
         let result = std::panic::AssertUnwindSafe(async move {
-            callback(invocation.name, invocation.request, callback_continuation).await
+            callback(invocation.name, invocation.request, continuation).await
         })
         .catch_unwind()
         .await;
-        drop(continuation);
         match result {
             Ok(Ok(value)) => resolve_completion(&host, completion_handle.as_ptr(), &value),
             Ok(Err(error)) => reject_completion(&host, completion_handle.as_ptr(), &error),
@@ -941,7 +917,7 @@ async fn pump_output_stream(
 }
 
 async fn push_output_json(continuation: &LlmStreamContinuationV2, chunk: &Json) -> Result<()> {
-    let host = &continuation.inner.continuation.host;
+    let host = &continuation.inner.host;
     let chunk = TaskHostString::from_json(&host.v3.v1, chunk)
         .ok_or_else(|| "failed to serialize native API v2 output chunk".to_string())?;
     std::future::poll_fn(move |_context| {
@@ -952,10 +928,7 @@ async fn push_output_json(continuation: &LlmStreamContinuationV2, chunk: &Json) 
             unsafe { (host.v3.async_stream_push_json)(continuation.inner.output, chunk.as_ptr()) };
         match status {
             NemoRelayStatus::Ok => Poll::Ready(Ok(())),
-            // For this operation the V3 ABI contract reserves `Internal` for
-            // a full bounded queue. Serialization and lifecycle faults use
-            // distinct statuses, so retrying cannot mask another ABI error.
-            NemoRelayStatus::Internal => Poll::Pending,
+            NemoRelayStatus::WouldBlock => Poll::Pending,
             status => Poll::Ready(Err(format!("native API v2 output push failed: {status:?}"))),
         }
     })
@@ -963,7 +936,7 @@ async fn push_output_json(continuation: &LlmStreamContinuationV2, chunk: &Json) 
 }
 
 fn finish_output(continuation: &LlmStreamContinuationV2) -> Result<()> {
-    let host = &continuation.inner.continuation.host;
+    let host = &continuation.inner.host;
     if unsafe { (host.v3.async_stream_is_cancelled)(continuation.inner.output) } {
         return Err("native API v2 output stream was cancelled".into());
     }
@@ -994,8 +967,7 @@ async fn reject_output(host: &NemoRelayNativeHostApiV4, output: OutputHandle, er
         let status = unsafe { (host.v3.async_stream_reject)(output.as_ptr(), message.as_ptr()) };
         match status {
             NemoRelayStatus::Ok => Poll::Ready(()),
-            // `Internal` has the same queue-full-only contract for rejection.
-            NemoRelayStatus::Internal => Poll::Pending,
+            NemoRelayStatus::WouldBlock => Poll::Pending,
             status => {
                 set_last_error(
                     &host.v3.v1,
@@ -1090,22 +1062,31 @@ struct TargetedResultCallback {
 
 unsafe extern "C" fn targeted_result_callback(
     user_data: *mut c_void,
-    outcome_json: *const NemoRelayNativeString,
+    response_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
 ) {
     if user_data.is_null() {
         return;
     }
     let state = unsafe { Box::from_raw(user_data.cast::<TargetedResultCallback>()) };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let outcome: LlmContinuationOutcomeV2 = read_json_value(
-            &state.host,
-            outcome_json,
-            "targeted LLM continuation outcome",
-        )
-        .map_err(|status| status_failure("targeted LLM continuation outcome", status))?;
-        match outcome {
-            LlmContinuationOutcomeV2::Success { response } => Ok(response),
-            LlmContinuationOutcomeV2::Failure { error } => Err(error),
+        match (response_json.is_null(), error_json.is_null()) {
+            (false, true) => read_json_value(
+                &state.host,
+                response_json,
+                "targeted LLM continuation response",
+            )
+            .map_err(|status| status_failure("targeted LLM continuation response", status)),
+            (true, false) => {
+                read_json_value(&state.host, error_json, "targeted LLM continuation failure")
+                    .map_or_else(
+                        |status| Err(status_failure("targeted LLM continuation failure", status)),
+                        Err,
+                    )
+            }
+            _ => Err(internal_failure(
+                "targeted LLM continuation returned an invalid outcome",
+            )),
         }
     }))
     .unwrap_or_else(|_| Err(internal_failure("targeted LLM result callback panicked")));
@@ -1143,38 +1124,36 @@ unsafe extern "C" fn passthrough_result_callback(
 
 struct StreamOpenCallback {
     host: NemoRelayNativeHostApiV4,
-    sender: oneshot::Sender<std::result::Result<usize, LlmContinuationFailureV2>>,
+    sender: oneshot::Sender<std::result::Result<OwnedProviderStream, LlmContinuationFailureV2>>,
 }
 
 struct OwnedProviderStream {
     host: NemoRelayNativeHostApiV4,
     raw: *const NemoRelayNativeLlmStreamV2,
-    armed: bool,
 }
 
 impl OwnedProviderStream {
     fn new(host: NemoRelayNativeHostApiV4, raw: *const NemoRelayNativeLlmStreamV2) -> Self {
-        Self {
-            host,
-            raw,
-            armed: !raw.is_null(),
-        }
+        debug_assert!(!raw.is_null());
+        Self { host, raw }
     }
 
-    fn disarm(&mut self) {
-        self.armed = false;
+    fn into_raw(mut self) -> *const NemoRelayNativeLlmStreamV2 {
+        std::mem::replace(&mut self.raw, ptr::null())
     }
 }
 
 impl Drop for OwnedProviderStream {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
+        if !self.raw.is_null() {
+            unsafe { (self.host.async_llm_stream_release_v2)(self.raw) };
         }
-        let _ = unsafe { (self.host.async_llm_stream_cancel_v2)(self.raw) };
-        unsafe { (self.host.async_llm_stream_release_v2)(self.raw) };
     }
 }
+
+// The host owns the opaque stream and documents release as thread-safe for a
+// plugin-owned reference.
+unsafe impl Send for OwnedProviderStream {}
 
 unsafe extern "C" fn stream_open_callback(
     user_data: *mut c_void,
@@ -1185,10 +1164,11 @@ unsafe extern "C" fn stream_open_callback(
         return;
     }
     let state = unsafe { Box::from_raw(user_data.cast::<StreamOpenCallback>()) };
-    let mut owned_stream = OwnedProviderStream::new(state.host, stream);
+    let mut owned_stream =
+        (!stream.is_null()).then(|| OwnedProviderStream::new(state.host, stream));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match (stream.is_null(), error_json.is_null()) {
-            (false, true) => Ok(stream as usize),
+            (false, true) => Ok(()),
             (true, false) => read_json_value(
                 &state.host.v3.v1,
                 error_json,
@@ -1208,87 +1188,65 @@ unsafe extern "C" fn stream_open_callback(
             "targeted LLM stream setup callback panicked",
         ))
     });
-    let transfers_stream = result.is_ok();
-    if state.sender.send(result).is_ok() && transfers_stream {
-        owned_stream.disarm();
-    }
+    let result = result.and_then(|()| {
+        owned_stream
+            .take()
+            .ok_or_else(|| internal_failure("targeted LLM stream setup returned a null stream"))
+    });
+    let _ = state.sender.send(result);
 }
 
 struct ProviderNextCallback {
     host: NemoRelayNativeHostApiV1,
-    sender: oneshot::Sender<ProviderItem>,
+    sender: oneshot::Sender<std::result::Result<Option<Json>, LlmContinuationFailureV2>>,
 }
 
 unsafe extern "C" fn provider_next_callback(
     user_data: *mut c_void,
-    event_json: *const NemoRelayNativeString,
+    chunk_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+    done: bool,
 ) {
     if user_data.is_null() {
         return;
     }
     let state = unsafe { Box::from_raw(user_data.cast::<ProviderNextCallback>()) };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let event: LlmContinuationStreamEventV2 =
-            read_json_value(&state.host, event_json, "targeted provider stream event")
-                .map_err(|status| status_failure("targeted provider stream event", status))?;
-        Ok::<_, LlmContinuationFailureV2>(match event {
-            LlmContinuationStreamEventV2::Chunk { chunk } => ProviderItem {
-                value: Ok(Some(chunk)),
-                terminal: false,
-            },
-            LlmContinuationStreamEventV2::Done => ProviderItem {
-                value: Ok(None),
-                terminal: true,
-            },
-            LlmContinuationStreamEventV2::Failure { error } => ProviderItem {
-                value: Err(error),
-                terminal: true,
-            },
-        })
+        match (chunk_json.is_null(), error_json.is_null(), done) {
+            (false, true, false) => {
+                read_json_value(&state.host, chunk_json, "targeted provider stream chunk")
+                    .map(Some)
+                    .map_err(|status| status_failure("targeted provider stream chunk", status))
+            }
+            (true, true, true) => Ok(None),
+            (true, false, true) => {
+                read_json_value(&state.host, error_json, "targeted provider stream failure")
+                    .map_err(|status| status_failure("targeted provider stream failure", status))
+                    .and_then(Err)
+            }
+            _ => Err(internal_failure(
+                "targeted provider stream returned an invalid event",
+            )),
+        }
     }))
     .unwrap_or_else(|_| {
         Err(internal_failure(
             "targeted provider stream callback panicked",
         ))
-    })
-    .unwrap_or_else(|error| ProviderItem {
-        value: Err(error),
-        terminal: false,
     });
     let _ = state.sender.send(result);
 }
 
 struct ForwardStreamCallback {
-    host: NemoRelayNativeHostApiV1,
-    sender: oneshot::Sender<Result<()>>,
+    sender: oneshot::Sender<()>,
 }
 
-unsafe extern "C" fn forward_stream_callback(
-    user_data: *mut c_void,
-    error: *const NemoRelayNativeString,
-) {
+unsafe extern "C" fn forward_stream_callback(user_data: *mut c_void) {
     if user_data.is_null() {
         return;
     }
     let state = unsafe { Box::from_raw(user_data.cast::<ForwardStreamCallback>()) };
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if error.is_null() {
-            Ok(())
-        } else {
-            // Relay has already settled the output before this wake-up. Keep
-            // the terminal context available for diagnostics, but report
-            // completion to the trampoline so it cannot reject a second time.
-            let message =
-                read_required_host_string(&state.host, error, "streaming pass-through error")
-                    .unwrap_or_else(|status| {
-                        format!("invalid streaming pass-through error: {status:?}")
-                    });
-            set_last_error(&state.host, &message);
-            Ok(())
-        }
-    }))
-    .unwrap_or_else(|_| Err("streaming pass-through terminal callback panicked".into()));
-    let _ = state.sender.send(result);
+    let _ = state.sender.send(());
 }
 
 fn status_failure(label: &str, status: NemoRelayStatus) -> LlmContinuationFailureV2 {
@@ -1297,10 +1255,8 @@ fn status_failure(label: &str, status: NemoRelayStatus) -> LlmContinuationFailur
 
 fn internal_failure(message: impl Into<String>) -> LlmContinuationFailureV2 {
     LlmContinuationFailureV2::NonHttp {
-        failure: LlmNonHttpFailureV2 {
-            kind: LlmNonHttpFailureKindV2::Internal,
-            message: bounded_error(&message.into()),
-        },
+        kind: LlmNonHttpFailureKindV2::Internal,
+        message: bounded_error(&message.into()),
     }
 }
 

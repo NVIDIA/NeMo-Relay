@@ -797,17 +797,16 @@ async fn forward_upstream_request(
             .provider_credential_present(),
         crate::provider_auth::has_provider_credential(headers)
     );
-    let effective = build_effective_dispatch_request(
+    let effective = effective_dispatch_request(
         body_bytes,
         headers,
         effective_request,
         url,
-        method,
         forwarding.source_route,
     );
     let configured_auth_header = forwarding.configured_auth_header(effective.target_route);
     let mut upstream = http
-        .request(effective.method.clone(), &effective.url)
+        .request(method.clone(), &effective.url)
         .body(effective.body_bytes.clone());
     for (name, value) in &effective.headers {
         if should_forward_request_header(name, &effective.headers) {
@@ -831,7 +830,6 @@ async fn forward_upstream_request(
 struct EffectiveUpstreamRequest {
     body_bytes: Bytes,
     headers: HeaderMap,
-    method: Method,
     url: String,
     target_route: ProviderRoute,
     credential_policy: TargetCredentialPolicy,
@@ -859,7 +857,6 @@ fn effective_upstream_request(
     (effective.body_bytes, effective.headers)
 }
 
-#[cfg(test)]
 fn effective_dispatch_request(
     body_bytes: &Bytes,
     headers: &HeaderMap,
@@ -867,31 +864,13 @@ fn effective_dispatch_request(
     url: &str,
     route: ProviderRoute,
 ) -> EffectiveUpstreamRequest {
-    build_effective_dispatch_request(
-        body_bytes,
-        headers,
-        effective_request,
-        url,
-        &Method::POST,
-        route,
-    )
-}
-
-fn build_effective_dispatch_request(
-    body_bytes: &Bytes,
-    headers: &HeaderMap,
-    effective_request: Option<&LlmRequest>,
-    url: &str,
-    method: &Method,
-    route: ProviderRoute,
-) -> EffectiveUpstreamRequest {
     let mut headers = headers.clone();
     strip_internal_dispatch_headers(&mut headers);
     let Some(request) = effective_request else {
-        return source_request(body_bytes, headers, method, url, route);
+        return source_request(body_bytes, headers, url, route);
     };
     let Some((body_bytes, body_reencoded)) = reencode_request_body(request, body_bytes) else {
-        return source_request(body_bytes, headers, method, url, route);
+        return source_request(body_bytes, headers, url, route);
     };
     let overrides = dispatch_overrides(&request.headers);
     let credential_policy = if overrides.is_explicit_target() {
@@ -910,7 +889,6 @@ fn build_effective_dispatch_request(
     EffectiveUpstreamRequest {
         body_bytes,
         headers,
-        method: method.clone(),
         url: overrides.resolve_url(url),
         target_route: overrides.route.unwrap_or(route),
         credential_policy,
@@ -920,14 +898,12 @@ fn build_effective_dispatch_request(
 fn source_request(
     body_bytes: &Bytes,
     headers: HeaderMap,
-    method: &Method,
     url: &str,
     route: ProviderRoute,
 ) -> EffectiveUpstreamRequest {
     EffectiveUpstreamRequest {
         body_bytes: body_bytes.clone(),
         headers,
-        method: method.clone(),
         url: url.to_string(),
         target_route: route,
         credential_policy: TargetCredentialPolicy::SourceOrEnvironment,

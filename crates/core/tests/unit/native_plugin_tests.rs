@@ -34,6 +34,19 @@ use crate::api::runtime::{
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::response::AnnotatedLlmResponse;
 
+#[derive(Clone, Debug, PartialEq)]
+enum LlmContinuationOutcomeV2 {
+    Success { response: Json },
+    Failure { error: LlmContinuationFailureV2 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum LlmContinuationStreamEventV2 {
+    Chunk { chunk: Json },
+    Failure { error: LlmContinuationFailureV2 },
+    Done,
+}
+
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
 impl ThreadScopeStackRestore {
@@ -113,20 +126,47 @@ unsafe extern "C" fn complete_native_next_result(
 
 unsafe extern "C" fn complete_typed_llm_result(
     user_data: *mut c_void,
-    outcome_json: *const NemoRelayNativeString,
+    response_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
 ) {
     let sender = unsafe {
         Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<LlmContinuationOutcomeV2>)
     };
-    let outcome = parse_json_arg(outcome_json, "typed LLM result")
-        .and_then(|value| serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson))
-        .expect("host emitted a valid typed LLM outcome");
+    let outcome = typed_llm_outcome(response_json, error_json);
     let _ = sender.send(outcome);
+}
+
+fn typed_llm_outcome(
+    response_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+) -> LlmContinuationOutcomeV2 {
+    if !response_json.is_null() {
+        LlmContinuationOutcomeV2::Success {
+            response: parse_json_arg(response_json, "typed LLM response")
+                .expect("host emitted valid provider JSON"),
+        }
+    } else if !error_json.is_null() {
+        LlmContinuationOutcomeV2::Failure {
+            error: parse_json_arg(error_json, "typed LLM failure")
+                .and_then(|value| {
+                    serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson)
+                })
+                .expect("host emitted a valid typed LLM failure"),
+        }
+    } else {
+        LlmContinuationOutcomeV2::Failure {
+            error: non_http_llm_failure(
+                LlmNonHttpFailureKindV2::Internal,
+                "host could not allocate a typed LLM callback value".into(),
+            ),
+        }
+    }
 }
 
 unsafe extern "C" fn reject_unexpected_typed_llm_result(
     _user_data: *mut c_void,
-    _outcome_json: *const NemoRelayNativeString,
+    _response_json: *const NemoRelayNativeString,
+    _error_json: *const NemoRelayNativeString,
 ) {
     panic!("invalid dispatch unexpectedly invoked its callback");
 }
@@ -141,9 +181,17 @@ unsafe extern "C" fn record_typed_llm_stream_open(
             user_data as *mut tokio::sync::oneshot::Sender<Result<usize, LlmContinuationFailureV2>>,
         )
     };
-    let result = if error_json.is_null() {
+    let result = typed_llm_stream_open_result(stream, error_json);
+    let _ = sender.send(result);
+}
+
+fn typed_llm_stream_open_result(
+    stream: *const NemoRelayNativeLlmStreamV2,
+    error_json: *const NemoRelayNativeString,
+) -> Result<usize, LlmContinuationFailureV2> {
+    if !stream.is_null() {
         Ok(stream as usize)
-    } else {
+    } else if !error_json.is_null() {
         match parse_json_arg(error_json, "typed LLM stream open error").and_then(|value| {
             serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson)
         }) {
@@ -153,13 +201,16 @@ unsafe extern "C" fn record_typed_llm_stream_open(
                 format!("invalid typed stream open error: {status:?}"),
             )),
         }
-    };
-    let _ = sender.send(result);
+    } else {
+        Err(non_http_llm_failure(
+            LlmNonHttpFailureKindV2::Internal,
+            "host could not allocate a typed stream-open callback value".into(),
+        ))
+    }
 }
 
 fn test_dispatch_target(url: &str) -> nemo_relay_plugin::LlmContinuationTargetV2 {
     nemo_relay_plugin::LlmContinuationTargetV2 {
-        method: "POST".into(),
         url: url.into(),
         headers: BTreeMap::new(),
     }
@@ -167,36 +218,123 @@ fn test_dispatch_target(url: &str) -> nemo_relay_plugin::LlmContinuationTargetV2
 
 unsafe extern "C" fn record_typed_llm_stream_next(
     user_data: *mut c_void,
-    event_json: *const NemoRelayNativeString,
+    chunk_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+    done: bool,
 ) {
     let sender = unsafe {
         Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<LlmContinuationStreamEventV2>)
     };
-    let event: LlmContinuationStreamEventV2 = parse_json_arg(event_json, "typed LLM stream result")
-        .and_then(|value| serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson))
-        .expect("host emitted a valid typed LLM stream event");
+    let event = typed_llm_stream_event(chunk_json, error_json, done);
     let _ = sender.send(event);
+}
+
+fn typed_llm_stream_event(
+    chunk_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+    done: bool,
+) -> LlmContinuationStreamEventV2 {
+    if !chunk_json.is_null() {
+        LlmContinuationStreamEventV2::Chunk {
+            chunk: parse_json_arg(chunk_json, "typed LLM stream chunk")
+                .expect("host emitted a valid typed LLM stream chunk"),
+        }
+    } else if !error_json.is_null() {
+        LlmContinuationStreamEventV2::Failure {
+            error: parse_json_arg(error_json, "typed LLM stream failure")
+                .and_then(|value| {
+                    serde_json::from_value(value).map_err(|_| NemoRelayStatus::InvalidJson)
+                })
+                .expect("host emitted a valid typed LLM stream failure"),
+        }
+    } else if done {
+        LlmContinuationStreamEventV2::Done
+    } else {
+        LlmContinuationStreamEventV2::Failure {
+            error: non_http_llm_failure(
+                LlmNonHttpFailureKindV2::Internal,
+                "host could not allocate a typed provider-stream callback value".into(),
+            ),
+        }
+    }
+}
+
+#[derive(Default)]
+struct TypedLlmResultCallbackState {
+    callbacks: AtomicUsize,
+    outcome: Mutex<Option<LlmContinuationOutcomeV2>>,
+    notified: tokio::sync::Notify,
+}
+
+unsafe extern "C" fn record_typed_llm_result_state(
+    user_data: *mut c_void,
+    response_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+) {
+    let state = unsafe { &*user_data.cast::<TypedLlmResultCallbackState>() };
+    state.callbacks.fetch_add(1, Ordering::SeqCst);
+    *state
+        .outcome
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some(typed_llm_outcome(response_json, error_json));
+    state.notified.notify_one();
+}
+
+#[derive(Default)]
+struct TypedLlmStreamOpenCallbackState {
+    callbacks: AtomicUsize,
+    result: Mutex<Option<Result<usize, LlmContinuationFailureV2>>>,
+    notified: tokio::sync::Notify,
+}
+
+unsafe extern "C" fn record_typed_llm_stream_open_state(
+    user_data: *mut c_void,
+    stream: *const NemoRelayNativeLlmStreamV2,
+    error_json: *const NemoRelayNativeString,
+) {
+    let state = unsafe { &*user_data.cast::<TypedLlmStreamOpenCallbackState>() };
+    state.callbacks.fetch_add(1, Ordering::SeqCst);
+    *state
+        .result
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some(typed_llm_stream_open_result(stream, error_json));
+    state.notified.notify_one();
+}
+
+#[derive(Default)]
+struct TypedLlmStreamNextCallbackState {
+    callbacks: AtomicUsize,
+    event: Mutex<Option<LlmContinuationStreamEventV2>>,
+    notified: tokio::sync::Notify,
+}
+
+unsafe extern "C" fn record_typed_llm_stream_next_state(
+    user_data: *mut c_void,
+    chunk_json: *const NemoRelayNativeString,
+    error_json: *const NemoRelayNativeString,
+    done: bool,
+) {
+    let state = unsafe { &*user_data.cast::<TypedLlmStreamNextCallbackState>() };
+    state.callbacks.fetch_add(1, Ordering::SeqCst);
+    *state
+        .event
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some(typed_llm_stream_event(chunk_json, error_json, done));
+    state.notified.notify_one();
 }
 
 #[derive(Default)]
 struct NativeForwardTerminalState {
     callbacks: AtomicUsize,
-    error: Mutex<Option<String>>,
     notified: tokio::sync::Notify,
 }
 
-unsafe extern "C" fn record_native_forward_terminal(
-    user_data: *mut c_void,
-    error: *const NemoRelayNativeString,
-) {
+unsafe extern "C" fn record_native_forward_terminal(user_data: *mut c_void) {
     let state = unsafe { &*user_data.cast::<NativeForwardTerminalState>() };
     state.callbacks.fetch_add(1, Ordering::SeqCst);
-    if !error.is_null() {
-        *state
-            .error
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = read_native_string(error).ok();
-    }
     state.notified.notify_one();
 }
 
@@ -1769,7 +1907,6 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
             let target = current_llm_dispatch_target().expect("typed target is bound");
             Box::pin(async move {
                 assert!(request.headers.is_empty());
-                assert_eq!(target.method(), "POST");
                 assert_eq!(
                     target.url().as_str(),
                     "https://provider.example/v1/chat/completions"
@@ -1824,11 +1961,9 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
         outcome,
         LlmContinuationOutcomeV2::Failure {
             error: LlmContinuationFailureV2::Http {
-                failure: LlmHttpFailureV2 {
-                    status: 429,
-                    body: "rate limited".into(),
-                    headers: BTreeMap::from([("retry-after".into(), "1".into())]),
-                },
+                status: 429,
+                body: "rate limited".into(),
+                headers: BTreeMap::from([("retry-after".into(), "1".into())]),
             },
         }
     );
@@ -1903,10 +2038,8 @@ fn native_api_v2_releasing_next_cancels_a_pending_targeted_call() {
         outcome,
         LlmContinuationOutcomeV2::Failure {
             error: LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind: LlmNonHttpFailureKindV2::Cancelled,
-                    ..
-                }
+                kind: LlmNonHttpFailureKindV2::Cancelled,
+                ..
             }
         }
     ));
@@ -1967,23 +2100,11 @@ fn native_api_v2_rejects_non_absolute_dispatch_targets_before_continuation() {
 }
 
 #[test]
-fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
+fn native_api_v2_rejects_prohibited_target_headers() {
     let request = LlmRequest {
         headers: Map::new(),
         content: json!({}),
     };
-    let mut target = test_dispatch_target("https://provider.example/v1/chat/completions");
-    target.method = "CONNECT".into();
-    assert_eq!(
-        prepare_llm_continuation_invocation(LlmContinuationInvocationV2 {
-            request: request.clone(),
-            target,
-        })
-        .unwrap_err(),
-        NemoRelayStatus::InvalidArg
-    );
-    assert_last_error_contains("method was invalid or prohibited");
-
     let mut target = test_dispatch_target("https://provider.example/v1/chat/completions");
     target
         .headers
@@ -2031,7 +2152,7 @@ fn native_api_v2_rejects_target_url_credentials() {
 fn native_api_v2_bounds_failure_data_and_removes_sensitive_headers() {
     let error = typed_llm_failure(FlowError::Upstream(crate::error::UpstreamFailure {
         status: Some(429),
-        body: "é".repeat(NATIVE_API_V2_MAX_FAILURE_BODY_BYTES),
+        body: "é".repeat(crate::error::MAX_UPSTREAM_FAILURE_BODY_BYTES),
         headers: BTreeMap::from([
             ("Authorization".into(), "Bearer secret".into()),
             ("Set-Cookie".into(), "session=secret".into()),
@@ -2040,23 +2161,22 @@ fn native_api_v2_bounds_failure_data_and_removes_sensitive_headers() {
                 "X-Request-ID".into(),
                 format!(
                     "{}é",
-                    "x".repeat(NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES - 1)
+                    "x".repeat(crate::error::MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES - 1)
                 ),
             ),
         ]),
         class: UpstreamFailureClass::RetryableStatus,
     }));
 
-    let LlmContinuationFailureV2::Http { failure } = error else {
+    let LlmContinuationFailureV2::Http { body, headers, .. } = error else {
         panic!("expected an upstream failure");
     };
-    let LlmHttpFailureV2 { body, headers, .. } = failure;
-    assert_eq!(body.len(), NATIVE_API_V2_MAX_FAILURE_BODY_BYTES);
+    assert_eq!(body.len(), crate::error::MAX_UPSTREAM_FAILURE_BODY_BYTES);
     assert!(body.is_char_boundary(body.len()));
     assert_eq!(headers.get("retry-after").map(String::as_str), Some("1"));
     assert_eq!(
         headers.get("x-request-id").map(String::len),
-        Some(NATIVE_API_V2_MAX_FAILURE_HEADER_VALUE_BYTES - 1)
+        Some(crate::error::MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES - 1)
     );
     assert!(!headers.contains_key("authorization"));
     assert!(!headers.contains_key("set-cookie"));
@@ -2129,28 +2249,39 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
         .enable_all()
         .build()
         .unwrap();
+    let provider_polls = Arc::new(AtomicUsize::new(0));
     let next = Arc::new(NativeAsyncNext::new(
-        NativeAsyncNextInner::LlmStream(Arc::new(|request| {
-            assert!(request.headers.is_empty());
-            Box::pin(async move {
-                assert_eq!(
-                    current_llm_dispatch_target()
-                        .expect("typed target is bound")
-                        .url()
-                        .as_str(),
-                    "https://provider.example/v1/messages"
-                );
-                Ok(LlmJsonStream::new(tokio_stream::iter(vec![
-                    Ok(json!({"type": "content_block_delta", "delta": {"text": "hi"}})),
-                    Err(FlowError::Upstream(crate::error::UpstreamFailure {
-                        status: Some(503),
-                        body: "unavailable".into(),
-                        headers: BTreeMap::new(),
-                        class: UpstreamFailureClass::ModelUnavailable,
-                    })),
-                ])))
+        NativeAsyncNextInner::LlmStream({
+            let provider_polls = Arc::clone(&provider_polls);
+            Arc::new(move |request| {
+                let provider_polls = Arc::clone(&provider_polls);
+                assert!(request.headers.is_empty());
+                Box::pin(async move {
+                    assert_eq!(
+                        current_llm_dispatch_target()
+                            .expect("typed target is bound")
+                            .url()
+                            .as_str(),
+                        "https://provider.example/v1/messages"
+                    );
+                    let mut events = VecDeque::from(vec![
+                        Ok(json!({"type": "content_block_delta", "delta": {"text": "hi"}})),
+                        Err(FlowError::Upstream(crate::error::UpstreamFailure {
+                            status: Some(503),
+                            body: "unavailable".into(),
+                            headers: BTreeMap::new(),
+                            class: UpstreamFailureClass::ModelUnavailable,
+                        })),
+                    ]);
+                    Ok(LlmJsonStream::new(futures_util::stream::poll_fn(
+                        move |_| {
+                            provider_polls.fetch_add(1, Ordering::SeqCst);
+                            std::task::Poll::Ready(events.pop_front())
+                        },
+                    )))
+                })
             })
-        })),
+        }),
         runtime.handle().clone(),
         None,
     ));
@@ -2160,7 +2291,6 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -2204,6 +2334,11 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
             .expect("open callback should be delivered")
             .expect("provider stream should open")
     }) as *const NemoRelayNativeLlmStreamV2;
+    assert_eq!(
+        provider_polls.load(Ordering::SeqCst),
+        0,
+        "opening a provider stream must not read ahead"
+    );
     let mut events = Vec::new();
     loop {
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -2228,6 +2363,11 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
             LlmContinuationStreamEventV2::Done | LlmContinuationStreamEventV2::Failure { .. }
         );
         events.push(event);
+        assert_eq!(
+            provider_polls.load(Ordering::SeqCst),
+            events.len(),
+            "each ABI next must poll exactly one immediately-ready provider item"
+        );
         if terminal {
             break;
         }
@@ -2243,11 +2383,9 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
             },
             LlmContinuationStreamEventV2::Failure {
                 error: LlmContinuationFailureV2::Http {
-                    failure: LlmHttpFailureV2 {
-                        status: 503,
-                        body: "unavailable".into(),
-                        headers: BTreeMap::new(),
-                    },
+                    status: 503,
+                    body: "unavailable".into(),
+                    headers: BTreeMap::new(),
                 },
             },
         ]
@@ -2263,6 +2401,98 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
         native_async_next_release(next_ref);
         native_async_stream_release(output_stream_ref);
     }
+}
+
+#[test]
+fn native_api_v2_provider_pulls_restore_scope_and_target_after_pending_wakes() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let ambient_scope = crate::api::runtime::task_scope_top().uuid;
+    let captured_stack = create_scope_stack();
+    let captured_scope = captured_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid;
+    assert_ne!(ambient_scope, captured_scope);
+    let context = with_scope_stack(captured_stack, MiddlewareContinuationContext::capture);
+    let target_url = "https://provider.example/v1/context";
+    let target = LlmDispatchTargetContext::try_new(target_url.into(), BTreeMap::new()).unwrap();
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let observations_for_stream = Arc::clone(&observations);
+    let mut pending = true;
+    let mut index = 0;
+    let provider_stream = LlmJsonStream::new(futures_util::stream::poll_fn(move |cx| {
+        if pending {
+            pending = false;
+            cx.waker().wake_by_ref();
+            return std::task::Poll::Pending;
+        }
+        pending = true;
+        let scope = crate::api::runtime::task_scope_top().uuid;
+        let target = current_llm_dispatch_target()
+            .expect("provider pull should restore its dispatch target")
+            .url()
+            .as_str()
+            .to_owned();
+        observations_for_stream
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((scope, target));
+        let chunk = json!({"index": index});
+        index += 1;
+        std::task::Poll::Ready(Some(Ok(chunk)))
+    }));
+    let (output, _output_receiver) = test_native_output_stream(1);
+    let provider = Arc::new(NativeLlmProviderStreamV2 {
+        stream: tokio::sync::Mutex::new(Some(provider_stream)),
+        runtime: runtime.handle().clone(),
+        context,
+        target,
+        output,
+        lifecycle: Mutex::new(NativeLlmProviderStreamLifecycleV2::Idle),
+    });
+    let provider_ref = Arc::into_raw(provider) as *const NemoRelayNativeLlmStreamV2;
+
+    for index in 0..2 {
+        let (sender, receiver) = tokio::sync::oneshot::channel::<LlmContinuationStreamEventV2>();
+        assert_eq!(
+            unsafe {
+                native_async_llm_stream_next_v2(
+                    provider_ref,
+                    record_typed_llm_stream_next,
+                    Box::into_raw(Box::new(sender)).cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            runtime.block_on(async {
+                tokio::time::timeout(Duration::from_secs(1), receiver)
+                    .await
+                    .expect("pending provider pull should be woken")
+                    .expect("provider pull callback should be delivered")
+            }),
+            LlmContinuationStreamEventV2::Chunk {
+                chunk: json!({"index": index})
+            }
+        );
+        assert!(current_llm_dispatch_target().is_none());
+        assert_eq!(crate::api::runtime::task_scope_top().uuid, ambient_scope);
+    }
+
+    assert_eq!(
+        *observations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()),
+        vec![
+            (captured_scope, target_url.into()),
+            (captured_scope, target_url.into()),
+        ]
+    );
+    unsafe { native_async_llm_stream_release_v2(provider_ref) };
 }
 
 #[test]
@@ -2294,7 +2524,6 @@ fn native_api_v2_direct_stream_forwarding_is_bounded_and_settles_once() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -2353,13 +2582,6 @@ fn native_api_v2_direct_stream_forwarding_is_bounded_and_settles_once() {
     });
     assert!(stream.settled.load(Ordering::Acquire));
     assert_eq!(terminal.callbacks.load(Ordering::SeqCst), 1);
-    assert!(
-        terminal
-            .error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .is_none()
-    );
 
     unsafe {
         native_string_free(request);
@@ -2397,7 +2619,6 @@ fn native_api_v2_direct_stream_forwarding_preserves_downstream_failure() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -2453,14 +2674,6 @@ fn native_api_v2_direct_stream_forwarding_preserves_downstream_failure() {
             .expect("failure should settle the terminal callback");
     });
     assert_eq!(terminal.callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        terminal
-            .error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_deref(),
-        Some("downstream LLM stream failed")
-    );
 
     unsafe {
         native_string_free(request);
@@ -2500,7 +2713,6 @@ fn native_api_v2_direct_stream_forwarding_cancels_with_the_consumer() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -2545,14 +2757,6 @@ fn native_api_v2_direct_stream_forwarding_cancels_with_the_consumer() {
     });
     assert!(stream.cancelled.load(Ordering::Acquire));
     assert_eq!(terminal.callbacks.load(Ordering::SeqCst), 1);
-    assert!(
-        terminal
-            .error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_deref()
-            .is_some_and(|error| error.contains("cancelled"))
-    );
 
     unsafe {
         native_string_free(request);
@@ -2563,33 +2767,49 @@ fn native_api_v2_direct_stream_forwarding_cancels_with_the_consumer() {
 
 #[test]
 fn native_api_v2_provider_stream_rejects_overlapping_next_and_releases_in_flight() {
+    struct StreamDropSignal(std::sync::mpsc::Sender<()>);
+
+    impl Drop for StreamDropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
-    let (provider_sender, provider_receiver) =
-        tokio::sync::mpsc::channel(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2);
-    let provider = Arc::new(NativeLlmProviderStreamV2 {
-        receiver: tokio::sync::Mutex::new(provider_receiver),
-        producer_abort: Mutex::new(None),
-        runtime: runtime.handle().clone(),
-        next_in_flight: AtomicBool::new(false),
-        cancelled: AtomicBool::new(false),
-        _library_guard: None,
-    });
+    let polls = Arc::new(AtomicUsize::new(0));
+    let polls_for_stream = Arc::clone(&polls);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+    let drop_signal = StreamDropSignal(dropped_tx);
+    let provider_stream = LlmJsonStream::new(futures_util::stream::poll_fn(move |_| {
+        let _ = &drop_signal;
+        if polls_for_stream.fetch_add(1, Ordering::SeqCst) == 0 {
+            let _ = started_tx.send(());
+        }
+        std::task::Poll::Pending
+    }));
+    let (provider, _output_receiver) = test_native_provider_stream(&runtime, provider_stream);
     let provider_ref = Arc::into_raw(provider) as *const NemoRelayNativeLlmStreamV2;
 
-    let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
+    let callback = Arc::new(TypedLlmStreamNextCallbackState::default());
     assert_eq!(
         unsafe {
             native_async_llm_stream_next_v2(
                 provider_ref,
-                record_typed_llm_stream_next,
-                Box::into_raw(Box::new(first_sender)).cast(),
+                record_typed_llm_stream_next_state,
+                Arc::as_ptr(&callback).cast_mut().cast(),
             )
         },
         NemoRelayStatus::Ok
     );
+    runtime
+        .block_on(async { tokio::task::spawn_blocking(move || started_rx.recv()).await })
+        .unwrap()
+        .unwrap();
+    assert_eq!(polls.load(Ordering::SeqCst), 1);
 
     let (overlap_sender, _overlap_receiver) =
         tokio::sync::oneshot::channel::<LlmContinuationStreamEventV2>();
@@ -2607,34 +2827,113 @@ fn native_api_v2_provider_stream_rejects_overlapping_next_and_releases_in_flight
     assert_last_error_contains("pending next");
     unsafe { drop(Box::from_raw(overlap_state)) };
 
-    assert_eq!(
-        unsafe { native_async_llm_stream_cancel_v2(provider_ref) },
-        NemoRelayStatus::Ok
-    );
-    assert_eq!(
-        unsafe { native_async_llm_stream_cancel_v2(provider_ref) },
-        NemoRelayStatus::Ok
-    );
-    drop(provider_sender);
     // Releasing the plugin's reference while `next` is pending is safe because
-    // the callback task retains its own provider-stream reference.
+    // the callback task retains its own provider-stream reference. Release
+    // cancels the pull before dropping that reference.
     unsafe { native_async_llm_stream_release_v2(provider_ref) };
 
-    let event = runtime
-        .block_on(async { tokio::time::timeout(Duration::from_secs(1), first_receiver).await })
-        .expect("cancelled provider next should settle")
-        .expect("provider next callback should be delivered");
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(1), callback.notified.notified())
+            .await
+            .expect("cancelled provider next should settle");
+    });
+    assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        event,
-        LlmContinuationStreamEventV2::Failure {
+        callback
+            .event
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref(),
+        Some(LlmContinuationStreamEventV2::Failure {
             error: LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind: LlmNonHttpFailureKindV2::Cancelled,
-                    ..
-                }
+                kind: LlmNonHttpFailureKindV2::Cancelled,
+                ..
             }
-        }
+        })
     ));
+    dropped_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("release should abort the pull and drop the provider stream");
+    runtime.block_on(tokio::task::yield_now());
+    assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
+    assert_eq!(polls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn native_api_v2_output_drop_cancels_pending_provider_next_once() {
+    struct StreamDropSignal(std::sync::mpsc::Sender<()>);
+
+    impl Drop for StreamDropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+    let drop_signal = StreamDropSignal(dropped_tx);
+    let mut started_tx = Some(started_tx);
+    let provider_stream = LlmJsonStream::new(futures_util::stream::poll_fn(move |_| {
+        let _ = &drop_signal;
+        if let Some(started_tx) = started_tx.take() {
+            let _ = started_tx.send(());
+        }
+        std::task::Poll::Pending
+    }));
+    let (provider, output_receiver) = test_native_provider_stream(&runtime, provider_stream);
+    let output = Arc::clone(&provider.output);
+    let provider_ref = Arc::into_raw(provider) as *const NemoRelayNativeLlmStreamV2;
+    let callback = Arc::new(TypedLlmStreamNextCallbackState::default());
+
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_next_v2(
+                provider_ref,
+                record_typed_llm_stream_next_state,
+                Arc::as_ptr(&callback).cast_mut().cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    runtime
+        .block_on(async { tokio::task::spawn_blocking(move || started_rx.recv()).await })
+        .unwrap()
+        .unwrap();
+
+    drop(NativeAsyncStreamReceiver {
+        receiver: output_receiver,
+        stream: output,
+    });
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(1), callback.notified.notified())
+            .await
+            .expect("output cancellation should settle the pending next callback");
+    });
+    assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        callback
+            .event
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref(),
+        Some(LlmContinuationStreamEventV2::Failure {
+            error: LlmContinuationFailureV2::NonHttp {
+                kind: LlmNonHttpFailureKindV2::Cancelled,
+                ..
+            }
+        })
+    ));
+
+    unsafe { native_async_llm_stream_release_v2(provider_ref) };
+    dropped_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("releasing the cancelled provider should drop its stream");
+    runtime.block_on(tokio::task::yield_now());
+    assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -2799,11 +3098,9 @@ fn native_api_v2_isolates_concurrent_dispatch_targets() {
 }
 
 #[test]
-fn native_api_v2_handles_64_concurrent_100_event_provider_streams() {
+fn native_api_v2_direct_pulls_64_concurrent_100_event_provider_streams_without_deadlock() {
     const STREAM_COUNT: usize = 64;
     const EVENT_COUNT: usize = 100;
-    assert_eq!(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V1, 64);
-    assert_eq!(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY_V2, 32);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -2828,7 +3125,6 @@ fn native_api_v2_handles_64_concurrent_100_event_provider_streams() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(output_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -2971,7 +3267,6 @@ fn test_native_output_stream(
             runtime: native_runtime().handle().clone(),
             context: MiddlewareContinuationContext::capture(),
             task: Mutex::new(None),
-            backpressure_waiter: Mutex::new(None),
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
@@ -2979,6 +3274,31 @@ fn test_native_output_stream(
             settlement: Mutex::new(()),
             before_settlement_lock: None,
             _callback_user_data: None,
+        }),
+        receiver,
+    )
+}
+
+fn test_native_provider_stream(
+    runtime: &tokio::runtime::Runtime,
+    stream: LlmJsonStream,
+) -> (
+    Arc<NativeLlmProviderStreamV2>,
+    tokio::sync::mpsc::Receiver<FlowResult<Json>>,
+) {
+    let (output, receiver) = test_native_output_stream(1);
+    (
+        Arc::new(NativeLlmProviderStreamV2 {
+            stream: tokio::sync::Mutex::new(Some(stream)),
+            runtime: runtime.handle().clone(),
+            context: MiddlewareContinuationContext::capture(),
+            target: LlmDispatchTargetContext::try_new(
+                "https://provider.example/v1/chat/completions".into(),
+                BTreeMap::new(),
+            )
+            .unwrap(),
+            output,
+            lifecycle: Mutex::new(NativeLlmProviderStreamLifecycleV2::Idle),
         }),
         receiver,
     )
@@ -3198,12 +3518,8 @@ fn native_api_v2_callback_guards_settle_once_and_cancel_on_drop() {
         active: true,
         _library_guard: None,
     };
-    typed_guard.complete(&LlmContinuationOutcomeV2::Success {
-        response: json!({"ok": true}),
-    });
-    typed_guard.complete(&LlmContinuationOutcomeV2::Success {
-        response: Json::Null,
-    });
+    typed_guard.complete(Ok(json!({"ok": true})));
+    typed_guard.complete(Ok(Json::Null));
     assert_eq!(
         receiver.blocking_recv().unwrap(),
         LlmContinuationOutcomeV2::Success {
@@ -3222,10 +3538,8 @@ fn native_api_v2_callback_guards_settle_once_and_cancel_on_drop() {
         receiver.blocking_recv().unwrap(),
         LlmContinuationOutcomeV2::Failure {
             error: LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind: LlmNonHttpFailureKindV2::Cancelled,
-                    ..
-                }
+                kind: LlmNonHttpFailureKindV2::Cancelled,
+                ..
             }
         }
     ));
@@ -3234,15 +3548,8 @@ fn native_api_v2_callback_guards_settle_once_and_cancel_on_drop() {
         .enable_all()
         .build()
         .unwrap();
-    let (provider_sender, provider_receiver) = tokio::sync::mpsc::channel(1);
-    let provider = Arc::new(NativeLlmProviderStreamV2 {
-        receiver: tokio::sync::Mutex::new(provider_receiver),
-        producer_abort: Mutex::new(None),
-        runtime: runtime.handle().clone(),
-        next_in_flight: AtomicBool::new(false),
-        cancelled: AtomicBool::new(false),
-        _library_guard: None,
-    });
+    let (provider, _output_receiver) =
+        test_native_provider_stream(&runtime, LlmJsonStream::new(tokio_stream::empty()));
     let (sender, receiver) =
         tokio::sync::oneshot::channel::<std::result::Result<usize, LlmContinuationFailureV2>>();
     let mut open_guard = NativeLlmStreamOpenCallbackGuardV2 {
@@ -3259,10 +3566,8 @@ fn native_api_v2_callback_guards_settle_once_and_cancel_on_drop() {
     assert!(matches!(
         receiver.blocking_recv().unwrap(),
         Err(LlmContinuationFailureV2::NonHttp {
-            failure: LlmNonHttpFailureV2 {
-                kind: LlmNonHttpFailureKindV2::Transport,
-                ..
-            }
+            kind: LlmNonHttpFailureKindV2::Transport,
+            ..
         })
     ));
 
@@ -3277,13 +3582,10 @@ fn native_api_v2_callback_guards_settle_once_and_cancel_on_drop() {
     assert!(matches!(
         receiver.blocking_recv().unwrap(),
         Err(LlmContinuationFailureV2::NonHttp {
-            failure: LlmNonHttpFailureV2 {
-                kind: LlmNonHttpFailureKindV2::Cancelled,
-                ..
-            }
+            kind: LlmNonHttpFailureKindV2::Cancelled,
+            ..
         })
     ));
-    drop(provider_sender);
     drop(provider);
 
     let (stream, _receiver) = test_native_output_stream(1);
@@ -3293,33 +3595,10 @@ fn native_api_v2_callback_guards_settle_once_and_cancel_on_drop() {
         user_data: (&terminal as *const NativeForwardTerminalState) as usize,
         stream: Arc::clone(&stream),
         active: true,
-        _library_guard: None,
     };
-    forward_guard.complete();
-    forward_guard.complete();
+    forward_guard.settle();
+    forward_guard.settle();
     assert_eq!(terminal.callbacks.load(Ordering::SeqCst), 1);
-
-    let (stream, _receiver) = test_native_output_stream(1);
-    let terminal = NativeForwardTerminalState::default();
-    fail_native_string_allocation_after(0);
-    let mut forward_guard = NativeLlmStreamForwardCallbackGuardV2 {
-        cb: record_native_forward_terminal,
-        user_data: (&terminal as *const NativeForwardTerminalState) as usize,
-        stream: Arc::clone(&stream),
-        active: true,
-        _library_guard: None,
-    };
-    forward_guard.fail("allocation failure");
-    forward_guard.fail("ignored");
-    assert_eq!(terminal.callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        terminal
-            .error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_deref(),
-        Some("native LLM stream forwarding failed")
-    );
 
     let (stream, _receiver) = test_native_output_stream(1);
     let terminal = NativeForwardTerminalState::default();
@@ -3328,10 +3607,166 @@ fn native_api_v2_callback_guards_settle_once_and_cancel_on_drop() {
         user_data: (&terminal as *const NativeForwardTerminalState) as usize,
         stream: Arc::clone(&stream),
         active: true,
-        _library_guard: None,
     });
     assert!(stream.cancelled.load(Ordering::Acquire));
     assert_eq!(terminal.callbacks.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn native_api_v2_split_callbacks_settle_when_native_string_allocation_fails() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let live_before = native_string_live_allocations();
+    let dispatch = test_v2_dispatch_json();
+    let live_with_dispatch = native_string_live_allocations();
+
+    for next in [
+        Arc::new(NativeAsyncNext::new(
+            NativeAsyncNextInner::Llm(Arc::new(|_| Box::pin(async { Ok(json!({"ok": true})) }))),
+            runtime.handle().clone(),
+            None,
+        )),
+        Arc::new(NativeAsyncNext::new(
+            NativeAsyncNextInner::Llm(Arc::new(|_| {
+                Box::pin(async { Err(FlowError::InvalidArgument("bad request".into())) })
+            })),
+            runtime.handle().clone(),
+            None,
+        )),
+    ] {
+        let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+        let callback = Arc::new(TypedLlmResultCallbackState::default());
+        fail_native_string_allocation_after(0);
+        assert_eq!(
+            unsafe {
+                native_async_llm_next_invoke_result_v2(
+                    next_ref,
+                    dispatch,
+                    record_typed_llm_result_state,
+                    Arc::as_ptr(&callback).cast_mut().cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(1), callback.notified.notified())
+                .await
+                .expect("unary allocation failure must still invoke its callback");
+        });
+        assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            callback
+                .outcome
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref(),
+            Some(LlmContinuationOutcomeV2::Failure {
+                error: LlmContinuationFailureV2::NonHttp {
+                    kind: LlmNonHttpFailureKindV2::Internal,
+                    ..
+                }
+            })
+        ));
+        assert_eq!(native_string_live_allocations(), live_with_dispatch);
+        unsafe { native_async_next_release(next_ref) };
+    }
+
+    let open_next = Arc::new(NativeAsyncNext::new(
+        NativeAsyncNextInner::LlmStream(Arc::new(|_| {
+            Box::pin(async { Err(FlowError::InvalidArgument("bad stream request".into())) })
+        })),
+        runtime.handle().clone(),
+        None,
+    ));
+    let open_next_ref = Arc::into_raw(open_next) as *const NemoRelayNativeAsyncNext;
+    let (output, output_receiver) = test_native_output_stream(1);
+    let output_ref = Arc::into_raw(Arc::clone(&output)) as *const NemoRelayNativeAsyncStream;
+    let open_callback = Arc::new(TypedLlmStreamOpenCallbackState::default());
+    fail_native_string_allocation_after(0);
+    assert_eq!(
+        unsafe {
+            native_async_llm_next_open_stream_v2(
+                open_next_ref,
+                dispatch,
+                output_ref,
+                record_typed_llm_stream_open_state,
+                Arc::as_ptr(&open_callback).cast_mut().cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(1), open_callback.notified.notified())
+            .await
+            .expect("stream-open allocation failure must still invoke its callback");
+    });
+    assert_eq!(open_callback.callbacks.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        open_callback
+            .result
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref(),
+        Some(Err(LlmContinuationFailureV2::NonHttp {
+            kind: LlmNonHttpFailureKindV2::Internal,
+            ..
+        }))
+    ));
+    assert_eq!(native_string_live_allocations(), live_with_dispatch);
+    drop(output_receiver);
+    unsafe {
+        native_async_next_release(open_next_ref);
+        native_async_stream_release(output_ref);
+    }
+
+    for stream in [
+        LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({"chunk": true}))])),
+        LlmJsonStream::new(tokio_stream::iter(vec![Err(FlowError::InvalidArgument(
+            "provider failure".into(),
+        ))])),
+    ] {
+        let (provider, output_receiver) = test_native_provider_stream(&runtime, stream);
+        let provider_ref = Arc::into_raw(provider) as *const NemoRelayNativeLlmStreamV2;
+        let callback = Arc::new(TypedLlmStreamNextCallbackState::default());
+        fail_native_string_allocation_after(0);
+        assert_eq!(
+            unsafe {
+                native_async_llm_stream_next_v2(
+                    provider_ref,
+                    record_typed_llm_stream_next_state,
+                    Arc::as_ptr(&callback).cast_mut().cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(1), callback.notified.notified())
+                .await
+                .expect("provider-next allocation failure must still invoke its callback");
+        });
+        assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            callback
+                .event
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref(),
+            Some(LlmContinuationStreamEventV2::Failure {
+                error: LlmContinuationFailureV2::NonHttp {
+                    kind: LlmNonHttpFailureKindV2::Internal,
+                    ..
+                }
+            })
+        ));
+        assert_eq!(native_string_live_allocations(), live_with_dispatch);
+        drop(output_receiver);
+        unsafe { native_async_llm_stream_release_v2(provider_ref) };
+    }
+
+    unsafe { native_string_free(dispatch) };
+    assert_eq!(native_string_live_allocations(), live_before);
 }
 
 #[test]
@@ -3369,23 +3804,20 @@ fn native_api_v2_failure_mapping_covers_http_and_non_http_kinds() {
         ),
     ];
     for (error, expected_kind) in cases {
-        let LlmContinuationFailureV2::NonHttp { failure } = typed_llm_failure(error) else {
+        let LlmContinuationFailureV2::NonHttp { kind, .. } = typed_llm_failure(error) else {
             panic!("expected non-HTTP failure")
         };
-        assert_eq!(failure.kind, expected_kind);
+        assert_eq!(kind, expected_kind);
     }
 
     let message = format!("{}é", "x".repeat(NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES));
-    let LlmContinuationFailureV2::NonHttp { failure } =
+    let LlmContinuationFailureV2::NonHttp { message, .. } =
         non_http_llm_failure(LlmNonHttpFailureKindV2::Internal, message)
     else {
         panic!("expected non-HTTP failure")
     };
-    assert_eq!(
-        failure.message.len(),
-        NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES
-    );
-    assert!(failure.message.is_char_boundary(failure.message.len()));
+    assert_eq!(message.len(), NATIVE_API_V2_MAX_FAILURE_MESSAGE_BYTES);
+    assert!(message.is_char_boundary(message.len()));
 }
 
 fn test_v2_dispatch_json() -> *mut NemoRelayNativeString {
@@ -3520,11 +3952,11 @@ fn native_api_v2_unary_entrypoint_reports_validation_panics_and_typed_failures()
         let outcome = runtime.block_on(receiver).unwrap();
         match outcome {
             LlmContinuationOutcomeV2::Failure {
-                error: LlmContinuationFailureV2::Http { failure },
-            } => assert_eq!(Some(failure.status), http_status),
+                error: LlmContinuationFailureV2::Http { status, .. },
+            } => assert_eq!(Some(status), http_status),
             LlmContinuationOutcomeV2::Failure {
-                error: LlmContinuationFailureV2::NonHttp { failure },
-            } => assert_eq!(Some(failure.kind), non_http_kind),
+                error: LlmContinuationFailureV2::NonHttp { kind, .. },
+            } => assert_eq!(Some(kind), non_http_kind),
             other => panic!("unexpected continuation outcome: {other:?}"),
         }
         unsafe { native_async_next_release(next_ref) };
@@ -3556,10 +3988,8 @@ fn native_api_v2_unary_entrypoint_reports_validation_panics_and_typed_failures()
         runtime.block_on(receiver).unwrap(),
         LlmContinuationOutcomeV2::Failure {
             error: LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind: LlmNonHttpFailureKindV2::Internal,
-                    ..
-                }
+                kind: LlmNonHttpFailureKindV2::Internal,
+                ..
             }
         }
     ));
@@ -3734,10 +4164,8 @@ fn native_api_v2_stream_open_reports_validation_setup_and_provider_failures() {
     assert!(matches!(
         runtime.block_on(open_receiver).unwrap(),
         Err(LlmContinuationFailureV2::NonHttp {
-            failure: LlmNonHttpFailureV2 {
-                kind: LlmNonHttpFailureKindV2::Internal,
-                ..
-            }
+            kind: LlmNonHttpFailureKindV2::Internal,
+            ..
         })
     ));
     drop(panic_receiver);
@@ -3842,17 +4270,17 @@ fn native_api_v2_stream_forwarding_validates_handles_and_contains_panics() {
     drop(receiver);
 
     let (settled, _receiver) = test_native_output_stream(1);
-    assert!(finish_forwarded_native_stream(&settled));
-    assert!(!finish_forwarded_native_stream(&settled));
+    finish_forwarded_native_stream(&settled);
+    finish_forwarded_native_stream(&settled);
     assert!(
         runtime
             .block_on(push_forwarded_native_stream_chunk(&settled, Json::Null))
             .is_err()
     );
-    assert!(!runtime.block_on(reject_forwarded_native_stream(
+    runtime.block_on(reject_forwarded_native_stream(
         &settled,
         FlowError::Internal("late".into()),
-    )));
+    ));
 
     let panicking = Arc::new(NativeAsyncNext::new(
         NativeAsyncNextInner::LlmStream(Arc::new(|_| {
@@ -3912,7 +4340,7 @@ fn native_api_v2_stream_forwarding_validates_handles_and_contains_panics() {
 }
 
 #[test]
-fn native_api_v2_provider_stream_reports_closed_and_cancelled_states() {
+fn native_api_v2_provider_stream_reports_terminal_and_release_states() {
     assert_eq!(
         unsafe {
             native_async_llm_stream_next_v2(
@@ -3923,25 +4351,14 @@ fn native_api_v2_provider_stream_reports_closed_and_cancelled_states() {
         },
         NemoRelayStatus::NullPointer
     );
-    assert_eq!(
-        unsafe { native_async_llm_stream_cancel_v2(ptr::null()) },
-        NemoRelayStatus::NullPointer
-    );
+    unsafe { native_async_llm_stream_release_v2(ptr::null()) };
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    drop(sender);
-    let stream = Arc::new(NativeLlmProviderStreamV2 {
-        receiver: tokio::sync::Mutex::new(receiver),
-        producer_abort: Mutex::new(None),
-        runtime: runtime.handle().clone(),
-        next_in_flight: AtomicBool::new(false),
-        cancelled: AtomicBool::new(false),
-        _library_guard: None,
-    });
+    let (stream, _output_receiver) =
+        test_native_provider_stream(&runtime, LlmJsonStream::new(tokio_stream::empty()));
     let stream_ref = Arc::into_raw(stream) as *const NemoRelayNativeLlmStreamV2;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     assert_eq!(
@@ -3956,19 +4373,8 @@ fn native_api_v2_provider_stream_reports_closed_and_cancelled_states() {
     );
     assert!(matches!(
         runtime.block_on(receiver).unwrap(),
-        LlmContinuationStreamEventV2::Failure {
-            error: LlmContinuationFailureV2::NonHttp {
-                failure: LlmNonHttpFailureV2 {
-                    kind: LlmNonHttpFailureKindV2::Cancelled,
-                    ..
-                }
-            }
-        }
+        LlmContinuationStreamEventV2::Done
     ));
-    assert_eq!(
-        unsafe { native_async_llm_stream_cancel_v2(stream_ref) },
-        NemoRelayStatus::Ok
-    );
     let callback_state = Box::into_raw(Box::new(
         tokio::sync::oneshot::channel::<LlmContinuationStreamEventV2>().0,
     ));
@@ -3982,12 +4388,32 @@ fn native_api_v2_provider_stream_reports_closed_and_cancelled_states() {
         },
         NemoRelayStatus::InvalidArg
     );
-    assert_last_error_contains("cancelled");
+    assert_last_error_contains("terminal");
     unsafe {
         drop(Box::from_raw(callback_state));
         native_async_llm_stream_release_v2(stream_ref);
-        native_async_llm_stream_release_v2(ptr::null());
     }
+
+    struct StreamDropSignal(std::sync::mpsc::Sender<()>);
+
+    impl Drop for StreamDropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+    let drop_signal = StreamDropSignal(dropped_tx);
+    let never_polled = LlmJsonStream::new(futures_util::stream::poll_fn(move |_| {
+        let _ = &drop_signal;
+        std::task::Poll::Pending
+    }));
+    let (stream, _output_receiver) = test_native_provider_stream(&runtime, never_polled);
+    let stream_ref = Arc::into_raw(stream) as *const NemoRelayNativeLlmStreamV2;
+    unsafe { native_async_llm_stream_release_v2(stream_ref) };
+    dropped_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("release before first next should drop the provider stream");
 }
 
 #[test]
@@ -4463,7 +4889,6 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                                 runtime: native_runtime().handle().clone(),
                                 context: MiddlewareContinuationContext::capture(),
                                 task: Mutex::new(None),
-                                backpressure_waiter: Mutex::new(None),
                                 sender: Mutex::new(Some(sender)),
                                 cancelled: AtomicBool::new(false),
                                 settled: AtomicBool::new(false),
@@ -4696,7 +5121,6 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -4863,7 +5287,6 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(true),
         settled: AtomicBool::new(false),
@@ -4980,7 +5403,6 @@ fn native_async_stream_next_supports_repeated_concurrent_calls() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -5100,7 +5522,6 @@ fn native_async_stream_settlement_rejects_late_next_and_aborts_in_flight_next() 
             runtime: native_runtime().handle().clone(),
             context: MiddlewareContinuationContext::capture(),
             task: Mutex::new(None),
-            backpressure_waiter: Mutex::new(None),
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
@@ -5224,7 +5645,6 @@ fn native_async_stream_next_stops_callbacks_after_false() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -5301,7 +5721,6 @@ fn native_async_stream_in_flight_cancellation_releases_callback_state() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -5386,7 +5805,6 @@ fn native_async_stream_cancellation_before_first_poll_releases_callback_state() 
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -5593,7 +6011,6 @@ fn native_async_task_cancellation_reclaims_never_woken_completion_and_stream_tas
         runtime: runtime.handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -5783,7 +6200,6 @@ fn native_async_task_stream_backpressure_wakes_after_consumer_drain() {
         runtime: runtime.handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -6330,7 +6746,6 @@ fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
             runtime: native_runtime().handle().clone(),
             context: MiddlewareContinuationContext::capture(),
             task: Mutex::new(None),
-            backpressure_waiter: Mutex::new(None),
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
@@ -6392,7 +6807,7 @@ fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
 }
 
 #[test]
-fn native_async_stream_push_is_bounded_retryable_and_incremental() {
+fn native_async_stream_backpressure_preserves_v3_internal_and_v4_would_block() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -6402,7 +6817,6 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
         runtime: native_runtime().handle().clone(),
         context: MiddlewareContinuationContext::capture(),
         task: Mutex::new(None),
-        backpressure_waiter: Mutex::new(None),
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -6414,15 +6828,21 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
     let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
     let first_chunk = native_string(r#"{"chunk":1}"#);
     let second_chunk = native_string(r#"{"chunk":2}"#);
+    let host_v3 = build_native_host_api_v3();
+    let host_v4 = build_native_host_api_v4();
     assert_eq!(
-        unsafe { native_async_stream_push_json(stream_ref, first_chunk) },
+        unsafe { (host_v3.async_stream_push_json)(stream_ref, first_chunk) },
         NemoRelayStatus::Ok
     );
     assert_eq!(
-        unsafe { native_async_stream_push_json(stream_ref, second_chunk) },
+        unsafe { (host_v3.async_stream_push_json)(stream_ref, second_chunk) },
         NemoRelayStatus::Internal
     );
     assert_last_error_contains("backpressured");
+    assert_eq!(
+        unsafe { (host_v4.v3.async_stream_push_json)(stream_ref, second_chunk) },
+        NemoRelayStatus::WouldBlock
+    );
     let mut receiver = NativeAsyncStreamReceiver {
         receiver,
         stream: Arc::clone(&stream),
@@ -6432,7 +6852,7 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
         json!({"chunk": 1})
     );
     assert_eq!(
-        unsafe { native_async_stream_push_json(stream_ref, second_chunk) },
+        unsafe { (host_v4.v3.async_stream_push_json)(stream_ref, second_chunk) },
         NemoRelayStatus::Ok
     );
     assert_eq!(
@@ -6453,6 +6873,50 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
     unsafe {
         native_string_free(first_chunk);
         native_string_free(second_chunk);
+        native_async_stream_release(stream_ref);
+    }
+
+    let (stream, receiver) = test_native_output_stream(1);
+    let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
+    let chunk = native_string(r#"{"chunk":1}"#);
+    let message = native_string("provider failed");
+    assert_eq!(
+        unsafe { (host_v3.async_stream_push_json)(stream_ref, chunk) },
+        NemoRelayStatus::Ok
+    );
+    assert_eq!(
+        unsafe { (host_v3.async_stream_reject)(stream_ref, message) },
+        NemoRelayStatus::Internal
+    );
+    assert_eq!(
+        unsafe { (host_v4.v3.async_stream_reject)(stream_ref, message) },
+        NemoRelayStatus::WouldBlock
+    );
+    let mut receiver = NativeAsyncStreamReceiver {
+        receiver,
+        stream: Arc::clone(&stream),
+    };
+    assert_eq!(
+        runtime.block_on(receiver.next()).unwrap().unwrap(),
+        json!({"chunk": 1})
+    );
+    assert_eq!(
+        unsafe { (host_v4.v3.async_stream_reject)(stream_ref, message) },
+        NemoRelayStatus::Ok
+    );
+    assert!(
+        runtime
+            .block_on(receiver.next())
+            .expect("rejection should be emitted")
+            .unwrap_err()
+            .to_string()
+            .contains("provider failed")
+    );
+    assert!(runtime.block_on(receiver.next()).is_none());
+    drop(receiver);
+    unsafe {
+        native_string_free(chunk);
+        native_string_free(message);
         native_async_stream_release(stream_ref);
     }
 }

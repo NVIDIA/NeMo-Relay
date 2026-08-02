@@ -128,3 +128,36 @@ fn upstream_failures_classify_retryability_and_render_status() {
     assert!(!rejected.is_retryable());
     assert!(rejected.to_string().contains("transport failure"));
 }
+
+#[test]
+fn upstream_failure_sanitization_bounds_data_and_keeps_only_safe_headers() {
+    use std::collections::BTreeMap;
+
+    let failure = sanitize_upstream_failure(UpstreamFailure {
+        status: Some(429),
+        body: "é".repeat(MAX_UPSTREAM_FAILURE_BODY_BYTES),
+        headers: BTreeMap::from([
+            ("Retry-After".into(), "2".into()),
+            ("Authorization".into(), "Bearer secret".into()),
+            (
+                "X-Request-Id".into(),
+                format!(
+                    "{}é",
+                    "x".repeat(MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES - 1)
+                ),
+            ),
+        ]),
+        class: UpstreamFailureClass::RetryableStatus,
+    });
+
+    assert_eq!(failure.body.len(), MAX_UPSTREAM_FAILURE_BODY_BYTES);
+    assert_eq!(
+        failure.headers.get("retry-after").map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        failure.headers.get("x-request-id").map(String::len),
+        Some(MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES - 1)
+    );
+    assert!(!failure.headers.contains_key("authorization"));
+}

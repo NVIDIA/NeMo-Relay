@@ -12,6 +12,56 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub(crate) const MAX_UPSTREAM_FAILURE_BODY_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES: usize = 1024;
+
+pub(crate) fn bounded_utf8(value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value[..boundary].to_owned()
+}
+
+pub(crate) fn sanitize_upstream_failure_headers(
+    headers: impl IntoIterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
+    headers
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let normalized = name.to_ascii_lowercase();
+            matches!(
+                normalized.as_str(),
+                "retry-after"
+                    | "request-id"
+                    | "traceparent"
+                    | "x-request-id"
+                    | "x-ratelimit-limit"
+                    | "x-ratelimit-remaining"
+                    | "x-ratelimit-reset"
+                    | "ratelimit-limit"
+                    | "ratelimit-remaining"
+                    | "ratelimit-reset"
+            )
+            .then(|| {
+                (
+                    normalized,
+                    bounded_utf8(value, MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES),
+                )
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn sanitize_upstream_failure(mut failure: UpstreamFailure) -> UpstreamFailure {
+    failure.body = bounded_utf8(failure.body, MAX_UPSTREAM_FAILURE_BODY_BYTES);
+    failure.headers = sanitize_upstream_failure_headers(failure.headers);
+    failure
+}
+
 /// Stable classification for an upstream provider failure captured by managed dispatch.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

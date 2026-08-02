@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +11,12 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde_json::{Map, json};
+
+use crate::api::llm::{
+    LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
+};
+use crate::api::runtime::{MiddlewareContinuationContext, NemoRelayContextState, global_context};
+use crate::error::{FlowError, MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES, bounded_utf8};
 
 use super::*;
 
@@ -131,8 +138,7 @@ fn response(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
 }
 
 fn target(url: String, headers: BTreeMap<String, String>) -> LlmDispatchTargetContext {
-    LlmDispatchTargetContext::try_new("POST".into(), url, headers)
-        .expect("test target should be valid")
+    LlmDispatchTargetContext::try_new(url, headers).expect("test target should be valid")
 }
 
 fn request() -> LlmRequest {
@@ -146,6 +152,15 @@ fn request() -> LlmRequest {
         ]),
         content: json!({"model": "selected", "prompt": "hello"}),
     }
+}
+
+async fn scope_test_target<F: Future>(target: LlmDispatchTargetContext, future: F) -> F::Output {
+    let event_uuid = uuid::Uuid::now_v7();
+    crate::api::runtime::with_active_event_uuid(
+        event_uuid,
+        scope_llm_dispatch_target(Some(event_uuid), target, future),
+    )
+    .await
 }
 
 #[tokio::test]
@@ -180,7 +195,7 @@ async fn buffered_target_runs_after_downstream_middleware_and_ignores_host_callb
         terminal(request)
     });
 
-    let result = scope_llm_dispatch_target(target, downstream(request()))
+    let result = scope_test_target(target, downstream(request()))
         .await
         .expect("targeted request should succeed");
 
@@ -198,7 +213,7 @@ async fn buffered_target_runs_after_downstream_middleware_and_ignores_host_callb
 
 #[tokio::test]
 async fn buffered_http_failure_is_bounded_and_filters_headers() {
-    let body = vec![b'x'; MAX_UPSTREAM_ERROR_BODY_BYTES + 1024];
+    let body = vec![b'x'; MAX_UPSTREAM_FAILURE_BODY_BYTES + 1024];
     let provider = FakeProvider::spawn(response(
         "429 Too Many Requests",
         &[
@@ -217,7 +232,7 @@ async fn buffered_http_failure_is_bounded_and_filters_headers() {
     };
     assert_eq!(failure.status, Some(429));
     assert_eq!(failure.class, UpstreamFailureClass::RetryableStatus);
-    assert_eq!(failure.body.len(), MAX_UPSTREAM_ERROR_BODY_BYTES);
+    assert_eq!(failure.body.len(), MAX_UPSTREAM_FAILURE_BODY_BYTES);
     assert_eq!(
         failure.headers.get("retry-after").map(String::as_str),
         Some("2")
@@ -287,7 +302,7 @@ async fn streaming_target_decodes_events_empty_streams_and_late_errors() {
         Box::pin(async { Ok(LlmJsonStream::new(futures_util::stream::empty())) })
     }));
     let stream_target = target(provider.url.clone(), BTreeMap::new());
-    let mut stream = scope_llm_dispatch_target(stream_target, terminal(request()))
+    let mut stream = scope_test_target(stream_target, terminal(request()))
         .await
         .expect("stream should open");
     assert_eq!(
@@ -337,21 +352,14 @@ async fn streaming_target_decodes_events_empty_streams_and_late_errors() {
 
 #[test]
 fn target_validation_rejects_unsafe_transport_inputs() {
-    for (method, url, headers) in [
-        ("TRACE", "https://provider.example/v1", BTreeMap::new()),
-        ("POST", "ftp://provider.example/v1", BTreeMap::new()),
+    for (url, headers) in [
+        ("ftp://provider.example/v1", BTreeMap::new()),
+        ("https://user:secret@provider.example/v1", BTreeMap::new()),
         (
-            "POST",
-            "https://user:secret@provider.example/v1",
-            BTreeMap::new(),
-        ),
-        (
-            "POST",
             "https://provider.example/v1",
             BTreeMap::from([("host".into(), "attacker.invalid".into())]),
         ),
         (
-            "POST",
             "https://provider.example/v1",
             BTreeMap::from([(
                 "x-nemo-relay-internal-dispatch-url".into(),
@@ -359,7 +367,6 @@ fn target_validation_rejects_unsafe_transport_inputs() {
             )]),
         ),
         (
-            "POST",
             "https://provider.example/v1",
             BTreeMap::from([
                 ("Authorization".into(), "Bearer first".into()),
@@ -367,25 +374,13 @@ fn target_validation_rejects_unsafe_transport_inputs() {
             ]),
         ),
     ] {
-        assert!(LlmDispatchTargetContext::try_new(method.into(), url.into(), headers,).is_err());
+        assert!(LlmDispatchTargetContext::try_new(url.into(), headers).is_err());
     }
 }
 
 #[test]
-fn target_validation_reports_malformed_method_and_headers() {
+fn target_validation_reports_malformed_headers() {
     let error = LlmDispatchTargetContext::try_new(
-        "P OST".into(),
-        "https://provider.example/v1".into(),
-        BTreeMap::new(),
-    )
-    .expect_err("method token containing a space should be rejected");
-    let FlowError::InvalidArgument(message) = error else {
-        panic!("expected invalid method argument");
-    };
-    assert_eq!(message, "LLM continuation method was invalid or prohibited");
-
-    let error = LlmDispatchTargetContext::try_new(
-        "POST".into(),
         "https://provider.example/v1".into(),
         BTreeMap::from([("bad header".into(), "value".into())]),
     )
@@ -399,7 +394,6 @@ fn target_validation_reports_malformed_method_and_headers() {
     );
 
     let error = LlmDispatchTargetContext::try_new(
-        "POST".into(),
         "https://provider.example/v1".into(),
         BTreeMap::from([("x-target".into(), "line one\nline two".into())]),
     )
@@ -415,14 +409,14 @@ fn target_validation_reports_malformed_method_and_headers() {
 
 #[test]
 fn bounded_utf8_truncates_long_multibyte_value_at_character_boundary() {
-    let expected = "a".repeat(MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES - 1);
+    let expected = "a".repeat(MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES - 1);
     let value = format!("{expected}\u{e9}");
-    assert_eq!(value.len(), MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES + 1);
+    assert_eq!(value.len(), MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES + 1);
 
-    let bounded = bounded_utf8(value, MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES);
+    let bounded = bounded_utf8(value, MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES);
 
     assert_eq!(bounded, expected);
-    assert_eq!(bounded.len(), MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES - 1);
+    assert_eq!(bounded.len(), MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES - 1);
 }
 
 #[tokio::test]
@@ -441,7 +435,7 @@ async fn transport_failures_do_not_fall_back_to_the_host_callback() {
         BTreeMap::new(),
     );
 
-    let error = scope_llm_dispatch_target(target, terminal(request()))
+    let error = scope_test_target(target, terminal(request()))
         .await
         .expect_err("connection should fail");
     let FlowError::Upstream(failure) = error else {
@@ -451,4 +445,110 @@ async fn transport_failures_do_not_fall_back_to_the_host_callback() {
     assert_eq!(failure.class, UpstreamFailureClass::Connection);
     assert!(!failure.body.contains("transport-secret"));
     assert!(!fallback_called.load(Ordering::SeqCst));
+}
+
+#[test]
+fn nested_buffered_managed_call_does_not_inherit_outer_target() {
+    let _guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    *global_context()
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = NemoRelayContextState::new();
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let target = target("http://127.0.0.1:9/v1/messages".into(), BTreeMap::new());
+        let context = crate::api::runtime::with_active_event_uuid(uuid::Uuid::now_v7(), async {
+            MiddlewareContinuationContext::capture()
+        })
+        .await;
+        let fallback_called = Arc::new(AtomicBool::new(false));
+        let fallback_called_for_fn = Arc::clone(&fallback_called);
+
+        let response = context
+            .invoke_with_llm_dispatch_target(target, || async move {
+                assert!(current_llm_dispatch_target().is_some());
+                let response = Box::pin(llm_call_execute(
+                    LlmCallExecuteParams::builder()
+                        .name("nested-buffered")
+                        .request(request())
+                        .func(Arc::new(move |_| {
+                            assert!(current_llm_dispatch_target().is_none());
+                            fallback_called_for_fn.store(true, Ordering::SeqCst);
+                            Box::pin(async { Ok(json!({"provider": "ordinary"})) })
+                        }))
+                        .build(),
+                ))
+                .await?;
+                assert!(current_llm_dispatch_target().is_some());
+                Ok::<_, FlowError>(response)
+            })
+            .await
+            .expect("nested ordinary call should use its own provider callback");
+
+        assert_eq!(response, json!({"provider": "ordinary"}));
+        assert!(fallback_called.load(Ordering::SeqCst));
+    });
+}
+
+#[test]
+fn nested_streaming_managed_call_isolated_during_lazy_polling() {
+    let _guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    *global_context()
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = NemoRelayContextState::new();
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let target = target("http://127.0.0.1:9/v1/messages".into(), BTreeMap::new());
+        let context = crate::api::runtime::with_active_event_uuid(uuid::Uuid::now_v7(), async {
+            MiddlewareContinuationContext::capture()
+        })
+        .await;
+        let provider_opened = Arc::new(AtomicBool::new(false));
+        let provider_opened_for_fn = Arc::clone(&provider_opened);
+        let provider_polled = Arc::new(AtomicBool::new(false));
+        let provider_polled_for_fn = Arc::clone(&provider_polled);
+
+        let chunk = context
+            .invoke_with_llm_dispatch_target(target, || async move {
+                assert!(current_llm_dispatch_target().is_some());
+                let mut stream = Box::pin(llm_stream_call_execute(
+                    LlmStreamCallExecuteParams::builder()
+                        .name("nested-streaming")
+                        .request(request())
+                        .func(Arc::new(move |_| {
+                            assert!(current_llm_dispatch_target().is_none());
+                            provider_opened_for_fn.store(true, Ordering::SeqCst);
+                            let provider_polled = Arc::clone(&provider_polled_for_fn);
+                            Box::pin(async move {
+                                Ok(LlmJsonStream::new(futures_util::stream::once(async move {
+                                    assert!(current_llm_dispatch_target().is_none());
+                                    provider_polled.store(true, Ordering::SeqCst);
+                                    Ok(json!({"delta": "ordinary"}))
+                                })))
+                            })
+                        }))
+                        .collector(Box::new(|_| Ok(())))
+                        .finalizer(Box::new(|| json!({"done": true})))
+                        .build(),
+                ))
+                .await?;
+                assert!(current_llm_dispatch_target().is_some());
+                let chunk = stream.next().await.expect("nested stream should emit")?;
+                assert!(current_llm_dispatch_target().is_some());
+                assert!(stream.next().await.is_none());
+                assert!(current_llm_dispatch_target().is_some());
+                Ok::<_, FlowError>(chunk)
+            })
+            .await
+            .expect("nested ordinary stream should use its own provider callback");
+
+        assert_eq!(chunk, json!({"delta": "ordinary"}));
+        assert!(provider_opened.load(Ordering::SeqCst));
+        assert!(provider_polled.load(Ordering::SeqCst));
+    });
 }

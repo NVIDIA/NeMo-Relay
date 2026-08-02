@@ -12,22 +12,31 @@ use std::time::Duration;
 use async_stream::stream;
 use futures_util::StreamExt;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
-use reqwest::{Client, Method, StatusCode, Url};
+use reqwest::{Client, StatusCode, Url};
 
 use crate::api::llm::LlmRequest;
+use crate::api::runtime::scope_stack::active_event_uuid;
 use crate::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
 use crate::codec::streaming::SseEventDecoder;
-use crate::error::{FlowError, Result, UpstreamFailure, UpstreamFailureClass};
+use crate::error::{
+    FlowError, MAX_UPSTREAM_FAILURE_BODY_BYTES, Result, UpstreamFailure, UpstreamFailureClass,
+    sanitize_upstream_failure_headers,
+};
 use crate::json::Json;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
-const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 16 * 1024;
-const MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES: usize = 1024;
-
 tokio::task_local! {
-    static TASK_LLM_DISPATCH_TARGET: LlmDispatchTargetContext;
+    static TASK_LLM_DISPATCH_TARGET: LlmDispatchTargetBinding;
+}
+
+#[derive(Clone)]
+struct LlmDispatchTargetBinding {
+    // The active LLM event identifies the exact managed continuation chain.
+    // Nested managed calls install their own event UUID and cannot consume it.
+    active_event_uuid: Option<uuid::Uuid>,
+    target: LlmDispatchTargetContext,
 }
 
 /// Validated provider transport target bound to one LLM continuation invocation.
@@ -37,26 +46,13 @@ tokio::task_local! {
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct LlmDispatchTargetContext {
-    method: Method,
     url: Url,
     headers: HeaderMap,
 }
 
 impl LlmDispatchTargetContext {
     /// Validate and construct a target for one continuation invocation.
-    pub(crate) fn try_new(
-        method: String,
-        url: String,
-        headers: BTreeMap<String, String>,
-    ) -> Result<Self> {
-        let method = Method::from_bytes(method.as_bytes()).map_err(|_| {
-            FlowError::InvalidArgument("LLM continuation method was invalid or prohibited".into())
-        })?;
-        if matches!(method, Method::CONNECT | Method::TRACE) {
-            return Err(FlowError::InvalidArgument(
-                "LLM continuation method was invalid or prohibited".into(),
-            ));
-        }
+    pub(crate) fn try_new(url: String, headers: BTreeMap<String, String>) -> Result<Self> {
         let url = Url::parse(&url).map_err(|_| invalid_target_url())?;
         if !matches!(url.scheme(), "http" | "https")
             || !url.has_host()
@@ -93,17 +89,9 @@ impl LlmDispatchTargetContext {
             .entry(header::CONTENT_TYPE)
             .or_insert(HeaderValue::from_static("application/json"));
         Ok(Self {
-            method,
             url,
             headers: validated_headers,
         })
-    }
-
-    /// HTTP method selected for this invocation.
-    #[doc(hidden)]
-    #[must_use]
-    pub(crate) fn method(&self) -> &Method {
-        &self.method
     }
 
     /// Absolute provider URL selected for this invocation.
@@ -128,7 +116,6 @@ impl fmt::Debug for LlmDispatchTargetContext {
         redacted_url.set_fragment(None);
         formatter
             .debug_struct("LlmDispatchTargetContext")
-            .field("method", &self.method)
             .field("url", &redacted_url)
             .field(
                 "header_names",
@@ -166,15 +153,29 @@ fn prohibited_target_header(name: &HeaderName) -> bool {
 }
 
 pub(crate) fn current_llm_dispatch_target() -> Option<LlmDispatchTargetContext> {
-    TASK_LLM_DISPATCH_TARGET.try_with(Clone::clone).ok()
+    TASK_LLM_DISPATCH_TARGET
+        .try_with(|binding| {
+            (binding.active_event_uuid == active_event_uuid()).then(|| binding.target.clone())
+        })
+        .ok()
+        .flatten()
 }
 
 /// Poll a future with one typed target bound to its continuation invocation.
 pub(crate) async fn scope_llm_dispatch_target<F: Future>(
+    event_uuid: Option<uuid::Uuid>,
     target: LlmDispatchTargetContext,
     future: F,
 ) -> F::Output {
-    TASK_LLM_DISPATCH_TARGET.scope(target, future).await
+    TASK_LLM_DISPATCH_TARGET
+        .scope(
+            LlmDispatchTargetBinding {
+                active_event_uuid: event_uuid,
+                target,
+            },
+            future,
+        )
+        .await
 }
 
 /// Wrap a host callback with core-owned targeted dispatch at the terminal step.
@@ -270,9 +271,7 @@ async fn send(
 ) -> Result<reqwest::Response> {
     let body = serde_json::to_vec(&request.content)
         .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
-    let mut outbound = targeted_http_client()
-        .request(target.method().clone(), target.url().clone())
-        .body(body);
+    let mut outbound = targeted_http_client().post(target.url().clone()).body(body);
     for (name, value) in target.headers() {
         outbound = outbound.header(name, value);
     }
@@ -303,12 +302,12 @@ async fn bounded_response_body(
 ) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
-    while body.len() < MAX_UPSTREAM_ERROR_BODY_BYTES {
+    while body.len() < MAX_UPSTREAM_FAILURE_BODY_BYTES {
         let Some(chunk) = stream.next().await else {
             break;
         };
         let chunk = chunk.map_err(|error| transport_error(target, error))?;
-        let remaining = MAX_UPSTREAM_ERROR_BODY_BYTES - body.len();
+        let remaining = MAX_UPSTREAM_FAILURE_BODY_BYTES - body.len();
         body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
     }
     Ok(body)
@@ -341,7 +340,7 @@ fn transport_error(target: &LlmDispatchTargetContext, error: reqwest::Error) -> 
 }
 
 fn http_error(status: StatusCode, headers: BTreeMap<String, String>, body: &[u8]) -> FlowError {
-    let body = String::from_utf8_lossy(&body[..body.len().min(MAX_UPSTREAM_ERROR_BODY_BYTES)]);
+    let body = String::from_utf8_lossy(&body[..body.len().min(MAX_UPSTREAM_FAILURE_BODY_BYTES)]);
     FlowError::Upstream(UpstreamFailure {
         status: Some(status.as_u16()),
         body: body.into_owned(),
@@ -355,45 +354,12 @@ fn http_error(status: StatusCode, headers: BTreeMap<String, String>, body: &[u8]
 }
 
 fn safe_failure_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| {
-            let name = name.as_str();
-            matches!(
-                name,
-                "retry-after"
-                    | "request-id"
-                    | "traceparent"
-                    | "x-request-id"
-                    | "x-ratelimit-limit"
-                    | "x-ratelimit-remaining"
-                    | "x-ratelimit-reset"
-                    | "ratelimit-limit"
-                    | "ratelimit-remaining"
-                    | "ratelimit-reset"
-            )
-            .then(|| {
-                (
-                    name.to_owned(),
-                    bounded_utf8(
-                        String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                        MAX_UPSTREAM_ERROR_HEADER_VALUE_BYTES,
-                    ),
-                )
-            })
-        })
-        .collect()
-}
-
-fn bounded_utf8(value: String, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value;
-    }
-    let mut boundary = max_bytes;
-    while !value.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    value[..boundary].to_owned()
+    sanitize_upstream_failure_headers(headers.iter().map(|(name, value)| {
+        (
+            name.as_str().to_owned(),
+            String::from_utf8_lossy(value.as_bytes()).into_owned(),
+        )
+    }))
 }
 
 #[cfg(test)]

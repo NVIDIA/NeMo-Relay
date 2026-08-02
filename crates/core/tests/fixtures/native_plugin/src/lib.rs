@@ -12,11 +12,11 @@ use nemo_relay_plugin::{
     Json, LlmContinuationInvocationV2, LlmContinuationTargetV2, LlmContinuationV2,
     LlmJsonAsyncStreamV2, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome,
     LlmStreamExecutionOutcomeV2, NativePlugin, NemoRelayNativeAsyncCallbackState,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind,
-    NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1,
-    NemoRelayNativeHostApiV3, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec,
-    PluginContext, PluginRuntime, ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
+    NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString,
+    NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime,
+    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 
@@ -433,7 +433,6 @@ fn targeted_fixture_invocation(url: String, request: LlmRequest) -> LlmContinuat
     LlmContinuationInvocationV2 {
         request,
         target: LlmContinuationTargetV2 {
-            method: "POST".into(),
             url,
             headers: std::collections::BTreeMap::from([(
                 "authorization".into(),
