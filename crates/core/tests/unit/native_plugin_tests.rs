@@ -377,7 +377,8 @@ fn assert_native_compatibility_edges() {
     assert!(validate_relay_compatibility(Some(" ")).is_err());
     assert!(validate_relay_compatibility(Some("not a requirement")).is_err());
     assert!(validate_relay_compatibility(Some(">=999.0.0")).is_err());
-    assert!(validate_relay_compatibility(Some("^0.7")).is_ok());
+    let host_requirement = format!("={}", env!("CARGO_PKG_VERSION"));
+    assert!(validate_relay_compatibility(Some(&host_requirement)).is_ok());
 }
 
 fn assert_native_descriptor_edges() {
