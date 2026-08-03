@@ -53,15 +53,12 @@ pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
 
 // Dispatches CLI subcommands while keeping the no-subcommand path as server mode. `run` inherits
 // top-level server flags so transparent launch can share config parsing with daemon startup.
-fn configure_logging(
-    cli: &Cli,
-) -> Result<
-    (
-        Option<nemo_relay::logging::LoggingRuntime>,
-        Option<error::CliError>,
-    ),
-    error::CliError,
-> {
+struct LoggingSetup {
+    _runtime: Option<nemo_relay::logging::LoggingRuntime>,
+    fallback_error: Option<error::CliError>,
+}
+
+fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
     let initialize = match cli.command.as_ref() {
         Some(command) => !command.skips_logging(),
         None => {
@@ -70,7 +67,10 @@ fn configure_logging(
         }
     };
     if !initialize {
-        return Ok((None, None));
+        return Ok(LoggingSetup {
+            _runtime: None,
+            fallback_error: None,
+        });
     }
 
     let user_only = matches!(cli.command.as_ref(), Some(Command::Mcp));
@@ -99,7 +99,10 @@ fn configure_logging(
             "Doctor fell back to default logging after resolution failure"
         );
     }
-    Ok((Some(runtime), fallback_error))
+    Ok(LoggingSetup {
+        _runtime: Some(runtime),
+        fallback_error,
+    })
 }
 
 async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {
@@ -110,7 +113,7 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
         .map(Command::log_name)
         .unwrap_or("default");
 
-    let (_logging, logging_fallback_error) = configure_logging(&cli)?;
+    let logging = configure_logging(&cli)?;
 
     log::info!(
         target: "nemo_relay.cli",
@@ -120,7 +123,7 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
     );
 
     let result = match cli.command {
-        Some(command) => run_command(command, &cli.server, logging_fallback_error.as_ref()).await,
+        Some(command) => run_command(command, &cli.server, logging.fallback_error.as_ref()).await,
         None => run_default(&cli.server, bootstrap_shutdown_token).await,
     };
     match &result {
