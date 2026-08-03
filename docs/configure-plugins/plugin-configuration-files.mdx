@@ -319,10 +319,16 @@ The effective Agent Trajectory Observability Format (ATOF) configuration keeps
 `version` and `enabled` from the user file. Its `sinks` list contains the system
 sink first, followed by the user sink.
 
-The top-level `components` array is special. Relay matches components by `kind`
-across files. A higher-precedence component with the same `kind` merges into the
-lower-precedence component. Relay adds a component with a different `kind` to
-the effective configuration.
+The top-level `components` array is special. Relay matches enabled components
+by `kind` across files. A higher-precedence component with the same `kind`
+merges into the lower-precedence component. Relay adds a component with a
+different `kind` to the effective configuration.
+
+A component entry that explicitly sets `enabled = false` is skipped before
+matching and merging. It does not change a lower-precedence component's enabled
+state or contribute any `config` fields or list entries. If every layer for a
+component kind sets `enabled = false`, that kind is absent from the effective
+configuration.
 
 This behavior applies to list fields declared at the top level of a component's
 `config`. It also applies to the observability destination lists

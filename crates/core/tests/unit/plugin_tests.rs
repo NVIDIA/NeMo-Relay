@@ -2259,8 +2259,8 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     assert_eq!(observability["kind"], json!("observability"));
     assert_eq!(
         observability["enabled"],
-        json!(false),
-        "the system layer wins shared scalar fields"
+        json!(true),
+        "a disabled system component does not override lower layers"
     );
     assert_eq!(
         observability["config"]["output_directory"],
@@ -2269,13 +2269,13 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     );
     assert_eq!(
         observability["config"]["mode"],
-        json!("system"),
-        "the system layer wins recursively merged config fields"
+        json!("project"),
+        "a disabled system component does not contribute configuration"
     );
     assert_eq!(
         observability["config"]["values"],
-        json!(["system", "project", "lower"]),
-        "list entries aggregate from highest to lowest precedence"
+        json!(["project", "lower"]),
+        "a disabled system component does not contribute list entries"
     );
     assert_eq!(
         components[1]["kind"],
@@ -2287,6 +2287,34 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
         json!("system_only"),
         "a system-only component kind is appended"
     );
+}
+
+#[test]
+fn test_load_plugin_config_files_omits_components_disabled_in_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let lower = dir.path().join("lower.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &lower,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &higher,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+
+    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
+        .unwrap()
+        .expect("the files exist");
+
+    assert_eq!(sources, vec![lower, higher]);
+    assert_eq!(merged["components"], json!([]));
 }
 
 #[test]
@@ -2470,7 +2498,13 @@ fn test_programmatic_enable_override_diagnostic_matches_positionally_and_names_s
             { "kind": "observability", "enabled": false }
         ]
     });
-    let enabled_sources = HashMap::from([("observability".to_string(), source.clone())]);
+    let enabled_sources = HashMap::from([(
+        "observability".to_string(),
+        ComponentEnabledSource {
+            enabled: false,
+            path: source.clone(),
+        },
+    )]);
     let programmatic = PluginConfig {
         components: vec![
             PluginComponentSpec::new("observability"),
@@ -2492,6 +2526,39 @@ fn test_programmatic_enable_override_diagnostic_matches_positionally_and_names_s
         diagnostic.message.contains(&source.display().to_string()),
         "{}",
         diagnostic.message
+    );
+}
+
+#[test]
+fn test_programmatic_reenable_diagnostic_survives_disabled_component_normalization() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let documents = vec![(
+        source.clone(),
+        json!({
+            "components": [{ "kind": "observability", "enabled": false }]
+        }),
+    )];
+    let enabled_sources = component_enabled_sources(&documents);
+    let (discovered, _) = merge_plugin_config_documents(documents)
+        .unwrap()
+        .expect("the file-backed configuration exists");
+    assert_eq!(discovered["components"], json!([]));
+
+    let diagnostics = programmatic_enable_override_diagnostics(
+        &discovered,
+        &enabled_sources,
+        &PluginConfig {
+            components: vec![PluginComponentSpec::new("observability")],
+            ..PluginConfig::default()
+        },
+    );
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "plugin.component_reenabled");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains(&source.display().to_string())
     );
 }
 

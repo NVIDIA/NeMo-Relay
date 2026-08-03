@@ -1715,7 +1715,12 @@ fn resolve_default_file_plugin_config() -> Result<DiscoveredPluginConfig> {
 
 struct DiscoveredPluginConfig {
     value: Json,
-    enabled_sources: HashMap<String, PathBuf>,
+    enabled_sources: HashMap<String, ComponentEnabledSource>,
+}
+
+struct ComponentEnabledSource {
+    enabled: bool,
+    path: PathBuf,
 }
 
 use std::path::{Path, PathBuf};
@@ -1751,7 +1756,9 @@ where
     Ok(documents)
 }
 
-fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, PathBuf> {
+fn component_enabled_sources(
+    documents: &[(PathBuf, Json)],
+) -> HashMap<String, ComponentEnabledSource> {
     let mut sources = HashMap::new();
     for (path, document) in documents {
         let Some(components) = document.get("components").and_then(Json::as_array) else {
@@ -1761,8 +1768,14 @@ fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, P
             let Some(kind) = component_kind(component) else {
                 continue;
             };
-            if component.get("enabled").and_then(Json::as_bool).is_some() {
-                sources.insert(kind.to_string(), path.clone());
+            if let Some(enabled) = component.get("enabled").and_then(Json::as_bool) {
+                sources.insert(
+                    kind.to_string(),
+                    ComponentEnabledSource {
+                        enabled,
+                        path: path.clone(),
+                    },
+                );
             }
         }
     }
@@ -1771,7 +1784,7 @@ fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, P
 
 fn programmatic_enable_override_diagnostics(
     discovered: &Json,
-    enabled_sources: &HashMap<String, PathBuf>,
+    enabled_sources: &HashMap<String, ComponentEnabledSource>,
     programmatic: &PluginConfig,
 ) -> Vec<ConfigDiagnostic> {
     let Some(discovered_components) = discovered.get("components").and_then(Json::as_array) else {
@@ -1785,18 +1798,21 @@ fn programmatic_enable_override_diagnostics(
             nth_component_by_kind(discovered_components, &component.kind, *nth)
                 .and_then(|index| discovered_components.get(index));
         *nth += 1;
-        if !component.enabled
-            || discovered_component
-                .and_then(|component| component.get("enabled"))
-                .and_then(Json::as_bool)
-                != Some(false)
-        {
+        let discovered_enabled = discovered_component
+            .and_then(|component| component.get("enabled"))
+            .and_then(Json::as_bool);
+        let file_disabled = discovered_enabled == Some(false)
+            || (discovered_enabled.is_none()
+                && enabled_sources
+                    .get(&component.kind)
+                    .is_some_and(|source| !source.enabled));
+        if !component.enabled || !file_disabled {
             continue;
         }
 
         let source = enabled_sources
             .get(&component.kind)
-            .map(|path| format!(" from {}", path.display()))
+            .map(|source| format!(" from {}", source.path.display()))
             .unwrap_or_default();
         diagnostics.push(ConfigDiagnostic {
             level: DiagnosticLevel::Warning,
@@ -1842,13 +1858,23 @@ where
 {
     let mut merged = Json::Object(Map::new());
     let mut sources = Vec::new();
-    for (path, document) in documents {
+    for (path, mut document) in documents {
         validate_plugin_config_version(&path, &document)?;
         validate_unique_component_kinds(&path, &document)?;
+
+        filter_disabled_plugin_components(&mut document);
         layer_config(&mut merged, document);
         sources.push(path);
     }
     Ok((!sources.is_empty()).then_some((merged, sources)))
+}
+
+/// Removes disabled components from one discovered plugin document before layering.
+fn filter_disabled_plugin_components(document: &mut Json) {
+    let Some(components) = document.get_mut("components").and_then(Json::as_array_mut) else {
+        return;
+    };
+    components.retain(|component| component.get("enabled").and_then(Json::as_bool) != Some(false));
 }
 
 /// Rejects a file with an unsupported top-level plugin config version before layering can
