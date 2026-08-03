@@ -390,6 +390,24 @@ jobs:
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/wheels/*.whl
           if-no-files-found: error
 
+      - name: Package Python source distribution
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -e
+          just \
+            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
+            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
+            package-python-sdist
+
+      - name: Upload Python source distribution artifact
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: python-sdist
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/sdists/nemo_relay-*.tar.gz
+          if-no-files-found: error
+
       - name: Package Python plugin SDK wheel
         if: ${{ matrix.platform == 'linux-amd64' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
