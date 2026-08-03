@@ -1597,9 +1597,12 @@ async fn initialize_plugin_components_catching_panics(
 
 /// Validates and activates `config` layered on top of the discovered
 /// `plugins.toml` configuration, so a direct integration sees the same file
-/// layering as the gateway. `config` wins on conflicts; as a typed document its
-/// default `version`/`policy`/`enabled` override the file, while `config` bodies
-/// merge field-by-field. Delegates to [`initialize_plugins_exact`].
+/// layering as the gateway. Each file's schema version is validated before
+/// layering. Non-default values in `config` win on conflicts, while default
+/// `policy` and `enabled` values inherit from a matching file entry and
+/// component `config` bodies merge field-by-field. Delegates to
+/// [`initialize_plugins_exact`]. Call that function directly when `config`
+/// is already fully resolved and every value must be applied exactly.
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
     let config = resolve_plugin_config(config)?;
     initialize_plugins_exact(config).await
@@ -1611,8 +1614,53 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
 /// one-time configuration resolution as regular harness-native initialization.
 pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<PluginConfig> {
     let mut base = resolve_default_file_plugin_config()?;
-    layer_config(&mut base, serde_json::to_value(config)?);
+    layer_config(&mut base, plugin_config_overlay_value(&config)?);
     Ok(serde_json::from_value(base)?)
+}
+
+/// Serializes a typed configuration as a discovery overlay.
+///
+/// A [`PluginConfig`] cannot record whether a default-valued field was supplied
+/// explicitly or filled by serde. Treating those defaults as overlay values
+/// would mask discovered file settings on every library initialization. Exact
+/// callers bypass discovery through [`initialize_plugins_exact`].
+fn plugin_config_overlay_value(config: &PluginConfig) -> Result<Json> {
+    let mut overlay = serde_json::to_value(config)?;
+    let Json::Object(root) = &mut overlay else {
+        return Ok(overlay);
+    };
+
+    if config.version == default_plugin_config_version() {
+        root.remove("version");
+    }
+
+    if let Some(Json::Object(policy)) = root.get_mut("policy") {
+        let defaults = ConfigPolicy::default();
+        if config.policy.unknown_component == defaults.unknown_component {
+            policy.remove("unknown_component");
+        }
+        if config.policy.unknown_field == defaults.unknown_field {
+            policy.remove("unknown_field");
+        }
+        if config.policy.unsupported_value == defaults.unsupported_value {
+            policy.remove("unsupported_value");
+        }
+        if policy.is_empty() {
+            root.remove("policy");
+        }
+    }
+
+    if let Some(Json::Array(components)) = root.get_mut("components") {
+        for (component, typed) in components.iter_mut().zip(&config.components) {
+            if typed.enabled == default_enabled()
+                && let Json::Object(component) = component
+            {
+                component.remove("enabled");
+            }
+        }
+    }
+
+    Ok(overlay)
 }
 
 /// Resolves the default `plugins.toml` layering into one JSON document, or an
@@ -1682,11 +1730,34 @@ where
     let mut merged = Json::Object(Map::new());
     let mut sources = Vec::new();
     for (path, document) in documents {
+        validate_plugin_config_version(&path, &document)?;
         validate_unique_component_kinds(&path, &document)?;
         layer_config(&mut merged, document);
         sources.push(path);
     }
     Ok((!sources.is_empty()).then_some((merged, sources)))
+}
+
+/// Rejects a file with an unsupported top-level plugin config version before layering can
+/// overwrite it with a higher-precedence source or typed default.
+fn validate_plugin_config_version(path: &Path, document: &Json) -> Result<()> {
+    let Some(raw_version) = document.get("version") else {
+        return Ok(());
+    };
+    let version = serde_json::from_value::<u32>(raw_version.clone()).map_err(|error| {
+        PluginError::InvalidConfig(format!(
+            "invalid plugin config version in {}: {error}",
+            path.display()
+        ))
+    })?;
+    if version == default_plugin_config_version() {
+        return Ok(());
+    }
+    Err(PluginError::InvalidConfig(format!(
+        "plugin config version {version} in {} is unsupported; expected {}",
+        path.display(),
+        default_plugin_config_version()
+    )))
 }
 
 /// Rejects a single file that declares the same component `kind` more than once.

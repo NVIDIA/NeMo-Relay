@@ -151,21 +151,33 @@ def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_e
     assert calls == [("checkpoint", {"secret": "raw"}), ("mark", {"stage": "first"})]
 
 
-def test_mark_sanitizer_exception_preserves_observability_fields(capture_events):
+def test_mark_sanitizer_exception_clears_observability_fields(capture_events, capfd):
     _capture_name, events = capture_events
+
+    def seed_category_profile(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
+        return {
+            "data": fields["data"],
+            "category_profile": {"subtype": "seeded"},
+            "metadata": fields["metadata"],
+        }
 
     def raises(_event: nemo_relay.Event, _fields: EventSanitizeFields) -> EventSanitizeFields:
         raise RuntimeError("sanitize boom")
 
+    guardrails.register_mark_sanitize("python-mark-seed-category-profile", 1, seed_category_profile)
     guardrails.register_mark_sanitize("python-mark-raises", 0, raises)
     try:
+        capfd.readouterr()
         scope.event("checkpoint", data={"kept": True})
         subscribers.flush()
     finally:
         guardrails.deregister_mark_sanitize("python-mark-raises")
+        guardrails.deregister_mark_sanitize("python-mark-seed-category-profile")
 
-    assert events[-1].data == {"kept": True}
+    assert events[-1].data is None
+    assert events[-1].category_profile is None
     assert events[-1].metadata is None
+    assert "Python event sanitizer callable failed" in capfd.readouterr().err
 
 
 async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):

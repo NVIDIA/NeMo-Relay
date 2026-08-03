@@ -134,6 +134,35 @@ pub enum FlowError {
 /// A specialized [`Result`](std::result::Result) type for NeMo Relay operations.
 pub type Result<T> = std::result::Result<T, FlowError>;
 
+impl FlowError {
+    /// Returns a low-cardinality classification suitable for OpenTelemetry's
+    /// `error.type` attribute.
+    ///
+    /// Relay-owned failures use stable `snake_case` codes. Internal failures
+    /// collapse to `internal_error` because Relay cannot reliably infer an
+    /// application exception type from an error message.
+    pub(crate) fn otel_error_type(&self) -> &str {
+        match self {
+            Self::AlreadyExists(_) => "already_exists",
+            Self::NotFound(_) => "not_found",
+            Self::InvalidArgument(_) => "invalid_argument",
+            Self::ScopeStackEmpty => "scope_stack_empty",
+            Self::GuardrailRejected(_) => "guardrail_rejected",
+            Self::Upstream(failure) => match failure.class {
+                UpstreamFailureClass::Connection => "connection_error",
+                UpstreamFailureClass::Timeout => "timeout",
+                UpstreamFailureClass::RetryableStatus => "retryable_status",
+                UpstreamFailureClass::ContextWindow => "context_window",
+                UpstreamFailureClass::ModelUnavailable => "model_unavailable",
+                UpstreamFailureClass::Authentication => "authentication",
+                UpstreamFailureClass::InvalidRequest => "invalid_request",
+                UpstreamFailureClass::Other => "upstream_error",
+            },
+            Self::Internal(_) => "internal_error",
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/coverage/error_tests.rs"]
 mod tests;

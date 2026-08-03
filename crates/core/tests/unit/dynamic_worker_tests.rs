@@ -1574,8 +1574,8 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
     for entries in [mark_entries, scope_start_entries, scope_end_entries] {
         let sanitized =
             NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries).await;
-        assert_eq!(sanitized.data(), event.data());
-        assert_eq!(sanitized.metadata(), event.metadata());
+        assert_eq!(sanitized.data(), None);
+        assert_eq!(sanitized.metadata(), None);
     }
 
     assert_eq!(
@@ -1585,7 +1585,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             &tool_request_entries,
         )
         .await,
-        tool_request
+        None
     );
     assert_eq!(
         NemoRelayContextState::tool_sanitize_response_snapshot_chain(
@@ -1594,7 +1594,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             &tool_response_entries,
         )
         .await,
-        tool_response
+        None
     );
     assert_eq!(
         NemoRelayContextState::llm_sanitize_request_snapshot_chain(
@@ -1603,7 +1603,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             &llm_request_entries,
         )
         .await,
-        Some(llm_request),
+        None,
     );
     assert_eq!(
         NemoRelayContextState::llm_sanitize_response_snapshot_chain(
@@ -1612,7 +1612,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             &llm_response_entries,
         )
         .await,
-        Some(llm_response),
+        None,
     );
     crate::api::subscriber::flush_subscribers().expect("subscriber callback should flush");
 }

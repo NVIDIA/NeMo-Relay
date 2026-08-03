@@ -55,6 +55,58 @@ fn test_error_debug() {
 }
 
 #[test]
+fn otel_error_type_maps_relay_variants() {
+    assert_eq!(
+        FlowError::AlreadyExists("duplicate".into()).otel_error_type(),
+        "already_exists"
+    );
+    assert_eq!(
+        FlowError::NotFound("missing".into()).otel_error_type(),
+        "not_found"
+    );
+    assert_eq!(
+        FlowError::InvalidArgument("bad scope".into()).otel_error_type(),
+        "invalid_argument"
+    );
+    assert_eq!(
+        FlowError::ScopeStackEmpty.otel_error_type(),
+        "scope_stack_empty"
+    );
+    assert_eq!(
+        FlowError::GuardrailRejected("blocked".into()).otel_error_type(),
+        "guardrail_rejected"
+    );
+
+    let upstream_cases = [
+        (UpstreamFailureClass::Connection, "connection_error"),
+        (UpstreamFailureClass::Timeout, "timeout"),
+        (UpstreamFailureClass::RetryableStatus, "retryable_status"),
+        (UpstreamFailureClass::ContextWindow, "context_window"),
+        (UpstreamFailureClass::ModelUnavailable, "model_unavailable"),
+        (UpstreamFailureClass::Authentication, "authentication"),
+        (UpstreamFailureClass::InvalidRequest, "invalid_request"),
+        (UpstreamFailureClass::Other, "upstream_error"),
+    ];
+    for (class, expected) in upstream_cases {
+        let failure = UpstreamFailure {
+            status: None,
+            body: "provider failed".into(),
+            headers: std::collections::BTreeMap::new(),
+            class,
+        };
+        assert_eq!(FlowError::Upstream(failure).otel_error_type(), expected);
+    }
+}
+
+#[test]
+fn otel_error_type_maps_internal_failures_to_generic_code() {
+    assert_eq!(
+        FlowError::Internal("application callback failed".into()).otel_error_type(),
+        "internal_error"
+    );
+}
+
+#[test]
 fn upstream_failures_classify_retryability_and_render_status() {
     use std::collections::BTreeMap;
 

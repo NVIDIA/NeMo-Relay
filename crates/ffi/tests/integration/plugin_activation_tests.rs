@@ -122,7 +122,7 @@ fn run_discovered_config_activation_test() {
     std::fs::write(
         &plugins_toml,
         format!(
-            r#"version = 999
+            r#"version = 1
 
 [[components]]
 kind = {DISCOVERED_STATIC_PLUGIN_KIND:?}
@@ -158,8 +158,7 @@ source = "project-file"
         "config": {}
     }]));
 
-    // The explicit version 1 must override the discovered version 999. The
-    // file-only component and its config must still survive the merge.
+    // The file-only component and its config must survive the merge.
     assert_eq!(report["diagnostics"], json!([]));
     assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
     assert_eq!(

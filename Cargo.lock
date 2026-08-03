@@ -1947,6 +1947,7 @@ dependencies = [
  "toml",
  "tonic",
  "tower",
+ "tracing",
  "typed-builder",
  "unicode-general-category",
  "uuid",
@@ -2346,6 +2347,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

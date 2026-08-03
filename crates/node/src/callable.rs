@@ -572,7 +572,7 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
             }
             .inspect_err(|error| {
                 // Scope and mark publication happens on the dispatcher
-                // thread. Preserve the event (the core fails open) while
+                // thread. The core clears the governed observability fields while
                 // making the binding-visible failure available to Node.
                 record_callback_error(error.to_string());
             })?;

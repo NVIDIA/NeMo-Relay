@@ -1718,6 +1718,7 @@ fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
     let error_metadata = metadata_for("llm-error");
     assert_eq!(error_metadata["caller"], json!("llm-error"));
     assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(error_metadata["error.type"], json!("internal_error"));
     assert!(
         error_metadata["otel.status_description"]
             .as_str()
@@ -1875,6 +1876,10 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
         json!("llm-stream-upstream-error")
     );
     assert_eq!(upstream_error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(
+        upstream_error_metadata["error.type"],
+        json!("internal_error")
+    );
     assert!(
         upstream_error_metadata["otel.status_description"]
             .as_str()
@@ -1888,6 +1893,10 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
         json!("llm-stream-collector-error")
     );
     assert_eq!(collector_error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(
+        collector_error_metadata["error.type"],
+        json!("internal_error")
+    );
     assert!(
         collector_error_metadata["otel.status_description"]
             .as_str()

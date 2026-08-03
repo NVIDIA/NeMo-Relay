@@ -623,7 +623,7 @@ func configureNativePluginProject(t *testing.T) string {
 	}
 	pluginsTOML := filepath.Join(projectConfigDir, "plugins.toml")
 	const staticKind = "go.fixture.static_base"
-	fileConfig := fmt.Sprintf(`version = 999
+	fileConfig := fmt.Sprintf(`version = 1
 
 [[components]]
 kind = %q

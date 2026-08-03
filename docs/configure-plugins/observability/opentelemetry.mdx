@@ -91,6 +91,53 @@ work or delivery to the other exporters.
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 
+## Batch Processor Environment Variables
+
+OpenTelemetry's standard batch processor settings apply process-wide to every
+configured endpoint. Set them before the plugin activates; endpoint-specific
+batch sizing is not supported.
+
+| Variable | Default | Notes |
+|---|---:|---|
+| `OTEL_BSP_MAX_QUEUE_SIZE` | `2048` | Maximum completed spans buffered per endpoint. |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | `512` | Maximum spans exported in one batch; capped at the queue size. |
+| `OTEL_BSP_SCHEDULE_DELAY` | `5000` ms | Maximum delay before exporting a non-full batch. |
+
+Use positive integer values. The SDK falls back to its defaults for malformed
+values but accepts zero; do not use zero values. Queue capacity counts spans,
+not bytes.
+
+<Warning>
+A full queue drops completed spans instead of applying backpressure to
+application work. Bursts can therefore drop spans that finish late, including
+an enclosing root span, and leave an incomplete trace in the backend.
+
+The OpenTelemetry SDK logs
+`BatchSpanProcessor.SpanDroppingStarted` at warning level when each endpoint
+first drops a span. It suppresses additional first-drop warnings for that
+endpoint to avoid a log storm. During graceful shutdown, it logs
+`BatchSpanProcessor.SpansDropped` with the endpoint processor's exact
+`dropped_span_count` and `max_queue_size`. The SDK diagnostics do not include
+the Relay endpoint index or URL.
+</Warning>
+
+Increasing `OTEL_BSP_MAX_QUEUE_SIZE` can reduce the risk for a known burst
+size, but a finite queue does not guarantee lossless telemetry. Always clear
+the plugin during graceful shutdown so the SDK can report its final drop count
+and attempt to export queued spans.
+
+## Endpoint Capacity and Sizing
+
+NeMo Relay does not impose a maximum number of OpenTelemetry endpoints. Each
+endpoint owns an exporter, tracer provider, batch processor, batch queue, and
+exporter runtime resources. Nothing in that export stack is shared between
+endpoints. Queue capacity and memory are per endpoint, and total export traffic
+is approximately the trace payload size multiplied by the endpoint count.
+
+Typical deployments need one to three endpoints. Validate configurations with
+tens or hundreds of endpoints against the process limits for threads, memory,
+and network egress before deploying them.
+
 Use `header_env` for secrets so configuration files contain only environment
 variable names. Each variable contains the complete header value. NeMo Relay
 validates variable names without reading their values, then resolves and
@@ -127,6 +174,36 @@ Rerankers, marks, and unsupported scope types are omitted. Supported
 descendants remain attached to their nearest exported ancestor. This
 projection never emits `nemo_relay.*` fields and does not export message
 content, tool payloads, or retrieval content.
+
+### Error Type Mapping
+
+For managed LLM, tool, and stream failures, NeMo Relay maps structured
+`FlowError` values to the OpenTelemetry `error.type` attribute:
+
+| Relay error | `error.type` |
+|---|---|
+| `AlreadyExists` | `already_exists` |
+| `NotFound` | `not_found` |
+| `InvalidArgument` | `invalid_argument` |
+| `ScopeStackEmpty` | `scope_stack_empty` |
+| `GuardrailRejected` | `guardrail_rejected` |
+| Upstream connection failure | `connection_error` |
+| Upstream timeout | `timeout` |
+| Upstream retryable status | `retryable_status` |
+| Upstream context-window failure | `context_window` |
+| Upstream model unavailable | `model_unavailable` |
+| Upstream authentication failure | `authentication` |
+| Upstream invalid request | `invalid_request` |
+| Other upstream failure | `upstream_error` |
+| `Internal` | `internal_error` |
+
+External application and callback exceptions that do not have a more specific
+`FlowError` classification are represented as `Internal` and emit
+`internal_error`. NeMo Relay does not inspect error messages to recover Python,
+JavaScript, or application-defined exception class names. When no structured
+`FlowError` is available, such as a cancellation or dropped execution, the
+GenAI projection emits `_OTHER`. Caller-provided `error.type` metadata takes
+precedence over the derived mapping.
 
 ## Direct Subscriber
 

@@ -2825,8 +2825,9 @@ macro_rules! napi_event_guardrail_api {
         /// The callback may return fields directly or in a Promise. Scope and mark
         /// calls queue the event and return synchronously; publication resumes after
         /// the Promise settles. Callback, serialization, conversion, or invalid-result
-        /// failures preserve the last valid event fields and record the error for
-        /// `getLastCallbackError()`.
+        /// failures clear the emitted event fields and record the error for
+        /// `getLastCallbackError()`. Await `flushSubscribers()` before inspecting
+        /// either the delivered event or that error.
         #[napi]
         pub fn $register_name(
             env: Env,
@@ -2904,7 +2905,7 @@ napi_guardrail_tool_api!(
     ///
     /// The `guardrail` callback receives `(toolName, args)` and must return sanitized args.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
-    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// If the callback throws, Relay omits the emitted payload and records the error
     /// for `getLastCallbackError()`.
     register_tool_sanitize_request_guardrail,
     /// Deregister a tool request sanitization guardrail by name.
@@ -2921,7 +2922,7 @@ napi_guardrail_tool_api!(
     ///
     /// The `guardrail` callback receives `(toolName, result)` and must return sanitized result.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
-    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// If the callback throws, Relay omits the emitted payload and records the error
     /// for `getLastCallbackError()`.
     register_tool_sanitize_response_guardrail,
     /// Deregister a tool response sanitization guardrail by name.
@@ -3074,8 +3075,8 @@ pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
 ///
 /// The `guardrail` callback receives `(request, context)` and must return the sanitized request,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
-/// guardrail with the same `name` already exists. If the callback throws, Relay preserves the last
-/// valid payload, continues publication, and records the error for `getLastCallbackError()`.
+/// guardrail with the same `name` already exists. If the callback throws, Relay omits the payload
+/// and annotation, continues publication, and records the error for `getLastCallbackError()`.
 #[napi]
 pub fn register_llm_sanitize_request_guardrail(
     env: Env,
@@ -3108,8 +3109,8 @@ pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
 ///
 /// The `guardrail` callback receives `(response, context)` and must return the sanitized response,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
-/// guardrail with the same `name` already exists. If the callback throws, Relay preserves the last
-/// valid payload, continues publication, and records the error for `getLastCallbackError()`.
+/// guardrail with the same `name` already exists. If the callback throws, Relay omits the payload
+/// and annotation, continues publication, and records the error for `getLastCallbackError()`.
 #[napi]
 pub fn register_llm_sanitize_response_guardrail(
     env: Env,
@@ -3367,8 +3368,9 @@ macro_rules! napi_scope_event_guardrail_api {
         /// The callback may return fields directly or in a Promise. Scope and mark
         /// calls queue the event and return synchronously; publication resumes after
         /// the Promise settles. Callback, serialization, conversion, or invalid-result
-        /// failures preserve the last valid event fields and record the error for
-        /// `getLastCallbackError()`.
+        /// failures clear the emitted event fields and record the error for
+        /// `getLastCallbackError()`. Await `flushSubscribers()` before inspecting
+        /// either the delivered event or that error.
         #[napi]
         pub fn $register_name(
             env: Env,
@@ -3463,7 +3465,7 @@ napi_scope_guardrail_tool_api!(
     /// The `guardrail` callback receives `(toolName, args)` and must return sanitized args.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
     /// on the specified scope.
-    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// If the callback throws, Relay omits the emitted payload and records the error
     /// for `getLastCallbackError()`.
     scope_register_tool_sanitize_request_guardrail,
     /// Deregister a scope-local tool request sanitization guardrail by name.
@@ -3481,7 +3483,7 @@ napi_scope_guardrail_tool_api!(
     /// The `guardrail` callback receives `(toolName, result)` and must return sanitized result.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
     /// on the specified scope.
-    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// If the callback throws, Relay omits the emitted payload and records the error
     /// for `getLastCallbackError()`.
     scope_register_tool_sanitize_response_guardrail,
     /// Deregister a scope-local tool response sanitization guardrail by name.
@@ -3656,7 +3658,7 @@ pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: Strin
 /// The `guardrail` callback receives `(request, context)` and must return the sanitized request,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists on the specified scope. If the callback throws,
-/// Relay preserves the last valid payload, continues publication, and records the error for
+/// Relay omits the payload and annotation, continues publication, and records the error for
 /// `getLastCallbackError()`.
 #[napi]
 pub fn scope_register_llm_sanitize_request_guardrail(
@@ -3701,7 +3703,7 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 /// The `guardrail` callback receives `(response, context)` and must return the sanitized response,
 /// or `null` to omit the observability payload. Lower `priority` values run first. Throws if a
 /// guardrail with the same `name` already exists on the specified scope. If the callback throws,
-/// Relay preserves the last valid payload, continues publication, and records the error for
+/// Relay omits the payload and annotation, continues publication, and records the error for
 /// `getLastCallbackError()`.
 #[napi]
 pub fn scope_register_llm_sanitize_response_guardrail(

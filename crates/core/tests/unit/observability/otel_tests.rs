@@ -1459,6 +1459,31 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
 }
 
 #[test]
+fn gen_ai_end_projection_preserves_explicit_error_type() {
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("chat")
+            .metadata(json!({
+                "otel.status_code": "ERROR",
+                "otel.status_description": "invalid argument: invalid value",
+                "error.type": "invalid_argument",
+            }))
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::from(ScopeType::Llm),
+        None,
+    ));
+
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("error.type"),
+        Some(&"invalid_argument".to_string())
+    );
+}
+
+#[test]
 fn gen_ai_projection_prefers_standard_names_and_normalized_provider_details() {
     let agent = make_start_event(
         Uuid::now_v7(),

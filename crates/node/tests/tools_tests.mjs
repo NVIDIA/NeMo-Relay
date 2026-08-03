@@ -415,6 +415,7 @@ describe('Tool execute', () => {
       assert.equal(errorEnd.metadata.caller, 'node-tool-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
+      assert.equal(errorEnd.metadata['error.type'], 'internal_error');
     } finally {
       deregisterSubscriber('node_tool_status_metadata_sub');
     }
@@ -680,7 +681,7 @@ describe('Tool guardrails', () => {
     }
   });
 
-  it('sanitize guardrail failures preserve the observable payload', async () => {
+  it('sanitize guardrail failures omit the observable payload', async () => {
     clearLastCallbackError();
     const events = [];
     registerSubscriber('node_tool_san_throw_sub', (event) => events.push(event));
@@ -697,7 +698,7 @@ describe('Tool guardrails', () => {
           event.category === 'tool' &&
           event.scope_category === 'start',
       );
-      assert.deepEqual(start.data, { original: true });
+      assert.equal(start.data, null);
       assert.match(getLastCallbackError() ?? '', /sanitize boom/i);
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_tool_san_throw');

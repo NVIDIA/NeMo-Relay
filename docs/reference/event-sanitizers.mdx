@@ -52,12 +52,13 @@ side effects, such as metrics, logging, mutation, or I/O; Relay only guarantees
 the transformed observability payload.
 
 Registries run in priority order. Lower priorities run first, and each
-callback receives the fields returned by the callback before it. Invalid
-binding callback results fail open and preserve the current fields. The same
-rule applies to tool and LLM request/response sanitizer errors: Relay preserves
-the last valid observability payload without changing provider execution. In Node.js,
-a synchronous sanitizer callback that throws also fails open; Relay records the
-error for `getLastCallbackError()`.
+callback receives the fields returned by the callback before it. A callback
+error, panic, rejected Promise, or invalid binding result fails closed and
+short-circuits the remaining sanitizer chain. Event sanitizers clear `data`,
+`category_profile`, and `metadata`; tool and LLM sanitizers omit their governed
+payload, while LLM sanitizers also omit its annotation. Sanitizer failures do
+not change tool or provider execution. Node.js records the error for
+`getLastCallbackError()`.
 
 <Warning>
 Event sanitizer callbacks are not re-entrant. Do not call another NeMo Relay
@@ -80,7 +81,7 @@ exporters.
 This preserves FIFO start/end/mark delivery without making `push_scope`,
 `pop_scope`, or `event` awaitable. A scope-local sanitizer removed after an
 event is emitted still applies to its queued snapshot. An asynchronous
-sanitizer rejection fails open and preserves the last valid event fields.
+sanitizer rejection fails closed and clears the governed observability fields.
 
 When Python code emits events from an `asyncio` task, await
 `nemo_relay.subscribers.flush_async()` to drain queued publication without

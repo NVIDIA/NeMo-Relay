@@ -99,6 +99,7 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
     let error_metadata = metadata_for("tool-error");
     assert_eq!(error_metadata["caller"], json!("tool-error"));
     assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(error_metadata["error.type"], json!("internal_error"));
     assert!(
         error_metadata["otel.status_description"]
             .as_str()

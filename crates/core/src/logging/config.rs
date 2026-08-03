@@ -55,7 +55,7 @@ pub struct LoggingConfig {
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
-            level: LogLevel::Info,
+            level: LogLevel::Error,
             stderr_format: LogFormat::Human,
             sinks: Vec::new(),
             flush_interval_millis: DEFAULT_FILE_FLUSH_INTERVAL_MILLIS,

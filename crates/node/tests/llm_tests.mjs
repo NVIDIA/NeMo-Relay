@@ -321,6 +321,7 @@ describe('LLM execute', () => {
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /llm status failure/);
+      assert.equal(errorEnd.metadata['error.type'], 'internal_error');
     } finally {
       deregisterSubscriber('node_llm_status_metadata_sub');
     }
@@ -831,7 +832,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize request guardrail failures preserve the payload and remain usable', async () => {
+  it('sanitize request guardrail failures omit the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_req_throw_sub', (event) => events.push(event));
@@ -849,7 +850,7 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'start',
       );
-      assert.deepEqual(start.data, { headers: request.headers, content: request.content });
+      assert.equal(start.data, null);
       assert.equal(getLastCallbackError(), 'internal error: unknown error');
 
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_throw');
@@ -944,7 +945,7 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('sanitize response guardrail failures preserve the payload and remain usable', async () => {
+  it('sanitize response guardrail failures omit the payload and remain usable', async () => {
     const events = [];
     clearLastCallbackError();
     registerSubscriber('node_llm_san_resp_throw_sub', (event) => events.push(event));
@@ -962,7 +963,7 @@ describe('LLM guardrails', () => {
           event.category === 'llm' &&
           event.scope_category === 'end',
       );
-      assert.deepEqual(end.data, response);
+      assert.equal(end.data, null);
       assert.match(getLastCallbackError() ?? '', /response sanitizer boom/i);
 
       deregisterLlmSanitizeResponseGuardrail('node_llm_san_resp_throw');

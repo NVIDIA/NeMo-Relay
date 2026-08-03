@@ -127,7 +127,7 @@ def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | 
     Notes:
         ``call_end()`` remains synchronous. Sanitize-response guardrails,
         event sanitizers, and subscriber delivery run later on Relay's serial
-        publication path. Callback failures are logged and fail open; they
+        publication path. Callback failures are logged and fail closed; they
         cannot be raised by this call. The caller-owned ``result`` is not
         altered.
         ``timestamp`` must be a timezone-aware ``datetime``; strings and naive

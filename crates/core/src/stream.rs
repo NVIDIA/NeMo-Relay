@@ -44,7 +44,9 @@ use crate::api::runtime::{
     EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
     current_scope_stack,
 };
-use crate::api::shared::{metadata_with_otel_status, snapshot_event_sanitizers};
+use crate::api::shared::{
+    metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
+};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::{FlowError, Result};
@@ -212,6 +214,16 @@ impl LlmStreamWrapper {
         self.finalization = self.emit_end_event(metadata, interrupted, false);
     }
 
+    fn finish_with_error(&mut self, error: &FlowError, interrupted: bool) {
+        if self.ended {
+            return;
+        }
+        self.ended = true;
+        self.inner.terminalize();
+        let metadata = metadata_with_otel_error(self.metadata.clone(), error);
+        self.finalization = self.emit_end_event(metadata, interrupted, false);
+    }
+
     /// Emit the LLM END event with aggregated response data.
     ///
     /// Calls the finalizer to produce the aggregated response, runs sanitize
@@ -237,19 +249,19 @@ impl LlmStreamWrapper {
             aggregated
         };
 
-        let entries = match self.scope_stack.read() {
+        let (entries, sanitizer_snapshot_failed) = match self.scope_stack.read() {
             Ok(scope_guard) => {
                 let scope_locals = scope_guard
                     .collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
                 match global_context().read() {
-                    Ok(state) => state.llm_sanitize_response_entries(&scope_locals),
+                    Ok(state) => (state.llm_sanitize_response_entries(&scope_locals), false),
                     Err(error) => {
                         log::error!(
                             target: "nemo_relay.runtime",
                             event = "stream_end_sanitizer_snapshot_failed";
-                            "LLM stream END sanitizer snapshot failed open: {error}"
+                            "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
                         );
-                        Vec::new()
+                        (Vec::new(), true)
                     }
                 }
             }
@@ -257,9 +269,9 @@ impl LlmStreamWrapper {
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "stream_end_sanitizer_snapshot_failed";
-                    "LLM stream END sanitizer snapshot failed open: {error}"
+                    "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
                 );
-                Vec::new()
+                (Vec::new(), true)
             }
         };
         let handle = self.handle.clone();
@@ -269,12 +281,17 @@ impl LlmStreamWrapper {
         let response_codec = self.response_codec.clone();
         let sanitize_context = self.sanitize_context.clone();
         let finalize = async move {
-            let sanitized = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
-                response,
-                sanitize_context,
-                &entries,
-            )
-            .await;
+            let sanitized = (!sanitizer_snapshot_failed).then(|| {
+                NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+                    response,
+                    sanitize_context,
+                    &entries,
+                )
+            });
+            let sanitized = match sanitized {
+                Some(sanitized) => sanitized.await,
+                None => None,
+            };
             let data = match sanitized {
                 Some(response) if response_was_null_without_fallback && response.is_null() => None,
                 response => response,
@@ -441,17 +458,15 @@ impl Stream for LlmStreamWrapper {
                 match (this.collector)(raw_chunk.clone()) {
                     Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
                     Err(e) => {
-                        let message = e.to_string();
+                        this.finish_with_error(&e, true);
                         this.terminal_result = Some(Err(e));
-                        this.finish_with_status("ERROR", Some(message), true);
                         self.poll_next(cx)
                     }
                 }
             }
             Poll::Ready(Some(Err(e))) => {
-                let message = e.to_string();
+                this.finish_with_error(&e, true);
                 this.terminal_result = Some(Err(e));
-                this.finish_with_status("ERROR", Some(message), true);
                 self.poll_next(cx)
             }
             Poll::Ready(None) => {
