@@ -54,6 +54,20 @@ fn base_event(
         .build()
 }
 
+fn py_scope_event(event: Event) -> PyScopeEvent {
+    match event {
+        Event::Scope(inner) => PyScopeEvent { inner },
+        _ => panic!("expected scope event"),
+    }
+}
+
+fn py_mark_event(event: Event) -> PyMarkEvent {
+    match event {
+        Event::Mark(inner) => PyMarkEvent { inner },
+        _ => panic!("expected mark event"),
+    }
+}
+
 #[test]
 fn test_register_exposes_all_type_bindings() {
     let _python = crate::test_support::init_python_test();
@@ -61,26 +75,31 @@ fn test_register_exposes_all_type_bindings() {
         let module = PyModule::new(py, "_types_test").unwrap();
         register(&module).unwrap();
 
-        assert!(module.getattr("ScopeStack").is_ok());
-        assert!(module.getattr("LlmStream").is_ok());
-        assert!(module.getattr("ScopeAttributes").is_ok());
-        assert!(module.getattr("ToolAttributes").is_ok());
-        assert!(module.getattr("LLMAttributes").is_ok());
-        assert!(module.getattr("ScopeType").is_ok());
-        assert!(module.getattr("ScopeHandle").is_ok());
-        assert!(module.getattr("ToolHandle").is_ok());
-        assert!(module.getattr("LLMHandle").is_ok());
-        assert!(module.getattr("LLMRequest").is_ok());
-        assert!(module.getattr("ScopeEvent").is_ok());
-        assert!(module.getattr("MarkEvent").is_ok());
-        assert!(module.getattr("AtifExporter").is_ok());
-        assert!(module.getattr("OpenInferenceConfig").is_err());
-        assert!(module.getattr("OpenInferenceSubscriber").is_err());
-        assert!(module.getattr("OpenTelemetryConfig").is_ok());
-        assert!(module.getattr("OpenTelemetrySubscriber").is_ok());
-        assert!(module.getattr("OpenAIChatCodec").is_ok());
-        assert!(module.getattr("OpenAIResponsesCodec").is_ok());
-        assert!(module.getattr("AnthropicMessagesCodec").is_ok());
+        for name in [
+            "ScopeStack",
+            "LlmStream",
+            "ScopeAttributes",
+            "ToolAttributes",
+            "LLMAttributes",
+            "ScopeType",
+            "ScopeHandle",
+            "ToolHandle",
+            "LLMHandle",
+            "LLMRequest",
+            "ScopeEvent",
+            "MarkEvent",
+            "AtifExporter",
+            "OpenTelemetryConfig",
+            "OpenTelemetrySubscriber",
+            "OpenAIChatCodec",
+            "OpenAIResponsesCodec",
+            "AnthropicMessagesCodec",
+        ] {
+            assert!(module.getattr(name).is_ok(), "{name} should be registered");
+        }
+        for name in ["OpenInferenceConfig", "OpenInferenceSubscriber"] {
+            assert!(module.getattr(name).is_err(), "{name} should be absent");
+        }
     });
 }
 
@@ -133,169 +152,179 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
 
     Python::attach(|py| {
         let parent_uuid = Uuid::now_v7();
-        let scope = PyScopeHandle::from(
-            ScopeHandle::builder()
-                .name("scope")
-                .scope_type(ScopeType::Tool)
-                .attributes(ScopeAttributes::PARALLEL)
-                .parent_uuid(parent_uuid)
-                .data(json!({"scope": true}))
-                .metadata(json!({"meta": "scope"}))
-                .build(),
-        );
-        assert!(scope.scope_type() == PyScopeType::Tool);
-        assert_eq!(scope.parent_uuid(), Some(parent_uuid.to_string()));
-        assert_eq!(
-            py_to_json(scope.data(py).unwrap().bind(py)).unwrap(),
-            json!({"scope": true})
-        );
-        assert_eq!(
-            py_to_json(scope.metadata(py).unwrap().bind(py)).unwrap(),
-            json!({"meta": "scope"})
-        );
-        assert!(scope.__repr__().contains("ScopeHandle"));
 
-        let tool = PyToolHandle::from(
-            ToolHandle::builder()
-                .name("tool")
-                .attributes(ToolAttributes::REMOTE)
-                .parent_uuid(parent_uuid)
-                .data(json!({"tool": true}))
-                .metadata(json!({"meta": "tool"}))
-                .build(),
-        );
-        assert_eq!(tool.parent_uuid(), Some(parent_uuid.to_string()));
-        assert_eq!(tool.attributes().value(), PyToolAttributes::REMOTE);
-        assert_eq!(
-            py_to_json(tool.data(py).unwrap().bind(py)).unwrap(),
-            json!({"tool": true})
-        );
-        assert_eq!(
-            py_to_json(tool.metadata(py).unwrap().bind(py)).unwrap(),
-            json!({"meta": "tool"})
-        );
-        assert!(tool.__repr__().contains("ToolHandle"));
+        fn assert_scope_handle_fields(py: Python<'_>, parent_uuid: Uuid) {
+            let scope = PyScopeHandle::from(
+                ScopeHandle::builder()
+                    .name("scope")
+                    .scope_type(ScopeType::Tool)
+                    .attributes(ScopeAttributes::PARALLEL)
+                    .parent_uuid(parent_uuid)
+                    .data(json!({"scope": true}))
+                    .metadata(json!({"meta": "scope"}))
+                    .build(),
+            );
+            assert!(scope.scope_type() == PyScopeType::Tool);
+            assert_eq!(scope.parent_uuid(), Some(parent_uuid.to_string()));
+            assert_eq!(
+                py_to_json(scope.data(py).unwrap().bind(py)).unwrap(),
+                json!({"scope": true})
+            );
+            assert_eq!(
+                py_to_json(scope.metadata(py).unwrap().bind(py)).unwrap(),
+                json!({"meta": "scope"})
+            );
+            assert!(scope.__repr__().contains("ScopeHandle"));
+        }
+        assert_scope_handle_fields(py, parent_uuid);
 
-        let llm = PyLLMHandle::from(
-            LlmHandle::builder()
-                .name("llm")
-                .attributes(LlmAttributes::STATEFUL | LlmAttributes::STREAMING)
-                .parent_uuid(parent_uuid)
-                .data(json!({"llm": true}))
-                .metadata(json!({"meta": "llm"}))
-                .build(),
-        );
-        assert_eq!(llm.parent_uuid(), Some(parent_uuid.to_string()));
-        assert_eq!(
-            llm.attributes().value(),
-            PyLLMAttributes::STATEFUL | PyLLMAttributes::STREAMING
-        );
-        assert_eq!(
-            py_to_json(llm.data(py).unwrap().bind(py)).unwrap(),
-            json!({"llm": true})
-        );
-        assert_eq!(
-            py_to_json(llm.metadata(py).unwrap().bind(py)).unwrap(),
-            json!({"meta": "llm"})
-        );
-        assert!(llm.__repr__().contains("LLMHandle"));
+        fn assert_tool_handle_fields(py: Python<'_>, parent_uuid: Uuid) {
+            let tool = PyToolHandle::from(
+                ToolHandle::builder()
+                    .name("tool")
+                    .attributes(ToolAttributes::REMOTE)
+                    .parent_uuid(parent_uuid)
+                    .data(json!({"tool": true}))
+                    .metadata(json!({"meta": "tool"}))
+                    .build(),
+            );
+            assert_eq!(tool.parent_uuid(), Some(parent_uuid.to_string()));
+            assert_eq!(tool.attributes().value(), PyToolAttributes::REMOTE);
+            assert_eq!(
+                py_to_json(tool.data(py).unwrap().bind(py)).unwrap(),
+                json!({"tool": true})
+            );
+            assert_eq!(
+                py_to_json(tool.metadata(py).unwrap().bind(py)).unwrap(),
+                json!({"meta": "tool"})
+            );
+            assert!(tool.__repr__().contains("ToolHandle"));
+        }
+        assert_tool_handle_fields(py, parent_uuid);
 
-        let request = PyLLMRequest {
-            inner: LlmRequest {
-                headers: serde_json::Map::from_iter([("x-trace".into(), json!("1"))]),
-                content: json!({"prompt": "hello"}),
-            },
-        };
-        assert_eq!(
-            py_to_json(request.headers(py).unwrap().bind(py)).unwrap(),
-            json!({"x-trace": "1"})
-        );
-        assert_eq!(
-            py_to_json(request.content(py).unwrap().bind(py)).unwrap(),
-            json!({"prompt": "hello"})
-        );
-        assert_eq!(request.__repr__(), "LLMRequest(...)");
+        fn assert_llm_handle_fields(py: Python<'_>, parent_uuid: Uuid) {
+            let llm = PyLLMHandle::from(
+                LlmHandle::builder()
+                    .name("llm")
+                    .attributes(LlmAttributes::STATEFUL | LlmAttributes::STREAMING)
+                    .parent_uuid(parent_uuid)
+                    .data(json!({"llm": true}))
+                    .metadata(json!({"meta": "llm"}))
+                    .build(),
+            );
+            assert_eq!(llm.parent_uuid(), Some(parent_uuid.to_string()));
+            assert_eq!(
+                llm.attributes().value(),
+                PyLLMAttributes::STATEFUL | PyLLMAttributes::STREAMING
+            );
+            assert_eq!(
+                py_to_json(llm.data(py).unwrap().bind(py)).unwrap(),
+                json!({"llm": true})
+            );
+            assert_eq!(
+                py_to_json(llm.metadata(py).unwrap().bind(py)).unwrap(),
+                json!({"meta": "llm"})
+            );
+            assert!(llm.__repr__().contains("LLMHandle"));
+        }
+        assert_llm_handle_fields(py, parent_uuid);
 
-        let event = match Event::Mark(MarkEvent::new(
-            base_event(
-                parent_uuid,
-                "event",
-                json!({"event": true}),
-                json!({"meta": "event"}),
-            ),
-            None,
-            None,
-        )) {
-            Event::Mark(inner) => PyMarkEvent { inner },
-            _ => unreachable!(),
-        };
-        assert_eq!(event.kind(), "mark");
-        assert_eq!(event.parent_uuid(), Some(parent_uuid.to_string()));
-        assert_eq!(
-            py_to_json(event.data(py).unwrap().bind(py)).unwrap(),
-            json!({"event": true})
-        );
-        assert_eq!(
-            py_to_json(event.metadata(py).unwrap().bind(py)).unwrap(),
-            json!({"meta": "event"})
-        );
-        assert!(event.timestamp().contains('T'));
+        fn assert_llm_request_fields(py: Python<'_>) {
+            let request = PyLLMRequest {
+                inner: LlmRequest {
+                    headers: serde_json::Map::from_iter([("x-trace".into(), json!("1"))]),
+                    content: json!({"prompt": "hello"}),
+                },
+            };
+            assert_eq!(
+                py_to_json(request.headers(py).unwrap().bind(py)).unwrap(),
+                json!({"x-trace": "1"})
+            );
+            assert_eq!(
+                py_to_json(request.content(py).unwrap().bind(py)).unwrap(),
+                json!({"prompt": "hello"})
+            );
+            assert_eq!(request.__repr__(), "LLMRequest(...)");
+        }
+        assert_llm_request_fields(py);
 
-        let tool_event = match Event::Scope(ScopeEvent::new(
-            base_event(
-                parent_uuid,
-                "tool-event",
-                json!({"input": true}),
-                json!({"meta": "event"}),
-            ),
-            ScopeCategory::Start,
-            tool_attributes_to_strings(ToolAttributes::REMOTE),
-            EventCategory::tool(),
-            Some(CategoryProfile::builder().tool_call_id("tool-1").build()),
-        )) {
-            Event::Scope(inner) => PyScopeEvent { inner },
-            _ => unreachable!(),
-        };
-        assert_eq!(tool_event.kind(), "scope");
-        assert_eq!(tool_event.scope_category(), "start");
-        assert_eq!(tool_event.category(), "tool");
-        assert_eq!(
-            py_to_json(tool_event.data(py).unwrap().bind(py)).unwrap(),
-            json!({"input": true})
-        );
-        assert_eq!(
-            py_to_json(tool_event.category_profile(py).unwrap().bind(py)).unwrap(),
-            json!({"tool_call_id": "tool-1"})
-        );
-        assert_eq!(tool_event.attributes(), vec!["remote"]);
+        fn assert_mark_and_tool_event_fields(py: Python<'_>, parent_uuid: Uuid) {
+            let event = py_mark_event(Event::Mark(MarkEvent::new(
+                base_event(
+                    parent_uuid,
+                    "event",
+                    json!({"event": true}),
+                    json!({"meta": "event"}),
+                ),
+                None,
+                None,
+            )));
+            assert_eq!(event.kind(), "mark");
+            assert_eq!(event.parent_uuid(), Some(parent_uuid.to_string()));
+            assert_eq!(
+                py_to_json(event.data(py).unwrap().bind(py)).unwrap(),
+                json!({"event": true})
+            );
+            assert_eq!(
+                py_to_json(event.metadata(py).unwrap().bind(py)).unwrap(),
+                json!({"meta": "event"})
+            );
+            assert!(event.timestamp().contains('T'));
 
-        let llm_event = match Event::Scope(ScopeEvent::new(
-            base_event(
-                parent_uuid,
-                "llm-event",
-                json!({"output": true}),
-                json!({"meta": "event"}),
-            ),
-            ScopeCategory::End,
-            llm_attributes_to_strings(LlmAttributes::STATEFUL),
-            EventCategory::llm(),
-            Some(CategoryProfile::builder().model_name("model").build()),
-        )) {
-            Event::Scope(inner) => PyScopeEvent { inner },
-            _ => unreachable!(),
-        };
-        assert_eq!(llm_event.kind(), "scope");
-        assert_eq!(llm_event.scope_category(), "end");
-        assert_eq!(llm_event.category(), "llm");
-        assert_eq!(
-            py_to_json(llm_event.data(py).unwrap().bind(py)).unwrap(),
-            json!({"output": true})
-        );
-        assert_eq!(
-            py_to_json(llm_event.category_profile(py).unwrap().bind(py)).unwrap(),
-            json!({"model_name": "model"})
-        );
-        assert_eq!(llm_event.attributes(), vec!["stateful"]);
+            let tool_event = py_scope_event(Event::Scope(ScopeEvent::new(
+                base_event(
+                    parent_uuid,
+                    "tool-event",
+                    json!({"input": true}),
+                    json!({"meta": "event"}),
+                ),
+                ScopeCategory::Start,
+                tool_attributes_to_strings(ToolAttributes::REMOTE),
+                EventCategory::tool(),
+                Some(CategoryProfile::builder().tool_call_id("tool-1").build()),
+            )));
+            assert_eq!(tool_event.kind(), "scope");
+            assert_eq!(tool_event.scope_category(), "start");
+            assert_eq!(tool_event.category(), "tool");
+            assert_eq!(
+                py_to_json(tool_event.data(py).unwrap().bind(py)).unwrap(),
+                json!({"input": true})
+            );
+            assert_eq!(
+                py_to_json(tool_event.category_profile(py).unwrap().bind(py)).unwrap(),
+                json!({"tool_call_id": "tool-1"})
+            );
+            assert_eq!(tool_event.attributes(), vec!["remote"]);
+        }
+        assert_mark_and_tool_event_fields(py, parent_uuid);
+
+        fn assert_llm_event_fields(py: Python<'_>, parent_uuid: Uuid) {
+            let llm_event = py_scope_event(Event::Scope(ScopeEvent::new(
+                base_event(
+                    parent_uuid,
+                    "llm-event",
+                    json!({"output": true}),
+                    json!({"meta": "event"}),
+                ),
+                ScopeCategory::End,
+                llm_attributes_to_strings(LlmAttributes::STATEFUL),
+                EventCategory::llm(),
+                Some(CategoryProfile::builder().model_name("model").build()),
+            )));
+            assert_eq!(llm_event.kind(), "scope");
+            assert_eq!(llm_event.scope_category(), "end");
+            assert_eq!(llm_event.category(), "llm");
+            assert_eq!(
+                py_to_json(llm_event.data(py).unwrap().bind(py)).unwrap(),
+                json!({"output": true})
+            );
+            assert_eq!(
+                py_to_json(llm_event.category_profile(py).unwrap().bind(py)).unwrap(),
+                json!({"model_name": "model"})
+            );
+            assert_eq!(llm_event.attributes(), vec!["stateful"]);
+        }
+        assert_llm_event_fields(py, parent_uuid);
     });
 }
 
@@ -501,7 +530,7 @@ fn test_openinference_typed_otel_config_rejects_invalid_inputs() {
 }
 
 #[test]
-fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
+fn test_attribute_wrappers_cover_remaining_bitwise_methods() {
     let _python = crate::test_support::init_python_test();
 
     let scope_or = PyScopeAttributes::new(PyScopeAttributes::PARALLEL)
@@ -526,372 +555,383 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
     );
     let llm_and = llm_or.__and__(&PyLLMAttributes::new(PyLLMAttributes::STREAMING));
     assert_eq!(llm_and.value(), PyLLMAttributes::STREAMING);
+}
 
+#[test]
+fn test_request_and_handle_wrappers_cover_remaining_methods() {
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let stack = PyScopeStack {
-            inner: nemo_relay::api::runtime::create_scope_stack(),
-            publication_buffer: None,
-        };
-        assert_eq!(stack.__repr__(), "<ScopeStack>");
+        fn assert_remaining_handle_methods(py: Python<'_>) {
+            let stack = PyScopeStack {
+                inner: nemo_relay::api::runtime::create_scope_stack(),
+                publication_buffer: None,
+            };
+            assert_eq!(stack.__repr__(), "<ScopeStack>");
 
-        let parent_uuid = Uuid::now_v7();
-        let scope = PyScopeHandle::from(
-            ScopeHandle::builder()
-                .name("scope")
-                .scope_type(ScopeType::Agent)
-                .attributes(ScopeAttributes::PARALLEL | ScopeAttributes::RELOCATABLE)
-                .parent_uuid(parent_uuid)
-                .data(json!({"scope": true}))
-                .metadata(json!({"scope_meta": true}))
-                .build(),
-        );
-        assert!(!scope.uuid().is_empty());
-        assert_eq!(scope.name(), "scope");
-        assert_eq!(
-            scope.attributes().value(),
-            PyScopeAttributes::PARALLEL | PyScopeAttributes::RELOCATABLE
-        );
-
-        let tool = PyToolHandle::from(
-            ToolHandle::builder()
-                .name("tool")
-                .attributes(ToolAttributes::REMOTE)
-                .parent_uuid(parent_uuid)
-                .data(json!({"tool": true}))
-                .metadata(json!({"tool_meta": true}))
-                .build(),
-        );
-        assert!(!tool.uuid().is_empty());
-        assert_eq!(tool.name(), "tool");
-
-        let llm = PyLLMHandle::from(
-            LlmHandle::builder()
-                .name("llm")
-                .attributes(LlmAttributes::STATEFUL | LlmAttributes::STREAMING)
-                .parent_uuid(parent_uuid)
-                .data(json!({"llm": true}))
-                .metadata(json!({"llm_meta": true}))
-                .build(),
-        );
-        assert!(!llm.uuid().is_empty());
-        assert_eq!(llm.name(), "llm");
-
-        let headers = PyDict::new(py);
-        headers.set_item("x-trace", "1").unwrap();
-        let content = json_to_py(py, &json!({"model": "demo", "messages": []})).unwrap();
-        let request = PyLLMRequest::new(headers.as_any(), content.bind(py)).unwrap();
-        assert_eq!(
-            py_to_json(request.headers(py).unwrap().bind(py)).unwrap(),
-            json!({"x-trace": "1"})
-        );
-        assert_eq!(
-            py_to_json(request.content(py).unwrap().bind(py)).unwrap(),
-            json!({"model": "demo", "messages": []})
-        );
-        assert_eq!(request.__repr__(), "LLMRequest(...)");
-
-        let annotated_request = AnnotatedLLMRequest {
-            instructions: None,
-            api_specific: None,
-            messages: vec![
-                Message::System {
-                    content: MessageContent::Text("system".into()),
-                    name: None,
-                },
-                Message::User {
-                    content: MessageContent::Text("user".into()),
-                    name: None,
-                },
-            ],
-            model: Some("codec-model".into()),
-            params: None,
-            tools: None,
-            tool_choice: None,
-            store: None,
-            previous_response_id: None,
-            truncation: None,
-            reasoning: None,
-            include: None,
-            user: None,
-            metadata: None,
-            service_tier: None,
-            parallel_tool_calls: None,
-            max_output_tokens: None,
-            max_tool_calls: None,
-            top_logprobs: None,
-            stream: None,
-            extra: serde_json::Map::new(),
-        };
-        let annotated_response = AnnotatedLLMResponse {
-            id: Some("resp-1".into()),
-            model: Some("codec-model".into()),
-            message: Some(MessageContent::Text("done".into())),
-            tool_calls: Some(vec![ResponseToolCall {
-                id: "call-1".into(),
-                name: "lookup".into(),
-                arguments: json!({"city": "NYC"}),
-            }]),
-            finish_reason: Some(FinishReason::Complete),
-            usage: Some(Usage {
-                prompt_tokens: Some(1),
-                completion_tokens: Some(2),
-                total_tokens: Some(3),
-                cache_read_tokens: None,
-                cache_write_tokens: None,
-                cost: None,
-            }),
-            api_specific: Some(ApiSpecificResponse::Custom {
-                api_name: "custom".into(),
-                data: json!({"ok": true}),
-            }),
-            optimization_summary: None,
-            extra: serde_json::Map::from_iter([("extra".into(), json!(true))]),
-        };
-
-        let scope_start = match Event::Scope(ScopeEvent::new(
-            base_event(
-                parent_uuid,
-                "scope-start",
-                json!({"phase": "start"}),
-                json!({"meta": true}),
-            ),
-            ScopeCategory::Start,
-            scope_attributes_to_strings(ScopeAttributes::PARALLEL),
-            EventCategory::agent(),
-            None,
-        )) {
-            Event::Scope(inner) => PyScopeEvent { inner },
-            _ => unreachable!(),
-        };
-        assert_eq!(scope_start.kind(), "scope");
-        assert_eq!(scope_start.scope_category(), "start");
-        assert_eq!(scope_start.name(), "scope-start");
-        assert_eq!(scope_start.category(), "agent");
-        assert_eq!(scope_start.attributes(), vec!["parallel".to_string()]);
-
-        let scope_end = match Event::Scope(ScopeEvent::new(
-            base_event(
-                parent_uuid,
-                "scope-end",
-                json!({"phase": "end"}),
-                json!({"meta": true}),
-            ),
-            ScopeCategory::End,
-            scope_attributes_to_strings(ScopeAttributes::RELOCATABLE),
-            EventCategory::tool(),
-            None,
-        )) {
-            Event::Scope(inner) => PyScopeEvent { inner },
-            _ => unreachable!(),
-        };
-        assert_eq!(scope_end.kind(), "scope");
-        assert_eq!(scope_end.scope_category(), "end");
-        assert_eq!(scope_end.category(), "tool");
-
-        let tool_end = match Event::Scope(ScopeEvent::new(
-            base_event(
-                parent_uuid,
-                "tool-end",
-                json!({"output": 1}),
-                json!({"meta": true}),
-            ),
-            ScopeCategory::End,
-            tool_attributes_to_strings(ToolAttributes::REMOTE),
-            EventCategory::tool(),
-            Some(CategoryProfile::builder().tool_call_id("call-1").build()),
-        )) {
-            Event::Scope(inner) => PyScopeEvent { inner },
-            _ => unreachable!(),
-        };
-        assert_eq!(tool_end.kind(), "scope");
-        assert_eq!(tool_end.scope_category(), "end");
-        assert_eq!(
-            py_to_json(tool_end.data(py).unwrap().bind(py)).unwrap(),
-            json!({"output": 1})
-        );
-        assert_eq!(
-            py_to_json(tool_end.category_profile(py).unwrap().bind(py)).unwrap(),
-            json!({"tool_call_id": "call-1"})
-        );
-
-        let llm_start = match Event::Scope(ScopeEvent::new(
-            base_event(
-                parent_uuid,
-                "llm-start",
-                json!({"input": true}),
-                json!({"meta": true}),
-            ),
-            ScopeCategory::Start,
-            llm_attributes_to_strings(LlmAttributes::STATEFUL),
-            EventCategory::llm(),
-            Some(
-                CategoryProfile::builder()
-                    .model_name("demo-model")
-                    .annotated_request(std::sync::Arc::new(annotated_request.clone()))
+            let parent_uuid = Uuid::now_v7();
+            let scope = PyScopeHandle::from(
+                ScopeHandle::builder()
+                    .name("scope")
+                    .scope_type(ScopeType::Agent)
+                    .attributes(ScopeAttributes::PARALLEL | ScopeAttributes::RELOCATABLE)
+                    .parent_uuid(parent_uuid)
+                    .data(json!({"scope": true}))
+                    .metadata(json!({"scope_meta": true}))
                     .build(),
-            ),
-        )) {
-            Event::Scope(inner) => PyScopeEvent { inner },
-            _ => unreachable!(),
-        };
-        let mut expected_start_profile = json!({"model_name": "demo-model"});
-        expected_start_profile.as_object_mut().unwrap().insert(
-            "annotated_request".into(),
-            serde_json::to_value(&annotated_request).unwrap(),
-        );
-        assert_eq!(
-            py_to_json(llm_start.category_profile(py).unwrap().bind(py)).unwrap(),
-            expected_start_profile
-        );
+            );
+            assert!(!scope.uuid().is_empty());
+            assert_eq!(scope.name(), "scope");
+            assert_eq!(
+                scope.attributes().value(),
+                PyScopeAttributes::PARALLEL | PyScopeAttributes::RELOCATABLE
+            );
 
-        let llm_end = match Event::Scope(ScopeEvent::new(
-            base_event(
-                parent_uuid,
-                "llm-end",
-                json!({"output": true}),
-                json!({"meta": true}),
-            ),
-            ScopeCategory::End,
-            llm_attributes_to_strings(LlmAttributes::STREAMING),
-            EventCategory::llm(),
-            Some(
-                CategoryProfile::builder()
-                    .model_name("demo-model")
-                    .annotated_response(std::sync::Arc::new(annotated_response.clone()))
+            let tool = PyToolHandle::from(
+                ToolHandle::builder()
+                    .name("tool")
+                    .attributes(ToolAttributes::REMOTE)
+                    .parent_uuid(parent_uuid)
+                    .data(json!({"tool": true}))
+                    .metadata(json!({"tool_meta": true}))
                     .build(),
-            ),
-        )) {
-            Event::Scope(inner) => PyScopeEvent { inner },
-            _ => unreachable!(),
-        };
-        let mut expected_end_profile = json!({"model_name": "demo-model"});
-        expected_end_profile.as_object_mut().unwrap().insert(
-            "annotated_response".into(),
-            serde_json::to_value(&annotated_response).unwrap(),
-        );
-        assert_eq!(
-            py_to_json(llm_end.category_profile(py).unwrap().bind(py)).unwrap(),
-            expected_end_profile
-        );
+            );
+            assert!(!tool.uuid().is_empty());
+            assert_eq!(tool.name(), "tool");
 
-        let mark = match Event::Mark(MarkEvent::new(
-            base_event(
-                parent_uuid,
-                "mark",
-                json!({"mark": true}),
-                json!({"meta": true}),
-            ),
-            None,
-            None,
-        )) {
-            Event::Mark(inner) => PyMarkEvent { inner },
-            _ => unreachable!(),
-        };
-        assert_eq!(mark.kind(), "mark");
-        assert_eq!(mark.name(), "mark");
+            let llm = PyLLMHandle::from(
+                LlmHandle::builder()
+                    .name("llm")
+                    .attributes(LlmAttributes::STATEFUL | LlmAttributes::STREAMING)
+                    .parent_uuid(parent_uuid)
+                    .data(json!({"llm": true}))
+                    .metadata(json!({"llm_meta": true}))
+                    .build(),
+            );
+            assert!(!llm.uuid().is_empty());
+            assert_eq!(llm.name(), "llm");
 
-        with_event_loop(py, |event_loop| {
-            let runner = PyModule::from_code(
-                py,
-                &CString::new(
-                    r#"
+            let headers = PyDict::new(py);
+            headers.set_item("x-trace", "1").unwrap();
+            let content = json_to_py(py, &json!({"model": "demo", "messages": []})).unwrap();
+            let request = PyLLMRequest::new(headers.as_any(), content.bind(py)).unwrap();
+            assert_eq!(
+                py_to_json(request.headers(py).unwrap().bind(py)).unwrap(),
+                json!({"x-trace": "1"})
+            );
+            assert_eq!(
+                py_to_json(request.content(py).unwrap().bind(py)).unwrap(),
+                json!({"model": "demo", "messages": []})
+            );
+            assert_eq!(request.__repr__(), "LLMRequest(...)");
+        }
+        assert_remaining_handle_methods(py);
+    });
+}
+
+#[test]
+fn test_event_wrappers_cover_remaining_methods() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        fn assert_remaining_event_methods(py: Python<'_>) {
+            let parent_uuid = Uuid::now_v7();
+            let annotated_request = AnnotatedLLMRequest {
+                instructions: None,
+                api_specific: None,
+                messages: vec![
+                    Message::System {
+                        content: MessageContent::Text("system".into()),
+                        name: None,
+                    },
+                    Message::User {
+                        content: MessageContent::Text("user".into()),
+                        name: None,
+                    },
+                ],
+                model: Some("codec-model".into()),
+                params: None,
+                tools: None,
+                tool_choice: None,
+                store: None,
+                previous_response_id: None,
+                truncation: None,
+                reasoning: None,
+                include: None,
+                user: None,
+                metadata: None,
+                service_tier: None,
+                parallel_tool_calls: None,
+                max_output_tokens: None,
+                max_tool_calls: None,
+                top_logprobs: None,
+                stream: None,
+                extra: serde_json::Map::new(),
+            };
+            let annotated_response = AnnotatedLLMResponse {
+                id: Some("resp-1".into()),
+                model: Some("codec-model".into()),
+                message: Some(MessageContent::Text("done".into())),
+                tool_calls: Some(vec![ResponseToolCall {
+                    id: "call-1".into(),
+                    name: "lookup".into(),
+                    arguments: json!({"city": "NYC"}),
+                }]),
+                finish_reason: Some(FinishReason::Complete),
+                usage: Some(Usage {
+                    prompt_tokens: Some(1),
+                    completion_tokens: Some(2),
+                    total_tokens: Some(3),
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    cost: None,
+                }),
+                api_specific: Some(ApiSpecificResponse::Custom {
+                    api_name: "custom".into(),
+                    data: json!({"ok": true}),
+                }),
+                optimization_summary: None,
+                extra: serde_json::Map::from_iter([("extra".into(), json!(true))]),
+            };
+
+            fn assert_scope_and_tool_event_methods(py: Python<'_>, parent_uuid: Uuid) {
+                let scope_start = py_scope_event(Event::Scope(ScopeEvent::new(
+                    base_event(
+                        parent_uuid,
+                        "scope-start",
+                        json!({"phase": "start"}),
+                        json!({"meta": true}),
+                    ),
+                    ScopeCategory::Start,
+                    scope_attributes_to_strings(ScopeAttributes::PARALLEL),
+                    EventCategory::agent(),
+                    None,
+                )));
+                assert_eq!(scope_start.kind(), "scope");
+                assert_eq!(scope_start.scope_category(), "start");
+                assert_eq!(scope_start.name(), "scope-start");
+                assert_eq!(scope_start.category(), "agent");
+                assert_eq!(scope_start.attributes(), vec!["parallel".to_string()]);
+
+                let scope_end = py_scope_event(Event::Scope(ScopeEvent::new(
+                    base_event(
+                        parent_uuid,
+                        "scope-end",
+                        json!({"phase": "end"}),
+                        json!({"meta": true}),
+                    ),
+                    ScopeCategory::End,
+                    scope_attributes_to_strings(ScopeAttributes::RELOCATABLE),
+                    EventCategory::tool(),
+                    None,
+                )));
+                assert_eq!(scope_end.kind(), "scope");
+                assert_eq!(scope_end.scope_category(), "end");
+                assert_eq!(scope_end.category(), "tool");
+
+                let tool_end = py_scope_event(Event::Scope(ScopeEvent::new(
+                    base_event(
+                        parent_uuid,
+                        "tool-end",
+                        json!({"output": 1}),
+                        json!({"meta": true}),
+                    ),
+                    ScopeCategory::End,
+                    tool_attributes_to_strings(ToolAttributes::REMOTE),
+                    EventCategory::tool(),
+                    Some(CategoryProfile::builder().tool_call_id("call-1").build()),
+                )));
+                assert_eq!(tool_end.kind(), "scope");
+                assert_eq!(tool_end.scope_category(), "end");
+                assert_eq!(
+                    py_to_json(tool_end.data(py).unwrap().bind(py)).unwrap(),
+                    json!({"output": 1})
+                );
+                assert_eq!(
+                    py_to_json(tool_end.category_profile(py).unwrap().bind(py)).unwrap(),
+                    json!({"tool_call_id": "call-1"})
+                );
+            }
+            assert_scope_and_tool_event_methods(py, parent_uuid);
+
+            let llm_start = py_scope_event(Event::Scope(ScopeEvent::new(
+                base_event(
+                    parent_uuid,
+                    "llm-start",
+                    json!({"input": true}),
+                    json!({"meta": true}),
+                ),
+                ScopeCategory::Start,
+                llm_attributes_to_strings(LlmAttributes::STATEFUL),
+                EventCategory::llm(),
+                Some(
+                    CategoryProfile::builder()
+                        .model_name("demo-model")
+                        .annotated_request(std::sync::Arc::new(annotated_request.clone()))
+                        .build(),
+                ),
+            )));
+            let mut expected_start_profile = json!({"model_name": "demo-model"});
+            expected_start_profile.as_object_mut().unwrap().insert(
+                "annotated_request".into(),
+                serde_json::to_value(&annotated_request).unwrap(),
+            );
+            assert_eq!(
+                py_to_json(llm_start.category_profile(py).unwrap().bind(py)).unwrap(),
+                expected_start_profile
+            );
+
+            let llm_end = py_scope_event(Event::Scope(ScopeEvent::new(
+                base_event(
+                    parent_uuid,
+                    "llm-end",
+                    json!({"output": true}),
+                    json!({"meta": true}),
+                ),
+                ScopeCategory::End,
+                llm_attributes_to_strings(LlmAttributes::STREAMING),
+                EventCategory::llm(),
+                Some(
+                    CategoryProfile::builder()
+                        .model_name("demo-model")
+                        .annotated_response(std::sync::Arc::new(annotated_response.clone()))
+                        .build(),
+                ),
+            )));
+            let mut expected_end_profile = json!({"model_name": "demo-model"});
+            expected_end_profile.as_object_mut().unwrap().insert(
+                "annotated_response".into(),
+                serde_json::to_value(&annotated_response).unwrap(),
+            );
+            assert_eq!(
+                py_to_json(llm_end.category_profile(py).unwrap().bind(py)).unwrap(),
+                expected_end_profile
+            );
+
+            let mark = py_mark_event(Event::Mark(MarkEvent::new(
+                base_event(
+                    parent_uuid,
+                    "mark",
+                    json!({"mark": true}),
+                    json!({"meta": true}),
+                ),
+                None,
+                None,
+            )));
+            assert_eq!(mark.kind(), "mark");
+            assert_eq!(mark.name(), "mark");
+        }
+        assert_remaining_event_methods(py);
+    });
+}
+
+#[test]
+fn test_llm_stream_wrapper_covers_remaining_methods() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        fn assert_llm_stream_methods(py: Python<'_>) {
+            with_event_loop(py, |event_loop| {
+                let runner = PyModule::from_code(
+                    py,
+                    &CString::new(
+                        r#"
 async def next_item(stream):
     return await stream.__anext__()
 "#,
-                )
-                .unwrap(),
-                &CString::new("py_types_stream_runner.py").unwrap(),
-                &CString::new("py_types_stream_runner").unwrap(),
-            )
-            .unwrap();
-            let (tx_ok, rx_ok) = tokio::sync::mpsc::channel(2);
-            tx_ok.blocking_send(Ok(json!({"chunk": 1}))).unwrap();
-            drop(tx_ok);
-            let (cancel_ok, _cancel_ok_rx) = tokio::sync::watch::channel(false);
-            let (_closed_ok, closed_ok_rx) = tokio::sync::watch::channel(Some(Ok(())));
-            let stream_ok = pyo3::Py::new(
-                py,
-                PyLlmStream {
-                    receiver: Arc::new(tokio::sync::Mutex::new(rx_ok)),
-                    cancel: cancel_ok,
-                    closed: closed_ok_rx,
-                },
-            )
-            .unwrap();
-            {
-                let ok_ref = stream_ok.bind(py).borrow();
-                let _ = PyLlmStream::__aiter__(ok_ref);
-            }
-            let ok_chunk = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (runner
-                        .getattr("next_item")
-                        .unwrap()
-                        .call1((stream_ok.clone_ref(py),))
-                        .unwrap(),),
+                    )
+                    .unwrap(),
+                    &CString::new("py_types_stream_runner.py").unwrap(),
+                    &CString::new("py_types_stream_runner").unwrap(),
                 )
                 .unwrap();
-            assert_eq!(
-                crate::convert::py_to_json(&ok_chunk).unwrap(),
-                json!({"chunk": 1})
-            );
-
-            let (tx_err, rx_err) = tokio::sync::mpsc::channel(1);
-            tx_err
-                .blocking_send(Err(nemo_relay::error::FlowError::Internal(
-                    "stream boom".into(),
-                )))
+                let (tx_ok, rx_ok) = tokio::sync::mpsc::channel(2);
+                tx_ok.blocking_send(Ok(json!({"chunk": 1}))).unwrap();
+                drop(tx_ok);
+                let (cancel_ok, _cancel_ok_rx) = tokio::sync::watch::channel(false);
+                let (_closed_ok, closed_ok_rx) = tokio::sync::watch::channel(Some(Ok(())));
+                let stream_ok = pyo3::Py::new(
+                    py,
+                    PyLlmStream {
+                        receiver: Arc::new(tokio::sync::Mutex::new(rx_ok)),
+                        cancel: cancel_ok,
+                        closed: closed_ok_rx,
+                    },
+                )
                 .unwrap();
-            drop(tx_err);
-            let (cancel_err, _cancel_err_rx) = tokio::sync::watch::channel(false);
-            let (_closed_err, closed_err_rx) = tokio::sync::watch::channel(Some(Ok(())));
-            let stream_err = pyo3::Py::new(
-                py,
-                PyLlmStream {
-                    receiver: Arc::new(tokio::sync::Mutex::new(rx_err)),
-                    cancel: cancel_err,
-                    closed: closed_err_rx,
-                },
-            )
-            .unwrap();
-            let err = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (runner
-                        .getattr("next_item")
-                        .unwrap()
-                        .call1((stream_err.clone_ref(py),))
-                        .unwrap(),),
-                )
-                .unwrap_err();
-            assert!(err.to_string().contains("stream boom"));
+                {
+                    let ok_ref = stream_ok.bind(py).borrow();
+                    let _ = PyLlmStream::__aiter__(ok_ref);
+                }
+                let ok_chunk = event_loop
+                    .call_method1(
+                        "run_until_complete",
+                        (runner
+                            .getattr("next_item")
+                            .unwrap()
+                            .call1((stream_ok.clone_ref(py),))
+                            .unwrap(),),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    crate::convert::py_to_json(&ok_chunk).unwrap(),
+                    json!({"chunk": 1})
+                );
 
-            let (tx_done, rx_done) = tokio::sync::mpsc::channel(1);
-            drop(tx_done);
-            let (cancel_done, _cancel_done_rx) = tokio::sync::watch::channel(false);
-            let (_closed_done, closed_done_rx) = tokio::sync::watch::channel(Some(Ok(())));
-            let stream_done = pyo3::Py::new(
-                py,
-                PyLlmStream {
-                    receiver: Arc::new(tokio::sync::Mutex::new(rx_done)),
-                    cancel: cancel_done,
-                    closed: closed_done_rx,
-                },
-            )
-            .unwrap();
-            let stop = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (runner
-                        .getattr("next_item")
-                        .unwrap()
-                        .call1((stream_done.clone_ref(py),))
-                        .unwrap(),),
+                let (tx_err, rx_err) = tokio::sync::mpsc::channel(1);
+                tx_err
+                    .blocking_send(Err(nemo_relay::error::FlowError::Internal(
+                        "stream boom".into(),
+                    )))
+                    .unwrap();
+                drop(tx_err);
+                let (cancel_err, _cancel_err_rx) = tokio::sync::watch::channel(false);
+                let (_closed_err, closed_err_rx) = tokio::sync::watch::channel(Some(Ok(())));
+                let stream_err = pyo3::Py::new(
+                    py,
+                    PyLlmStream {
+                        receiver: Arc::new(tokio::sync::Mutex::new(rx_err)),
+                        cancel: cancel_err,
+                        closed: closed_err_rx,
+                    },
                 )
-                .unwrap_err();
-            assert!(stop.to_string().contains("StopAsyncIteration"));
-        });
+                .unwrap();
+                let err = event_loop
+                    .call_method1(
+                        "run_until_complete",
+                        (runner
+                            .getattr("next_item")
+                            .unwrap()
+                            .call1((stream_err.clone_ref(py),))
+                            .unwrap(),),
+                    )
+                    .unwrap_err();
+                assert!(err.to_string().contains("stream boom"));
+
+                let (tx_done, rx_done) = tokio::sync::mpsc::channel(1);
+                drop(tx_done);
+                let (cancel_done, _cancel_done_rx) = tokio::sync::watch::channel(false);
+                let (_closed_done, closed_done_rx) = tokio::sync::watch::channel(Some(Ok(())));
+                let stream_done = pyo3::Py::new(
+                    py,
+                    PyLlmStream {
+                        receiver: Arc::new(tokio::sync::Mutex::new(rx_done)),
+                        cancel: cancel_done,
+                        closed: closed_done_rx,
+                    },
+                )
+                .unwrap();
+                let stop = event_loop
+                    .call_method1(
+                        "run_until_complete",
+                        (runner
+                            .getattr("next_item")
+                            .unwrap()
+                            .call1((stream_done.clone_ref(py),))
+                            .unwrap(),),
+                    )
+                    .unwrap_err();
+                assert!(stop.to_string().contains("StopAsyncIteration"));
+            });
+        }
+        assert_llm_stream_methods(py);
     });
 }
 
@@ -1106,55 +1146,63 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
             Some(extra.bind(py)),
         )
         .unwrap();
-        assert_eq!(annotated.model(), Some("demo-model".into()));
-        assert_eq!(
-            py_to_json(annotated.instructions(py).unwrap().bind(py)).unwrap(),
-            json!("Initial policy")
-        );
-        assert_eq!(
-            py_to_json(annotated.api_specific(py).unwrap().bind(py)).unwrap(),
-            json!({"api": "openai_chat", "seed": 7})
-        );
-        assert_eq!(annotated.system_prompt(), Some("Initial policy".into()));
-        assert_eq!(
-            annotated.last_user_message(),
-            Some("Where is the weather?".into())
-        );
-        assert!(annotated.has_tool_calls());
-        assert!(annotated.__repr__().contains("AnnotatedLLMRequest"));
-        assert_eq!(
-            py_to_json(annotated.messages(py).unwrap().bind(py)).unwrap()[0]["role"],
-            json!("system")
-        );
-        assert_eq!(
-            py_to_json(annotated.params(py).unwrap().bind(py)).unwrap()["max_tokens"],
-            json!(64)
-        );
-        assert_eq!(
-            py_to_json(annotated.tools(py).unwrap().bind(py)).unwrap()[0]["function"]["name"],
-            json!("lookup")
-        );
-        assert_eq!(
-            py_to_json(annotated.tool_choice(py).unwrap().bind(py)).unwrap()["function"]["name"],
-            json!("lookup")
-        );
-        assert_eq!(
-            py_to_json(annotated.extra(py).unwrap().bind(py)).unwrap()["provider"],
-            json!("test")
-        );
-        assert_eq!(annotated.store(), None);
-        assert_eq!(annotated.previous_response_id(), None);
-        assert!(annotated.truncation(py).unwrap().bind(py).is_none());
-        assert!(annotated.reasoning(py).unwrap().bind(py).is_none());
-        assert!(annotated.include(py).unwrap().bind(py).is_none());
-        assert_eq!(annotated.user(), None);
-        assert!(annotated.metadata(py).unwrap().bind(py).is_none());
-        assert_eq!(annotated.service_tier(), None);
-        assert_eq!(annotated.parallel_tool_calls(), None);
-        assert_eq!(annotated.max_output_tokens(), None);
-        assert_eq!(annotated.max_tool_calls(), None);
-        assert_eq!(annotated.top_logprobs(), None);
-        assert_eq!(annotated.stream(), None);
+
+        fn assert_initial_annotated_content(py: Python<'_>, annotated: &PyAnnotatedLLMRequest) {
+            assert_eq!(annotated.model(), Some("demo-model".into()));
+            assert_eq!(
+                py_to_json(annotated.instructions(py).unwrap().bind(py)).unwrap(),
+                json!("Initial policy")
+            );
+            assert_eq!(
+                py_to_json(annotated.api_specific(py).unwrap().bind(py)).unwrap(),
+                json!({"api": "openai_chat", "seed": 7})
+            );
+            assert_eq!(annotated.system_prompt(), Some("Initial policy".into()));
+            assert_eq!(
+                annotated.last_user_message(),
+                Some("Where is the weather?".into())
+            );
+            assert!(annotated.has_tool_calls());
+            assert!(annotated.__repr__().contains("AnnotatedLLMRequest"));
+            assert_eq!(
+                py_to_json(annotated.messages(py).unwrap().bind(py)).unwrap()[0]["role"],
+                json!("system")
+            );
+            assert_eq!(
+                py_to_json(annotated.params(py).unwrap().bind(py)).unwrap()["max_tokens"],
+                json!(64)
+            );
+            assert_eq!(
+                py_to_json(annotated.tools(py).unwrap().bind(py)).unwrap()[0]["function"]["name"],
+                json!("lookup")
+            );
+            assert_eq!(
+                py_to_json(annotated.tool_choice(py).unwrap().bind(py)).unwrap()["function"]["name"],
+                json!("lookup")
+            );
+            assert_eq!(
+                py_to_json(annotated.extra(py).unwrap().bind(py)).unwrap()["provider"],
+                json!("test")
+            );
+        }
+        assert_initial_annotated_content(py, &annotated);
+
+        fn assert_initial_annotated_options(py: Python<'_>, annotated: &PyAnnotatedLLMRequest) {
+            assert_eq!(annotated.store(), None);
+            assert_eq!(annotated.previous_response_id(), None);
+            assert!(annotated.truncation(py).unwrap().bind(py).is_none());
+            assert!(annotated.reasoning(py).unwrap().bind(py).is_none());
+            assert!(annotated.include(py).unwrap().bind(py).is_none());
+            assert_eq!(annotated.user(), None);
+            assert!(annotated.metadata(py).unwrap().bind(py).is_none());
+            assert_eq!(annotated.service_tier(), None);
+            assert_eq!(annotated.parallel_tool_calls(), None);
+            assert_eq!(annotated.max_output_tokens(), None);
+            assert_eq!(annotated.max_tool_calls(), None);
+            assert_eq!(annotated.top_logprobs(), None);
+            assert_eq!(annotated.stream(), None);
+        }
+        assert_initial_annotated_options(py, &annotated);
 
         let updated_messages =
             json_to_py(py, &json!([{"role": "user", "content": "updated"}])).unwrap();
@@ -1204,45 +1252,53 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         annotated.set_stream(Some(true));
         let updated_extra = json_to_py(py, &json!({"updated": true})).unwrap();
         annotated.set_extra(updated_extra.bind(py)).unwrap();
-        assert_eq!(annotated.model(), Some("updated-model".into()));
-        assert_eq!(annotated.last_user_message(), Some("updated".into()));
-        assert_eq!(
-            py_to_json(annotated.instructions(py).unwrap().bind(py)).unwrap(),
-            json!([{"type": "text", "text": "Updated policy"}])
-        );
-        assert_eq!(
-            py_to_json(annotated.api_specific(py).unwrap().bind(py)).unwrap(),
-            json!({"api": "openai_responses", "background": true})
-        );
-        assert_eq!(annotated.store(), Some(true));
-        assert_eq!(annotated.previous_response_id(), Some("resp_1".into()));
-        assert_eq!(
-            py_to_json(annotated.truncation(py).unwrap().bind(py)).unwrap(),
-            json!("disabled")
-        );
-        assert_eq!(
-            py_to_json(annotated.reasoning(py).unwrap().bind(py)).unwrap(),
-            json!({"effort": "low"})
-        );
-        assert_eq!(
-            py_to_json(annotated.include(py).unwrap().bind(py)).unwrap(),
-            json!(["reasoning.encrypted_content"])
-        );
-        assert_eq!(annotated.user(), Some("user-1".into()));
-        assert_eq!(
-            py_to_json(annotated.metadata(py).unwrap().bind(py)).unwrap(),
-            json!({"tenant": "qa"})
-        );
-        assert_eq!(annotated.service_tier(), Some("default".into()));
-        assert_eq!(annotated.parallel_tool_calls(), Some(false));
-        assert_eq!(annotated.max_output_tokens(), Some(128));
-        assert_eq!(annotated.max_tool_calls(), Some(3));
-        assert_eq!(annotated.top_logprobs(), Some(2));
-        assert_eq!(annotated.stream(), Some(true));
-        assert_eq!(
-            py_to_json(annotated.extra(py).unwrap().bind(py)).unwrap(),
-            json!({"updated": true})
-        );
+
+        fn assert_updated_annotated_content(py: Python<'_>, annotated: &PyAnnotatedLLMRequest) {
+            assert_eq!(annotated.model(), Some("updated-model".into()));
+            assert_eq!(annotated.last_user_message(), Some("updated".into()));
+            assert_eq!(
+                py_to_json(annotated.instructions(py).unwrap().bind(py)).unwrap(),
+                json!([{"type": "text", "text": "Updated policy"}])
+            );
+            assert_eq!(
+                py_to_json(annotated.api_specific(py).unwrap().bind(py)).unwrap(),
+                json!({"api": "openai_responses", "background": true})
+            );
+            assert_eq!(annotated.store(), Some(true));
+            assert_eq!(annotated.previous_response_id(), Some("resp_1".into()));
+            assert_eq!(
+                py_to_json(annotated.truncation(py).unwrap().bind(py)).unwrap(),
+                json!("disabled")
+            );
+            assert_eq!(
+                py_to_json(annotated.reasoning(py).unwrap().bind(py)).unwrap(),
+                json!({"effort": "low"})
+            );
+            assert_eq!(
+                py_to_json(annotated.include(py).unwrap().bind(py)).unwrap(),
+                json!(["reasoning.encrypted_content"])
+            );
+        }
+        assert_updated_annotated_content(py, &annotated);
+
+        fn assert_updated_annotated_options(py: Python<'_>, annotated: &PyAnnotatedLLMRequest) {
+            assert_eq!(annotated.user(), Some("user-1".into()));
+            assert_eq!(
+                py_to_json(annotated.metadata(py).unwrap().bind(py)).unwrap(),
+                json!({"tenant": "qa"})
+            );
+            assert_eq!(annotated.service_tier(), Some("default".into()));
+            assert_eq!(annotated.parallel_tool_calls(), Some(false));
+            assert_eq!(annotated.max_output_tokens(), Some(128));
+            assert_eq!(annotated.max_tool_calls(), Some(3));
+            assert_eq!(annotated.top_logprobs(), Some(2));
+            assert_eq!(annotated.stream(), Some(true));
+            assert_eq!(
+                py_to_json(annotated.extra(py).unwrap().bind(py)).unwrap(),
+                json!({"updated": true})
+            );
+        }
+        assert_updated_annotated_options(py, &annotated);
 
         annotated.set_params(py.None().bind(py)).unwrap();
         annotated.set_instructions(py.None().bind(py)).unwrap();
@@ -1253,15 +1309,19 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         annotated.set_reasoning(py.None().bind(py)).unwrap();
         annotated.set_include(py.None().bind(py)).unwrap();
         annotated.set_metadata(py.None().bind(py)).unwrap();
-        assert!(annotated.params(py).unwrap().bind(py).is_none());
-        assert!(annotated.instructions(py).unwrap().bind(py).is_none());
-        assert!(annotated.api_specific(py).unwrap().bind(py).is_none());
-        assert!(annotated.tools(py).unwrap().bind(py).is_none());
-        assert!(annotated.tool_choice(py).unwrap().bind(py).is_none());
-        assert!(annotated.truncation(py).unwrap().bind(py).is_none());
-        assert!(annotated.reasoning(py).unwrap().bind(py).is_none());
-        assert!(annotated.include(py).unwrap().bind(py).is_none());
-        assert!(annotated.metadata(py).unwrap().bind(py).is_none());
+
+        fn assert_cleared_annotated_options(py: Python<'_>, annotated: &PyAnnotatedLLMRequest) {
+            assert!(annotated.params(py).unwrap().bind(py).is_none());
+            assert!(annotated.instructions(py).unwrap().bind(py).is_none());
+            assert!(annotated.api_specific(py).unwrap().bind(py).is_none());
+            assert!(annotated.tools(py).unwrap().bind(py).is_none());
+            assert!(annotated.tool_choice(py).unwrap().bind(py).is_none());
+            assert!(annotated.truncation(py).unwrap().bind(py).is_none());
+            assert!(annotated.reasoning(py).unwrap().bind(py).is_none());
+            assert!(annotated.include(py).unwrap().bind(py).is_none());
+            assert!(annotated.metadata(py).unwrap().bind(py).is_none());
+        }
+        assert_cleared_annotated_options(py, &annotated);
 
         let bad_messages = json_to_py(py, &json!([{"content": "missing role"}])).unwrap();
         let err = PyAnnotatedLLMRequest::new(
@@ -1298,237 +1358,249 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         let bad_extra = PyList::empty(py);
         assert!(annotated.set_extra(&bad_extra.into_any()).is_err());
 
-        let response = PyAnnotatedLLMResponse {
-            inner: AnnotatedLLMResponse {
-                id: Some("resp-42".into()),
-                model: Some("demo-model".into()),
-                message: Some(MessageContent::Text("hello".into())),
-                tool_calls: Some(vec![ResponseToolCall {
-                    id: "call-1".into(),
-                    name: "lookup".into(),
-                    arguments: json!({"city": "NYC"}),
-                }]),
-                finish_reason: Some(FinishReason::Complete),
-                usage: Some(Usage {
-                    prompt_tokens: Some(2),
-                    completion_tokens: Some(3),
-                    total_tokens: Some(5),
-                    cache_read_tokens: Some(1),
-                    cache_write_tokens: None,
-                    cost: Some(CostEstimate {
-                        total: Some(0.000_001),
-                        currency: "USD".into(),
-                        input: Some(0.000_000_2),
-                        output: Some(0.000_000_8),
-                        cache_read: None,
-                        cache_write: None,
-                        source: CostSource::ProviderReported,
-                        pricing_provider: Some("test-provider".into()),
-                        pricing_model: Some("demo-model".into()),
-                        pricing_as_of: Some("2026-06-04".into()),
-                        pricing_source: Some("https://example.test/pricing".into()),
+        fn assert_annotated_response_fields(py: Python<'_>) {
+            let response = PyAnnotatedLLMResponse {
+                inner: AnnotatedLLMResponse {
+                    id: Some("resp-42".into()),
+                    model: Some("demo-model".into()),
+                    message: Some(MessageContent::Text("hello".into())),
+                    tool_calls: Some(vec![ResponseToolCall {
+                        id: "call-1".into(),
+                        name: "lookup".into(),
+                        arguments: json!({"city": "NYC"}),
+                    }]),
+                    finish_reason: Some(FinishReason::Complete),
+                    usage: Some(Usage {
+                        prompt_tokens: Some(2),
+                        completion_tokens: Some(3),
+                        total_tokens: Some(5),
+                        cache_read_tokens: Some(1),
+                        cache_write_tokens: None,
+                        cost: Some(CostEstimate {
+                            total: Some(0.000_001),
+                            currency: "USD".into(),
+                            input: Some(0.000_000_2),
+                            output: Some(0.000_000_8),
+                            cache_read: None,
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("test-provider".into()),
+                            pricing_model: Some("demo-model".into()),
+                            pricing_as_of: Some("2026-06-04".into()),
+                            pricing_source: Some("https://example.test/pricing".into()),
+                        }),
                     }),
-                }),
-                api_specific: Some(ApiSpecificResponse::Custom {
-                    api_name: "custom".into(),
-                    data: json!({"debug": true}),
-                }),
-                optimization_summary: Some(
-                    serde_json::from_value(json!({
-                        "schema_version": "1",
-                        "calculation_version": "1",
-                        "status": "partial",
-                        "limitations": ["missing_pricing"],
-                        "tokens_saved": {"prompt_tokens": 2, "total_tokens": 2},
-                        "contributions": []
-                    }))
-                    .unwrap(),
-                ),
-                extra: serde_json::Map::from_iter([("trace".into(), json!("abc"))]),
-            },
-        };
-        assert_eq!(response.id(), Some("resp-42".into()));
-        assert_eq!(response.model(), Some("demo-model".into()));
-        assert_eq!(
-            py_to_json(response.message(py).unwrap().bind(py)).unwrap(),
-            json!("hello")
-        );
-        assert_eq!(
-            py_to_json(response.tool_calls(py).unwrap().bind(py)).unwrap()[0]["name"],
-            json!("lookup")
-        );
-        assert_eq!(response.finish_reason(), Some("complete".into()));
-        assert_eq!(
-            py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["total_tokens"],
-            json!(5)
-        );
-        assert_eq!(
-            py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["cost"]["pricing_provider"],
-            json!("test-provider")
-        );
-        assert_eq!(
-            py_to_json(response.optimization_summary(py).unwrap().bind(py)).unwrap()["tokens_saved"]
-                ["prompt_tokens"],
-            json!(2)
-        );
-        assert_eq!(
-            py_to_json(response.api_specific(py).unwrap().bind(py)).unwrap()["api_name"],
-            json!("custom")
-        );
-        assert_eq!(
-            py_to_json(response.extra(py).unwrap().bind(py)).unwrap()["trace"],
-            json!("abc")
-        );
-        assert_eq!(response.response_text(), Some("hello".into()));
-        assert!(response.has_tool_calls());
-        assert!(response.__repr__().contains("AnnotatedLLMResponse"));
+                    api_specific: Some(ApiSpecificResponse::Custom {
+                        api_name: "custom".into(),
+                        data: json!({"debug": true}),
+                    }),
+                    optimization_summary: Some(
+                        serde_json::from_value(json!({
+                            "schema_version": "1",
+                            "calculation_version": "1",
+                            "status": "partial",
+                            "limitations": ["missing_pricing"],
+                            "tokens_saved": {"prompt_tokens": 2, "total_tokens": 2},
+                            "contributions": []
+                        }))
+                        .unwrap(),
+                    ),
+                    extra: serde_json::Map::from_iter([("trace".into(), json!("abc"))]),
+                },
+            };
+            assert_eq!(response.id(), Some("resp-42".into()));
+            assert_eq!(response.model(), Some("demo-model".into()));
+            assert_eq!(
+                py_to_json(response.message(py).unwrap().bind(py)).unwrap(),
+                json!("hello")
+            );
+            assert_eq!(
+                py_to_json(response.tool_calls(py).unwrap().bind(py)).unwrap()[0]["name"],
+                json!("lookup")
+            );
+            assert_eq!(response.finish_reason(), Some("complete".into()));
+            assert_eq!(
+                py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["total_tokens"],
+                json!(5)
+            );
+            assert_eq!(
+                py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["cost"]["pricing_provider"],
+                json!("test-provider")
+            );
+            assert_eq!(
+                py_to_json(response.optimization_summary(py).unwrap().bind(py)).unwrap()["tokens_saved"]
+                    ["prompt_tokens"],
+                json!(2)
+            );
+            assert_eq!(
+                py_to_json(response.api_specific(py).unwrap().bind(py)).unwrap()["api_name"],
+                json!("custom")
+            );
+            assert_eq!(
+                py_to_json(response.extra(py).unwrap().bind(py)).unwrap()["trace"],
+                json!("abc")
+            );
+            assert_eq!(response.response_text(), Some("hello".into()));
+            assert!(response.has_tool_calls());
+            assert!(response.__repr__().contains("AnnotatedLLMResponse"));
 
-        let response_without_api_specific = PyAnnotatedLLMResponse {
-            inner: AnnotatedLLMResponse {
-                id: None,
-                model: None,
-                message: None,
-                tool_calls: None,
-                finish_reason: None,
-                usage: None,
-                api_specific: None,
-                optimization_summary: None,
-                extra: serde_json::Map::new(),
-            },
-        };
-        assert!(
-            response_without_api_specific
-                .api_specific(py)
-                .unwrap()
-                .bind(py)
-                .is_none()
-        );
-        assert!(
-            response_without_api_specific
-                .optimization_summary(py)
-                .unwrap()
-                .bind(py)
-                .is_none()
-        );
+            let response_without_api_specific = PyAnnotatedLLMResponse {
+                inner: AnnotatedLLMResponse {
+                    id: None,
+                    model: None,
+                    message: None,
+                    tool_calls: None,
+                    finish_reason: None,
+                    usage: None,
+                    api_specific: None,
+                    optimization_summary: None,
+                    extra: serde_json::Map::new(),
+                },
+            };
+            assert!(
+                response_without_api_specific
+                    .api_specific(py)
+                    .unwrap()
+                    .bind(py)
+                    .is_none()
+            );
+            assert!(
+                response_without_api_specific
+                    .optimization_summary(py)
+                    .unwrap()
+                    .bind(py)
+                    .is_none()
+            );
+        }
+        assert_annotated_response_fields(py);
 
-        let chat_request = PyLLMRequest {
-            inner: nemo_relay::api::llm::LlmRequest {
-                headers: serde_json::Map::new(),
-                content: json!({
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 16
-                }),
-            },
-        };
-        let chat_codec = PyOpenAIChatCodec::new();
-        let chat_decoded = chat_codec.decode(&chat_request).unwrap();
-        assert_eq!(chat_decoded.model(), Some("gpt-4o-mini".into()));
-        let chat_encoded = chat_codec.encode(&chat_decoded, &chat_request).unwrap();
-        assert_eq!(chat_encoded.inner.content["model"], json!("gpt-4o-mini"));
-        let chat_response = chat_codec
-            .decode_response(
-                json_to_py(
-                    py,
-                    &json!({
-                        "id": "chatcmpl-1",
+        fn assert_openai_chat_codec(py: Python<'_>) {
+            let chat_request = PyLLMRequest {
+                inner: nemo_relay::api::llm::LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({
                         "model": "gpt-4o-mini",
-                        "choices": [{
-                            "message": {"role": "assistant", "content": "hello"},
-                            "finish_reason": "stop"
-                        }]
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 16
                     }),
+                },
+            };
+            let chat_codec = PyOpenAIChatCodec::new();
+            let chat_decoded = chat_codec.decode(&chat_request).unwrap();
+            assert_eq!(chat_decoded.model(), Some("gpt-4o-mini".into()));
+            let chat_encoded = chat_codec.encode(&chat_decoded, &chat_request).unwrap();
+            assert_eq!(chat_encoded.inner.content["model"], json!("gpt-4o-mini"));
+            let chat_response = chat_codec
+                .decode_response(
+                    json_to_py(
+                        py,
+                        &json!({
+                            "id": "chatcmpl-1",
+                            "model": "gpt-4o-mini",
+                            "choices": [{
+                                "message": {"role": "assistant", "content": "hello"},
+                                "finish_reason": "stop"
+                            }]
+                        }),
+                    )
+                    .unwrap()
+                    .bind(py),
                 )
-                .unwrap()
-                .bind(py),
-            )
-            .unwrap();
-        assert_eq!(chat_response.response_text(), Some("hello".into()));
-        assert_eq!(chat_codec.__repr__(), "<OpenAIChatCodec>");
+                .unwrap();
+            assert_eq!(chat_response.response_text(), Some("hello".into()));
+            assert_eq!(chat_codec.__repr__(), "<OpenAIChatCodec>");
+        }
+        assert_openai_chat_codec(py);
 
-        let responses_request = PyLLMRequest {
-            inner: nemo_relay::api::llm::LlmRequest {
-                headers: serde_json::Map::new(),
-                content: json!({
-                    "model": "gpt-4o-mini",
-                    "instructions": "Be helpful",
-                    "input": [{"role": "user", "content": "hi"}],
-                    "max_output_tokens": 32
-                }),
-            },
-        };
-        let responses_codec = PyOpenAIResponsesCodec::new();
-        let responses_decoded = responses_codec.decode(&responses_request).unwrap();
-        assert_eq!(responses_decoded.system_prompt(), Some("Be helpful".into()));
-        let responses_encoded = responses_codec
-            .encode(&responses_decoded, &responses_request)
-            .unwrap();
-        assert_eq!(
-            responses_encoded.inner.content["instructions"],
-            json!("Be helpful")
-        );
-        let responses_response = responses_codec
-            .decode_response(
-                json_to_py(
-                    py,
-                    &json!({
-                        "id": "resp-1",
+        fn assert_openai_responses_codec(py: Python<'_>) {
+            let responses_request = PyLLMRequest {
+                inner: nemo_relay::api::llm::LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({
                         "model": "gpt-4o-mini",
-                        "status": "completed",
-                        "output": [{
-                            "type": "message",
-                            "role": "assistant",
+                        "instructions": "Be helpful",
+                        "input": [{"role": "user", "content": "hi"}],
+                        "max_output_tokens": 32
+                    }),
+                },
+            };
+            let responses_codec = PyOpenAIResponsesCodec::new();
+            let responses_decoded = responses_codec.decode(&responses_request).unwrap();
+            assert_eq!(responses_decoded.system_prompt(), Some("Be helpful".into()));
+            let responses_encoded = responses_codec
+                .encode(&responses_decoded, &responses_request)
+                .unwrap();
+            assert_eq!(
+                responses_encoded.inner.content["instructions"],
+                json!("Be helpful")
+            );
+            let responses_response = responses_codec
+                .decode_response(
+                    json_to_py(
+                        py,
+                        &json!({
+                            "id": "resp-1",
+                            "model": "gpt-4o-mini",
                             "status": "completed",
-                            "content": [{"type": "output_text", "text": "done"}]
-                        }]
-                    }),
+                            "output": [{
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": [{"type": "output_text", "text": "done"}]
+                            }]
+                        }),
+                    )
+                    .unwrap()
+                    .bind(py),
                 )
-                .unwrap()
-                .bind(py),
-            )
-            .unwrap();
-        assert_eq!(responses_response.response_text(), Some("done".into()));
-        assert_eq!(responses_codec.__repr__(), "<OpenAIResponsesCodec>");
+                .unwrap();
+            assert_eq!(responses_response.response_text(), Some("done".into()));
+            assert_eq!(responses_codec.__repr__(), "<OpenAIResponsesCodec>");
+        }
+        assert_openai_responses_codec(py);
 
-        let anthropic_request = PyLLMRequest {
-            inner: nemo_relay::api::llm::LlmRequest {
-                headers: serde_json::Map::new(),
-                content: json!({
-                    "model": "claude-sonnet-4-20250514",
-                    "system": "Be careful",
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 64
-                }),
-            },
-        };
-        let anthropic_codec = PyAnthropicMessagesCodec::new();
-        let anthropic_decoded = anthropic_codec.decode(&anthropic_request).unwrap();
-        assert_eq!(anthropic_decoded.system_prompt(), Some("Be careful".into()));
-        let anthropic_encoded = anthropic_codec
-            .encode(&anthropic_decoded, &anthropic_request)
-            .unwrap();
-        assert_eq!(
-            anthropic_encoded.inner.content["system"],
-            json!("Be careful")
-        );
-        let anthropic_response = anthropic_codec
-            .decode_response(
-                json_to_py(
-                    py,
-                    &json!({
-                        "id": "msg-1",
+        fn assert_anthropic_messages_codec(py: Python<'_>) {
+            let anthropic_request = PyLLMRequest {
+                inner: nemo_relay::api::llm::LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({
                         "model": "claude-sonnet-4-20250514",
-                        "content": [{"type": "text", "text": "done"}],
-                        "stop_reason": "end_turn",
-                        "usage": {"input_tokens": 1, "output_tokens": 2}
+                        "system": "Be careful",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 64
                     }),
+                },
+            };
+            let anthropic_codec = PyAnthropicMessagesCodec::new();
+            let anthropic_decoded = anthropic_codec.decode(&anthropic_request).unwrap();
+            assert_eq!(anthropic_decoded.system_prompt(), Some("Be careful".into()));
+            let anthropic_encoded = anthropic_codec
+                .encode(&anthropic_decoded, &anthropic_request)
+                .unwrap();
+            assert_eq!(
+                anthropic_encoded.inner.content["system"],
+                json!("Be careful")
+            );
+            let anthropic_response = anthropic_codec
+                .decode_response(
+                    json_to_py(
+                        py,
+                        &json!({
+                            "id": "msg-1",
+                            "model": "claude-sonnet-4-20250514",
+                            "content": [{"type": "text", "text": "done"}],
+                            "stop_reason": "end_turn",
+                            "usage": {"input_tokens": 1, "output_tokens": 2}
+                        }),
+                    )
+                    .unwrap()
+                    .bind(py),
                 )
-                .unwrap()
-                .bind(py),
-            )
-            .unwrap();
-        assert_eq!(anthropic_response.response_text(), Some("done".into()));
-        assert_eq!(anthropic_codec.__repr__(), "<AnthropicMessagesCodec>");
+                .unwrap();
+            assert_eq!(anthropic_response.response_text(), Some("done".into()));
+            assert_eq!(anthropic_codec.__repr__(), "<AnthropicMessagesCodec>");
+        }
+        assert_anthropic_messages_codec(py);
     });
 }
 
@@ -1893,60 +1965,44 @@ def run(types):
             .unwrap();
         let result_json = py_to_json(&result).unwrap();
 
-        assert!(result_json["request_error"].as_str().is_some());
+        for key in [
+            "request_error",
+            "invalid_params_error",
+            "invalid_tools_error",
+            "invalid_tool_choice_error",
+            "invalid_extra_error",
+            "invalid_messages_setter_error",
+            "invalid_params_setter_error",
+            "invalid_tools_setter_error",
+            "invalid_tool_choice_setter_error",
+            "invalid_extra_setter_error",
+        ] {
+            assert!(result_json[key].as_str().is_some(), "{key}");
+        }
         assert!(result_json["otel_grpc_error"].is_null());
         assert!(result_json["oi_grpc_error"].is_null());
-        assert_eq!(result_json["params_is_none"], json!(true));
-        assert_eq!(result_json["tools_is_none"], json!(true));
-        assert_eq!(result_json["tool_choice_is_none"], json!(true));
-        assert!(result_json["invalid_params_error"].as_str().is_some());
-        assert!(result_json["invalid_tools_error"].as_str().is_some());
-        assert!(result_json["invalid_tool_choice_error"].as_str().is_some());
-        assert!(result_json["invalid_extra_error"].as_str().is_some());
-        assert!(
-            result_json["invalid_messages_setter_error"]
-                .as_str()
-                .is_some()
-        );
-        assert!(
-            result_json["invalid_params_setter_error"]
-                .as_str()
-                .is_some()
-        );
-        assert!(result_json["invalid_tools_setter_error"].as_str().is_some());
-        assert!(
-            result_json["invalid_tool_choice_setter_error"]
-                .as_str()
-                .is_some()
-        );
-        assert!(result_json["invalid_extra_setter_error"].as_str().is_some());
-        assert!(result_json["chat_tool_calls_is_none"].as_bool().is_some());
-        assert!(result_json["chat_usage_is_none"].as_bool().is_some());
-        assert!(result_json["chat_api_specific_is_none"].as_bool().is_some());
-        assert!(result_json["responses_message_is_none"].as_bool().is_some());
-        assert!(
-            result_json["responses_tool_calls_is_none"]
-                .as_bool()
-                .is_some()
-        );
-        assert!(result_json["responses_usage_is_none"].as_bool().is_some());
-        assert!(
-            result_json["responses_api_specific_is_none"]
-                .as_bool()
-                .is_some()
-        );
-        assert!(result_json["anthropic_message_is_none"].as_bool().is_some());
-        assert!(
-            result_json["anthropic_tool_calls_is_none"]
-                .as_bool()
-                .is_some()
-        );
-        assert!(
-            result_json["anthropic_api_specific_is_none"]
-                .as_bool()
-                .is_some()
-        );
-        assert!(result_json["anthropic_usage_is_none"].as_bool().is_some());
+        for key in ["params_is_none", "tools_is_none", "tool_choice_is_none"] {
+            assert_eq!(result_json[key].as_bool(), Some(true), "{key}");
+        }
+        for key in [
+            "chat_tool_calls_is_none",
+            "chat_usage_is_none",
+            "responses_message_is_none",
+            "responses_tool_calls_is_none",
+            "responses_usage_is_none",
+            "anthropic_message_is_none",
+            "anthropic_tool_calls_is_none",
+            "anthropic_usage_is_none",
+        ] {
+            assert_eq!(result_json[key].as_bool(), Some(true), "{key}");
+        }
+        for key in [
+            "chat_api_specific_is_none",
+            "responses_api_specific_is_none",
+            "anthropic_api_specific_is_none",
+        ] {
+            assert_eq!(result_json[key].as_bool(), Some(false), "{key}");
+        }
     });
 }
 

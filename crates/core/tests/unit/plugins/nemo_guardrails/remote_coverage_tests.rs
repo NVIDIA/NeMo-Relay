@@ -91,6 +91,24 @@ fn spawn_http_response(
     format!("http://{address}")
 }
 
+fn spawn_truncated_http_response(status: &'static str, content_type: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        read_http_request(&mut stream);
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: 64\r\nConnection: close\r\n\r\npartial"
+        )
+        .unwrap();
+    });
+    format!("http://{address}")
+}
+
 fn read_http_request(stream: &mut std::net::TcpStream) {
     let mut request = Vec::new();
     let mut buffer = [0; 1024];
@@ -205,6 +223,24 @@ fn request_body_and_guardrails_config_helpers_cover_defaults() {
         runtime.build_request_body(&invalid_request, false),
         "request content is not an object",
     );
+    assert_flow_error_contains(
+        runtime.build_request_body(
+            &LlmRequest {
+                headers: Map::new(),
+                content: json!({
+                    "model": "gpt-4o-mini",
+                    "messages": [],
+                    "tools": [{"type": "function", "function": {"name": "lookup"}}]
+                }),
+            },
+            false,
+        ),
+        "does not support OpenAI tool definitions",
+    );
+    runtime.record_access_status(reqwest::StatusCode::OK);
+    assert_eq!(runtime.access_state.load(Ordering::Acquire), 2);
+    runtime.record_access_status(reqwest::StatusCode::OK);
+    assert_eq!(runtime.access_state.load(Ordering::Acquire), 2);
 
     let defaults = RequestDefaultsConfig {
         context: Some(json!({"tenant": "test"})),
@@ -774,6 +810,53 @@ async fn remote_execute_transport_and_stream_status_errors_are_reported() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
+async fn truncated_remote_bodies_report_buffered_streaming_and_tool_errors() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    crate::api::runtime::set_thread_scope_stack(crate::api::runtime::create_scope_stack());
+
+    let buffered =
+        runtime_with_endpoint(spawn_truncated_http_response("200 OK", "application/json"));
+    assert_flow_error_contains(
+        buffered.execute(simple_chat_request(), false).await,
+        "failed to read remote response body",
+    );
+
+    let status = runtime_with_endpoint(spawn_truncated_http_response(
+        "503 Service Unavailable",
+        "text/plain",
+    ));
+    assert_flow_error_contains(
+        status.execute_stream(simple_chat_request()).await,
+        "failed to read remote stream error body",
+    );
+
+    let streaming =
+        runtime_with_endpoint(spawn_truncated_http_response("200 OK", "text/event-stream"));
+    let mut stream = streaming
+        .execute_stream(simple_chat_request())
+        .await
+        .expect("stream opens after headers");
+    assert_flow_error_contains(
+        stream
+            .next()
+            .await
+            .expect("truncated body reports an error"),
+        "failed to read remote stream chunk",
+    );
+
+    let tool = runtime_with_endpoint(spawn_truncated_http_response("200 OK", "application/json"));
+    assert_flow_error_contains(
+        tool.check_tool_input("weather_lookup", &json!({"city": "Phoenix"}))
+            .await,
+        "failed to read remote response body",
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn remote_execute_stream_yields_completed_events_and_reports_malformed_final_event() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
@@ -846,6 +929,25 @@ async fn remote_execute_stream_reports_malformed_named_final_event() {
             .expect("decoder should report malformed done event"),
         "failed to parse SSE data payload",
     );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn remote_stream_decoder_flushes_an_unterminated_final_event() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    crate::api::runtime::set_thread_scope_stack(crate::api::runtime::create_scope_stack());
+
+    let runtime = runtime_with_endpoint(spawn_http_response(
+        "200 OK",
+        "text/event-stream",
+        "data: {\"final\":true}",
+    ));
+    let mut stream = runtime.execute_stream(simple_chat_request()).await.unwrap();
+    assert_eq!(stream.next().await.unwrap().unwrap()["final"], json!(true));
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]

@@ -329,6 +329,16 @@ fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
         .collect()
 }
 
+fn finished_span_named<'a>(
+    spans: &'a [opentelemetry_sdk::trace::SpanData],
+    name: &str,
+) -> &'a opentelemetry_sdk::trace::SpanData {
+    spans
+        .iter()
+        .find(|span| span.name.as_ref() == name)
+        .unwrap_or_else(|| panic!("missing span {name}"))
+}
+
 fn make_start_event(
     uuid: Uuid,
     parent_uuid: Option<Uuid>,
@@ -646,7 +656,11 @@ fn config_defaults_and_builder_overrides_are_applied() {
             .with_mark_exclude_names(["notification"])
             .with_attribute_mapping("nemo_relay.model_name", "model.alias")
             .with_timeout(Duration::from_millis(1250));
+    assert_config_builder_overrides(&config);
+    assert_config_defaults(&OpenTelemetryConfig::default());
+}
 
+fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
     assert_eq!(config.transport, OtlpTransport::HttpBinary);
     assert_eq!(config.endpoint, "http://localhost:4318/v1/traces");
     assert_eq!(
@@ -665,8 +679,9 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(config.mark_exclude_names, vec!["notification"]);
     assert_eq!(config.attribute_mappings.len(), 1);
     assert_eq!(config.timeout, Duration::from_millis(1250));
+}
 
-    let defaults = OpenTelemetryConfig::default();
+fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
     assert_eq!(defaults.service_name, "unknown_service");
     assert_eq!(defaults.instrumentation_scope, "opentelemetry");
@@ -940,22 +955,17 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     subscriber.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    let root = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "identity-root")
-        .unwrap();
-    let child = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "identity-child")
-        .unwrap();
-    let second_root = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "identity-second-root")
-        .unwrap();
-    let orphan_mark = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "mark:session.start")
-        .unwrap();
+    assert_session_root_and_child_identity(&spans, &instance_id);
+    assert_session_mark_identity(&spans);
+}
+
+fn assert_session_root_and_child_identity(
+    spans: &[opentelemetry_sdk::trace::SpanData],
+    instance_id: &str,
+) {
+    let root = finished_span_named(spans, "identity-root");
+    let child = finished_span_named(spans, "identity-child");
+    let second_root = finished_span_named(spans, "identity-second-root");
 
     let root_attributes = attr_map(&root.attributes);
     assert_eq!(root_attributes["session.id"], "logical-session");
@@ -996,7 +1006,12 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
         root.span_context.trace_id(),
         second_root.span_context.trace_id()
     );
+}
 
+fn assert_session_mark_identity(spans: &[opentelemetry_sdk::trace::SpanData]) {
+    let root = finished_span_named(spans, "identity-root");
+    let orphan_mark = finished_span_named(spans, "mark:session.start");
+    let root_attributes = attr_map(&root.attributes);
     let mark_attributes = attr_map(&root.events.events[0].attributes);
     assert_eq!(mark_attributes["session.id"], "logical-session");
     assert_eq!(mark_attributes["user.id"], "alice");
@@ -1611,6 +1626,106 @@ fn gen_ai_projection_prefers_standard_names_and_normalized_provider_details() {
             Some(&expected.to_string())
         );
     }
+}
+
+#[test]
+fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
+    let request = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("chat")
+            .data(json!({
+                "headers": {},
+                "content": {
+                    "model": "gpt-5",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "max_tokens": 512,
+                    "temperature": 0.4,
+                    "top_p": 0.8,
+                    "stop": ["done"],
+                    "n": 1
+                }
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        None,
+    ));
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &request,
+    ));
+    for (key, expected) in [
+        ("gen_ai.provider.name", "openai"),
+        ("gen_ai.request.max_tokens", "512"),
+        ("gen_ai.request.temperature", "0.4"),
+        ("gen_ai.request.top_p", "0.8"),
+        ("gen_ai.request.stop_sequences", "[\"done\"]"),
+    ] {
+        assert_eq!(attributes.get(key), Some(&expected.to_string()));
+    }
+    assert!(!attributes.contains_key("gen_ai.request.choice.count"));
+
+    for (reason, expected) in [
+        (FinishReason::Complete, "stop"),
+        (FinishReason::Length, "length"),
+        (FinishReason::ContentFilter, "content_filter"),
+        (
+            FinishReason::Unknown("provider_reason".to_string()),
+            "provider_reason",
+        ),
+    ] {
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            None,
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        finish_reason: Some(reason),
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+        assert_eq!(
+            attributes.get("gen_ai.response.finish_reasons"),
+            Some(&format!("[\"{expected}\"]"))
+        );
+    }
+}
+
+#[test]
+fn gen_ai_projection_reads_nested_scalar_fallbacks() {
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("embed")
+            .metadata(json!({
+                "request": {"provider": true, "server_port": 8443},
+                "response": {"response_model": 17},
+                "usage": {"input_tokens": u64::MAX}
+            }))
+            .data(json!({"usage": {"prompt_tokens": 23}}))
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::from(ScopeType::Embedder),
+        None,
+    ));
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("gen_ai.response.model"),
+        Some(&"17".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.input_tokens"),
+        Some(&"23".to_string())
+    );
 }
 
 #[test]
@@ -2462,6 +2577,14 @@ fn llm_end_with_unannotated_openai_response_without_usage_omits_cost() {
 
 #[test]
 fn helper_functions_cover_additional_otel_branches() {
+    assert_otel_scope_and_model_attribute_branches();
+    assert_otel_tool_attribute_branches();
+    assert_otel_catalog_cost_branches();
+    assert_otel_normalized_cost_branches();
+    assert_otel_manual_cost_branches();
+}
+
+fn assert_otel_scope_and_model_attribute_branches() {
     let function_end = make_end_event(Uuid::now_v7(), None, "fn-scope", ScopeType::Function, None);
     assert_eq!(span_name(&function_end), "fn-scope");
     assert_eq!(
@@ -2531,7 +2654,9 @@ fn helper_functions_cover_additional_otel_branches() {
         response_model_attributes.get("nemo_relay.model_name"),
         Some(&"response-model".to_string())
     );
+}
 
+fn assert_otel_tool_attribute_branches() {
     let tool_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("lookup")
@@ -2574,7 +2699,9 @@ fn helper_functions_cover_additional_otel_branches() {
         tool_end_attributes.get("nemo_relay.end.data.result"),
         Some(&"true".to_string())
     );
+}
 
+fn assert_otel_catalog_cost_branches() {
     {
         let _pricing_guard = pricing_test_mutex().lock().unwrap();
         install_test_pricing("priced-model");
@@ -2653,7 +2780,9 @@ fn helper_functions_cover_additional_otel_branches() {
             Some(&"USD".to_string())
         );
     }
+}
 
+fn assert_otel_normalized_cost_branches() {
     let normalized_cost_event = make_scope_event_with_profile(
         ScopeCategory::End,
         Uuid::now_v7(),
@@ -2747,7 +2876,9 @@ fn helper_functions_cover_additional_otel_branches() {
             Some(&"EUR".to_string())
         );
     }
+}
 
+fn assert_otel_manual_cost_branches() {
     {
         let _pricing_guard = pricing_test_mutex().lock().unwrap();
         install_test_pricing("priced-model");

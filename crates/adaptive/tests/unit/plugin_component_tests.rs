@@ -271,6 +271,11 @@ fn response_cache_backend_validation_uses_the_default_backend_kind() {
 
 #[test]
 fn adaptive_to_plugin_error_maps_all_non_redis_variants() {
+    assert_adaptive_config_and_lookup_errors();
+    assert_adaptive_internal_and_serialization_errors();
+}
+
+fn assert_adaptive_config_and_lookup_errors() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::InvalidConfig("bad".into())),
         nemo_relay::plugin::PluginError::InvalidConfig(message) if message == "bad"
@@ -283,6 +288,9 @@ fn adaptive_to_plugin_error_maps_all_non_redis_variants() {
         adaptive_to_plugin_error(AdaptiveError::Storage("store".into())),
         nemo_relay::plugin::PluginError::Internal(message) if message == "store"
     ));
+}
+
+fn assert_adaptive_internal_and_serialization_errors() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Internal("internal".into())),
         nemo_relay::plugin::PluginError::Internal(message) if message == "internal"

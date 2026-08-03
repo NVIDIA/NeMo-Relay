@@ -577,6 +577,13 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         .build()
         .unwrap();
 
+    assert_llm_exec_callbacks(&runtime);
+    assert_llm_stream_callbacks(&runtime);
+    assert_collector_and_finalizer_callbacks();
+    assert_event_callbacks();
+}
+
+fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
     let exec = wrap_llm_exec_fn(llm_exec_cb, std::ptr::null_mut(), None);
     let result = runtime.block_on(exec(make_request())).unwrap();
     assert_eq!(result["ok"], json!(true));
@@ -593,7 +600,9 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         .block_on(intercept("llm", make_request(), next))
         .unwrap();
     assert_eq!(intercepted["intercepted"], json!(true));
+}
 
+fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
     let stream_exec = wrap_llm_stream_exec_fn(llm_exec_cb, std::ptr::null_mut(), None);
     let mut stream = runtime.block_on(stream_exec(make_request())).unwrap();
     let first = runtime.block_on(async { stream.next().await.unwrap().unwrap() });
@@ -635,7 +644,9 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
     let first = runtime.block_on(async { intercepted_stream.next().await.unwrap().unwrap() });
     assert_eq!(first["intercepted"], json!(true));
     assert_eq!(first["model"], json!("test-model"));
+}
 
+fn assert_collector_and_finalizer_callbacks() {
     COLLECTED_COUNT.store(0, Ordering::SeqCst);
     let mut collector = wrap_collector_fn(collector_cb);
     collector(json!({"chunk": 1})).unwrap();
@@ -643,7 +654,9 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
 
     let finalizer = wrap_finalizer_fn(finalizer_cb);
     assert_eq!(finalizer(), json!({"done": true}));
+}
 
+fn assert_event_callbacks() {
     let (user_data, seen) = user_data_counter();
     let subscriber = wrap_event_subscriber(subscriber_cb, user_data, Some(free_arc_counter));
     let event = Event::Scope(nemo_relay::api::event::ScopeEvent::new(

@@ -15,7 +15,7 @@ use crate::codec::anthropic::AnthropicMessagesCodec;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
     reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -365,6 +365,16 @@ fn set_event_timestamp(event: &mut Event, timestamp: chrono::DateTime<chrono::Ut
     match event {
         Event::Scope(inner) => inner.base.timestamp = timestamp,
         Event::Mark(inner) => inner.base.timestamp = timestamp,
+    }
+}
+
+fn set_sequential_event_timestamps(
+    events: &mut [&mut Event],
+    base: chrono::DateTime<chrono::Utc>,
+    step: chrono::Duration,
+) {
+    for (offset, event) in events.iter_mut().enumerate() {
+        set_event_timestamp(event, base + step * offset as i32);
     }
 }
 
@@ -721,8 +731,22 @@ fn test_exporter_llm_lifecycle() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();
 
-    // Input wrapped in LlmRequest envelope — should be unwrapped.
-    let start = event_builder(llm_uuid, EventType::Start)
+    let start = llm_lifecycle_start_event(llm_uuid);
+    let end = llm_lifecycle_end_event(llm_uuid);
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(start);
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(trajectory.steps.len(), 2);
+    assert_llm_lifecycle_steps(&trajectory);
+}
+
+fn llm_lifecycle_start_event(llm_uuid: Uuid) -> Event {
+    event_builder(llm_uuid, EventType::Start)
         .name("gpt-4")
         .scope_type(ScopeType::Llm)
         .input(json!({
@@ -745,10 +769,11 @@ fn test_exporter_llm_lifecycle() {
             "headers": {}
         }))
         .model_name("gpt-4")
-        .build();
+        .build()
+}
 
-    // Output with content, token_usage, and tool_calls.
-    let end = event_builder(llm_uuid, EventType::End)
+fn llm_lifecycle_end_event(llm_uuid: Uuid) -> Event {
+    event_builder(llm_uuid, EventType::End)
         .name("gpt-4")
         .scope_type(ScopeType::Llm)
         .output(json!({
@@ -762,17 +787,10 @@ fn test_exporter_llm_lifecycle() {
             "tool_calls": []
         }))
         .model_name("gpt-4")
-        .build();
+        .build()
+}
 
-    {
-        let mut state = exporter.state.lock().unwrap();
-        state.events.push(start);
-        state.events.push(end);
-    }
-
-    let trajectory = exporter.export().unwrap();
-    assert_eq!(trajectory.steps.len(), 2);
-
+fn assert_llm_lifecycle_steps(trajectory: &AtifTrajectory) {
     // First step: user (LLM start — unwrapped LlmRequest, then messages extracted)
     let step1 = &trajectory.steps[0];
     assert_eq!(step1.step_id, 1);
@@ -2131,17 +2149,16 @@ fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_expl
         .model_name("gpt-4")
         .build();
 
-    for (offset, event) in [
-        &mut stripped_start,
-        &mut stripped_end,
-        &mut partial_start,
-        &mut partial_end,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        set_event_timestamp(event, base + chrono::Duration::milliseconds(offset as i64));
-    }
+    set_sequential_event_timestamps(
+        &mut [
+            &mut stripped_start,
+            &mut stripped_end,
+            &mut partial_start,
+            &mut partial_end,
+        ],
+        base,
+        chrono::Duration::milliseconds(1),
+    );
 
     {
         let mut state = exporter.state.lock().unwrap();
@@ -2153,7 +2170,17 @@ fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_expl
     let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert_eq!(trajectory.steps.len(), 4);
+    assert_openclaw_stripped_steps(&trajectory);
+    assert_openclaw_partial_steps(&trajectory);
+    assert_openclaw_combined_metrics(&trajectory);
+}
 
+fn assert_openclaw_stripped_steps(trajectory: &AtifTrajectory) {
+    assert_openclaw_stripped_user_step(trajectory);
+    assert_openclaw_stripped_agent_step(trajectory);
+}
+
+fn assert_openclaw_stripped_user_step(trajectory: &AtifTrajectory) {
     let stripped_user = &trajectory.steps[0];
     assert_eq!(stripped_user.source, "user");
     let stripped_user_message: serde_json::Value =
@@ -2175,7 +2202,9 @@ fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_expl
     assert!(stripped_request.get("systemPrompt").is_none());
     assert_eq!(stripped_request["messages"], json!([]));
     assert_eq!(stripped_request["imagesCount"], json!(1));
+}
 
+fn assert_openclaw_stripped_agent_step(trajectory: &AtifTrajectory) {
     let stripped_agent = &trajectory.steps[1];
     assert_eq!(stripped_agent.source, "agent");
     let stripped_message: serde_json::Value =
@@ -2192,7 +2221,9 @@ fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_expl
     let stripped_response = stripped_agent_extra.llm_response.unwrap();
     assert!(stripped_response.get("content").is_none());
     assert_eq!(stripped_response["assistant_texts_count"], json!(1));
+}
 
+fn assert_openclaw_partial_steps(trajectory: &AtifTrajectory) {
     let partial_user = &trajectory.steps[2];
     assert_eq!(partial_user.source, "user");
     assert_eq!(partial_user.message, json!("visible prompt"));
@@ -2213,7 +2244,9 @@ fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_expl
     assert_eq!(partial_metrics.completion_tokens, None);
     assert_eq!(partial_metrics.cached_tokens, None);
     assert_eq!(partial_metrics.cost_usd, None);
+}
 
+fn assert_openclaw_combined_metrics(trajectory: &AtifTrajectory) {
     let final_metrics = trajectory.final_metrics.as_ref().unwrap();
     assert_eq!(final_metrics.total_prompt_tokens, Some(42));
     assert_eq!(final_metrics.total_completion_tokens, None);
@@ -2929,19 +2962,18 @@ fn test_exporter_embeds_nested_subagent_trajectory() {
         .scope_type(ScopeType::Agent)
         .build();
 
-    for (offset, event) in [
-        &mut root_start,
-        &mut child_start,
-        &mut llm_start,
-        &mut llm_end,
-        &mut child_end,
-        &mut root_end,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        set_event_timestamp(event, base + chrono::Duration::seconds(offset as i64));
-    }
+    set_sequential_event_timestamps(
+        &mut [
+            &mut root_start,
+            &mut child_start,
+            &mut llm_start,
+            &mut llm_end,
+            &mut child_end,
+            &mut root_end,
+        ],
+        base,
+        chrono::Duration::seconds(1),
+    );
 
     {
         let mut state = exporter.state.lock().unwrap();
@@ -2961,7 +2993,10 @@ fn test_exporter_embeds_nested_subagent_trajectory() {
     assert_eq!(trajectory.session_id, root_uuid.to_string());
     assert_eq!(trajectory.trajectory_id, Some(root_uuid.to_string()));
     assert_eq!(trajectory.steps.len(), 1);
+    assert_nested_subagent_projection(&trajectory, child_uuid);
+}
 
+fn assert_nested_subagent_projection(trajectory: &AtifTrajectory, child_uuid: Uuid) {
     let step = &trajectory.steps[0];
     assert_eq!(step.source, "agent");
     assert_eq!(step.llm_call_count, Some(0));
@@ -2993,7 +3028,7 @@ fn test_exporter_embeds_nested_subagent_trajectory() {
     assert_eq!(child.steps[0].source, "user");
     assert_eq!(child.steps[1].source, "agent");
 
-    let serialized = serde_json::to_value(&trajectory).unwrap();
+    let serialized = serde_json::to_value(trajectory).unwrap();
     assert!(serialized["steps"][0]["observation"]["results"][0]["content"].is_null());
 }
 
@@ -6035,4 +6070,424 @@ fn test_projected_duplicate_cleanup_preserves_partial_multi_call_step() {
 
     assert_eq!(steps.len(), 2);
     assert_eq!(step_tool_call_ids(&steps[0]), vec!["call_a", "call_b"]);
+}
+
+#[test]
+fn atif_private_projection_helpers_cover_provider_edge_shapes() {
+    assert_provider_response_edge_shapes();
+    assert_request_turn_state_edge_shapes();
+    assert_annotated_turn_state_edge_shapes();
+    assert_tool_argument_and_metric_edge_shapes();
+}
+
+fn assert_provider_response_edge_shapes() {
+    assert_eq!(atif_content_value(&Json::Null), empty_message());
+    assert_eq!(
+        extract_llm_response_message(&json!({
+            "assistant_message": {"content": "assistant"}
+        })),
+        json!("assistant")
+    );
+    assert_eq!(
+        anthropic_messages_content_message(
+            &json!({"type": "message"}),
+            &json!([
+                false,
+                {"type": "unknown"},
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"}
+            ]),
+        ),
+        Some(json!("first\nsecond"))
+    );
+    assert_eq!(
+        anthropic_messages_content_message(
+            &json!({"type": "message"}),
+            &json!([{"type": "tool_use"}]),
+        ),
+        Some(empty_message())
+    );
+    assert_eq!(
+        anthropic_messages_content_message(&json!({"type": "message"}), &json!([])),
+        None
+    );
+
+    for invalid_parts in [
+        json!(false),
+        json!([false]),
+        json!([{"type": "unknown"}]),
+        json!([{"type": "text"}]),
+        json!([{"type": "image", "source": {"media_type": "text/plain"}}]),
+    ] {
+        assert!(!is_atif_content_parts(&invalid_parts));
+    }
+    assert_eq!(
+        openai_responses_output_message(&json!({"output_text": "direct"})),
+        Some(json!("direct"))
+    );
+    assert_eq!(
+        openai_responses_output_message(&json!({
+            "output": [
+                false,
+                {"type": "unknown"},
+                {"type": "output_text", "text": "first"},
+                {"type": "message", "content": [
+                    false,
+                    {"type": "output_text", "text": "second"}
+                ]}
+            ]
+        })),
+        Some(json!("first\nsecond"))
+    );
+}
+
+fn assert_request_turn_state_edge_shapes() {
+    assert_eq!(
+        request_turn_state_from_raw(&json!({"prompt": "hello"})),
+        Some(RequestTurnState::FreshUser)
+    );
+    assert_eq!(
+        request_turn_state_from_raw(&json!({
+            "messages": [{"role": "assistant", "content": "answer"}]
+        })),
+        Some(RequestTurnState::Continuation)
+    );
+    assert_eq!(
+        request_turn_state_from_raw(&json!({
+            "messages": [{"role": "user", "content": [{"type": "tool_result"}]}]
+        })),
+        Some(RequestTurnState::Continuation)
+    );
+    assert_eq!(
+        request_turn_state_from_raw(&json!({
+            "input": [{"type": "message", "role": "user", "content": "hello"}]
+        })),
+        Some(RequestTurnState::FreshUser)
+    );
+    assert_eq!(provider_native_turn_state(&json!({"role": "system"})), None);
+    assert_eq!(
+        provider_native_turn_state(&json!({"role": "assistant"})),
+        Some(RequestTurnState::Continuation)
+    );
+    assert_eq!(provider_native_turn_state(&json!({})), None);
+    assert!(raw_content_starts_new_turn(&json!({"type": "text"})));
+    assert!(!raw_content_starts_new_turn(
+        &json!({"type": "tool_result"})
+    ));
+    assert!(raw_content_starts_new_turn(&json!(false)));
+    assert_eq!(
+        openai_responses_turn_state(&json!([{"type": "function_call"}])),
+        Some(RequestTurnState::Continuation)
+    );
+    assert_eq!(
+        openai_responses_input_content_message(&json!("direct input")),
+        Some(json!("direct input"))
+    );
+    assert_eq!(
+        openai_responses_input_content_message(&json!([
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"}
+        ])),
+        Some(json!("first\nsecond"))
+    );
+    assert_eq!(openai_responses_input_content_message(&json!(false)), None);
+}
+
+fn assert_annotated_turn_state_edge_shapes() {
+    let text = MessageContent::Text("hello".into());
+    assert_eq!(
+        annotated_message_turn_state(&Message::System {
+            content: text.clone(),
+            name: None,
+        }),
+        None
+    );
+    assert_eq!(
+        annotated_message_turn_state(&Message::Assistant {
+            content: None,
+            tool_calls: None,
+            name: None,
+        }),
+        Some(RequestTurnState::Continuation)
+    );
+    assert_eq!(
+        annotated_message_turn_state(&Message::Tool {
+            content: text.clone(),
+            tool_call_id: "call-1".into(),
+        }),
+        Some(RequestTurnState::Continuation)
+    );
+    assert_eq!(
+        annotated_message_turn_state(&Message::ToolResultItem {
+            id: None,
+            call_id: "call-1".into(),
+            output: json!("done"),
+            extra: Default::default(),
+        }),
+        Some(RequestTurnState::Continuation)
+    );
+    assert!(annotated_content_starts_new_turn(&MessageContent::Parts(
+        vec![ContentPart::Text {
+            text: "hello".into(),
+            extra: Default::default(),
+        },]
+    )));
+    assert!(!annotated_content_starts_new_turn(&MessageContent::Parts(
+        vec![ContentPart::ToolResult {
+            tool_use_id: "call-1".into(),
+            content: json!("done"),
+            is_error: None,
+            extra: Default::default(),
+        },]
+    )));
+    assert_eq!(
+        atif_message_from_annotated_response(&AnnotatedLlmResponse {
+            message: Some(MessageContent::Parts(vec![])),
+            ..Default::default()
+        }),
+        None
+    );
+}
+
+fn assert_tool_argument_and_metric_edge_shapes() {
+    assert_eq!(normalize_tool_arguments(None), json!({}));
+    assert_eq!(normalize_tool_arguments(Some(&json!(null))), json!({}));
+    assert_eq!(
+        normalize_tool_arguments(Some(&json!(42))),
+        json!({"value": 42})
+    );
+    assert_eq!(
+        normalize_tool_arguments(Some(&json!("not-json"))),
+        json!({"raw": "not-json"})
+    );
+    assert_eq!(
+        normalize_tool_arguments(Some(&json!("{\"key\":true}"))),
+        json!({"key": true})
+    );
+
+    let supplemental = AtifMetrics {
+        prompt_tokens: Some(7),
+        extra: Some(json!({"supplemental": true})),
+        ..Default::default()
+    };
+    let merged = merge_metrics(Some(AtifMetrics::default()), Some(&supplemental)).unwrap();
+    assert_eq!(merged.prompt_tokens, Some(7));
+    assert_eq!(merged.extra, supplemental.extra);
+
+    let mut target = Some(json!({"preserved": true}));
+    merge_metrics_extra(&mut target, &Some(json!({"added": true})));
+    assert_eq!(target, Some(json!({"preserved": true, "added": true})));
+    let mut scalar = Some(json!(1));
+    merge_metrics_extra(&mut scalar, &Some(json!(2)));
+    assert_eq!(scalar, Some(json!(1)));
+}
+
+#[test]
+fn atif_projection_helpers_cover_absent_and_fallback_values() {
+    assert!(!is_atif_image_source(None));
+    assert_eq!(
+        extract_user_messages(&json!({"messages": [{"content": "implicit user"}]})),
+        json!("implicit user")
+    );
+    assert_eq!(
+        raw_chat_message_turn_state(json!({"role": "user"}).as_object().expect("object fixture")),
+        Some(RequestTurnState::FreshUser)
+    );
+    assert_eq!(
+        openai_responses_item_turn_state(
+            json!({"type": "message", "role": "assistant"})
+                .as_object()
+                .expect("object fixture")
+        ),
+        Some(RequestTurnState::Continuation)
+    );
+    assert_eq!(
+        atif_message_from_annotated_request(&AnnotatedLlmRequest::default()),
+        None
+    );
+    assert_eq!(
+        annotated_message_turn_state(&Message::Developer {
+            content: MessageContent::Text("instruction".into()),
+            name: None,
+        }),
+        None
+    );
+    assert_eq!(
+        normalize_tool_arguments(Some(&json!("[1,2]"))),
+        json!({"value": [1, 2]})
+    );
+
+    let calls = extract_tool_calls(&json!({
+        "tool_calls": [
+            {},
+            {"name": "lookup", "arguments": null}
+        ]
+    }))
+    .expect("one meaningful tool call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].tool_call_id, "lookup:2");
+
+    let mut metrics = Some(json!({"kept": true}));
+    merge_metrics_extra(&mut metrics, &None);
+    assert_eq!(metrics, Some(json!({"kept": true})));
+}
+
+#[test]
+fn atif_observation_helpers_merge_and_prune_incomplete_references() {
+    let mut observation = AtifObservation {
+        results: vec![AtifObservationResult {
+            source_call_id: Some("call-1".into()),
+            content: None,
+            subagent_trajectory_ref: None,
+            extra: None,
+        }],
+    };
+    merge_observation_result(
+        &mut observation,
+        AtifObservationResult {
+            source_call_id: Some("call-1".into()),
+            content: Some(json!("done")),
+            subagent_trajectory_ref: Some(vec![AtifSubagentTrajectoryRef {
+                trajectory_id: Some("child-1".into()),
+                session_id: Some("session-1".into()),
+                extra: None,
+            }]),
+            extra: Some(json!({"provider": "test"})),
+        },
+    );
+    assert_eq!(observation.results[0].content, Some(json!("done")));
+    assert_eq!(
+        observation.results[0]
+            .subagent_trajectory_ref
+            .as_ref()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        observation.results[0].extra,
+        Some(json!({"provider": "test"}))
+    );
+
+    merge_observation_extra(&mut observation.results[0].extra, json!(false));
+    assert_eq!(
+        observation.results[0].extra,
+        Some(json!({"provider": "test"}))
+    );
+
+    let mut step = cleanup_test_agent_step(empty_message(), &[], &[]);
+    step.source = "system".into();
+    step.llm_call_count = None;
+    step.observation = Some(AtifObservation {
+        results: vec![AtifObservationResult {
+            source_call_id: None,
+            content: None,
+            subagent_trajectory_ref: Some(vec![AtifSubagentTrajectoryRef {
+                trajectory_id: Some("missing-child".into()),
+                session_id: None,
+                extra: None,
+            }]),
+            extra: None,
+        }],
+    });
+    let mut steps = vec![step, cleanup_test_user_step()];
+    prune_subagent_refs(&mut steps, &HashSet::new());
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].step_id, 1);
+    assert_eq!(steps[0].source, "user");
+}
+
+#[test]
+fn atif_step_conversion_state_covers_tool_correlation_guard_paths() {
+    let tool_uuid = Uuid::now_v7();
+    let tool_start = event_builder(tool_uuid, EventType::Start)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .input(json!({"query": "relay"}))
+        .build();
+    let mut lookups = EventLookupMaps::from_events(&[]);
+
+    let mut state = StepConversionState::default();
+    state.handle_tool_start(&tool_start, &lookups);
+    assert!(state.active_tool_call_id.is_none());
+    assert!(!state.ensure_tool_call_on_current_agent(&tool_start, "call-1"));
+
+    state.current_agent.step_idx = Some(99);
+    assert!(!state.ensure_tool_call_on_current_agent(&tool_start, "call-1"));
+
+    state.steps = vec![cleanup_test_agent_step(empty_message(), &["call-1"], &[])];
+    state.steps[0]
+        .tool_calls
+        .as_mut()
+        .expect("tool call fixture")[0]
+        .function_name = "lookup".into();
+    state.current_agent.step_idx = Some(0);
+    assert!(state.ensure_tool_call_on_current_agent(&tool_start, "call-1"));
+    assert!(state.current_agent.has_tool_call_id("call-1"));
+
+    lookups
+        .tool_call_ids
+        .insert(tool_uuid, "lookup-call".into());
+    assert_eq!(
+        state.resolve_source_call_id(&tool_start, &lookups),
+        Some("lookup-call".into())
+    );
+    lookups.tool_call_ids.clear();
+    assert_eq!(
+        state.resolve_source_call_id(&tool_start, &lookups),
+        Some("call-1".into())
+    );
+
+    state.current_agent.tool_call_order.clear();
+    state
+        .last_tool_call_map
+        .insert("lookup".into(), "call-1".into());
+    assert_eq!(
+        state.resolve_source_call_id(&tool_start, &lookups),
+        Some("call-1".into())
+    );
+    state.last_tool_call_map.clear();
+    state
+        .deferred_observations
+        .insert("call-1".into(), Vec::new());
+    assert_eq!(
+        state.resolve_source_call_id(&tool_start, &lookups),
+        Some("call-1".into())
+    );
+    state.deferred_observations.clear();
+    state
+        .deferred_tool_metadata
+        .insert("call-1".into(), Vec::new());
+    assert_eq!(
+        state.resolve_source_call_id(&tool_start, &lookups),
+        Some("call-1".into())
+    );
+    state.deferred_tool_metadata.clear();
+    assert_eq!(state.resolve_source_call_id(&tool_start, &lookups), None);
+
+    let tool_end = event_builder(tool_uuid, EventType::End)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .tool_call_id("call-1")
+        .build();
+    state.handle_tool_end(&tool_end, &lookups);
+    assert!(state.pending_observations.is_empty());
+
+    let child = AgentScopeNode {
+        uuid: Uuid::now_v7(),
+        name: "child".into(),
+        session_id: None,
+        referenced_by_parent: false,
+        parent_agent: None,
+        children: Vec::new(),
+        start_timestamp: base_timestamp(),
+    };
+    let mut empty_state = StepConversionState::default();
+    assert!(!empty_state.attach_subagent_ref_to_agent_step(&child, &tool_start, "call-1"));
+    empty_state.current_agent.step_idx = Some(1);
+    assert!(!empty_state.attach_subagent_ref_to_agent_step(&child, &tool_start, "call-1"));
+    empty_state.steps.push(cleanup_test_user_step());
+    empty_state.current_agent.step_idx = Some(0);
+    assert!(!empty_state.attach_subagent_ref_to_agent_step(&child, &tool_start, "call-1"));
+    empty_state.steps[0] = cleanup_test_agent_step(empty_message(), &["other"], &[]);
+    assert!(!empty_state.attach_subagent_ref_to_agent_step(&child, &tool_start, "call-1"));
 }

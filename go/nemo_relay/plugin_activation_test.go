@@ -763,12 +763,18 @@ func assertMissingNativePluginFails(t *testing.T) {
 }
 
 func TestInitializeWithDynamicPluginsLoadsWorkerPluginThroughCgo(t *testing.T) {
+	executable := goWorkerPluginFixture(t)
+	manifest := writeGoWorkerPluginManifest(t, executable)
+	runTestInIsolatedWorkingDirectory(t, func(t *testing.T) {
+		testInitializeWithDynamicWorkerPlugin(t, manifest)
+	})
+}
+
+func testInitializeWithDynamicWorkerPlugin(t *testing.T, manifest string) {
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf(clearConfigurationErrorFmt, err)
 	}
 
-	executable := goWorkerPluginFixture(t)
-	manifest := writeGoWorkerPluginManifest(t, executable)
 	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
 		PluginID:    "fixture_worker",
 		Kind:        DynamicPluginKindWorker,
@@ -812,9 +818,6 @@ func TestInitializeWithDynamicPluginsLoadsWorkerPluginThroughCgo(t *testing.T) {
 }
 
 func TestPluginActivationFinalizerReleasesHostOwnership(t *testing.T) {
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(clearConfigurationErrorFmt, err)
-	}
 	library := goNativePluginFixture(t)
 	manifest := writeGoNativePluginManifest(t, library)
 	specs := []DynamicPluginActivationSpec{{
@@ -823,6 +826,15 @@ func TestPluginActivationFinalizerReleasesHostOwnership(t *testing.T) {
 		ManifestRef: manifest,
 		Config:      map[string]any{},
 	}}
+	runTestInIsolatedWorkingDirectory(t, func(t *testing.T) {
+		testPluginActivationFinalizerReleasesHostOwnership(t, specs)
+	})
+}
+
+func testPluginActivationFinalizerReleasesHostOwnership(t *testing.T, specs []DynamicPluginActivationSpec) {
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(clearConfigurationErrorFmt, err)
+	}
 	createUnclosedPluginActivation(t, specs)
 
 	deadline := time.Now().Add(10 * time.Second)

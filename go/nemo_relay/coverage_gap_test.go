@@ -14,7 +14,9 @@ import (
 
 type failingAtofSink struct{}
 
-func (failingAtofSink) atofExporterSink() {}
+func (failingAtofSink) atofExporterSink() {
+	// This marker method intentionally has no runtime behavior.
+}
 
 func (failingAtofSink) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("forced ATOF sink marshal failure")
@@ -98,7 +100,7 @@ func assertInvalidScopePayloads(t *testing.T) {
 
 	handle, err := PushScope("invalid_scope_end_metadata", ScopeTypeAgent)
 	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
+		t.Fatalf(pushScopeFailed, err)
 	}
 	if PopScope(handle, WithScopeEndMetadata(json.RawMessage("{"))) == nil {
 		t.Fatal("expected PopScope to fail on invalid end metadata JSON")
@@ -200,7 +202,7 @@ func assertAdaptiveJSONUnmarshalFailures(t *testing.T) {
 	}
 	scope, err := PushScope("adaptive_bind_scope", ScopeTypeAgent)
 	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
+		t.Fatalf(pushScopeFailed, err)
 	}
 	if err := runtime.BindScope(scope); err != nil {
 		t.Fatalf("BindScope failed: %v", err)
@@ -395,7 +397,9 @@ func assertClosedHandleErrorPaths(t *testing.T) {
 				t.Fatal("expected closed scope stack Run to panic")
 			}
 		}()
-		stack.Run(func() {})
+		stack.Run(func() {
+			// The empty callback isolates the closed-stack panic path.
+		})
 	}()
 
 	exporter, err := NewAtofExporter(NewAtofExporterConfig())
@@ -424,7 +428,7 @@ func assertOptimizationContributionValidation(t *testing.T) {
 		`{"producer":"test"}`,
 	} {
 		var contribution LLMOptimizationContribution
-		if err := json.Unmarshal([]byte(raw), &contribution); err == nil {
+		if json.Unmarshal([]byte(raw), &contribution) == nil {
 			t.Fatalf("expected invalid optimization contribution %s to fail", raw)
 		}
 	}
@@ -433,7 +437,7 @@ func assertOptimizationContributionValidation(t *testing.T) {
 func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	scopeHandle, err := PushScope("finalizer_scope", ScopeTypeAgent)
 	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
+		t.Fatalf(pushScopeFailed, err)
 	}
 	if err := PopScope(scopeHandle); err != nil {
 		t.Fatalf("PopScope failed: %v", err)
