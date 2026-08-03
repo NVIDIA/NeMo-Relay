@@ -974,6 +974,7 @@ fn register_opentelemetry(
             "enabled OpenTelemetry section requires at least one endpoint".to_string(),
         ));
     }
+    validate_distinct_opentelemetry_destinations(&section.endpoints)?;
     let subscribers = build_opentelemetry_subscribers(section.endpoints)?;
     for (index, _) in subscribers.iter().enumerate() {
         log::info!(
@@ -2233,7 +2234,67 @@ fn validate_opentelemetry_section(
         }
         validate_opentelemetry_headers(diagnostics, policy, index, endpoint);
     }
+    for error in opentelemetry_destination_collision_errors(&section.endpoints) {
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "observability.unsafe_otel_destination_collision".to_string(),
+            component: Some("opentelemetry".to_string()),
+            field: Some(format!("endpoints[{}].endpoint", error.index)),
+            message: error.message,
+        });
+    }
     validate_opentelemetry_feature_support(diagnostics, policy, section);
+}
+
+struct OpenTelemetryDestinationCollision {
+    index: usize,
+    message: String,
+}
+
+fn validate_distinct_opentelemetry_destinations(
+    endpoints: &[OpenTelemetryEndpointConfig],
+) -> PluginResult<()> {
+    if let Some(error) = opentelemetry_destination_collision_errors(endpoints)
+        .into_iter()
+        .next()
+    {
+        return Err(PluginError::InvalidConfig(error.message));
+    }
+    Ok(())
+}
+
+fn opentelemetry_destination_collision_errors(
+    endpoints: &[OpenTelemetryEndpointConfig],
+) -> Vec<OpenTelemetryDestinationCollision> {
+    let mut errors = Vec::new();
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        for (other_index, other) in endpoints[..index].iter().enumerate() {
+            if endpoint.transport == other.transport
+                && endpoint.endpoint.trim() == other.endpoint.trim()
+                && endpoint.otel_type != other.otel_type
+            {
+                errors.push(OpenTelemetryDestinationCollision {
+                    index,
+                    message: format!(
+                        "OpenTelemetry endpoints[{other_index}] ({}) and endpoints[{index}] ({}) use the same {} destination {:?}; different projection types must use independent destinations",
+                        opentelemetry_type_name(other.otel_type),
+                        opentelemetry_type_name(endpoint.otel_type),
+                        endpoint.transport,
+                        endpoint.endpoint.trim(),
+                    ),
+                });
+            }
+        }
+    }
+    errors
+}
+
+const fn opentelemetry_type_name(otel_type: OpenTelemetryType) -> &'static str {
+    match otel_type {
+        OpenTelemetryType::Full => "full",
+        OpenTelemetryType::GenAi => "gen_ai",
+        OpenTelemetryType::OpenInference => "openinference",
+    }
 }
 
 fn validate_opentelemetry_headers(
