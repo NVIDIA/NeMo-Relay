@@ -460,73 +460,74 @@ fn native_abi_struct_sizes_are_self_describing() {
     assert_eq!(NemoRelayStatus::StreamEnd as i32, 10);
     assert_eq!(NemoRelayStatus::WouldBlock as i32, 11);
 
-    #[cfg(target_pointer_width = "64")]
-    {
-        assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 320);
-        assert_eq!(
-            host_api_offsets(),
-            [
-                0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
-                152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272,
-                280, 288, 296, 304, 312,
-            ]
-        );
-        assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 440);
-        assert_eq!(
-            host_api_v3_offsets(),
-            [
-                0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
-            ]
-        );
-        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 520);
-        assert_eq!(
-            host_api_v4_offsets(),
-            [0, 440, 448, 456, 464, 472, 480, 488, 496, 504, 512]
-        );
-        assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
-        assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
-        assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 40);
-        assert_eq!(stream_offsets(), [0, 8, 16, 24, 32]);
-    }
+    assert_native_abi_target_layout();
+}
 
-    #[cfg(target_pointer_width = "32")]
-    {
-        assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 160);
-        assert_eq!(
-            host_api_offsets(),
-            [
-                0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80,
-                84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 148,
-                152, 156,
-            ]
-        );
-        assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 220);
-        assert_eq!(
-            host_api_v3_offsets(),
-            [
-                0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212, 216
-            ]
-        );
-        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
-        assert_eq!(
-            host_api_v4_offsets(),
-            [0, 220, 224, 228, 232, 236, 240, 244, 248, 252, 256]
-        );
-        assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
-        assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
-        assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
-        assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
-    }
+#[cfg(target_pointer_width = "64")]
+fn assert_native_abi_target_layout() {
+    assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 320);
+    assert_eq!(
+        host_api_offsets(),
+        [
+            0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152,
+            160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272, 280, 288,
+            296, 304, 312,
+        ]
+    );
+    assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 440);
+    assert_eq!(
+        host_api_v3_offsets(),
+        [
+            0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
+        ]
+    );
+    assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 520);
+    assert_eq!(
+        host_api_v4_offsets(),
+        [0, 440, 448, 456, 464, 472, 480, 488, 496, 504, 512]
+    );
+    assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
+    assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
+    assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
+    assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 8);
+    assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 40);
+    assert_eq!(stream_offsets(), [0, 8, 16, 24, 32]);
+}
+
+#[cfg(target_pointer_width = "32")]
+fn assert_native_abi_target_layout() {
+    assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 160);
+    assert_eq!(
+        host_api_offsets(),
+        [
+            0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84,
+            88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 148, 152, 156,
+        ]
+    );
+    assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 220);
+    assert_eq!(
+        host_api_v3_offsets(),
+        [
+            0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212, 216
+        ]
+    );
+    assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
+    assert_eq!(
+        host_api_v4_offsets(),
+        [0, 220, 224, 228, 232, 236, 240, 244, 248, 252, 256]
+    );
+    assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
+    assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
+    assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
+    assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 4);
+    assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
+    assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
 }
 
 fn host_api_v4_offsets() -> [usize; 11] {
