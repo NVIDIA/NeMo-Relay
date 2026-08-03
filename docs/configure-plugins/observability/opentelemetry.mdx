@@ -77,7 +77,7 @@ work or delivery to the other exporters.
 | Field | Default | Notes |
 |---|---|---|
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
-| `endpoint` | Required | Nonblank OTLP endpoint. |
+| `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, a URL with no path receives `/v1/traces`; an explicit path is preserved. gRPC endpoints are always preserved. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
