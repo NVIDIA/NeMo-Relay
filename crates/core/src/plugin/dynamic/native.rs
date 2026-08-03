@@ -2218,80 +2218,11 @@ unsafe extern "C" fn native_async_next_invoke_stream(
             return;
         }
         continuation_context
-            .run(async move {
-                let mut callback_guard = callback_guard;
-                let result = AssertUnwindSafe(async {
-                    match next_fn(request).await {
-                        Ok(mut stream) => {
-                            while let Some(item) = stream.next().await {
-                                match item {
-                                    Ok(chunk) => {
-                                        if let Some(chunk) = native_string_from_json(&chunk) {
-                                            let keep_going = unsafe {
-                                                cb(
-                                                    user_data as *mut c_void,
-                                                    chunk,
-                                                    ptr::null(),
-                                                    false,
-                                                )
-                                            };
-                                            unsafe {
-                                                native_string_free(chunk);
-                                            }
-                                            if !keep_going {
-                                                callback_guard.finish();
-                                                return;
-                                            }
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    Err(error) => {
-                                        if let Some(message) =
-                                            native_string_from_str(&error.to_string())
-                                        {
-                                            unsafe {
-                                                let _ = cb(
-                                                    user_data as *mut c_void,
-                                                    ptr::null(),
-                                                    message,
-                                                    false,
-                                                );
-                                                native_string_free(message);
-                                            }
-                                            callback_guard.finish();
-                                        }
-                                        return;
-                                    }
-                                }
-                            }
-                            unsafe {
-                                let _ =
-                                    cb(user_data as *mut c_void, ptr::null(), ptr::null(), true);
-                            }
-                            callback_guard.finish();
-                        }
-                        Err(error) => {
-                            if let Some(message) = native_string_from_str(&error.to_string()) {
-                                unsafe {
-                                    let _ =
-                                        cb(user_data as *mut c_void, ptr::null(), message, false);
-                                    native_string_free(message);
-                                }
-                                callback_guard.finish();
-                            }
-                        }
-                    }
-                })
-                .catch_unwind()
-                .await;
-                if let Err(payload) = result {
-                    callback_guard.fail(&format!(
-                        "native async stream continuation panicked: {}",
-                        panic_payload_message(payload.as_ref())
-                    ));
-                }
-            })
+            .run(deliver_native_async_next_stream(
+                next_fn,
+                request,
+                callback_guard,
+            ))
             .await;
         output_stream_for_cleanup
             .downstream_aborts
@@ -2303,6 +2234,79 @@ unsafe extern "C" fn native_async_next_invoke_stream(
     downstream_aborts.insert(task.id(), abort);
     let _ = start_tx.send(());
     NemoRelayStatus::Ok
+}
+
+async fn deliver_native_async_next_stream(
+    next_fn: LlmStreamExecutionNextFn,
+    request: LlmRequest,
+    mut callback_guard: NativeAsyncStreamCallbackGuard,
+) {
+    let result = AssertUnwindSafe(async {
+        match next_fn(request).await {
+            Ok(stream) => forward_native_async_next_stream(stream, &mut callback_guard).await,
+            Err(error) => callback_guard.fail(&error.to_string()),
+        }
+    })
+    .catch_unwind()
+    .await;
+    if let Err(payload) = result {
+        callback_guard.fail(&format!(
+            "native async stream continuation panicked: {}",
+            panic_payload_message(payload.as_ref())
+        ));
+    }
+}
+
+async fn forward_native_async_next_stream(
+    stream: LlmJsonStream,
+    callback_guard: &mut NativeAsyncStreamCallbackGuard,
+) {
+    forward_native_async_next_stream_with(stream, callback_guard, native_string_from_json).await;
+}
+
+async fn forward_native_async_next_stream_with(
+    mut stream: LlmJsonStream,
+    callback_guard: &mut NativeAsyncStreamCallbackGuard,
+    to_native_string: impl Fn(&Json) -> Option<*mut NemoRelayNativeString>,
+) {
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(chunk) => {
+                let Some(chunk) = to_native_string(&chunk) else {
+                    callback_guard.fail(
+                        "failed to serialize or allocate native async stream continuation chunk",
+                    );
+                    return;
+                };
+                let keep_going = unsafe {
+                    (callback_guard.cb)(
+                        callback_guard.user_data as *mut c_void,
+                        chunk,
+                        ptr::null(),
+                        false,
+                    )
+                };
+                unsafe { native_string_free(chunk) };
+                if !keep_going {
+                    callback_guard.finish();
+                    return;
+                }
+            }
+            Err(error) => {
+                callback_guard.fail(&error.to_string());
+                return;
+            }
+        }
+    }
+    unsafe {
+        let _ = (callback_guard.cb)(
+            callback_guard.user_data as *mut c_void,
+            ptr::null(),
+            ptr::null(),
+            true,
+        );
+    }
+    callback_guard.finish();
 }
 
 fn wrap_native_async_tool_json(

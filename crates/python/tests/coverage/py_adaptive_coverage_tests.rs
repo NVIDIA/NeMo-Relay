@@ -393,126 +393,96 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
             }),
         )
         .unwrap();
-        assert!(
-            locked_runtime
-                .deregister()
-                .unwrap_err()
-                .to_string()
-                .contains("locked by an async operation")
+        assert_py_error_contains(locked_runtime.deregister(), "locked by an async operation");
+        assert_py_error_contains(
+            locked_runtime.wait_for_idle(),
+            "locked by an async operation",
         );
-        assert!(
-            locked_runtime
-                .wait_for_idle()
-                .unwrap_err()
-                .to_string()
-                .contains("locked by an async operation")
-        );
-        assert!(
-            locked_runtime
-                .report(py)
-                .unwrap_err()
-                .to_string()
-                .contains("locked by an async operation")
-        );
+        assert_py_error_contains(locked_runtime.report(py), "locked by an async operation");
         let scope_handle = crate::py_types::PyScopeHandle {
             inner: ScopeHandle::builder()
                 .name("adaptive-runtime-cov-locked")
                 .scope_type(CoreScopeType::Agent)
                 .build(),
         };
-        assert!(match locked_runtime.bind_scope(&scope_handle) {
-            Ok(_) => panic!("expected locked runtime rewrite to fail"),
-            Err(err) => err.to_string().contains("locked by an async operation"),
-        });
-        assert!(
-            locked_runtime
-                .build_cache_request_facts(
-                    py,
-                    "openai",
-                    "00000000-0000-0000-0000-000000000204",
-                    annotated_request.bind(py),
-                    "adaptive-runtime-cov",
-                    None,
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("locked by an async operation")
+        assert_py_error_contains(
+            locked_runtime.bind_scope(&scope_handle),
+            "locked by an async operation",
+        );
+        assert_py_error_contains(
+            locked_runtime.build_cache_request_facts(
+                py,
+                "openai",
+                "00000000-0000-0000-0000-000000000204",
+                annotated_request.bind(py),
+                "adaptive-runtime-cov",
+                None,
+            ),
+            "locked by an async operation",
         );
         drop(guard);
 
         let empty_runtime = PyAdaptiveRuntime {
             inner: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         };
-        assert!(
-            empty_runtime
-                .deregister()
-                .unwrap_err()
-                .to_string()
-                .contains("already shut down")
-        );
-        assert!(
-            empty_runtime
-                .wait_for_idle()
-                .unwrap_err()
-                .to_string()
-                .contains("already shut down")
-        );
+        assert_py_error_contains(empty_runtime.deregister(), "already shut down");
+        assert_py_error_contains(empty_runtime.wait_for_idle(), "already shut down");
         let scope_handle = crate::py_types::PyScopeHandle {
             inner: ScopeHandle::builder()
                 .name("adaptive-runtime-cov-empty")
                 .scope_type(CoreScopeType::Agent)
                 .build(),
         };
-        assert!(match empty_runtime.bind_scope(&scope_handle) {
-            Ok(_) => panic!("expected shut down runtime rewrite to fail"),
-            Err(err) => err.to_string().contains("already shut down"),
-        });
+        assert_py_error_contains(empty_runtime.bind_scope(&scope_handle), "already shut down");
 
-        let valid_report = validate_adaptive_config_or_err(&parsed_config).unwrap();
-        assert!(!valid_report.has_errors());
+        fn assert_adaptive_config_and_telemetry_parsing(parsed_config: &AdaptiveConfig) {
+            let valid_report = validate_adaptive_config_or_err(parsed_config).unwrap();
+            assert!(!valid_report.has_errors());
 
-        let invalid_config: AdaptiveConfig = serde_json::from_value(json!({
-            "version": 1,
-            "policy": {
-                "unknown_component": "warn",
-                "unknown_field": "warn",
-                "unsupported_value": "error"
-            },
-            "tool_parallelism": {
-                "mode": "definitely_not_supported"
-            }
-        }))
-        .unwrap();
-        let invalid_err = validate_adaptive_config_or_err(&invalid_config).unwrap_err();
-        assert!(invalid_err.to_string().contains("unsupported"));
+            let invalid_config: AdaptiveConfig = serde_json::from_value(json!({
+                "version": 1,
+                "policy": {
+                    "unknown_component": "warn",
+                    "unknown_field": "warn",
+                    "unsupported_value": "error"
+                },
+                "tool_parallelism": {
+                    "mode": "definitely_not_supported"
+                }
+            }))
+            .unwrap();
+            let invalid_err = validate_adaptive_config_or_err(&invalid_config).unwrap_err();
+            assert!(invalid_err.to_string().contains("unsupported"));
 
-        assert!(matches!(
-            parse_cache_telemetry_provider("anthropic").unwrap(),
-            CacheTelemetryProvider::Anthropic
-        ));
-        assert!(matches!(
-            parse_cache_telemetry_provider("openai").unwrap(),
-            CacheTelemetryProvider::OpenAI
-        ));
-        assert!(
-            parse_cache_telemetry_provider("bogus")
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported provider")
-        );
-        assert!(
-            parse_cache_telemetry_request_id("not-a-uuid")
-                .unwrap_err()
-                .to_string()
-                .contains("invalid request_id UUID")
-        );
-        assert!(
-            parse_cache_telemetry_timestamp(Some("not-a-timestamp"))
-                .unwrap_err()
-                .to_string()
-                .contains("invalid timestamp")
-        );
-        assert!(parse_cache_telemetry_timestamp(None).is_ok());
+            assert!(matches!(
+                parse_cache_telemetry_provider("anthropic").unwrap(),
+                CacheTelemetryProvider::Anthropic
+            ));
+            assert!(matches!(
+                parse_cache_telemetry_provider("openai").unwrap(),
+                CacheTelemetryProvider::OpenAI
+            ));
+            assert!(
+                parse_cache_telemetry_provider("bogus")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("unsupported provider")
+            );
+            assert!(
+                parse_cache_telemetry_request_id("not-a-uuid")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("invalid request_id UUID")
+            );
+            assert!(
+                parse_cache_telemetry_timestamp(Some("not-a-timestamp"))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("invalid timestamp")
+            );
+            assert!(parse_cache_telemetry_timestamp(None).is_ok());
+        }
+        assert_adaptive_config_and_telemetry_parsing(&parsed_config);
 
         let types_module = PyModule::new(py, "_adaptive_types").unwrap();
         crate::py_types::register(&types_module).unwrap();
@@ -605,6 +575,11 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
         assert!(validate_err.to_string().contains("ValueError"));
         assert_eq!(to_py_err("boom").to_string(), "RuntimeError: boom");
     });
+}
+
+fn assert_py_error_contains<T>(result: PyResult<T>, expected: &str) {
+    let error = result.err().expect("operation should fail");
+    assert!(error.to_string().contains(expected), "{error}");
 }
 
 #[test]

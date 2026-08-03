@@ -45,3 +45,6 @@ uuid = "=1.18.1"
 
 [workspace.lints.rust]
 missing_docs = "deny"
+
+[workspace.lints.clippy]
+cognitive_complexity = "deny"

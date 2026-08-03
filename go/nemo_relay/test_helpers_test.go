@@ -3,7 +3,32 @@
 
 package nemo_relay
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
+
+// runTestInIsolatedWorkingDirectory changes the process-wide working directory,
+// so callers must not use it with t.Parallel().
+func runTestInIsolatedWorkingDirectory(t *testing.T, fn func(*testing.T)) {
+	t.Helper()
+
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir to temporary directory failed: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(original); err != nil {
+			t.Errorf("restore working directory failed: %v", err)
+		}
+	}()
+
+	fn(t)
+}
 
 func runWithTestScopeStack(t *testing.T, fn func()) {
 	t.Helper()

@@ -395,10 +395,14 @@ config = { version = 1, components = [] }
 }
 
 #[test]
-fn write_or_merge_overwrites_without_merge_scope_and_reports_malformed_existing_config() {
+fn write_or_merge_replaces_agents_without_merge_scope_and_preserves_other_sections() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
-    std::fs::write(&path, "[agents.codex]\ncommand = \"old\"\n").unwrap();
+    std::fs::write(
+        &path,
+        "[agents.codex]\ncommand = \"old\"\n\n[upstream]\nopenai_base_url = \"https://example.test\"\n",
+    )
+    .unwrap();
     let doc = build_config(&SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::Hermes],
@@ -408,11 +412,11 @@ fn write_or_merge_overwrites_without_merge_scope_and_reports_malformed_existing_
     let overwritten = std::fs::read_to_string(&path).unwrap();
     assert!(!overwritten.contains("[agents.codex]"));
     assert!(overwritten.contains("[agents.hermes]"));
+    assert!(overwritten.contains("[upstream]"));
+    assert!(overwritten.contains("https://example.test"));
 
     std::fs::write(&path, "[agents.codex\n").unwrap();
-    let error = write_or_merge(&path, &doc, Some(CodingAgent::Hermes))
-        .unwrap_err()
-        .to_string();
+    let error = write_or_merge(&path, &doc, None).unwrap_err().to_string();
     assert!(error.contains("could not parse existing config"));
 }
 

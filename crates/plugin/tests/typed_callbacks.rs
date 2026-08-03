@@ -1887,6 +1887,15 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
     drop(stack);
 
     let calls = RUNTIME_CALLS.lock().unwrap().clone();
+    assert_scope_runtime_calls(&calls);
+    assert_stack_runtime_calls(&calls);
+    assert_eq!(SCOPE_HANDLE_FREES.load(Ordering::SeqCst), 2);
+    assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
+    assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
+    assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
+}
+
+fn assert_scope_runtime_calls(calls: &[String]) {
     assert!(calls.iter().any(|call| call == "current_scope"));
     assert!(calls.iter().any(|call| {
         call.starts_with("push:work:Tool:0:parent=false")
@@ -1904,15 +1913,14 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
             && call.contains(r#""output":true"#)
             && call.contains(r#""closed":true"#)
     }));
+}
+
+fn assert_stack_runtime_calls(calls: &[String]) {
     assert!(calls.iter().any(|call| call == "stack_create"));
     assert!(calls.iter().any(|call| call == "stack_with_current"));
     assert!(calls.iter().any(|call| call == "stack_capture"));
     assert!(calls.iter().any(|call| call == "stack_set_thread"));
     assert!(calls.iter().any(|call| call == "stack_restore"));
-    assert_eq!(SCOPE_HANDLE_FREES.load(Ordering::SeqCst), 2);
-    assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
-    assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
-    assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -2750,7 +2758,7 @@ fn typed_callback_free_catches_drop_panics() {
 }
 
 #[test]
-fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
+fn typed_event_and_tool_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     let _guard = begin_test();
     let host = test_host();
 
@@ -2953,6 +2961,14 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
         drop(Box::from_raw(next_state));
         registration.free();
     }
+}
+
+#[test]
+fn typed_llm_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut out = ptr::null_mut();
+    let mut reason = ptr::null_mut();
 
     let mut ctx = test_context(&host);
     ctx.register_llm_sanitize_request_guardrail("llm-request", 0, |request, _context| {
@@ -3180,7 +3196,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
 }
 
 #[test]
-fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
+fn typed_subscriber_event_and_tool_sanitize_callbacks_report_invalid_json() {
     let _guard = begin_test();
     let host = test_host();
 
@@ -3277,6 +3293,12 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
         (host.string_free)(payload);
         registration.free();
     }
+}
+
+#[test]
+fn typed_conditional_execution_and_llm_callbacks_report_invalid_json() {
+    let _guard = begin_test();
+    let host = test_host();
 
     let mut ctx = test_context(&host);
     ctx.register_tool_conditional_execution_guardrail("tool-conditional", 0, |_name, _value| {
@@ -4701,14 +4723,8 @@ fn typed_llm_stream_execution_wraps_next_chunks() {
         "llm-stream",
         31,
         |_name, request, next: LlmStreamNext<'_>| {
-            let stream = next.call(request)?;
-            let stream: LlmJsonStream = Box::new(stream.map(|chunk| {
-                chunk.map(|mut chunk| {
-                    chunk["wrapped"] = json!(true);
-                    chunk
-                })
-            }));
-            Ok(stream)
+            let stream: LlmJsonStream = Box::new(next.call(request)?);
+            Ok(wrap_stream_chunks(stream))
         },
     )
     .unwrap();
@@ -4748,20 +4764,7 @@ fn typed_llm_stream_execution_wraps_next_chunks() {
         NemoRelayStatus::NullPointer
     );
 
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::Ok);
-    assert_eq!(chunk.unwrap()["wrapped"], json!(true));
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::Ok);
-    let chunk = chunk.unwrap();
-    assert_eq!(chunk["chunk"], json!(2));
-    assert_eq!(chunk["wrapped"], json!(true));
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::StreamEnd);
-    assert!(chunk.is_none());
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::StreamEnd);
-    assert!(chunk.is_none());
+    assert_wrapped_stream_chunks(&host, &stream);
     assert_eq!(
         unsafe { stream.cancel.unwrap()(stream.user_data) },
         NemoRelayStatus::Ok
@@ -4780,6 +4783,36 @@ fn typed_llm_stream_execution_wraps_next_chunks() {
     }
     assert_eq!(cancelled.load(Ordering::SeqCst), 0);
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+fn wrap_stream_chunks(stream: LlmJsonStream) -> LlmJsonStream {
+    Box::new(stream.map(|chunk| {
+        chunk.map(|mut chunk| {
+            chunk["wrapped"] = json!(true);
+            chunk
+        })
+    }))
+}
+
+fn assert_wrapped_stream_chunks(
+    host: &NemoRelayNativeHostApiV1,
+    stream: &NemoRelayNativeLlmStreamV1,
+) {
+    let (status, chunk) = poll_stream_chunk(host, stream);
+    assert_eq!(status, NemoRelayStatus::Ok);
+    assert_eq!(chunk.unwrap()["wrapped"], json!(true));
+
+    let (status, chunk) = poll_stream_chunk(host, stream);
+    assert_eq!(status, NemoRelayStatus::Ok);
+    let chunk = chunk.unwrap();
+    assert_eq!(chunk["chunk"], json!(2));
+    assert_eq!(chunk["wrapped"], json!(true));
+
+    for _ in 0..2 {
+        let (status, chunk) = poll_stream_chunk(host, stream);
+        assert_eq!(status, NemoRelayStatus::StreamEnd);
+        assert!(chunk.is_none());
+    }
 }
 
 #[test]

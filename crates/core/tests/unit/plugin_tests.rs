@@ -708,6 +708,33 @@ fn test_layer_config_preserves_multi_instance_kinds() {
 }
 
 #[test]
+fn config_layering_helpers_cover_malformed_and_scalar_shapes() {
+    let mut scalar = json!("lower");
+    layer_config(&mut scalar, json!("higher"));
+    assert_eq!(scalar, json!("higher"));
+
+    let mut malformed_left = json!({"not": "components"});
+    merge_plugin_components(&mut malformed_left, json!([]));
+    assert_eq!(malformed_left, json!([]));
+
+    let mut malformed_right = json!([]);
+    merge_plugin_components(&mut malformed_right, json!({"not": "components"}));
+    assert_eq!(malformed_right, json!({"not": "components"}));
+
+    let mut components = json!([]);
+    merge_plugin_components(&mut components, json!([{"enabled": true}]));
+    assert_eq!(components, json!([{"enabled": true}]));
+
+    let mut malformed_component = json!("lower");
+    merge_plugin_component(&mut malformed_component, json!({"kind": "higher"}));
+    assert_eq!(malformed_component, json!({"kind": "higher"}));
+
+    let mut object = json!({"existing": true});
+    merge_json_value(&mut object, json!({"added": true}));
+    assert_eq!(object, json!({"existing": true, "added": true}));
+}
+
+#[test]
 fn test_config_report_has_errors() {
     let report = ConfigReport {
         diagnostics: vec![ConfigDiagnostic {
@@ -2255,6 +2282,37 @@ fn test_load_plugin_config_files_rejects_version_before_layering() {
         }
         other => panic!("unexpected plugin config version error: {other}"),
     }
+}
+
+#[test]
+fn test_plugin_config_loading_reports_read_parse_and_version_type_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let unreadable = dir.path().join("directory.toml");
+    std::fs::create_dir(&unreadable).unwrap();
+    assert!(
+        load_plugin_config_files([unreadable])
+            .unwrap_err()
+            .to_string()
+            .contains("failed to read")
+    );
+
+    let malformed = dir.path().join("malformed.toml");
+    std::fs::write(&malformed, "version = [").unwrap();
+    assert!(
+        load_plugin_config_files([malformed])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid plugin TOML")
+    );
+
+    assert!(
+        merge_plugin_config_documents([
+            (dir.path().join("typed.toml"), json!({"version": "one"}),)
+        ])
+        .unwrap_err()
+        .to_string()
+        .contains("invalid plugin config version")
+    );
 }
 
 #[test]

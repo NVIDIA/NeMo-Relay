@@ -3,6 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::optimization::{
     LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
@@ -119,11 +122,78 @@ fn python_worker_launch_clears_host_python_environment() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file() {
+    let plugin_id = "acme.python.launch";
+    let digest = Sha256::digest(plugin_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temp = tempfile::tempdir().unwrap();
+    let managed = temp.path().join(MANAGED_ENVIRONMENTS_DIR).join(digest);
+    let interpreter = managed.join("bin/python");
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    let probe = temp.path().join("launch-probe");
+    std::fs::write(
+        &interpreter,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$0\" \"$NEMO_RELAY_WORKER_ENDPOINT_FILE\" > '{}'\nexit 0\n",
+            probe.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&interpreter).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&interpreter, permissions).unwrap();
+
+    let endpoint_file = temp.path().join("worker-endpoint");
+    let mut child = spawn_worker_process(WorkerProcessLaunch {
+        runtime: WorkerRuntime::Python,
+        manifest_path: &temp.path().join("plugin.toml"),
+        environment_ref: managed.to_str(),
+        plugin_id,
+        entrypoint: "acme_worker:create_plugin",
+        activation_id: "activation",
+        auth_token: "token",
+        host_endpoint: "http://127.0.0.1:1",
+        worker_endpoint: "http://127.0.0.1:2",
+        worker_endpoint_file: Some(&endpoint_file),
+    })
+    .unwrap();
+    assert!(child.wait().unwrap().success());
+    let recorded = std::fs::read_to_string(&probe).unwrap();
+    let mut lines = recorded.lines();
+    assert_eq!(lines.next(), interpreter.to_str());
+    assert_eq!(lines.next(), endpoint_file.to_str());
+    assert_eq!(lines.next(), None);
+}
+
 #[cfg(not(unix))]
 #[test]
 fn empty_worker_endpoint_announcement_is_retried() {
     let temp = tempfile::tempdir().unwrap();
     let announcement = temp.path().join("worker-endpoint");
+    let missing = temp.path().join("missing-endpoint");
+    let directory = temp.path().join("endpoint-directory");
+    std::fs::create_dir(&directory).unwrap();
+
+    assert_eq!(
+        normalize_worker_tcp_endpoint(" tcp://127.0.0.1:50051 ").unwrap(),
+        "http://127.0.0.1:50051"
+    );
+    assert_eq!(
+        normalize_worker_tcp_endpoint("http://127.0.0.1:50051").unwrap(),
+        "http://127.0.0.1:50051"
+    );
+    assert!(normalize_worker_tcp_endpoint("tcp://").is_err());
+    assert!(normalize_worker_tcp_endpoint("https://127.0.0.1").is_err());
+    assert!(
+        resolve_worker_connect_endpoint(&WorkerConnectEndpoint::Announced(missing))
+            .unwrap()
+            .is_none()
+    );
+    assert!(resolve_worker_connect_endpoint(&WorkerConnectEndpoint::Announced(directory)).is_err());
     std::fs::write(&announcement, "").unwrap();
 
     let endpoint = WorkerConnectEndpoint::Announced(announcement);
@@ -135,14 +205,18 @@ fn empty_worker_endpoint_announcement_is_retried() {
     );
 }
 
-#[test]
-fn response_helpers_cover_error_and_unexpected_shapes() {
-    enable_operational_logs();
-    let worker_error = WorkerError {
+fn test_worker_error() -> WorkerError {
+    WorkerError {
         code: "worker.failed".into(),
         message: "boom".into(),
         retryable: false,
-    };
+    }
+}
+
+#[test]
+fn response_helpers_cover_json_and_guardrail_error_shapes() {
+    enable_operational_logs();
+    let worker_error = test_worker_error();
 
     let error = json_from_invoke_response(InvokeResponse {
         result: Some(InvokeResult::Json(JsonResult {
@@ -211,6 +285,12 @@ fn response_helpers_cover_error_and_unexpected_shapes() {
         .to_string()
         .contains("guardrail returned unexpected")
     );
+}
+
+#[test]
+fn response_helpers_cover_stream_optional_and_cancellation_errors() {
+    enable_operational_logs();
+    let worker_error = test_worker_error();
 
     assert!(
         json_from_stream_chunk(StreamChunk {
@@ -236,6 +316,74 @@ fn response_helpers_cover_error_and_unexpected_shapes() {
             .expect_err("empty stream chunk should fail")
             .to_string()
             .contains("stream chunk was empty")
+    );
+
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: None,
+                error: Some(worker_error.clone()),
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("worker.failed")
+    );
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: Some(JsonEnvelope {
+                    schema: JSON_SCHEMA.into(),
+                    json: b"{".to_vec(),
+                }),
+                error: None,
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("invalid JSON result")
+    );
+    assert_eq!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        })
+        .expect("empty result must map to no replacement JSON"),
+        None
+    );
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Guardrail(GuardrailResult {
+                block_reason: String::new(),
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("unexpected LLM sanitizer result")
+    );
+
+    let typed_error = typed_json_result::<Json>(
+        JSON_SCHEMA,
+        Err(FlowError::Internal("typed result failed".into())),
+    );
+    assert!(typed_error.value.is_none());
+    assert!(
+        typed_error
+            .error
+            .is_some_and(|error| error.message.contains("typed result failed"))
+    );
+    assert!(
+        worker_error_to_flow(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "cancelled by caller".into(),
+            retryable: false,
+        })
+        .to_string()
+        .contains("worker invocation cancelled")
+    );
+    assert!(
+        worker_status_to_flow("unused", Status::cancelled("cancelled by transport"))
+            .to_string()
+            .contains("worker invocation cancelled")
     );
 }
 
@@ -419,6 +567,16 @@ fn worker_endpoints_fail_when_host_socket_cannot_bind() {
     );
 
     let _ = std::fs::remove_dir_all(&activation_dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn worker_unix_connection_reports_a_missing_socket() {
+    let missing = std::env::temp_dir().join(format!("nmrw-missing-{}", Uuid::now_v7()));
+    let error = connect_worker(&WorkerConnectEndpoint::Unix(missing.clone()))
+        .await
+        .expect_err("a missing worker socket should fail to connect");
+    assert!(error.to_string().contains(&missing.display().to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1851,6 +2009,18 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
         .await
         .expect_err("a capability cannot be reused by another invocation");
     assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
+    let wrong_invocation = state
+        .response_codec(&response_capability, "another-invocation")
+        .err()
+        .expect("response capability must remain invocation-bound");
+    assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
+    let wrong_direction = state
+        .response_codec(&request_capability, invocation_id)
+        .err()
+        .expect("request capability cannot decode responses");
+    assert_eq!(wrong_direction.code(), tonic::Code::InvalidArgument);
 
     let decoded = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {

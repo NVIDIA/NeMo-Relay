@@ -939,6 +939,12 @@ fn test_helper_and_error_paths_cover_remaining_chat_branches() {
 
 #[test]
 fn chat_request_component_branch_matrix() {
+    assert_chat_content_and_tool_call_branches();
+    assert_chat_message_decode_branches();
+    assert_chat_message_encoding_tool_and_choice_branches();
+}
+
+fn assert_chat_content_and_tool_call_branches() {
     assert!(decode_chat_content(&json!({})).is_err());
     for invalid in [
         json!(42),
@@ -1023,7 +1029,9 @@ fn chat_request_component_branch_matrix() {
         .unwrap()
         .is_some()
     );
+}
 
+fn assert_chat_message_decode_branches() {
     for invalid in [
         json!(42),
         json!({"content": "x"}),
@@ -1059,7 +1067,9 @@ fn chat_request_component_branch_matrix() {
             Message::ProviderNative { .. }
         ));
     }
+}
 
+fn assert_chat_message_encoding_tool_and_choice_branches() {
     let tool_call = ToolCall {
         id: "call".into(),
         call_type: "function".into(),
@@ -1753,4 +1763,49 @@ fn openai_chat_streaming_codec_skips_null_usage_chunks() {
     let assembled = finalizer();
     assert_eq!(assembled["usage"]["prompt_tokens"], json!(1));
     assert_eq!(assembled["usage"]["total_tokens"], json!(2));
+}
+
+#[test]
+fn openai_chat_helpers_cover_provider_edge_values() {
+    let refusal = decode_chat_content_part(&json!({
+        "type": "refusal",
+        "refusal": "cannot comply",
+        "provider_field": true
+    }))
+    .unwrap();
+    assert!(matches!(
+        refusal,
+        ContentPart::Refusal { refusal, extra }
+            if refusal == "cannot comply" && extra["provider_field"] == json!(true)
+    ));
+
+    assert!(decode_chat_message(&json!({"role": "tool"})).is_err());
+    assert!(matches!(
+        decode_chat_tool_choice(&json!("none")),
+        ToolChoice::None
+    ));
+    assert!(matches!(
+        decode_chat_tool_choice(&json!("required")),
+        ToolChoice::Required
+    ));
+    assert_eq!(
+        encode_chat_tool_choice(&ToolChoice::Auto).unwrap(),
+        json!("auto")
+    );
+
+    let mut object = serde_json::Map::from_iter([("remove".into(), json!(true))]);
+    set_or_remove_json(&mut object, "remove", None);
+    assert!(!object.contains_key("remove"));
+    set_or_remove_json(&mut object, "insert", Some(json!(42)));
+    assert_eq!(object["insert"], json!(42));
+
+    let codec = OpenAIChatCodec;
+    for invalid_request in [
+        json!({"messages": [], "stop": false}),
+        json!({"messages": [], "functions": {}}),
+        json!({"messages": [], "modalities": false}),
+    ] {
+        assert!(codec.decode(&make_request(invalid_request)).is_err());
+    }
+    assert!(OpenAIChatStreamingCodec::default().finalizer()().is_object());
 }

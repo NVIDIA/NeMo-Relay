@@ -713,11 +713,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
             "anthropic.messages",
             "claude-sonnet-4",
             "/v1/messages",
-            json!({
-                "model": "claude-sonnet-4",
-                "messages": [{"role": "user", "content": "Find the file."}],
-                "tools": [{"name": "search", "input_schema": {"type": "object"}}]
-            }),
+            anthropic_wire_start_payload(),
         ),
         wire_format_llm_event(
             anthropic_uuid,
@@ -726,21 +722,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
             "anthropic.messages",
             "claude-sonnet-4",
             "/v1/messages",
-            json!({
-                "id": "msg_01",
-                "type": "message",
-                "content": [
-                    {"type": "text", "text": "I will search."},
-                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
-                ],
-                "usage": {
-                    "input_tokens": 11,
-                    "output_tokens": 7,
-                    "cache_read_input_tokens": 3,
-                    "cache_creation_input_tokens": 5,
-                    "cost": {"total": 0.0042}
-                }
-            }),
+            anthropic_wire_end_payload(),
         ),
         wire_format_llm_event(
             responses_uuid,
@@ -749,11 +731,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
             "openai.responses",
             "gpt-4o",
             "/v1/responses",
-            json!({
-                "model": "gpt-4o",
-                "input": "Find the weather.",
-                "tools": [{"type": "function", "name": "get_weather"}]
-            }),
+            responses_wire_start_payload(),
         ),
         wire_format_llm_event(
             responses_uuid,
@@ -762,20 +740,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
             "openai.responses",
             "gpt-4o",
             "/v1/responses",
-            json!({
-                "id": "resp_1",
-                "output": [
-                    {"type": "message", "content": [{"type": "output_text", "text": "I will check."}]},
-                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
-                ],
-                "usage": {
-                    "input_tokens": 75,
-                    "output_tokens": 20,
-                    "total_tokens": 95,
-                    "input_tokens_details": {"cached_tokens": 10},
-                    "cost_usd": 0.005
-                }
-            }),
+            responses_wire_end_payload(),
         ),
         wire_format_llm_event(
             chat_uuid,
@@ -784,11 +749,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
             "openai.chat_completions",
             "gpt-4o",
             "/v1/chat/completions",
-            json!({
-                "model": "gpt-4o",
-                "messages": [{"role": "user", "content": "Inspect the files."}],
-                "tools": [{"type": "function", "function": {"name": "read"}}]
-            }),
+            chat_wire_start_payload(),
         ),
         wire_format_llm_event(
             chat_uuid,
@@ -797,22 +758,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
             "openai.chat_completions",
             "gpt-4o",
             "/v1/chat/completions",
-            json!({
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": "I will inspect.",
-                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
-                    }
-                }],
-                "usage": {
-                    "prompt_tokens": 3,
-                    "completion_tokens": 4,
-                    "total_tokens": 7,
-                    "prompt_tokens_details": {"cached_tokens": 2},
-                    "cost_usd": 0.001
-                }
-            }),
+            chat_wire_end_payload(),
         ),
     ];
 
@@ -823,8 +769,21 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
 
     let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), events.len());
+    assert_wire_lines_match_events(&lines, &events);
+    assert_wire_lines_common_shape(&lines, parent_uuid);
+    assert_anthropic_wire_lines(&lines);
+    assert_responses_wire_lines(&lines);
+    assert_chat_wire_lines(&lines);
+}
+
+fn assert_wire_lines_match_events(lines: &[Json], events: &[Event]) {
     for (line, event) in lines.iter().zip(events.iter()) {
         assert_eq!(line, &event.try_to_json_value().unwrap());
+    }
+}
+
+fn assert_wire_lines_common_shape(lines: &[Json], parent_uuid: Uuid) {
+    for line in lines {
         assert_eq!(line["kind"], "scope");
         assert_eq!(line["atof_version"], "0.1");
         assert_eq!(line["parent_uuid"], parent_uuid.to_string());
@@ -834,7 +793,9 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
         assert_eq!(line["metadata"]["source"], "openclaw.public_plugin");
         assert_eq!(line["metadata"]["provider_payload_exact"], true);
     }
+}
 
+fn assert_anthropic_wire_lines(lines: &[Json]) {
     assert_eq!(lines[0]["name"], "anthropic.messages");
     assert_eq!(lines[0]["scope_category"], "start");
     assert_eq!(lines[0]["metadata"]["gateway_path"], "/v1/messages");
@@ -847,7 +808,9 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
     assert_eq!(lines[1]["data"]["content"][1]["type"], "tool_use");
     assert_eq!(lines[1]["data"]["usage"]["cache_creation_input_tokens"], 5);
     assert_eq!(lines[1]["data"]["usage"]["cost"]["total"], 0.0042);
+}
 
+fn assert_responses_wire_lines(lines: &[Json]) {
     assert_eq!(lines[2]["metadata"]["gateway_path"], "/v1/responses");
     assert_eq!(lines[2]["data"]["input"], "Find the weather.");
     assert_eq!(lines[3]["data"]["output"][1]["type"], "function_call");
@@ -856,7 +819,9 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
         10
     );
     assert_eq!(lines[3]["data"]["usage"]["cost_usd"], 0.005);
+}
 
+fn assert_chat_wire_lines(lines: &[Json]) {
     assert_eq!(lines[4]["metadata"]["gateway_path"], "/v1/chat/completions");
     assert_eq!(
         lines[4]["data"]["messages"][0]["content"],
@@ -871,6 +836,84 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
         2
     );
     assert_eq!(lines[5]["data"]["usage"]["cost_usd"], 0.001);
+}
+
+fn anthropic_wire_start_payload() -> Json {
+    json!({
+        "model": "claude-sonnet-4",
+        "messages": [{"role": "user", "content": "Find the file."}],
+        "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+    })
+}
+
+fn anthropic_wire_end_payload() -> Json {
+    json!({
+        "id": "msg_01",
+        "type": "message",
+        "content": [
+            {"type": "text", "text": "I will search."},
+            {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+        ],
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "cache_read_input_tokens": 3,
+            "cache_creation_input_tokens": 5,
+            "cost": {"total": 0.0042}
+        }
+    })
+}
+
+fn responses_wire_start_payload() -> Json {
+    json!({
+        "model": "gpt-4o",
+        "input": "Find the weather.",
+        "tools": [{"type": "function", "name": "get_weather"}]
+    })
+}
+
+fn responses_wire_end_payload() -> Json {
+    json!({
+        "id": "resp_1",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "I will check."}]},
+            {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
+        ],
+        "usage": {
+            "input_tokens": 75,
+            "output_tokens": 20,
+            "total_tokens": 95,
+            "input_tokens_details": {"cached_tokens": 10},
+            "cost_usd": 0.005
+        }
+    })
+}
+
+fn chat_wire_start_payload() -> Json {
+    json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Inspect the files."}],
+        "tools": [{"type": "function", "function": {"name": "read"}}]
+    })
+}
+
+fn chat_wire_end_payload() -> Json {
+    json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "I will inspect.",
+                "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
+            }
+        }],
+        "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 4,
+            "total_tokens": 7,
+            "prompt_tokens_details": {"cached_tokens": 2},
+            "cost_usd": 0.001
+        }
+    })
 }
 
 #[test]
@@ -1631,6 +1674,73 @@ fn http_endpoint_worker_reports_request_transport_failure() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
+fn ndjson_endpoint_worker_streams_events_flushes_and_closes() {
+    enable_operational_logs();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let body = read_http_request(&mut stream);
+        assert_eq!(body, "{\"kind\":\"mark\"}\n");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+
+    let endpoint = validate_endpoint_config(
+        AtofEndpointConfig::new(url, AtofEndpointTransport::Ndjson).with_timeout_millis(5_000),
+    )
+    .unwrap();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || run_endpoint_worker(0, endpoint, rx));
+
+    tx.send(EndpointMessage::Event("{\"kind\":\"mark\"}".into()))
+        .unwrap();
+    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    worker.join().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn atof_config_helpers_cover_file_path_and_replace_dots_policy() {
+    let config = AtofExporterConfig::new()
+        .with_output_directory("output")
+        .with_filename("events.jsonl");
+    assert_eq!(config.path(), Some(PathBuf::from("output/events.jsonl")));
+    assert_eq!(
+        AtofEndpointFieldNamePolicy::ReplaceDots.as_str(),
+        "replace_dots"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn atof_file_sink_reports_deferred_dev_full_write_failures() {
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory("/dev")
+            .with_filename("full"),
+    )
+    .unwrap();
+    exporter.subscriber()(&make_mark_event("write-failure"));
+    assert!(exporter.force_flush().is_err());
+    assert!(exporter.shutdown().is_err());
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
 fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
     enable_operational_logs();
     let endpoint = validate_endpoint_config(AtofEndpointConfig {
@@ -1654,6 +1764,48 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
         assert_eq!(pending.len(), 1);
         assert_eq!(retry.attempts, 1);
     });
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn endpoint_validation_helpers_cover_header_retry_and_collision_edges() {
+    enable_operational_logs();
+
+    let invalid_name = std::collections::HashMap::from([("bad header".into(), "value".into())]);
+    assert!(resolved_header_map(&invalid_name, &std::collections::HashMap::new()).is_err());
+
+    let invalid_value = std::collections::HashMap::from([("x-test".into(), "bad\nvalue".into())]);
+    assert!(resolved_header_map(&invalid_value, &std::collections::HashMap::new()).is_err());
+
+    let headers = std::collections::HashMap::from([("x-test".into(), "value".into())]);
+    let header_env = std::collections::HashMap::from([("x-test".into(), "UNUSED_ENV".into())]);
+    assert!(resolved_header_map(&headers, &header_env).is_err());
+
+    let mut retry = WebSocketRetryState::default();
+    retry.record_failure(7);
+    retry.record_failure(7);
+    assert_eq!(retry.attempts, 2);
+    assert!(retry.warning_emitted);
+    retry.record_recovered(7);
+    assert_eq!(retry.attempts, 0);
+    assert!(!retry.warning_emitted);
+    assert!(retry.access_validated);
+    retry.record_recovered(7);
+
+    let object =
+        serde_json::Map::from_iter([("key".into(), Json::Null), ("key_2".into(), Json::Null)]);
+    assert_eq!(collision_free_key(&object, "new".into()), "new");
+    assert_eq!(collision_free_key(&object, "key".into()), "key_3");
+
+    for (transport, name) in [
+        (AtofEndpointTransport::HttpPost, "http_post"),
+        (AtofEndpointTransport::Websocket, "websocket"),
+        (AtofEndpointTransport::Ndjson, "ndjson"),
+    ] {
+        assert_eq!(AtofEndpointTransport::parse(name), Some(transport));
+        assert_eq!(transport.as_str(), name);
+    }
+    assert_eq!(AtofEndpointTransport::parse("invalid"), None);
 }
 
 #[test]

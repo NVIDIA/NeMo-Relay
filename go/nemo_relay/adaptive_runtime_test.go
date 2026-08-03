@@ -11,8 +11,12 @@ import (
 )
 
 const (
-	testAgentID                 = "go-agent"
-	newAdaptiveRuntimeFailedMsg = "NewAdaptiveRuntime failed: %v"
+	adaptiveRuntimeClosedMessage    = "adaptive runtime is nil or shut down"
+	forcedAdaptiveMarshalFailure    = "forced adaptive JSON marshal failure"
+	newAdaptiveRuntimeFailedMsg     = "NewAdaptiveRuntime failed: %v"
+	responseCacheTestNamespace      = "go-harness"
+	testAgentID                     = "go-agent"
+	validateAdaptiveConfigFailedMsg = "ValidateAdaptiveConfig failed: %v"
 )
 
 func testAdaptiveRuntimeConfig(provider string) AdaptiveConfig {
@@ -34,7 +38,7 @@ func uint64Ptr(value uint64) *uint64 {
 func TestValidateAdaptiveConfigAndOwnedRuntime(t *testing.T) {
 	report, err := ValidateAdaptiveConfig(NewAdaptiveConfig())
 	if err != nil {
-		t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+		t.Fatalf(validateAdaptiveConfigFailedMsg, err)
 	}
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
@@ -175,22 +179,28 @@ func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	backend := NewInMemoryResponseCacheBackend()
 	rc := NewResponseCacheConfig()
-	if rc.TTLSeconds == nil || *rc.TTLSeconds != 3600 {
-		t.Fatalf("constructor TTL default mismatch: %#v", rc.TTLSeconds)
-	}
-	if rc.Priority == nil || *rc.Priority != 50 {
-		t.Fatalf("constructor priority default mismatch: %#v", rc.Priority)
-	}
-	rc.Namespace = "go-harness"
+	assertResponseCacheConstructorDefaults(t, rc)
+	rc.Namespace = responseCacheTestNamespace
 	rc.CacheNondeterministic = true
 	rc.Backend = &backend
+	assertResponseCacheJSONSurface(t, rc)
+	assertResponseCacheValidation(t, rc)
+}
 
+func assertResponseCacheConstructorDefaults(t *testing.T, config ResponseCacheConfig) {
+	t.Helper()
+	if config.TTLSeconds == nil || *config.TTLSeconds != 3600 {
+		t.Fatalf("constructor TTL default mismatch: %#v", config.TTLSeconds)
+	}
+	if config.Priority == nil || *config.Priority != 50 {
+		t.Fatalf("constructor priority default mismatch: %#v", config.Priority)
+	}
+}
+
+func assertResponseCacheJSONSurface(t *testing.T, responseCache ResponseCacheConfig) {
+	t.Helper()
 	config := NewAdaptiveConfig()
-	config.ResponseCache = &rc
-
-	// 1. The typed AdaptiveConfig must carry response_cache through json.Marshal.
-	//    The bug this guards is the struct silently DROPPING the section because it
-	//    enumerates fields by name with no response_cache field and no catch-all.
+	config.ResponseCache = &responseCache
 	payload, err := json.Marshal(config)
 	if err != nil {
 		t.Fatalf("marshal failed: %v", err)
@@ -203,7 +213,7 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	if !ok {
 		t.Fatalf("response_cache missing from marshaled config: %s", payload)
 	}
-	if section["namespace"] != "go-harness" {
+	if section["namespace"] != responseCacheTestNamespace {
 		t.Fatalf("response_cache fields not preserved: %#v", section)
 	}
 	if _, ok := section["skip_keys"]; ok {
@@ -215,21 +225,22 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	if b, ok := section["backend"].(map[string]any); !ok || b["kind"] != "in_memory" {
 		t.Fatalf("backend not preserved: %#v", section["backend"])
 	}
+}
 
-	// 2. A valid section validates clean through the FFI -> Rust adaptive validator.
+func assertResponseCacheValidation(t *testing.T, responseCache ResponseCacheConfig) {
+	t.Helper()
+	config := NewAdaptiveConfig()
+	config.ResponseCache = &responseCache
 	report, err := ValidateAdaptiveConfig(config)
 	if err != nil {
-		t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+		t.Fatalf(validateAdaptiveConfigFailedMsg, err)
 	}
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
 	}
 
-	// 3. An invalid section produces a response_cache diagnostic. This proves the
-	//    section is actually validated end-to-end (a dropped section would yield no
-	//    diagnostic at all), not merely carried in the struct.
 	bad := NewResponseCacheConfig()
-	bad.Namespace = "go-harness"
+	bad.Namespace = responseCacheTestNamespace
 	bad.BypassRate = 2.0
 	badConfig := NewAdaptiveConfig()
 	badConfig.ResponseCache = &bad
@@ -237,100 +248,97 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateAdaptiveConfig (invalid bypass_rate) returned error: %v", err)
 	}
-	found := false
-	for _, d := range badReport.Diagnostics {
-		if d.Code == "response_cache.invalid_bypass_rate" {
-			found = true
-		}
-	}
-	if !found {
+	if !hasAdaptiveDiagnostic(badReport, "response_cache.invalid_bypass_rate") {
 		t.Fatalf("expected response_cache.invalid_bypass_rate diagnostic, got %#v", badReport.Diagnostics)
 	}
 }
 
 func TestResponseCacheConfigPreservesOmissionAndExplicitZero(t *testing.T) {
-	marshal := func(t *testing.T, responseCache ResponseCacheConfig) map[string]any {
-		t.Helper()
-		payload, err := json.Marshal(responseCache)
-		if err != nil {
-			t.Fatalf("marshal failed: %v", err)
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal(payload, &decoded); err != nil {
-			t.Fatalf("unmarshal failed: %v", err)
-		}
-		return decoded
+	t.Run("partial config delegates to Rust defaults", testPartialResponseCacheConfig)
+	t.Run("missing namespace remains invalid", testMissingResponseCacheNamespace)
+	t.Run("explicit TTL zero remains invalid", testExplicitZeroResponseCacheTTL)
+	t.Run("explicit priority zero remains valid", testExplicitZeroResponseCachePriority)
+}
+
+func marshalResponseCacheConfig(t *testing.T, responseCache ResponseCacheConfig) map[string]any {
+	t.Helper()
+	payload, err := json.Marshal(responseCache)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
 	}
-	validate := func(t *testing.T, responseCache ResponseCacheConfig) ConfigReport {
-		t.Helper()
-		config := NewAdaptiveConfig()
-		config.ResponseCache = &responseCache
-		report, err := ValidateAdaptiveConfig(config)
-		if err != nil {
-			t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
-		}
-		return report
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
 	}
+	return decoded
+}
 
-	t.Run("partial config delegates to Rust defaults", func(t *testing.T) {
-		responseCache := ResponseCacheConfig{Namespace: "dev"}
-		decoded := marshal(t, responseCache)
-		if _, ok := decoded["ttl_seconds"]; ok {
-			t.Fatalf("partial config must omit ttl_seconds: %#v", decoded)
-		}
-		if _, ok := decoded["priority"]; ok {
-			t.Fatalf("partial config must omit priority: %#v", decoded)
-		}
-		if report := validate(t, responseCache); len(report.Diagnostics) != 0 {
-			t.Fatalf("expected Rust defaults to validate cleanly, got %#v", report.Diagnostics)
-		}
-	})
+func validateResponseCacheConfig(t *testing.T, responseCache ResponseCacheConfig) ConfigReport {
+	t.Helper()
+	config := NewAdaptiveConfig()
+	config.ResponseCache = &responseCache
+	report, err := ValidateAdaptiveConfig(config)
+	if err != nil {
+		t.Fatalf(validateAdaptiveConfigFailedMsg, err)
+	}
+	return report
+}
 
-	t.Run("missing namespace remains invalid", func(t *testing.T) {
-		report := validate(t, ResponseCacheConfig{})
-		found := false
-		for _, diagnostic := range report.Diagnostics {
-			if diagnostic.Code == "response_cache.missing_namespace" {
-				found = true
-			}
+func hasAdaptiveDiagnostic(report ConfigReport, code string) bool {
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Code == code {
+			return true
 		}
-		if !found {
-			t.Fatalf("expected response_cache.missing_namespace, got %#v", report.Diagnostics)
-		}
-	})
+	}
+	return false
+}
 
-	t.Run("explicit TTL zero remains invalid", func(t *testing.T) {
-		zero := uint64(0)
-		responseCache := ResponseCacheConfig{TTLSeconds: &zero, Namespace: "dev"}
-		if got := marshal(t, responseCache)["ttl_seconds"]; got != float64(0) {
-			t.Fatalf("explicit ttl_seconds=0 was not preserved: %#v", got)
-		}
-		report := validate(t, responseCache)
-		found := false
-		for _, diagnostic := range report.Diagnostics {
-			if diagnostic.Code == "response_cache.invalid_ttl" {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("expected response_cache.invalid_ttl, got %#v", report.Diagnostics)
-		}
-	})
+func testPartialResponseCacheConfig(t *testing.T) {
+	responseCache := ResponseCacheConfig{Namespace: "dev"}
+	decoded := marshalResponseCacheConfig(t, responseCache)
+	if _, ok := decoded["ttl_seconds"]; ok {
+		t.Fatalf("partial config must omit ttl_seconds: %#v", decoded)
+	}
+	if _, ok := decoded["priority"]; ok {
+		t.Fatalf("partial config must omit priority: %#v", decoded)
+	}
+	if report := validateResponseCacheConfig(t, responseCache); len(report.Diagnostics) != 0 {
+		t.Fatalf("expected Rust defaults to validate cleanly, got %#v", report.Diagnostics)
+	}
+}
 
-	t.Run("explicit priority zero remains valid", func(t *testing.T) {
-		zero := int32(0)
-		responseCache := ResponseCacheConfig{Priority: &zero, Namespace: "dev"}
-		decoded := marshal(t, responseCache)
-		if got := decoded["priority"]; got != float64(0) {
-			t.Fatalf("explicit priority=0 was not preserved: %#v", got)
-		}
-		if _, ok := decoded["ttl_seconds"]; ok {
-			t.Fatalf("unconfigured ttl_seconds must remain omitted: %#v", decoded)
-		}
-		if report := validate(t, responseCache); len(report.Diagnostics) != 0 {
-			t.Fatalf("expected priority=0 to validate cleanly, got %#v", report.Diagnostics)
-		}
-	})
+func testMissingResponseCacheNamespace(t *testing.T) {
+	report := validateResponseCacheConfig(t, ResponseCacheConfig{})
+	if !hasAdaptiveDiagnostic(report, "response_cache.missing_namespace") {
+		t.Fatalf("expected response_cache.missing_namespace, got %#v", report.Diagnostics)
+	}
+}
+
+func testExplicitZeroResponseCacheTTL(t *testing.T) {
+	zero := uint64(0)
+	responseCache := ResponseCacheConfig{TTLSeconds: &zero, Namespace: "dev"}
+	if got := marshalResponseCacheConfig(t, responseCache)["ttl_seconds"]; got != float64(0) {
+		t.Fatalf("explicit ttl_seconds=0 was not preserved: %#v", got)
+	}
+	report := validateResponseCacheConfig(t, responseCache)
+	if !hasAdaptiveDiagnostic(report, "response_cache.invalid_ttl") {
+		t.Fatalf("expected response_cache.invalid_ttl, got %#v", report.Diagnostics)
+	}
+}
+
+func testExplicitZeroResponseCachePriority(t *testing.T) {
+	zero := int32(0)
+	responseCache := ResponseCacheConfig{Priority: &zero, Namespace: "dev"}
+	decoded := marshalResponseCacheConfig(t, responseCache)
+	if got := decoded["priority"]; got != float64(0) {
+		t.Fatalf("explicit priority=0 was not preserved: %#v", got)
+	}
+	if _, ok := decoded["ttl_seconds"]; ok {
+		t.Fatalf("unconfigured ttl_seconds must remain omitted: %#v", decoded)
+	}
+	if report := validateResponseCacheConfig(t, responseCache); len(report.Diagnostics) != 0 {
+		t.Fatalf("expected priority=0 to validate cleanly, got %#v", report.Diagnostics)
+	}
 }
 
 func TestAdaptiveRuntimeLifecycleRejectsUseAfterShutdown(t *testing.T) {
@@ -358,18 +366,18 @@ func assertAdaptiveRuntimeClosed(t *testing.T, runtime *AdaptiveRuntime) {
 		{name: "WaitForIdle", err: runtime.WaitForIdle()},
 		{name: "BindScope", err: runtime.BindScope(nil)},
 	} {
-		if test.err == nil || !strings.Contains(test.err.Error(), "adaptive runtime is nil or shut down") {
+		if test.err == nil || !strings.Contains(test.err.Error(), adaptiveRuntimeClosedMessage) {
 			t.Fatalf("expected %s to reject a shut down runtime, got %v", test.name, test.err)
 		}
 	}
 
-	if _, err := runtime.Report(); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
+	if _, err := runtime.Report(); err == nil || !strings.Contains(err.Error(), adaptiveRuntimeClosedMessage) {
 		t.Fatalf("expected Report to reject a shut down runtime, got %v", err)
 	}
-	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{}); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
+	if _, err := runtime.BuildCacheRequestFacts(CacheRequestFactsInput{}); err == nil || !strings.Contains(err.Error(), adaptiveRuntimeClosedMessage) {
 		t.Fatalf("expected BuildCacheRequestFacts to reject a shut down runtime, got %v", err)
 	}
-	if err := runtime.Shutdown(); err == nil || !strings.Contains(err.Error(), "adaptive runtime is nil or shut down") {
+	if err := runtime.Shutdown(); err == nil || !strings.Contains(err.Error(), adaptiveRuntimeClosedMessage) {
 		t.Fatalf("expected repeated Shutdown to reject a shut down runtime, got %v", err)
 	}
 }
@@ -379,16 +387,16 @@ func TestAdaptiveRuntimePublicHelpersPropagateJSONMarshalFailures(t *testing.T) 
 	t.Cleanup(func() { jsonMarshal = oldMarshal })
 
 	jsonMarshal = func(any) ([]byte, error) {
-		return nil, errors.New("forced adaptive JSON marshal failure")
+		return nil, errors.New(forcedAdaptiveMarshalFailure)
 	}
 
-	if _, err := ValidateAdaptiveConfig(NewAdaptiveConfig()); err == nil || !strings.Contains(err.Error(), "forced adaptive JSON marshal failure") {
+	if _, err := ValidateAdaptiveConfig(NewAdaptiveConfig()); err == nil || !strings.Contains(err.Error(), forcedAdaptiveMarshalFailure) {
 		t.Fatalf("expected ValidateAdaptiveConfig to return marshal failure, got %v", err)
 	}
-	if _, err := NewAdaptiveRuntime(NewAdaptiveConfig()); err == nil || !strings.Contains(err.Error(), "forced adaptive JSON marshal failure") {
+	if _, err := NewAdaptiveRuntime(NewAdaptiveConfig()); err == nil || !strings.Contains(err.Error(), forcedAdaptiveMarshalFailure) {
 		t.Fatalf("expected NewAdaptiveRuntime to return marshal failure, got %v", err)
 	}
-	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{}); err == nil || !strings.Contains(err.Error(), "forced adaptive JSON marshal failure") {
+	if _, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{}); err == nil || !strings.Contains(err.Error(), forcedAdaptiveMarshalFailure) {
 		t.Fatalf("expected BuildCacheTelemetryEvent to return marshal failure, got %v", err)
 	}
 }

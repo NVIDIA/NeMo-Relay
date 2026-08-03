@@ -4148,3 +4148,108 @@ level = "error"
         }
     }
 }
+
+#[test]
+fn configuration_value_helpers_cover_empty_and_invalid_shapes() {
+    let source = Path::new("plugins.toml");
+    let mut scalar = toml::Value::String("not a table".into());
+    let resolved =
+        resolve_dynamic_plugin_refs(source, &mut scalar, &mut std::collections::HashSet::new())
+            .unwrap();
+    assert!(resolved.dynamic_plugins.is_empty());
+    assert_eq!(
+        resolved.dynamic_plugin_policy,
+        DynamicPluginHostPolicy::default()
+    );
+
+    let value: toml::Value = toml::from_str(
+        r#"
+[plugins]
+dynamic = []
+[plugins.policy]
+rules = []
+[other]
+enabled = true
+"#,
+    )
+    .unwrap();
+    let cleaned = remove_dynamic_plugin_sections(value);
+    assert!(cleaned.get("plugins").is_none());
+    assert_eq!(cleaned["other"]["enabled"].as_bool(), Some(true));
+    assert_eq!(plugin_toml_runtime_value(json!({})), None);
+    assert_eq!(
+        plugin_toml_runtime_value(json!({"enabled": true})),
+        Some(json!({"enabled": true}))
+    );
+
+    assert!(validate_auth_header("AUTH", "   ".into()).is_err());
+    assert!(parse_env_body_limit("LIMIT", "not-a-number").is_err());
+    assert_eq!(parse_env_body_limit("LIMIT", "17").unwrap(), 17);
+}
+
+#[test]
+fn logging_path_and_sink_helpers_cover_lexical_fallbacks() {
+    let temp = tempfile::tempdir().unwrap();
+    let existing_parent = temp.path().join("logs");
+    std::fs::create_dir_all(&existing_parent).unwrap();
+    let canonical = std::fs::canonicalize(&existing_parent)
+        .unwrap()
+        .join("relay.log");
+    assert_eq!(
+        logging_path_identity(&existing_parent.join("relay.log")),
+        canonical
+    );
+
+    let lexical = logging_path_identity(&temp.path().join("missing/../nested/relay.log"));
+    assert!(lexical.ends_with("nested/relay.log"));
+    assert_eq!(
+        normalize_path_components(Path::new("a/./b/../c")),
+        PathBuf::from("a/c")
+    );
+    assert_eq!(
+        normalize_path_components(Path::new("single")),
+        PathBuf::from("single")
+    );
+
+    let path = temp.path().join("coalesced.log");
+    let lower = toml::Value::Table(toml::Table::from_iter([
+        (
+            "path".into(),
+            toml::Value::String(path.display().to_string()),
+        ),
+        ("level".into(), toml::Value::String("info".into())),
+    ]));
+    let higher = toml::Value::Table(toml::Table::from_iter([
+        (
+            "path".into(),
+            toml::Value::String(path.display().to_string()),
+        ),
+        ("format".into(), toml::Value::String("json".into())),
+    ]));
+    let coalesced = coalesce_logging_sinks(vec![lower, higher]);
+    assert_eq!(coalesced.len(), 1);
+    assert_eq!(coalesced[0]["level"].as_str(), Some("info"));
+    assert_eq!(coalesced[0]["format"].as_str(), Some("json"));
+
+    let mut invalid_higher: toml::Value = toml::from_str("[logging]\nsinks = 'invalid'").unwrap();
+    let lower = toml::Value::Table(toml::Table::new());
+    merge_logging_sinks_by_path(&lower, &mut invalid_higher);
+    assert_eq!(invalid_higher["logging"]["sinks"].as_str(), Some("invalid"));
+}
+
+#[test]
+fn dynamic_plugin_identity_allows_worker_without_manifest() {
+    let component = ActiveDynamicPluginComponent {
+        plugin_id: "acme.manual-worker".into(),
+        kind: DynamicPluginKind::Worker,
+        lifecycle_generation: 7,
+        manifest_ref: None,
+        environment_ref: None,
+        config: serde_json::Map::new(),
+        activation_snapshot: None,
+    };
+    let identity = dynamic_plugin_bootstrap_identity(&component).unwrap();
+    assert_eq!(identity["plugin_id"], "acme.manual-worker");
+    assert_eq!(identity["manifest"], Value::Null);
+    assert_eq!(identity["lifecycle_generation"], 7);
+}

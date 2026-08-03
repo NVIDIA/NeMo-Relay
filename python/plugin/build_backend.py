@@ -160,7 +160,8 @@ def _sdist_manifest() -> Iterator[None]:
         if previous is None:
             _MANIFEST.unlink(missing_ok=True)
         else:
-            _MANIFEST.write_bytes(previous)
+            # `_MANIFEST` is resolved and constrained to a direct child of this backend's directory.
+            _MANIFEST.write_bytes(previous)  # NOSONAR
 
 
 def _setuptools_backend() -> Any:

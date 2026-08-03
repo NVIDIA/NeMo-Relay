@@ -494,407 +494,482 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         )
         .unwrap();
 
-        let tool_intercepted = tool_request_intercepts(
-            py,
-            "demo-tool".to_string(),
-            &py_dict(py, json!({"value": 1})),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::convert::py_to_json(&tool_intercepted).unwrap(),
-            json!({"value": 3})
-        );
-        tool_conditional_execution(
-            py,
-            "demo-tool".to_string(),
-            &py_dict(py, json!({"value": 1})),
-        )
-        .unwrap();
-        assert!(
-            tool_conditional_execution(
+        fn assert_python_api_execution_paths(
+            py: Python<'_>,
+            helpers: Bound<'_, PyModule>,
+            runner: Bound<'_, PyModule>,
+            api_module: Bound<'_, PyModule>,
+            types_module: Bound<'_, PyModule>,
+            child: PyScopeHandle,
+        ) {
+            let tool_intercepted = tool_request_intercepts(
                 py,
                 "demo-tool".to_string(),
-                &py_dict(py, json!({"value": -1}))
+                &py_dict(py, json!({"value": 1})),
             )
-            .unwrap_err()
-            .to_string()
-            .contains("blocked")
-        );
-        let async_sync_rejection_name = format!("async-sync-{}", Uuid::now_v7());
-        register_tool_conditional_execution_guardrail(
-            &async_sync_rejection_name,
-            20,
-            helpers.getattr("async_tool_conditional").unwrap().unbind(),
-        )
-        .unwrap();
-        assert!(
+            .unwrap();
+            assert_eq!(
+                crate::convert::py_to_json(&tool_intercepted).unwrap(),
+                json!({"value": 3})
+            );
             tool_conditional_execution(
                 py,
                 "demo-tool".to_string(),
                 &py_dict(py, json!({"value": 1})),
             )
-            .unwrap_err()
-            .to_string()
-            .contains("requires an async caller")
-        );
-        let llm_request = PyLLMRequest {
-            inner: nemo_relay::api::llm::LlmRequest {
-                headers: serde_json::Map::new(),
-                content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
-            },
-        };
-        let intercepted_request =
-            llm_request_intercepts(py, "demo-llm".to_string(), llm_request.clone()).unwrap();
-        let intercepted_request: PyRef<'_, crate::py_types::PyLLMRequestInterceptOutcome> =
-            intercepted_request.extract().unwrap();
-        assert_eq!(
-            intercepted_request
-                .inner
-                .request
-                .headers
-                .get("x-intercepted"),
-            Some(&json!("1"))
-        );
-        llm_conditional_execution(py, llm_request.clone()).unwrap();
-        assert!(
-            llm_conditional_execution(
-                py,
-                PyLLMRequest {
-                    inner: nemo_relay::api::llm::LlmRequest {
-                        headers: serde_json::Map::new(),
-                        content: json!({"messages": [], "model": "blocked"}),
-                    },
-                }
+            .unwrap();
+            assert!(
+                tool_conditional_execution(
+                    py,
+                    "demo-tool".to_string(),
+                    &py_dict(py, json!({"value": -1}))
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("blocked")
+            );
+            let async_sync_rejection_name = format!("async-sync-{}", Uuid::now_v7());
+            register_tool_conditional_execution_guardrail(
+                &async_sync_rejection_name,
+                20,
+                helpers.getattr("async_tool_conditional").unwrap().unbind(),
             )
-            .unwrap_err()
-            .to_string()
-            .contains("blocked")
-        );
-
-        with_event_loop(py, |event_loop| {
-            let standalone = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (runner
-                        .getattr("run_standalone")
-                        .unwrap()
-                        .call1((api_module.clone(), llm_request.clone()))
-                        .unwrap(),),
+            .unwrap();
+            assert!(
+                tool_conditional_execution(
+                    py,
+                    "demo-tool".to_string(),
+                    &py_dict(py, json!({"value": 1})),
                 )
-                .unwrap();
+                .unwrap_err()
+                .to_string()
+                .contains("requires an async caller")
+            );
+            let llm_request = PyLLMRequest {
+                inner: nemo_relay::api::llm::LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
+                },
+            };
+            let intercepted_request =
+                llm_request_intercepts(py, "demo-llm".to_string(), llm_request.clone()).unwrap();
+            let intercepted_request: PyRef<'_, crate::py_types::PyLLMRequestInterceptOutcome> =
+                intercepted_request.extract().unwrap();
             assert_eq!(
-                crate::convert::py_to_json(&standalone).unwrap(),
-                json!({"tool_value": 3, "conditional_allowed": true, "llm_header": "1"})
+                intercepted_request
+                    .inner
+                    .request
+                    .headers
+                    .get("x-intercepted"),
+                Some(&json!("1"))
+            );
+            llm_conditional_execution(py, llm_request.clone()).unwrap();
+            assert!(
+                llm_conditional_execution(
+                    py,
+                    PyLLMRequest {
+                        inner: nemo_relay::api::llm::LlmRequest {
+                            headers: serde_json::Map::new(),
+                            content: json!({"messages": [], "model": "blocked"}),
+                        },
+                    }
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("blocked")
             );
 
-            let tool_result = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (runner
-                        .getattr("run_tool")
-                        .unwrap()
-                        .call1((
-                            api_module.clone(),
-                            helpers.getattr("tool_exec").unwrap(),
-                            child.clone(),
-                            PyToolAttributes {
-                                inner: nemo_relay::api::tool::ToolAttributes::REMOTE,
-                            },
-                        ))
-                        .unwrap(),),
-                )
-                .unwrap();
-            let tool_json = crate::convert::py_to_json(&tool_result).unwrap();
-            assert_eq!(tool_json["tool_result"], json!(6));
-            assert_eq!(tool_json["tool_intercepted"], json!(true));
+            with_event_loop(py, |event_loop| {
+                let standalone = event_loop
+                    .call_method1(
+                        "run_until_complete",
+                        (runner
+                            .getattr("run_standalone")
+                            .unwrap()
+                            .call1((api_module.clone(), llm_request.clone()))
+                            .unwrap(),),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    crate::convert::py_to_json(&standalone).unwrap(),
+                    json!({"tool_value": 3, "conditional_allowed": true, "llm_header": "1"})
+                );
 
-            let codec = helpers.getattr("EchoCodec").unwrap().call0().unwrap();
-            let response_codec = types_module
-                .getattr("OpenAIChatCodec")
-                .unwrap()
-                .call0()
-                .unwrap();
-            let llm_result = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (runner
-                        .getattr("run_llm")
-                        .unwrap()
-                        .call1((
-                            api_module.clone(),
-                            llm_request.clone(),
-                            helpers.getattr("llm_exec").unwrap(),
-                            child.clone(),
-                            PyLLMAttributes {
-                                inner: nemo_relay::api::llm::LlmAttributes::STATEFUL,
-                            },
-                            codec,
-                            response_codec,
-                        ))
-                        .unwrap(),),
-                )
-                .unwrap();
-            let llm_json = crate::convert::py_to_json(&llm_result).unwrap();
-            assert_eq!(llm_json["id"], json!("chatcmpl-test"));
-            assert_eq!(llm_json["from_intercept"], json!(true));
+                let tool_result = event_loop
+                    .call_method1(
+                        "run_until_complete",
+                        (runner
+                            .getattr("run_tool")
+                            .unwrap()
+                            .call1((
+                                api_module.clone(),
+                                helpers.getattr("tool_exec").unwrap(),
+                                child.clone(),
+                                PyToolAttributes {
+                                    inner: nemo_relay::api::tool::ToolAttributes::REMOTE,
+                                },
+                            ))
+                            .unwrap(),),
+                    )
+                    .unwrap();
+                let tool_json = crate::convert::py_to_json(&tool_result).unwrap();
+                assert_eq!(tool_json["tool_result"], json!(6));
+                assert_eq!(tool_json["tool_intercepted"], json!(true));
 
-            let stream_codec = helpers.getattr("EchoCodec").unwrap().call0().unwrap();
-            let stream_response_codec = types_module
-                .getattr("OpenAIChatCodec")
-                .unwrap()
-                .call0()
-                .unwrap();
-            let stream_items = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (runner
-                        .getattr("run_stream")
-                        .unwrap()
-                        .call1((
-                            api_module.clone(),
-                            llm_request.clone(),
-                            helpers.getattr("llm_stream_exec").unwrap(),
-                            helpers.getattr("collector").unwrap(),
-                            helpers.getattr("finalizer").unwrap(),
-                            child.clone(),
-                            PyLLMAttributes {
-                                inner: nemo_relay::api::llm::LlmAttributes::STREAMING,
-                            },
-                            stream_codec,
-                            stream_response_codec,
-                        ))
-                        .unwrap(),),
-                )
-                .unwrap();
-            assert_eq!(
-                crate::convert::py_to_json(&stream_items).unwrap(),
-                json!([{"delta": 11}, {"delta": 12}])
+                let codec = helpers.getattr("EchoCodec").unwrap().call0().unwrap();
+                let response_codec = types_module
+                    .getattr("OpenAIChatCodec")
+                    .unwrap()
+                    .call0()
+                    .unwrap();
+                let llm_result = event_loop
+                    .call_method1(
+                        "run_until_complete",
+                        (runner
+                            .getattr("run_llm")
+                            .unwrap()
+                            .call1((
+                                api_module.clone(),
+                                llm_request.clone(),
+                                helpers.getattr("llm_exec").unwrap(),
+                                child.clone(),
+                                PyLLMAttributes {
+                                    inner: nemo_relay::api::llm::LlmAttributes::STATEFUL,
+                                },
+                                codec,
+                                response_codec,
+                            ))
+                            .unwrap(),),
+                    )
+                    .unwrap();
+                let llm_json = crate::convert::py_to_json(&llm_result).unwrap();
+                assert_eq!(llm_json["id"], json!("chatcmpl-test"));
+                assert_eq!(llm_json["from_intercept"], json!(true));
+
+                let stream_codec = helpers.getattr("EchoCodec").unwrap().call0().unwrap();
+                let stream_response_codec = types_module
+                    .getattr("OpenAIChatCodec")
+                    .unwrap()
+                    .call0()
+                    .unwrap();
+                let stream_items = event_loop
+                    .call_method1(
+                        "run_until_complete",
+                        (runner
+                            .getattr("run_stream")
+                            .unwrap()
+                            .call1((
+                                api_module.clone(),
+                                llm_request.clone(),
+                                helpers.getattr("llm_stream_exec").unwrap(),
+                                helpers.getattr("collector").unwrap(),
+                                helpers.getattr("finalizer").unwrap(),
+                                child.clone(),
+                                PyLLMAttributes {
+                                    inner: nemo_relay::api::llm::LlmAttributes::STREAMING,
+                                },
+                                stream_codec,
+                                stream_response_codec,
+                            ))
+                            .unwrap(),),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    crate::convert::py_to_json(&stream_items).unwrap(),
+                    json!([{"delta": 11}, {"delta": 12}])
+                );
+            });
+            assert!(
+                deregister_tool_conditional_execution_guardrail(&async_sync_rejection_name)
+                    .unwrap()
             );
-        });
-        assert!(
-            deregister_tool_conditional_execution_guardrail(&async_sync_rejection_name).unwrap()
+        }
+        assert_python_api_execution_paths(
+            py,
+            helpers.clone(),
+            runner,
+            api_module,
+            types_module.clone(),
+            child.clone(),
         );
 
-        let events = helpers.getattr("events").unwrap();
-        let events_json = crate::convert::py_to_json(events.as_any()).unwrap();
-        assert!(
-            events_json
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|event| event[0] == "scope" && event[1] == "tool" && event[2] == "start")
-        );
-        assert!(
-            events_json
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|event| event[0] == "scope" && event[1] == "llm" && event[2] == "end")
-        );
+        fn assert_python_api_emitted_events(helpers: &Bound<'_, PyModule>) {
+            let events = helpers.getattr("events").unwrap();
+            let events_json = crate::convert::py_to_json(events.as_any()).unwrap();
+            assert!(
+                events_json
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|event| event[0] == "scope" && event[1] == "tool" && event[2] == "start")
+            );
+            assert!(
+                events_json
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|event| event[0] == "scope" && event[1] == "llm" && event[2] == "end")
+            );
 
-        let chunks = helpers.getattr("chunks").unwrap();
-        assert_eq!(
-            crate::convert::py_to_json(chunks.as_any()).unwrap(),
-            json!([11, 12])
-        );
+            let chunks = helpers.getattr("chunks").unwrap();
+            assert_eq!(
+                crate::convert::py_to_json(chunks.as_any()).unwrap(),
+                json!([11, 12])
+            );
+        }
+        assert_python_api_emitted_events(&helpers);
 
-        let scope_tool_sanitize_request_name = format!("scope-tsrq-{}", Uuid::now_v7());
-        let scope_tool_sanitize_response_name = format!("scope-tsrs-{}", Uuid::now_v7());
-        let scope_tool_conditional_name = format!("scope-tcond-{}", Uuid::now_v7());
-        let scope_tool_request_name = format!("scope-treq-{}", Uuid::now_v7());
-        let scope_tool_exec_name = format!("scope-texec-{}", Uuid::now_v7());
-        let scope_llm_sanitize_request_name = format!("scope-lsrq-{}", Uuid::now_v7());
-        let scope_llm_sanitize_response_name = format!("scope-lsrs-{}", Uuid::now_v7());
-        let scope_llm_conditional_name = format!("scope-lcond-{}", Uuid::now_v7());
-        let scope_llm_request_name = format!("scope-lreq-{}", Uuid::now_v7());
-        let scope_llm_exec_name = format!("scope-lexec-{}", Uuid::now_v7());
-        let scope_llm_stream_name = format!("scope-lstream-{}", Uuid::now_v7());
-        let scope_subscriber = format!("scope-sub-{}", Uuid::now_v7());
+        fn assert_scope_registry_paths(child_uuid: &str, helpers: &Bound<'_, PyModule>) {
+            let scope_tool_sanitize_request_name = format!("scope-tsrq-{}", Uuid::now_v7());
+            let scope_tool_sanitize_response_name = format!("scope-tsrs-{}", Uuid::now_v7());
+            let scope_tool_conditional_name = format!("scope-tcond-{}", Uuid::now_v7());
+            let scope_tool_request_name = format!("scope-treq-{}", Uuid::now_v7());
+            let scope_tool_exec_name = format!("scope-texec-{}", Uuid::now_v7());
+            let scope_llm_sanitize_request_name = format!("scope-lsrq-{}", Uuid::now_v7());
+            let scope_llm_sanitize_response_name = format!("scope-lsrs-{}", Uuid::now_v7());
+            let scope_llm_conditional_name = format!("scope-lcond-{}", Uuid::now_v7());
+            let scope_llm_request_name = format!("scope-lreq-{}", Uuid::now_v7());
+            let scope_llm_exec_name = format!("scope-lexec-{}", Uuid::now_v7());
+            let scope_llm_stream_name = format!("scope-lstream-{}", Uuid::now_v7());
+            let scope_subscriber = format!("scope-sub-{}", Uuid::now_v7());
 
-        scope_register_tool_sanitize_request_guardrail(
-            &child_uuid,
-            &scope_tool_sanitize_request_name,
-            5,
-            helpers.getattr("tool_sanitize_request").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_tool_sanitize_response_guardrail(
-            &child_uuid,
-            &scope_tool_sanitize_response_name,
-            5,
-            helpers.getattr("tool_sanitize_response").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_tool_conditional_execution_guardrail(
-            &child_uuid,
-            &scope_tool_conditional_name,
-            5,
-            helpers.getattr("tool_conditional").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_tool_request_intercept(
-            &child_uuid,
-            &scope_tool_request_name,
-            5,
-            false,
-            helpers.getattr("tool_request_intercept").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_tool_execution_intercept(
-            &child_uuid,
-            &scope_tool_exec_name,
-            5,
-            helpers.getattr("tool_exec_intercept").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_llm_sanitize_request_guardrail(
-            &child_uuid,
-            &scope_llm_sanitize_request_name,
-            5,
-            helpers.getattr("llm_sanitize_request").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_llm_sanitize_response_guardrail(
-            &child_uuid,
-            &scope_llm_sanitize_response_name,
-            5,
-            helpers.getattr("llm_sanitize_response").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_llm_conditional_execution_guardrail(
-            &child_uuid,
-            &scope_llm_conditional_name,
-            5,
-            helpers.getattr("llm_conditional").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_llm_request_intercept(
-            &child_uuid,
-            &scope_llm_request_name,
-            5,
-            false,
-            helpers.getattr("llm_request_intercept").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_llm_execution_intercept(
-            &child_uuid,
-            &scope_llm_exec_name,
-            5,
-            helpers.getattr("llm_exec_intercept").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_llm_stream_execution_intercept(
-            &child_uuid,
-            &scope_llm_stream_name,
-            5,
-            helpers.getattr("llm_stream_intercept").unwrap().unbind(),
-        )
-        .unwrap();
-        scope_register_subscriber(
-            &child_uuid,
-            &scope_subscriber,
-            helpers.getattr("subscriber").unwrap().unbind(),
-        )
-        .unwrap();
-
-        assert!(
+            scope_register_tool_sanitize_request_guardrail(
+                child_uuid,
+                &scope_tool_sanitize_request_name,
+                5,
+                helpers.getattr("tool_sanitize_request").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_tool_sanitize_response_guardrail(
+                child_uuid,
+                &scope_tool_sanitize_response_name,
+                5,
+                helpers.getattr("tool_sanitize_response").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_tool_conditional_execution_guardrail(
+                child_uuid,
+                &scope_tool_conditional_name,
+                5,
+                helpers.getattr("tool_conditional").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_tool_request_intercept(
+                child_uuid,
+                &scope_tool_request_name,
+                5,
+                false,
+                helpers.getattr("tool_request_intercept").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_tool_execution_intercept(
+                child_uuid,
+                &scope_tool_exec_name,
+                5,
+                helpers.getattr("tool_exec_intercept").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_llm_sanitize_request_guardrail(
+                child_uuid,
+                &scope_llm_sanitize_request_name,
+                5,
+                helpers.getattr("llm_sanitize_request").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_llm_sanitize_response_guardrail(
+                child_uuid,
+                &scope_llm_sanitize_response_name,
+                5,
+                helpers.getattr("llm_sanitize_response").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_llm_conditional_execution_guardrail(
+                child_uuid,
+                &scope_llm_conditional_name,
+                5,
+                helpers.getattr("llm_conditional").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_llm_request_intercept(
+                child_uuid,
+                &scope_llm_request_name,
+                5,
+                false,
+                helpers.getattr("llm_request_intercept").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_llm_execution_intercept(
+                child_uuid,
+                &scope_llm_exec_name,
+                5,
+                helpers.getattr("llm_exec_intercept").unwrap().unbind(),
+            )
+            .unwrap();
+            scope_register_llm_stream_execution_intercept(
+                child_uuid,
+                &scope_llm_stream_name,
+                5,
+                helpers.getattr("llm_stream_intercept").unwrap().unbind(),
+            )
+            .unwrap();
             scope_register_subscriber(
-                "not-a-uuid",
-                "bad",
+                child_uuid,
+                &scope_subscriber,
                 helpers.getattr("subscriber").unwrap().unbind(),
             )
-            .unwrap_err()
-            .to_string()
-            .contains("invalid UUID")
-        );
+            .unwrap();
 
-        assert!(
-            scope_deregister_tool_sanitize_request_guardrail(
-                &child_uuid,
-                &scope_tool_sanitize_request_name
-            )
-            .unwrap()
-        );
-        assert!(
-            scope_deregister_tool_sanitize_response_guardrail(
-                &child_uuid,
-                &scope_tool_sanitize_response_name
-            )
-            .unwrap()
-        );
-        assert!(
-            scope_deregister_tool_conditional_execution_guardrail(
-                &child_uuid,
-                &scope_tool_conditional_name
-            )
-            .unwrap()
-        );
-        assert!(
-            scope_deregister_tool_request_intercept(&child_uuid, &scope_tool_request_name).unwrap()
-        );
-        assert!(
-            scope_deregister_tool_execution_intercept(&child_uuid, &scope_tool_exec_name).unwrap()
-        );
-        assert!(
-            scope_deregister_llm_sanitize_request_guardrail(
-                &child_uuid,
-                &scope_llm_sanitize_request_name
-            )
-            .unwrap()
-        );
-        assert!(
-            scope_deregister_llm_sanitize_response_guardrail(
-                &child_uuid,
-                &scope_llm_sanitize_response_name
-            )
-            .unwrap()
-        );
-        assert!(
-            scope_deregister_llm_conditional_execution_guardrail(
-                &child_uuid,
-                &scope_llm_conditional_name
-            )
-            .unwrap()
-        );
-        assert!(
-            scope_deregister_llm_request_intercept(&child_uuid, &scope_llm_request_name).unwrap()
-        );
-        assert!(
-            scope_deregister_llm_execution_intercept(&child_uuid, &scope_llm_exec_name).unwrap()
-        );
-        assert!(
-            scope_deregister_llm_stream_execution_intercept(&child_uuid, &scope_llm_stream_name)
+            assert!(
+                scope_register_subscriber(
+                    "not-a-uuid",
+                    "bad",
+                    helpers.getattr("subscriber").unwrap().unbind(),
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("invalid UUID")
+            );
+
+            assert!(
+                scope_deregister_tool_sanitize_request_guardrail(
+                    child_uuid,
+                    &scope_tool_sanitize_request_name
+                )
                 .unwrap()
-        );
-        assert!(scope_deregister_subscriber(&child_uuid, &scope_subscriber).unwrap());
+            );
+            assert!(
+                scope_deregister_tool_sanitize_response_guardrail(
+                    child_uuid,
+                    &scope_tool_sanitize_response_name
+                )
+                .unwrap()
+            );
+            assert!(
+                scope_deregister_tool_conditional_execution_guardrail(
+                    child_uuid,
+                    &scope_tool_conditional_name
+                )
+                .unwrap()
+            );
+            assert!(
+                scope_deregister_tool_request_intercept(child_uuid, &scope_tool_request_name)
+                    .unwrap()
+            );
+            assert!(
+                scope_deregister_tool_execution_intercept(child_uuid, &scope_tool_exec_name)
+                    .unwrap()
+            );
+            assert!(
+                scope_deregister_llm_sanitize_request_guardrail(
+                    child_uuid,
+                    &scope_llm_sanitize_request_name
+                )
+                .unwrap()
+            );
+            assert!(
+                scope_deregister_llm_sanitize_response_guardrail(
+                    child_uuid,
+                    &scope_llm_sanitize_response_name
+                )
+                .unwrap()
+            );
+            assert!(
+                scope_deregister_llm_conditional_execution_guardrail(
+                    child_uuid,
+                    &scope_llm_conditional_name
+                )
+                .unwrap()
+            );
+            assert!(
+                scope_deregister_llm_request_intercept(child_uuid, &scope_llm_request_name)
+                    .unwrap()
+            );
+            assert!(
+                scope_deregister_llm_execution_intercept(child_uuid, &scope_llm_exec_name).unwrap()
+            );
+            assert!(
+                scope_deregister_llm_stream_execution_intercept(child_uuid, &scope_llm_stream_name)
+                    .unwrap()
+            );
+            assert!(scope_deregister_subscriber(child_uuid, &scope_subscriber).unwrap());
+        }
+        assert_scope_registry_paths(&child_uuid, &helpers);
 
-        assert!(deregister_tool_sanitize_request_guardrail(&tool_sanitize_request_name).unwrap());
-        assert!(!deregister_tool_sanitize_request_guardrail(&tool_sanitize_request_name).unwrap());
-        assert!(deregister_tool_sanitize_response_guardrail(&tool_sanitize_response_name).unwrap());
-        assert!(
-            !deregister_tool_sanitize_response_guardrail(&tool_sanitize_response_name).unwrap()
+        fn assert_global_tool_deregistration(
+            tool_sanitize_request_name: &str,
+            tool_sanitize_response_name: &str,
+            tool_conditional_name: &str,
+            tool_request_name: &str,
+            tool_exec_name: &str,
+        ) {
+            assert!(
+                deregister_tool_sanitize_request_guardrail(tool_sanitize_request_name).unwrap()
+            );
+            assert!(
+                !deregister_tool_sanitize_request_guardrail(tool_sanitize_request_name).unwrap()
+            );
+            assert!(
+                deregister_tool_sanitize_response_guardrail(tool_sanitize_response_name).unwrap()
+            );
+            assert!(
+                !deregister_tool_sanitize_response_guardrail(tool_sanitize_response_name).unwrap()
+            );
+            assert!(
+                deregister_tool_conditional_execution_guardrail(tool_conditional_name).unwrap()
+            );
+            assert!(
+                !deregister_tool_conditional_execution_guardrail(tool_conditional_name).unwrap()
+            );
+            assert!(deregister_tool_request_intercept(tool_request_name).unwrap());
+            assert!(!deregister_tool_request_intercept(tool_request_name).unwrap());
+            assert!(deregister_tool_execution_intercept(tool_exec_name).unwrap());
+            assert!(!deregister_tool_execution_intercept(tool_exec_name).unwrap());
+        }
+        assert_global_tool_deregistration(
+            &tool_sanitize_request_name,
+            &tool_sanitize_response_name,
+            &tool_conditional_name,
+            &tool_request_name,
+            &tool_exec_name,
         );
-        assert!(deregister_tool_conditional_execution_guardrail(&tool_conditional_name).unwrap());
-        assert!(!deregister_tool_conditional_execution_guardrail(&tool_conditional_name).unwrap());
-        assert!(deregister_tool_request_intercept(&tool_request_name).unwrap());
-        assert!(!deregister_tool_request_intercept(&tool_request_name).unwrap());
-        assert!(deregister_tool_execution_intercept(&tool_exec_name).unwrap());
-        assert!(!deregister_tool_execution_intercept(&tool_exec_name).unwrap());
 
-        assert!(deregister_llm_sanitize_request_guardrail(&llm_sanitize_request_name).unwrap());
-        assert!(!deregister_llm_sanitize_request_guardrail(&llm_sanitize_request_name).unwrap());
-        assert!(deregister_llm_sanitize_response_guardrail(&llm_sanitize_response_name).unwrap());
-        assert!(!deregister_llm_sanitize_response_guardrail(&llm_sanitize_response_name).unwrap());
-        assert!(deregister_llm_conditional_execution_guardrail(&llm_conditional_name).unwrap());
-        assert!(!deregister_llm_conditional_execution_guardrail(&llm_conditional_name).unwrap());
-        assert!(deregister_llm_request_intercept(&llm_request_name).unwrap());
-        assert!(!deregister_llm_request_intercept(&llm_request_name).unwrap());
-        assert!(deregister_llm_execution_intercept(&llm_exec_name).unwrap());
-        assert!(!deregister_llm_execution_intercept(&llm_exec_name).unwrap());
-        assert!(deregister_llm_stream_execution_intercept(&llm_stream_name).unwrap());
-        assert!(!deregister_llm_stream_execution_intercept(&llm_stream_name).unwrap());
-        assert!(deregister_subscriber(&global_subscriber).unwrap());
-        assert!(!deregister_subscriber(&global_subscriber).unwrap());
+        fn assert_global_llm_and_subscriber_deregistration(
+            llm_sanitize_request_name: &str,
+            llm_sanitize_response_name: &str,
+            llm_conditional_name: &str,
+            llm_request_name: &str,
+            llm_exec_name: &str,
+            llm_stream_name: &str,
+            global_subscriber: &str,
+        ) {
+            assert!(deregister_llm_sanitize_request_guardrail(llm_sanitize_request_name).unwrap());
+            assert!(!deregister_llm_sanitize_request_guardrail(llm_sanitize_request_name).unwrap());
+            assert!(
+                deregister_llm_sanitize_response_guardrail(llm_sanitize_response_name).unwrap()
+            );
+            assert!(
+                !deregister_llm_sanitize_response_guardrail(llm_sanitize_response_name).unwrap()
+            );
+            assert!(deregister_llm_conditional_execution_guardrail(llm_conditional_name).unwrap());
+            assert!(!deregister_llm_conditional_execution_guardrail(llm_conditional_name).unwrap());
+            assert!(deregister_llm_request_intercept(llm_request_name).unwrap());
+            assert!(!deregister_llm_request_intercept(llm_request_name).unwrap());
+            assert!(deregister_llm_execution_intercept(llm_exec_name).unwrap());
+            assert!(!deregister_llm_execution_intercept(llm_exec_name).unwrap());
+            assert!(deregister_llm_stream_execution_intercept(llm_stream_name).unwrap());
+            assert!(!deregister_llm_stream_execution_intercept(llm_stream_name).unwrap());
+            assert!(deregister_subscriber(global_subscriber).unwrap());
+            assert!(!deregister_subscriber(global_subscriber).unwrap());
+        }
+        assert_global_llm_and_subscriber_deregistration(
+            &llm_sanitize_request_name,
+            &llm_sanitize_response_name,
+            &llm_conditional_name,
+            &llm_request_name,
+            &llm_exec_name,
+            &llm_stream_name,
+            &global_subscriber,
+        );
 
         pop_scope(py, &child, None, None, None).unwrap();
     });

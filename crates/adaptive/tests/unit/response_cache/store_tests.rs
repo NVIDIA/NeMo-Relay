@@ -214,3 +214,23 @@ async fn an_entry_larger_than_the_budget_is_not_cached_and_keeps_existing_entrie
     );
     assert_eq!(store.total_bytes(), 0);
 }
+
+#[tokio::test]
+async fn repeated_replacement_compacts_stale_insertion_order_nodes() {
+    let store = InMemoryCacheStore::new(BIG);
+    for generation in 0..70 {
+        store
+            .set(
+                "stable-key",
+                entry("stable-key", generation, u64::MAX),
+                Duration::MAX,
+            )
+            .await
+            .unwrap();
+    }
+
+    let guard = store.inner.lock().unwrap();
+    assert_eq!(guard.map.len(), 1);
+    assert_eq!(guard.order.len(), 4);
+    assert_eq!(guard.next_generation, 70);
+}

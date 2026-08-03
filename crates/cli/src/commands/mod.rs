@@ -53,6 +53,49 @@ pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
 
 // Dispatches CLI subcommands while keeping the no-subcommand path as server mode. `run` inherits
 // top-level server flags so transparent launch can share config parsing with daemon startup.
+fn configure_logging(
+    cli: &Cli,
+) -> Result<Option<nemo_relay::logging::LoggingRuntime>, error::CliError> {
+    let initialize = match cli.command.as_ref() {
+        Some(command) => !command.skips_logging(),
+        None => {
+            cli.server.to_runtime().requested_daemon_mode()
+                || runtime_configuration::any_config_file_exists()
+        }
+    };
+    if !initialize {
+        return Ok(None);
+    }
+
+    let user_only = matches!(cli.command.as_ref(), Some(Command::Mcp));
+    let explicit_config = match (user_only, cli.command.as_ref()) {
+        (true, _) => None,
+        (false, Some(Command::Run(command))) => {
+            command.config.as_deref().or(cli.server.config.as_deref())
+        }
+        (false, _) => cli.server.config.as_deref(),
+    };
+    let mut fallback_error = None;
+    let config = match cli.logging.resolve(explicit_config, user_only) {
+        Ok(config) => config,
+        Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
+            fallback_error = Some(error);
+            nemo_relay::logging::LoggingConfig::default()
+        }
+        Err(error) => return Err(error),
+    };
+    let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
+    if let Some(error) = fallback_error {
+        log::warn!(
+            target: "nemo_relay.cli",
+            event = "doctor_logging_fallback",
+            error_kind = error.log_kind();
+            "Doctor fell back to default logging after resolution failure"
+        );
+    }
+    Ok(Some(runtime))
+}
+
 async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {
     let cli = Cli::parse();
     let command_name = cli
@@ -61,47 +104,7 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
         .map(Command::log_name)
         .unwrap_or("default");
 
-    let initialize_logging = match cli.command.as_ref() {
-        Some(command) => !command.skips_logging(),
-        None => {
-            cli.server.to_runtime().requested_daemon_mode()
-                || runtime_configuration::any_config_file_exists()
-        }
-    };
-    let _logging = if initialize_logging {
-        let user_only = matches!(cli.command.as_ref(), Some(Command::Mcp));
-        let explicit_config = if user_only {
-            None
-        } else {
-            match cli.command.as_ref() {
-                Some(Command::Run(command)) => {
-                    command.config.as_deref().or(cli.server.config.as_deref())
-                }
-                _ => cli.server.config.as_deref(),
-            }
-        };
-        let mut logging_fallback_error = None;
-        let config = match cli.logging.resolve(explicit_config, user_only) {
-            Ok(config) => config,
-            Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
-                logging_fallback_error = Some(error);
-                nemo_relay::logging::LoggingConfig::default()
-            }
-            Err(error) => return Err(error),
-        };
-        let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
-        if let Some(error) = logging_fallback_error {
-            log::warn!(
-                target: "nemo_relay.cli",
-                event = "doctor_logging_fallback",
-                error_kind = error.log_kind();
-                "Doctor fell back to default logging after resolution failure"
-            );
-        }
-        Some(runtime)
-    } else {
-        None
-    };
+    let _logging = configure_logging(&cli)?;
 
     log::info!(
         target: "nemo_relay.cli",
