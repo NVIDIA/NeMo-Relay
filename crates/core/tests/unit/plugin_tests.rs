@@ -2133,6 +2133,41 @@ fn test_initialize_plugins_replaces_previous_configuration_on_success() {
 }
 
 #[test]
+fn test_initialize_plugins_preserves_resolution_diagnostics() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+
+    let diagnostic = ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: "plugin.component_reenabled".to_string(),
+        component: Some("recording.plugin".to_string()),
+        field: Some("enabled".to_string()),
+        message: "programmatic configuration re-enabled the component".to_string(),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let report = runtime
+        .block_on(initialize_plugins_with_diagnostics(
+            PluginConfig {
+                components: vec![PluginComponentSpec::new("recording.plugin")],
+                ..PluginConfig::default()
+            },
+            vec![diagnostic.clone()],
+        ))
+        .unwrap();
+
+    assert_eq!(report.diagnostics, vec![diagnostic.clone()]);
+    assert_eq!(
+        active_plugin_report().unwrap().diagnostics,
+        vec![diagnostic]
+    );
+    reset_global();
+}
+
+#[test]
 fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_cannot_be_restored() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -2372,10 +2407,10 @@ fn test_load_plugin_config_files_deduplicates_aliases_at_highest_precedence() {
 }
 
 #[test]
-fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
+fn test_plugin_config_overlay_enables_programmatically_declared_components() {
     // After each file's schema version is validated, a typed `PluginConfig` is layered over
-    // the discovered file base. Default-valued `policy`/`enabled` fields inherit the file,
-    // the free-form `config` body merges, and an undeclared component kind is inherited.
+    // the discovered file base. Default-valued policy fields inherit the file, a declared
+    // component applies its enabled value, and the free-form `config` body merges.
     let file_base = json!({
         "version": 1,
         "components": [
@@ -2384,7 +2419,7 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
                 "enabled": false,
                 "config": { "output_directory": "/var/log", "mode": "append" }
             },
-            { "kind": "adaptive", "config": { "ttl": 60 } }
+            { "kind": "adaptive", "enabled": false, "config": { "ttl": 60 } }
         ],
         "policy": {
             "unknown_component": "error",
@@ -2404,7 +2439,7 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
     layer_config(&mut merged, plugin_config_overlay_value(&code).unwrap());
     let typed: PluginConfig = serde_json::from_value(merged).unwrap();
 
-    // Typed defaults do not mask the file base.
+    // Typed policy defaults do not mask the file base.
     assert_eq!(typed.version, 1);
     assert_eq!(
         typed.policy.unknown_component,
@@ -2414,8 +2449,8 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
     let observability = &typed.components[0];
     assert_eq!(observability.kind, "observability");
     assert!(
-        !observability.enabled,
-        "typed default enabled=true inherits the file's false"
+        observability.enabled,
+        "a declared component is enabled by code"
     );
     // The component config body merges: code's `mode` wins, the file's `output_directory`
     // is inherited.
@@ -2423,6 +2458,41 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
     assert_eq!(observability.config["output_directory"], json!("/var/log"));
     // A kind the code config does not declare is inherited from the file.
     assert_eq!(typed.components[1].kind, "adaptive");
+    assert!(!typed.components[1].enabled);
+}
+
+#[test]
+fn test_programmatic_enable_override_diagnostic_matches_positionally_and_names_source() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let discovered = json!({
+        "components": [
+            { "kind": "observability", "enabled": true },
+            { "kind": "observability", "enabled": false }
+        ]
+    });
+    let enabled_sources = HashMap::from([("observability".to_string(), source.clone())]);
+    let programmatic = PluginConfig {
+        components: vec![
+            PluginComponentSpec::new("observability"),
+            PluginComponentSpec::new("observability"),
+        ],
+        ..PluginConfig::default()
+    };
+
+    let diagnostics =
+        programmatic_enable_override_diagnostics(&discovered, &enabled_sources, &programmatic);
+
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+    assert_eq!(diagnostic.code, "plugin.component_reenabled");
+    assert_eq!(diagnostic.component.as_deref(), Some("observability"));
+    assert_eq!(diagnostic.field.as_deref(), Some("enabled"));
+    assert!(
+        diagnostic.message.contains(&source.display().to_string()),
+        "{}",
+        diagnostic.message
+    );
 }
 
 #[test]
