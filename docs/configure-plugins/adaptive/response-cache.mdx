@@ -386,7 +386,7 @@ arg_skip = ["trace_id"]
 members = ["docs_*", "unit_convert"]
 
 [components.config.response_cache.tools.overrides.docs_search]
-tool_version = "v2" # bump to intentionally stop reusing earlier results
+tool_version = "v1" # identifies the deployed tool contract
 ```
 
 An exact class member wins. Otherwise, Relay selects the most-specific matching
