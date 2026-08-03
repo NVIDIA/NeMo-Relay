@@ -502,21 +502,19 @@ fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
             ),
         ));
     }
-    if config
-        .target_paths
-        .iter()
-        .any(|path| path.len() > MAX_TARGET_PATH_BYTES || !is_valid_json_pointer(path))
-    {
+    if config.target_paths.iter().any(|path| {
+        path.is_empty() || path.len() > MAX_TARGET_PATH_BYTES || !is_valid_json_pointer(path)
+    }) {
         violations.push(ConfigViolation::new(
             "target_paths",
             "target_paths entries must be bounded valid JSON pointers",
         ));
     }
-    if config
-        .target_path_patterns
-        .iter()
-        .any(|path| path.len() > MAX_TARGET_PATH_BYTES || !is_valid_json_pointer_pattern(path))
-    {
+    if config.target_path_patterns.iter().any(|path| {
+        path.is_empty()
+            || path.len() > MAX_TARGET_PATH_BYTES
+            || !is_valid_json_pointer_pattern(path)
+    }) {
         violations.push(ConfigViolation::new(
             "target_path_patterns",
             "target_path_patterns entries must be bounded JSON pointers with only complete '*' segments",
@@ -712,6 +710,16 @@ mod tests {
                 "target_paths",
                 serde_json::json!(["messages/0/content"]),
                 "target_paths entries",
+            ),
+            (
+                "target_paths",
+                serde_json::json!([""]),
+                "target_paths entries",
+            ),
+            (
+                "target_path_patterns",
+                serde_json::json!([""]),
+                "target_path_patterns entries",
             ),
             ("min_score", serde_json::json!(1.1), "min_score must"),
         ];

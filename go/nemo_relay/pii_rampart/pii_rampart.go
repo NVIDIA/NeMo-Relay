@@ -8,6 +8,7 @@ import nemo_relay "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 type Config = nemo_relay.RampartPiiConfig
 type ConfigPolicy = nemo_relay.ConfigPolicy
 type ConfigReport = nemo_relay.ConfigReport
+type ComponentSpec = nemo_relay.RampartPiiComponentSpec
 
 // PluginKind is the Rampart PII component kind.
 const PluginKind = nemo_relay.RampartPiiPluginKind
@@ -23,9 +24,14 @@ func NewConfig(modelPath string) Config {
 	return nemo_relay.NewRampartPiiConfig(modelPath)
 }
 
+// NewComponentSpec wraps Rampart PII config as an enabled component.
+func NewComponentSpec(config Config) ComponentSpec {
+	return nemo_relay.NewRampartPiiComponentSpec(config)
+}
+
 // Component converts config into the shared plugin component.
 func Component(config Config) nemo_relay.PluginComponentSpec {
-	return nemo_relay.RampartPiiComponent(config)
+	return NewComponentSpec(config).PluginComponent()
 }
 
 // ValidateConfig validates config without loading model files.

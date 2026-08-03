@@ -22,6 +22,12 @@ func TestRampartPiiConfigHelpers(t *testing.T) {
 		RampartModelRevision != "b1993e4e68b082835b80ffc65acc03325ea2e501" {
 		t.Fatalf("unexpected Rampart model identity: %s@%s", RampartModelID, RampartModelRevision)
 	}
+
+	disabled := NewRampartPiiComponentSpec(config)
+	disabled.Enabled = false
+	if disabled.PluginComponent().Enabled {
+		t.Fatal("disabled Rampart PII component was enabled")
+	}
 }
 
 func TestRampartPiiConfigPreservesExplicitZeroValues(t *testing.T) {

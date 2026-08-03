@@ -33,6 +33,12 @@ type RampartPiiConfig struct {
 	Policy               *ConfigPolicy `json:"policy,omitempty"`
 }
 
+// RampartPiiComponentSpec wraps one Rampart PII config as a top-level plugin component.
+type RampartPiiComponentSpec struct {
+	Enabled bool             `json:"enabled,omitempty"`
+	Config  RampartPiiConfig `json:"config"`
+}
+
 // NewRampartPiiConfig returns Rampart PII settings with runtime defaults.
 func NewRampartPiiConfig(modelPath string) RampartPiiConfig {
 	return RampartPiiConfig{
@@ -54,13 +60,26 @@ func NewRampartPiiConfig(modelPath string) RampartPiiConfig {
 	}
 }
 
-// RampartPiiComponent converts config into the shared plugin component.
-func RampartPiiComponent(config RampartPiiConfig) PluginComponentSpec {
+// NewRampartPiiComponentSpec wraps Rampart PII config as an enabled component.
+func NewRampartPiiComponentSpec(config RampartPiiConfig) RampartPiiComponentSpec {
+	return RampartPiiComponentSpec{
+		Enabled: true,
+		Config:  config,
+	}
+}
+
+// PluginComponent converts the Rampart PII wrapper into the shared plugin shape.
+func (spec RampartPiiComponentSpec) PluginComponent() PluginComponentSpec {
 	return PluginComponentSpec{
 		Kind:    RampartPiiPluginKind,
-		Enabled: true,
-		Config:  mustConfigMap(config),
+		Enabled: spec.Enabled,
+		Config:  mustConfigMap(spec.Config),
 	}
+}
+
+// RampartPiiComponent converts config into the shared plugin component.
+func RampartPiiComponent(config RampartPiiConfig) PluginComponentSpec {
+	return NewRampartPiiComponentSpec(config).PluginComponent()
 }
 
 // ValidateRampartPiiConfig validates config without loading model files.
