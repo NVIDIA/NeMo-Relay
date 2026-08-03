@@ -239,9 +239,12 @@ enabled = true
         activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
       ]);
       assert.equal(activation.report.diagnostics.length, 1);
-      assert.equal(activation.report.diagnostics[0].level, 'warning');
-      assert.equal(activation.report.diagnostics[0].code, 'plugin.configuration_inherited');
-      assert.match(activation.report.diagnostics[0].message, /plugins\.toml$/);
+      const diagnostic = activation.report.diagnostics[0];
+      assert.equal(diagnostic.level, 'warning');
+      assert.equal(diagnostic.code, 'plugin.configuration_inherited');
+      assert.ok(diagnostic.message.endsWith(path.resolve(pluginsToml)));
+      assert.equal(diagnostic.component, undefined);
+      assert.equal(diagnostic.field, undefined);
       const result = await executeTool('node_static_and_dynamic_tool');
       assert.equal(result.staticBase, true);
       assert.equal(result.native_plugin_tool_execution, true);
