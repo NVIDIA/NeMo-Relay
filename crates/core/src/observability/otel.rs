@@ -14,6 +14,7 @@
 //! - [`OpenTelemetrySubscriber`] exposes a NeMo Relay [`EventSubscriberFn`] and
 //!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc;
@@ -147,6 +148,27 @@ pub enum OtlpTransport {
     HttpBinary,
     /// OTLP/gRPC, typically `http://host:4317`.
     Grpc,
+}
+
+/// Completes a bare OTLP/HTTP base URL with the standard trace signal path.
+#[doc(hidden)]
+pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
+    let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
+        return Cow::Borrowed(endpoint);
+    };
+
+    let has_explicit_root_path = endpoint
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|url| url.ends_with('/'));
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.path() != "/"
+        || has_explicit_root_path
+    {
+        return Cow::Borrowed(endpoint);
+    }
+    parsed.set_path("/v1/traces");
+    Cow::Owned(parsed.into())
 }
 
 /// Configuration for the OpenTelemetry subscriber.
@@ -681,7 +703,8 @@ fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvid
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
                 .with_timeout(config.timeout);
-            builder = builder.with_endpoint(config.endpoint.clone());
+            builder =
+                builder.with_endpoint(resolve_http_trace_endpoint(&config.endpoint).into_owned());
             if !config.headers.is_empty() {
                 builder = builder.with_headers(config.headers.clone());
             }

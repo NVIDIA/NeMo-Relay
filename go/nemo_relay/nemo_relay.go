@@ -2010,16 +2010,15 @@ type OpenTelemetrySubscriber struct {
 	ptr unsafe.Pointer
 }
 
-// NewOpenTelemetrySubscriber creates a new OpenTelemetry subscriber from config.
-func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubscriber, error) {
+func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConfig, error) {
 	if config.Transport == "" {
 		config.Transport = OpenTelemetryTransportHTTPBinary
 	}
 	if config.Type == "" {
-		return nil, fmt.Errorf("type is required")
+		return config, fmt.Errorf("type is required")
 	}
 	if config.Endpoint == "" {
-		return nil, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf("endpoint is required")
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2045,17 +2044,30 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	if config.AttributeMappings == nil {
 		config.AttributeMappings = []OtlpAttributeMapping{}
 	}
+	return config, nil
+}
+
+func optionalCString(value string) *C.char {
+	if value == "" {
+		return nil
+	}
+	return C.CString(value)
+}
+
+// NewOpenTelemetrySubscriber creates a new OpenTelemetry subscriber from config.
+func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubscriber, error) {
+	config, err := normalizeOpenTelemetryConfig(config)
+	if err != nil {
+		return nil, err
+	}
 
 	cTransport := C.CString(string(config.Transport))
 	defer C.free(unsafe.Pointer(cTransport))
 	cType := C.CString(string(config.Type))
 	defer C.free(unsafe.Pointer(cType))
 
-	var cEndpoint *C.char
-	if config.Endpoint != "" {
-		cEndpoint = C.CString(config.Endpoint)
-		defer C.free(unsafe.Pointer(cEndpoint))
-	}
+	cEndpoint := C.CString(config.Endpoint)
+	defer C.free(unsafe.Pointer(cEndpoint))
 
 	headersJSON, err := jsonMarshal(config.Headers)
 	if err != nil {
@@ -2074,17 +2086,11 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	cServiceName := C.CString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 
-	var cServiceNamespace *C.char
-	if config.ServiceNamespace != "" {
-		cServiceNamespace = C.CString(config.ServiceNamespace)
-		defer C.free(unsafe.Pointer(cServiceNamespace))
-	}
+	cServiceNamespace := optionalCString(config.ServiceNamespace)
+	defer C.free(unsafe.Pointer(cServiceNamespace))
 
-	var cServiceVersion *C.char
-	if config.ServiceVersion != "" {
-		cServiceVersion = C.CString(config.ServiceVersion)
-		defer C.free(unsafe.Pointer(cServiceVersion))
-	}
+	cServiceVersion := optionalCString(config.ServiceVersion)
+	defer C.free(unsafe.Pointer(cServiceVersion))
 
 	cInstrumentationScope := C.CString(config.InstrumentationScope)
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
