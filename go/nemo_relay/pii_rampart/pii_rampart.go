@@ -20,6 +20,7 @@ const ModelID = nemo_relay.RampartModelID
 const ModelRevision = nemo_relay.RampartModelRevision
 
 // NewConfig returns Rampart PII settings with runtime defaults.
+// Set TargetPaths or TargetPathPatterns before validation or activation.
 func NewConfig(modelPath string) Config {
 	return nemo_relay.NewRampartPiiConfig(modelPath)
 }

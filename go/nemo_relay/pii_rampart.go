@@ -40,6 +40,7 @@ type RampartPiiComponentSpec struct {
 }
 
 // NewRampartPiiConfig returns Rampart PII settings with runtime defaults.
+// Set TargetPaths or TargetPathPatterns before validation or activation.
 func NewRampartPiiConfig(modelPath string) RampartPiiConfig {
 	return RampartPiiConfig{
 		Version:              1,
