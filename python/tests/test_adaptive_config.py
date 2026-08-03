@@ -226,7 +226,7 @@ class TestDynamicConfigContract:
             enabled=True,
             cache_errors=True,
             classes={"read_only": ToolClass(cacheable=True, members=["docs_lookup"])},
-            overrides={"docs_lookup": ToolOverride(tool_version="v2")},
+            overrides={"docs_lookup": ToolOverride(tool_version="v1")},
         )
         serialized = ResponseCacheConfig(tools=tools).to_dict()["tools"]
         assert serialized == {
@@ -235,7 +235,7 @@ class TestDynamicConfigContract:
             "priority": 150,
             "default": {"cacheable": False, "arg_skip": [], "members": []},
             "classes": {"read_only": {"cacheable": True, "arg_skip": [], "members": ["docs_lookup"]}},
-            "overrides": {"docs_lookup": {"tool_version": "v2"}},
+            "overrides": {"docs_lookup": {"tool_version": "v1"}},
         }
 
     def test_canonical_cache_telemetry_helper_supports_openai_provider(self):

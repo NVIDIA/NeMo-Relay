@@ -42,7 +42,7 @@ fn policy_resolution_inherits_class_values_and_honors_an_override() {
         ToolOverride {
             cacheable: Some(false),
             arg_skip: Some(vec![]),
-            tool_version: Some("v2".to_string()),
+            tool_version: Some("v1".to_string()),
             ..ToolOverride::default()
         },
     );
@@ -67,7 +67,7 @@ fn policy_resolution_inherits_class_values_and_honors_an_override() {
     assert_eq!(overridden.ttl, Duration::from_secs(300));
     assert_eq!(overridden.bypass_rate, 0.2);
     assert!(overridden.arg_skip.is_empty());
-    assert_eq!(overridden.tool_version.as_deref(), Some("v2"));
+    assert_eq!(overridden.tool_version.as_deref(), Some("v1"));
 }
 
 #[test]

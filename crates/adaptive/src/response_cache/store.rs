@@ -30,7 +30,7 @@ pub type BoxCacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send +
 /// or the key derivation changes in an incompatible way: old entries become
 /// unreachable under the new keys.
 #[doc(hidden)]
-pub const CACHE_SCHEMA_VERSION: u32 = 2;
+pub const CACHE_SCHEMA_VERSION: u32 = 1;
 
 /// Wall-clock milliseconds since the Unix epoch.
 pub fn now_unix_ms() -> u64 {

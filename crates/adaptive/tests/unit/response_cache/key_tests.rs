@@ -1014,7 +1014,7 @@ fn tool_name_args_namespace_and_version_each_separate_keys() {
     assert_ne!(key, tool_key("", "t", None, json!({"q": "y"}), &[]), "args");
     assert_ne!(key, tool_key("", "other", None, base(), &[]), "tool name");
     assert_ne!(key, tool_key("ns", "t", None, base(), &[]), "namespace");
-    assert_ne!(key, tool_key("", "t", Some("v2"), base(), &[]), "version");
+    assert_ne!(key, tool_key("", "t", Some("v1"), base(), &[]), "version");
 }
 
 #[test]

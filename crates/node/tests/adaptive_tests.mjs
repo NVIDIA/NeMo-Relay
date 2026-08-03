@@ -340,7 +340,7 @@ describe('adaptive helpers', () => {
           cacheErrors: true,
           default: { ttlSeconds: 30, bypassRate: 0.1, argSkip: ['trace'] },
           classes: { readOnly: { cacheable: true, members: ['search'] } },
-          overrides: { search: { toolVersion: 'v2', argSkip: ['requestId'] } },
+          overrides: { search: { toolVersion: 'v1', argSkip: ['requestId'] } },
         },
       },
     });
@@ -349,7 +349,7 @@ describe('adaptive helpers', () => {
       cache_errors: true,
       default: { ttl_seconds: 30, bypass_rate: 0.1, arg_skip: ['trace'] },
       classes: { readOnly: { cacheable: true, members: ['search'] } },
-      overrides: { search: { tool_version: 'v2', arg_skip: ['requestId'] } },
+      overrides: { search: { tool_version: 'v1', arg_skip: ['requestId'] } },
     });
   });
 
