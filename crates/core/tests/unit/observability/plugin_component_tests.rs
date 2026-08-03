@@ -1832,6 +1832,7 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
     .unwrap();
     pop(&valid);
 
+    flush_subscribers().unwrap();
     assert!(
         crate::plugin::active_plugin_report()
             .unwrap()

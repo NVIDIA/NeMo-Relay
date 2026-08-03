@@ -494,7 +494,7 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
 }
 
 #[test]
-fn atif_storage_http_non_2xx_marks_sink_unhealthy() {
+fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
     let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
     reset_runtime();
     let mut server = start_http_server(2, vec![("/fail", 500)]);
@@ -532,11 +532,14 @@ fn atif_storage_http_non_2xx_marks_sink_unhealthy() {
     server.stop();
     {
         let requests = server.received.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "POST");
-        assert_eq!(requests[0].path, "/fail");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.method == "POST" && request.path == "/fail")
+        );
     }
-    clear_plugin_configuration().expect("plugin teardown should ignore unhealthy sink errors");
+    clear_plugin_configuration().expect_err("plugin teardown should report failed uploads");
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
