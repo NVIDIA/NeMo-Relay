@@ -763,7 +763,8 @@ fn native_test_adapter(
             relay_compat: "^0.7".into(),
             allows_multiple_components: false,
             plugin: Mutex::new(plugin),
-            _library: libloading::os::unix::Library::this().into(),
+            library: Some(libloading::os::unix::Library::this().into()),
+            retain_library_on_drop: AtomicBool::new(false),
         }),
     }
 }
@@ -872,7 +873,7 @@ fn assert_native_digest_edges() {
 
 fn assert_native_host_api_versions() {
     let current = native_host_api();
-    let legacy = native_host_api_legacy();
+    let legacy = native_host_api_v2();
     assert!(!current.is_null());
     assert!(!legacy.is_null());
     assert_eq!(
@@ -891,6 +892,9 @@ async fn native_async_wait_and_rejection_cover_dropped_and_aborted_continuations
             cancelled: AtomicBool::new(false),
             next_invoked: AtomicBool::new(false),
             next_abort: Mutex::new(None),
+            runtime: tokio::runtime::Handle::current(),
+            context: MiddlewareContinuationContext::capture(),
+            task: Mutex::new(None),
             before_settlement_lock: None,
             _callback_user_data: None,
         }),
@@ -911,6 +915,9 @@ async fn native_async_wait_and_rejection_cover_dropped_and_aborted_continuations
         cancelled: AtomicBool::new(false),
         next_invoked: AtomicBool::new(true),
         next_abort: Mutex::new(Some(abort)),
+        runtime: tokio::runtime::Handle::current(),
+        context: MiddlewareContinuationContext::capture(),
+        task: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -935,8 +942,8 @@ async fn native_async_wait_and_rejection_cover_dropped_and_aborted_continuations
     unsafe { native_async_completion_release(completion_ref) };
 }
 
-#[test]
-fn native_stream_callback_guard_covers_terminal_drop_modes() {
+#[tokio::test]
+async fn native_stream_callback_guard_covers_terminal_drop_modes() {
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
         sender: Mutex::new(Some(sender)),
@@ -944,6 +951,9 @@ fn native_stream_callback_guard_covers_terminal_drop_modes() {
         settled: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        runtime: tokio::runtime::Handle::current(),
+        context: MiddlewareContinuationContext::capture(),
+        task: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1002,6 +1012,9 @@ async fn native_async_stream_forwarding_reports_conversion_and_stream_errors() {
             settled: AtomicBool::new(false),
             downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
+            runtime: tokio::runtime::Handle::current(),
+            context: MiddlewareContinuationContext::capture(),
+            task: Mutex::new(None),
             before_settlement_lock: None,
             _callback_user_data: None,
         })
@@ -1135,8 +1148,8 @@ async fn native_async_result_entrypoint_covers_llm_and_stream_continuations() {
     }
 }
 
-#[test]
-fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
+#[tokio::test]
+async fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
     let chunk = native_string("null");
 
     let no_sender = Arc::new(NativeAsyncStream {
@@ -1145,6 +1158,9 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         settled: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        runtime: tokio::runtime::Handle::current(),
+        context: MiddlewareContinuationContext::capture(),
+        task: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1171,6 +1187,9 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         settled: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        runtime: tokio::runtime::Handle::current(),
+        context: MiddlewareContinuationContext::capture(),
+        task: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1193,6 +1212,9 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         settled: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        runtime: tokio::runtime::Handle::current(),
+        context: MiddlewareContinuationContext::capture(),
+        task: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1214,6 +1236,9 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         settled: AtomicBool::new(true),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        runtime: tokio::runtime::Handle::current(),
+        context: MiddlewareContinuationContext::capture(),
+        task: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1289,6 +1314,9 @@ async fn native_async_stream_next_entrypoint_validates_handle_kind_and_request()
         settled: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        runtime: tokio::runtime::Handle::current(),
+        context: MiddlewareContinuationContext::capture(),
+        task: Mutex::new(None),
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -4473,7 +4501,15 @@ fn native_legacy_stream_next_reports_validation_item_and_setup_failures() {
             .await
             .expect("allocation failure should terminate the legacy stream");
     });
-    assert!(callback.done.load(Ordering::Acquire));
+    assert!(!callback.done.load(Ordering::Acquire));
+    assert!(
+        callback
+            .error
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_deref()
+            .is_some_and(|error| error.contains("failed to serialize or allocate"))
+    );
     assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
     drop(allocation_receiver);
 
@@ -7468,7 +7504,8 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
         relay_compat: "^0.7".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
-        _library: libloading::os::unix::Library::this().into(),
+        library: Some(libloading::os::unix::Library::this().into()),
+        retain_library_on_drop: AtomicBool::new(false),
     });
     let mut invalid_host = NativeHostPluginContext {
         ctx: ptr::null_mut(),
@@ -7925,7 +7962,8 @@ fn assert_async_request_registration_rejects_legacy_relay_contract() {
         relay_compat: "^0.5".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
-        _library: libloading::os::unix::Library::this().into(),
+        library: Some(libloading::os::unix::Library::this().into()),
+        retain_library_on_drop: AtomicBool::new(false),
     });
     let mut registration = PluginRegistrationContext::new();
     let mut host = NativeHostPluginContext {
@@ -7974,7 +8012,8 @@ async fn native_async_wrappers_validate_callback_result_shapes() {
         relay_compat: "^0.7".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
-        _library: libloading::os::unix::Library::this().into(),
+        library: Some(libloading::os::unix::Library::this().into()),
+        retain_library_on_drop: AtomicBool::new(false),
     });
     let result = native_string("true");
     let user_data = result.cast();
@@ -8710,17 +8749,6 @@ unsafe extern "C" fn llm_execution_error_with_output(
     NemoRelayStatus::InvalidArg
 }
 
-unsafe extern "C" fn llm_stream_execution_error(
-    _user_data: *mut c_void,
-    _name: *const NemoRelayNativeString,
-    _request_json: *const NemoRelayNativeString,
-    _next_fn: NemoRelayNativeLlmStreamNextFn,
-    _next_ctx: *mut c_void,
-    _out_stream: *mut NemoRelayNativeLlmStreamV1,
-) -> NemoRelayStatus {
-    NemoRelayStatus::InvalidArg
-}
-
 #[test]
 fn native_callback_helpers_cover_success_error_and_invalid_output() {
     assert_eq!(
@@ -8878,7 +8906,8 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         relay_compat: "^0.7".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
-        _library: libloading::os::unix::Library::this().into(),
+        library: Some(libloading::os::unix::Library::this().into()),
+        retain_library_on_drop: AtomicBool::new(false),
     });
     let request = LlmRequest {
         headers: Map::new(),
