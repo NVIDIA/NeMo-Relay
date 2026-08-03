@@ -121,6 +121,11 @@ pub(super) async fn probe_tcp_named(name: &'static str, endpoint: &str) -> Check
 pub(super) fn validate_grpc_endpoint(endpoint: &str) -> Result<(reqwest::Url, String), String> {
     let parsed = reqwest::Url::parse(endpoint)
         .map_err(|error| format!("{endpoint}: invalid gRPC endpoint: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!(
+            "{endpoint}: gRPC endpoint must use http:// or https://"
+        ));
+    }
     let host = parsed
         .host_str()
         .map(str::to_owned)
@@ -129,9 +134,17 @@ pub(super) fn validate_grpc_endpoint(endpoint: &str) -> Result<(reqwest::Url, St
 }
 
 pub(super) fn validate_otlp_http_endpoint(endpoint: &str) -> Result<(), String> {
-    reqwest::Url::parse(endpoint)
-        .map(|_| ())
-        .map_err(|error| format!("{endpoint}: invalid OTLP HTTP endpoint: {error}"))
+    let parsed = reqwest::Url::parse(endpoint)
+        .map_err(|error| format!("{endpoint}: invalid OTLP HTTP endpoint: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!(
+            "{endpoint}: OTLP HTTP endpoint must use http:// or https://"
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(format!("{endpoint}: OTLP HTTP endpoint has no host"));
+    }
+    Ok(())
 }
 
 fn grpc_endpoint_port(endpoint: &reqwest::Url) -> u16 {

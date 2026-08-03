@@ -1253,6 +1253,41 @@ async fn opentelemetry_doctor_offline_still_rejects_malformed_endpoints() {
     assert!(checks.iter().all(|check| check.status == Status::Fail));
 }
 
+#[tokio::test]
+async fn opentelemetry_doctor_offline_rejects_unsupported_endpoint_schemes() {
+    let checks = offline_observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "gen_ai",
+                    "transport": "grpc",
+                    "endpoint": "ftp://collector.example:4317"
+                },
+                {
+                    "type": "full",
+                    "endpoint": "file:///tmp/collector"
+                }
+            ]
+        }
+    }))
+    .await;
+
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0].status, Status::Fail);
+    assert_eq!(checks[1].status, Status::Fail);
+    assert!(
+        checks[0]
+            .details
+            .contains("gRPC endpoint must use http:// or https://")
+    );
+    assert!(
+        checks[1]
+            .details
+            .contains("OTLP HTTP endpoint must use http:// or https://")
+    );
+}
+
 #[test]
 fn atof_file_checks_preserve_configured_sink_indices() {
     let config = serde_json::json!({
@@ -1798,6 +1833,39 @@ async fn atof_endpoint_offline_skips_live_network_probe_after_validation() {
     assert_eq!(
         skipped.details,
         "sinks[0] http_post http://127.0.0.1:1/events: live network probe skipped (--offline)"
+    );
+}
+
+#[tokio::test]
+async fn atof_endpoint_offline_still_rejects_invalid_transport_and_scheme() {
+    let invalid_websocket = offline_atof_endpoint(
+        0,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "transport": "websocket"
+        }),
+    )
+    .await;
+    assert_eq!(invalid_websocket.status, Status::Fail);
+    assert!(
+        invalid_websocket
+            .details
+            .contains("invalid scheme (must be ws or wss)")
+    );
+
+    let unsupported_transport = offline_atof_endpoint(
+        1,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "transport": "udp"
+        }),
+    )
+    .await;
+    assert_eq!(unsupported_transport.status, Status::Fail);
+    assert!(
+        unsupported_transport
+            .details
+            .contains("unsupported transport")
     );
 }
 

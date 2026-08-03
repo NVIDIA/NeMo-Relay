@@ -1124,6 +1124,13 @@ async fn probe_atof_stream_sink(
             };
         }
     };
+    if let Err(details) = validate_atof_stream_probe_target(index, transport, url) {
+        return Check {
+            name,
+            status: Status::Fail,
+            details,
+        };
+    }
     if probe_mode.is_offline() {
         return Check {
             name,
@@ -1159,6 +1166,39 @@ async fn probe_atof_stream_sink(
 #[cfg(test)]
 async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
     probe_atof_stream_sink(index, endpoint, DoctorProbeMode::Live).await
+}
+
+fn validate_atof_stream_probe_target(
+    index: usize,
+    transport: &str,
+    url: &str,
+) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|error| format!("sinks[{index}] {transport} {url}: {error}"))?;
+    if parsed.host_str().is_none() {
+        return Err(format!("sinks[{index}] {transport} {url}: missing host"));
+    }
+    let valid_scheme = match transport {
+        "http_post" | "ndjson" => matches!(parsed.scheme(), "http" | "https"),
+        "websocket" => matches!(parsed.scheme(), "ws" | "wss"),
+        _ => {
+            return Err(format!(
+                "sinks[{index}] {transport} {url}: unsupported transport"
+            ));
+        }
+    };
+    if valid_scheme {
+        Ok(())
+    } else {
+        let expected = match transport {
+            "http_post" | "ndjson" => "http or https",
+            "websocket" => "ws or wss",
+            _ => unreachable!("unsupported transports return earlier"),
+        };
+        Err(format!(
+            "sinks[{index}] {transport} {url}: invalid scheme (must be {expected})"
+        ))
+    }
 }
 
 fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {

@@ -25,7 +25,11 @@ async fn grpc_probe_reports_invalid_hostless_and_refused_endpoints() {
 
     let hostless = probe_tcp_named("OpenTelemetry endpoint", "file:///tmp/collector").await;
     assert_eq!(hostless.status, Status::Fail);
-    assert!(hostless.details.contains("has no host"));
+    assert!(
+        hostless
+            .details
+            .contains("gRPC endpoint must use http:// or https://")
+    );
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
