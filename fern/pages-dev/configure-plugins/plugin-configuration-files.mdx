@@ -355,8 +355,21 @@ follows:
    setting it specifies overrides the file value, and the result is the
    effective config that Relay validates and activates.
 
+Programmatic lists participate in the same concatenation rules. For example, a
+programmatic `config.opentelemetry.endpoints` list appears before endpoints
+inherited from system, project, and explicit-or-user files; it does not remove
+those file entries.
+
+When library initialization discovers `plugins.toml` files, Relay emits one
+`plugin.configuration_inherited` warning per file. Each warning is written to
+the operational log and included in the initialization result and active plugin
+report. It names only the source path and does not include configuration values
+or credentials. Discovery itself does not block initialization, but validation
+or activation errors in the effective layered configuration still fail
+normally.
 
 Files and code differ only in how they treat a setting you **omit**:
+
 | You omit | In a file | In code |
 |---|---|---|
 | `version`, `policy`, or the `enabled` flag of a component you declare | Inherited from a lower-precedence file | **Always taken from code** — its default if you did not set it |
