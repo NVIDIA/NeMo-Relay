@@ -3,7 +3,10 @@
 
 package pii_rampart
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestConfigAndComponentHelpers(t *testing.T) {
 	config := NewConfig("/models/rampart")
@@ -25,4 +28,34 @@ func TestConfigAndComponentHelpers(t *testing.T) {
 	if disabled.PluginComponent().Enabled {
 		t.Fatal("disabled Rampart PII component was enabled")
 	}
+}
+
+func TestValidateConfig(t *testing.T) {
+	modelPath, err := filepath.Abs("testdata/rampart")
+	if err != nil {
+		t.Fatalf("resolve model path: %v", err)
+	}
+	config := NewConfig(modelPath)
+	config.TargetPaths = []string{"/message"}
+
+	report, err := ValidateConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+	}
+
+	config.TargetPaths = nil
+	config.TargetPathPatterns = []string{"/messages/pre*fix/content"}
+	report, err = ValidateConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateConfig rejected diagnostic input: %v", err)
+	}
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Field != nil && *diagnostic.Field == "target_path_patterns" {
+			return
+		}
+	}
+	t.Fatalf("expected target_path_patterns diagnostic, got %#v", report.Diagnostics)
 }

@@ -1002,6 +1002,31 @@ mod tests {
     }
 
     #[test]
+    fn exact_selectors_match_escaped_json_pointer_segments() {
+        let sanitizer = RampartSanitizer::new(
+            RampartPiiConfig {
+                model_path: "/tmp/rampart".into(),
+                target_paths: vec!["/a~1b/c~0d".into()],
+                ..RampartPiiConfig::default()
+            },
+            Arc::new(NameDetector),
+        )
+        .unwrap();
+        let value = serde_json::json!({
+            "a/b": {"c~d": "Hello José"},
+            "a": {"b": {"c~d": "José"}}
+        });
+
+        assert_eq!(
+            sanitizer.sanitize_json(value).unwrap(),
+            serde_json::json!({
+                "a/b": {"c~d": "Hello [REDACTED]"},
+                "a": {"b": {"c~d": "José"}}
+            })
+        );
+    }
+
+    #[test]
     fn model_errors_fail_closed_only_for_selected_values() {
         let sanitizer = sanitizer(Arc::new(FailingDetector), vec!["/message"]);
         assert_eq!(

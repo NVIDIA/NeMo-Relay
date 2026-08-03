@@ -28,7 +28,6 @@ function defaultConfig(modelPath, config) {
   }
   return {
     version: 1,
-    model_path: modelPath,
     input: true,
     output: true,
     mark: true,

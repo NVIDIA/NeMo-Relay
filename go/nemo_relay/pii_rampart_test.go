@@ -5,6 +5,7 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 )
 
@@ -49,4 +50,34 @@ func TestRampartPiiConfigPreservesExplicitZeroValues(t *testing.T) {
 	if value["version"] != float64(0) || value["priority"] != float64(0) {
 		t.Fatalf("explicit zero values were not preserved: %#v", value)
 	}
+}
+
+func TestValidateRampartPiiConfig(t *testing.T) {
+	modelPath, err := filepath.Abs("testdata/rampart")
+	if err != nil {
+		t.Fatalf("resolve model path: %v", err)
+	}
+	config := NewRampartPiiConfig(modelPath)
+	config.TargetPaths = []string{"/message"}
+
+	report, err := ValidateRampartPiiConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateRampartPiiConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+	}
+
+	config.TargetPaths = nil
+	config.TargetPathPatterns = []string{"/messages/pre*fix/content"}
+	report, err = ValidateRampartPiiConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateRampartPiiConfig rejected diagnostic input: %v", err)
+	}
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Field != nil && *diagnostic.Field == "target_path_patterns" {
+			return
+		}
+	}
+	t.Fatalf("expected target_path_patterns diagnostic, got %#v", report.Diagnostics)
 }

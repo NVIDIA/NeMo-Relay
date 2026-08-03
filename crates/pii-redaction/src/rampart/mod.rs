@@ -127,7 +127,9 @@ pub struct RampartPiiConfig {
     /// Maximum token windows accepted from one observability payload.
     #[serde(default = "default_max_windows_per_payload")]
     pub max_windows_per_payload: usize,
-    /// Maximum short token windows grouped in one model invocation.
+    /// Maximum short token windows requested per model invocation.
+    ///
+    /// The 512 padded-token budget can reduce the actual batch size.
     #[serde(default = "default_inference_batch_size")]
     pub inference_batch_size: usize,
     /// Component-local unsupported-config policy.
