@@ -354,6 +354,15 @@ fn doctor_rejects_conflicting_agent_and_plugin_targets() {
 }
 
 #[test]
+fn doctor_accepts_offline_flag() {
+    let cli = Cli::try_parse_from(["nemo-relay", "doctor", "--offline"]).unwrap();
+    match cli.command {
+        Some(Command::Doctor(command)) => assert!(command.offline),
+        other => panic!("expected doctor command, got {other:?}"),
+    }
+}
+
+#[test]
 fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
     let visited = std::cell::RefCell::new(Vec::new());
     let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {
