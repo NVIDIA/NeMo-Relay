@@ -3602,56 +3602,7 @@ fn native_api_v2_split_callbacks_settle_when_native_string_allocation_fails() {
     let dispatch = test_v2_dispatch_json();
     let live_with_dispatch = native_string_live_allocations();
 
-    for next in [
-        Arc::new(NativeAsyncNext::new(
-            NativeAsyncNextInner::Llm(Arc::new(|_| Box::pin(async { Ok(json!({"ok": true})) }))),
-            runtime.handle().clone(),
-            None,
-        )),
-        Arc::new(NativeAsyncNext::new(
-            NativeAsyncNextInner::Llm(Arc::new(|_| {
-                Box::pin(async { Err(FlowError::InvalidArgument("bad request".into())) })
-            })),
-            runtime.handle().clone(),
-            None,
-        )),
-    ] {
-        let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
-        let callback = Arc::new(TypedLlmResultCallbackState::default());
-        fail_native_string_allocation_after(0);
-        assert_eq!(
-            unsafe {
-                native_async_llm_next_invoke_result_v2(
-                    next_ref,
-                    dispatch,
-                    record_typed_llm_result_state,
-                    Arc::as_ptr(&callback).cast_mut().cast(),
-                )
-            },
-            NemoRelayStatus::Ok
-        );
-        runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(1), callback.notified.notified())
-                .await
-                .expect("unary allocation failure must still invoke its callback");
-        });
-        assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            callback
-                .outcome
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_ref(),
-            Some(LlmContinuationOutcomeV2::Failure {
-                error: LlmContinuationFailureV2::NonHttp {
-                    kind: LlmNonHttpFailureKindV2::Internal,
-                    ..
-                }
-            })
-        ));
-        assert_eq!(native_string_live_allocations(), live_with_dispatch);
-        unsafe { native_async_next_release(next_ref) };
-    }
+    assert_unary_allocation_failures_settle(&runtime, dispatch, live_with_dispatch);
 
     let open_next = Arc::new(NativeAsyncNext::new(
         NativeAsyncNextInner::LlmStream(Arc::new(|_| {
@@ -3747,6 +3698,63 @@ fn native_api_v2_split_callbacks_settle_when_native_string_allocation_fails() {
 
     unsafe { native_string_free(dispatch) };
     assert_eq!(native_string_live_allocations(), live_before);
+}
+
+fn assert_unary_allocation_failures_settle(
+    runtime: &tokio::runtime::Runtime,
+    dispatch: *const NemoRelayNativeString,
+    live_with_dispatch: usize,
+) {
+    for next in [
+        Arc::new(NativeAsyncNext::new(
+            NativeAsyncNextInner::Llm(Arc::new(|_| Box::pin(async { Ok(json!({"ok": true})) }))),
+            runtime.handle().clone(),
+            None,
+        )),
+        Arc::new(NativeAsyncNext::new(
+            NativeAsyncNextInner::Llm(Arc::new(|_| {
+                Box::pin(async { Err(FlowError::InvalidArgument("bad request".into())) })
+            })),
+            runtime.handle().clone(),
+            None,
+        )),
+    ] {
+        let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+        let callback = Arc::new(TypedLlmResultCallbackState::default());
+        fail_native_string_allocation_after(0);
+        assert_eq!(
+            unsafe {
+                native_async_llm_next_invoke_result_v2(
+                    next_ref,
+                    dispatch,
+                    record_typed_llm_result_state,
+                    Arc::as_ptr(&callback).cast_mut().cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(1), callback.notified.notified())
+                .await
+                .expect("unary allocation failure must still invoke its callback");
+        });
+        assert_eq!(callback.callbacks.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            callback
+                .outcome
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref(),
+            Some(LlmContinuationOutcomeV2::Failure {
+                error: LlmContinuationFailureV2::NonHttp {
+                    kind: LlmNonHttpFailureKindV2::Internal,
+                    ..
+                }
+            })
+        ));
+        assert_eq!(native_string_live_allocations(), live_with_dispatch);
+        unsafe { native_async_next_release(next_ref) };
+    }
 }
 
 #[test]
@@ -8419,13 +8427,25 @@ fn native_codec_operations_clear_output_slots_on_null_arguments() {
     assert!(output.is_null());
     assert_last_error_contains("response codec decode capability is null");
 
+    assert_null_codec_inputs_clear_existing_outputs(&request_codec, &response_codec, request_json);
+    unsafe {
+        native_string_free(annotated_json);
+        native_string_free(request_json);
+    }
+}
+
+fn assert_null_codec_inputs_clear_existing_outputs(
+    request_codec: &NativeHostLlmRequestCodec,
+    response_codec: &NativeHostLlmResponseCodec,
+    request_json: *mut NemoRelayNativeString,
+) {
     let request_decode_sentinel = native_string("request-decode-sentinel");
-    output = request_decode_sentinel;
+    let mut output = request_decode_sentinel;
     set_native_last_error("stale request decode error");
     assert_eq!(
         unsafe {
             native_llm_request_codec_decode(
-                ptr::from_ref(&request_codec).cast(),
+                ptr::from_ref(request_codec).cast(),
                 ptr::null(),
                 &mut output,
             )
@@ -8442,7 +8462,7 @@ fn native_codec_operations_clear_output_slots_on_null_arguments() {
     assert_eq!(
         unsafe {
             native_llm_request_codec_encode(
-                ptr::from_ref(&request_codec).cast(),
+                ptr::from_ref(request_codec).cast(),
                 ptr::null(),
                 request_json,
                 &mut output,
@@ -8460,7 +8480,7 @@ fn native_codec_operations_clear_output_slots_on_null_arguments() {
     assert_eq!(
         unsafe {
             native_llm_response_codec_decode(
-                ptr::from_ref(&response_codec).cast(),
+                ptr::from_ref(response_codec).cast(),
                 ptr::null(),
                 &mut output,
             )
@@ -8469,11 +8489,7 @@ fn native_codec_operations_clear_output_slots_on_null_arguments() {
     );
     assert!(output.is_null());
     assert_last_error_contains("response codec decode response is null");
-    unsafe {
-        native_string_free(response_decode_sentinel);
-        native_string_free(annotated_json);
-        native_string_free(request_json);
-    }
+    unsafe { native_string_free(response_decode_sentinel) };
 }
 
 unsafe extern "C" fn tool_json_echo(
