@@ -74,6 +74,8 @@ pub(crate) enum PluginDeregistrationOutcome {
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
+static LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT: LazyLock<Mutex<Option<ConfigReport>>> =
+    LazyLock::new(|| Mutex::new(None));
 static PLUGIN_MUTATION_OWNER: LazyLock<Mutex<PluginMutationOwner>> =
     LazyLock::new(|| Mutex::new(PluginMutationOwner::Idle));
 static NEXT_PLUGIN_REGISTRATION_ID: AtomicU64 = AtomicU64::new(1);
@@ -2035,7 +2037,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     let flush_error = crate::api::runtime::subscriber_dispatcher::flush_queued_subscribers()
         .err()
         .map(|error| error.to_string());
-    let previous = {
+    let mut registrations = {
         let mut guard = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
             Ok(guard) => guard,
             Err(err) => {
@@ -2047,11 +2049,27 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
                 };
             }
         };
-        guard.take()
+        guard
+            .as_mut()
+            .map(|state| std::mem::take(&mut state.registrations))
     };
-    let deregistration_errors = previous
-        .map(|mut previous_state| rollback_registrations_checked(&mut previous_state.registrations))
+    // Keep the report installed while callbacks run so runtime diagnostics
+    // emitted by teardown work can be recorded against it.
+    let deregistration_errors = registrations
+        .as_mut()
+        .map(rollback_registrations_checked)
         .unwrap_or_default();
+    let teardown_report = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
+        Ok(mut guard) => guard.take().map(|state| state.report),
+        Err(err) => {
+            return PluginHostClearOutcome {
+                result: Err(PluginError::Internal(format!(
+                    "active plugin configuration lock poisoned: {err}"
+                ))),
+                callbacks_cleared: false,
+            };
+        }
+    };
     // Runtime delivery failures are reported by an otherwise successful
     // deregistration callback. They must propagate without treating callback
     // removal itself as unsafe.
@@ -2072,6 +2090,16 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
             "{deregister}; subscriber flush also failed: {flush}"
         ))),
     };
+    if result.is_ok() {
+        if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+            *guard = None;
+        }
+    } else if let Some(report) =
+        teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+        && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+    {
+        *guard = Some(report);
+    }
     PluginHostClearOutcome {
         result,
         callbacks_cleared,
@@ -2178,22 +2206,29 @@ fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
     PluginError::Conflict(message.into())
 }
 
-/// Returns the last successfully configured plugin report.
+/// Returns the active plugin report or a report retained after a failed teardown.
 ///
-/// `None` indicates that no plugin configuration is currently active.
+/// `None` indicates that no plugin configuration is active and no failed
+/// teardown report is retained.
 ///
 /// # Returns
-/// The last successful [`ConfigReport`], or `None` when no configuration is
-/// active.
+/// The active [`ConfigReport`], or the report containing runtime diagnostics
+/// from the last failed teardown.
 ///
 /// # Notes
 /// This is a snapshot of the last successful activation and does not re-run
 /// validation.
 pub fn active_plugin_report() -> Option<ConfigReport> {
-    ACTIVE_PLUGIN_CONFIGURATION
+    let active_report = ACTIVE_PLUGIN_CONFIGURATION
         .lock()
         .ok()
-        .and_then(|guard| guard.as_ref().map(|state| state.report.clone()))
+        .and_then(|guard| guard.as_ref().map(|state| state.report.clone()));
+    active_report.or_else(|| {
+        LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    })
 }
 
 /// Record a bounded runtime diagnostic against the active plugin report.
@@ -2389,6 +2424,9 @@ fn store_active_plugin_configuration(
         report,
         registrations,
     });
+    if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+        *guard = None;
+    }
     Ok(())
 }
 

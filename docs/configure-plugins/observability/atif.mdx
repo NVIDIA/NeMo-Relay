@@ -245,10 +245,10 @@ delivery diagnostic and retries that destination for each later trajectory.
 Other destinations continue to receive writes. When every remote destination
 fails for one trajectory, Relay writes a local recovery copy under
 `output_directory`; a successful remote destination does not create that copy.
-The diagnostic remains visible in the active plugin report and causes plugin
-teardown to report the degraded delivery, even when the local recovery write
-succeeds. Fatal dispatcher failures, such as trajectory serialization failures,
-are also reported during teardown.
+The diagnostic remains visible in `plugin.report()` and is retained there after
+a failed teardown. Teardown also reports the degraded delivery, even when the
+local recovery write succeeds. Fatal dispatcher failures, such as trajectory
+serialization failures, are also reported during teardown.
 
 ## Expected Output
 

@@ -2545,6 +2545,47 @@ fn atif_explicit_options_and_open_agent_teardown_are_written() {
 }
 
 #[test]
+#[cfg(feature = "object-store")]
+fn atif_open_agent_teardown_failure_retains_runtime_diagnostic_report() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-open-agent-delivery-failure");
+    let (endpoint, server) = start_http_status_server("500 Internal Server Error");
+    let config = plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "output_directory": dir,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{"type": "http", "endpoint": endpoint}]
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    let agent = push_agent("open-agent-delivery-failure");
+
+    let teardown = clear_plugin_configuration().unwrap_err();
+    assert!(teardown.to_string().contains("atif.remote_delivery_failed"));
+    server.join().unwrap().unwrap();
+
+    let report = crate::plugin::active_plugin_report()
+        .expect("failed teardown should retain its runtime diagnostics");
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "atif.remote_delivery_failed")
+        .expect("remote failure should be retained in the report");
+    assert_eq!(diagnostic.field.as_deref(), Some("storage[0]"));
+    assert_eq!(
+        diagnostic.session_id.as_deref(),
+        Some(agent.uuid.to_string().as_str())
+    );
+    assert!(!diagnostic.message.is_empty());
+
+    pop(&agent);
+    clear_plugin_configuration().unwrap();
+    assert!(crate::plugin::active_plugin_report().is_none());
+}
+
+#[test]
 fn atif_rejects_unsafe_template_and_ignores_non_top_level_agents() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();

@@ -505,9 +505,10 @@ func ClearPluginConfiguration() error {
 	return checkStatus(C.nemo_relay_clear_plugin_configuration())
 }
 
-// ActivePluginReport returns the last successfully activated plugin report.
+// ActivePluginReport returns the active plugin report or one retained after a
+// teardown failure with runtime diagnostics.
 //
-// A nil report means no plugin configuration is currently active.
+// A nil report means neither report is available.
 func ActivePluginReport() (*ConfigReport, error) {
 	raw, err := activePluginReportJSON()
 	if err != nil {

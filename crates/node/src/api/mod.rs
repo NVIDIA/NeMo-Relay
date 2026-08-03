@@ -5020,7 +5020,7 @@ pub fn clear_plugin_configuration() -> napi::Result<()> {
     clear_plugin_configuration_impl().map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
-/// Return the last successfully configured plugin report.
+/// Return the active plugin report or one retained after a teardown failure with runtime diagnostics.
 #[napi]
 pub fn active_plugin_report() -> napi::Result<Option<Json>> {
     active_plugin_report_impl()
