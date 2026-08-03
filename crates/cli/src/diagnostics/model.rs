@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::configuration::DynamicPluginHostConfigStatus;
+use crate::configuration::{DynamicPluginHostConfigStatus, GatewayConfig};
 
 /// Outcome of one check inside the doctor report.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -71,13 +71,23 @@ pub(crate) struct UpstreamAuthInfo {
 }
 
 impl UpstreamAuthInfo {
-    pub(crate) fn from_gateway_headers(
-        openai_auth_header: Option<&str>,
-        anthropic_auth_header: Option<&str>,
-    ) -> Self {
+    pub(crate) fn from_effective_gateway_auth(gateway: &GatewayConfig) -> Self {
         Self {
-            openai: SecretPresence::from_header(openai_auth_header),
-            anthropic: SecretPresence::from_header(anthropic_auth_header),
+            openai: SecretPresence::from_effective_provider_auth(
+                gateway.openai_auth_header.as_deref(),
+                "OPENAI_API_KEY",
+            ),
+            anthropic: SecretPresence::from_effective_provider_auth(
+                gateway.anthropic_auth_header.as_deref(),
+                "ANTHROPIC_API_KEY",
+            ),
+        }
+    }
+
+    pub(crate) fn unknown() -> Self {
+        Self {
+            openai: SecretPresence::Unknown,
+            anthropic: SecretPresence::Unknown,
         }
     }
 }
@@ -87,11 +97,15 @@ impl UpstreamAuthInfo {
 pub(crate) enum SecretPresence {
     Configured,
     Unset,
+    Unknown,
 }
 
 impl SecretPresence {
-    pub(crate) fn from_header(header: Option<&str>) -> Self {
-        if header.is_some() {
+    pub(crate) fn from_effective_provider_auth(
+        configured_auth_header: Option<&str>,
+        fallback_env_var: &str,
+    ) -> Self {
+        if configured_auth_header.is_some() || env_var_is_nonempty(fallback_env_var) {
             Self::Configured
         } else {
             Self::Unset
@@ -102,8 +116,16 @@ impl SecretPresence {
         match self {
             Self::Configured => "configured",
             Self::Unset => "unset",
+            Self::Unknown => "unknown",
         }
     }
+}
+
+fn env_var_is_nonempty(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .is_some()
 }
 
 #[derive(Debug, Clone, Serialize)]

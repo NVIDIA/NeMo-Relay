@@ -268,6 +268,16 @@ fn format_human_reports_effective_upstream_auth_presence() {
 }
 
 #[test]
+fn format_human_reports_unknown_upstream_auth_presence() {
+    let mut report = empty_report();
+    report.configuration.upstream_auth = UpstreamAuthInfo::unknown();
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Upstream   openai=unknown anthropic=unknown"));
+}
+
+#[test]
 fn format_human_reports_all_checks_passed_on_clean_report() {
     let report = empty_report();
     let rendered = format_human(&report);
@@ -908,6 +918,48 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
         crate::process::resolve_executable(binary.to_str().unwrap()).as_deref(),
         Some(binary.as_path())
     );
+}
+
+#[test]
+fn upstream_auth_info_reports_openai_env_fallback_as_configured() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", Some(std::ffi::OsStr::new("sk-openai"))),
+        ("ANTHROPIC_API_KEY", None),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Configured);
+    assert_eq!(info.anthropic, SecretPresence::Unset);
+}
+
+#[test]
+fn upstream_auth_info_reports_anthropic_env_fallback_as_configured() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", None),
+        (
+            "ANTHROPIC_API_KEY",
+            Some(std::ffi::OsStr::new("sk-anthropic")),
+        ),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Unset);
+    assert_eq!(info.anthropic, SecretPresence::Configured);
+}
+
+#[test]
+fn upstream_auth_info_treats_whitespace_env_values_as_unset() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", Some(std::ffi::OsStr::new("   "))),
+        ("ANTHROPIC_API_KEY", Some(std::ffi::OsStr::new("\t  "))),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Unset);
+    assert_eq!(info.anthropic, SecretPresence::Unset);
 }
 
 #[test]

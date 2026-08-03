@@ -3334,11 +3334,47 @@ anthropic_auth_header = "Basic project-anthropic"
         .unwrap();
 
     assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer project-openai"));
+    assert!(!stdout.contains("Basic project-anthropic"));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["configuration"]["upstream_auth"]["openai"], "unset");
     assert_eq!(
         report["configuration"]["upstream_auth"]["anthropic"],
         "configured"
+    );
+}
+
+#[test]
+fn cli_doctor_json_reports_unknown_upstream_auth_when_resolution_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[upstream]\nopenai_auth_header = \"\"\"\\\nBearer private\nsecret\"\"\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("OPENAI_API_KEY", "sk-runtime")
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer private"));
+    assert!(!stdout.contains("secret"));
+    assert!(!stdout.contains("sk-runtime"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "fail");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["openai"],
+        "unknown"
+    );
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "unknown"
     );
 }
 
@@ -3720,6 +3756,8 @@ anthropic_auth_header = "Basic project-anthropic"
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer project-openai"));
+    assert!(!stdout.contains("Basic project-anthropic"));
     assert!(stdout.contains("openai_base_url = http://env-openai"));
     assert!(stdout.contains("openai_auth = unset"));
     assert!(stdout.contains("anthropic_auth = configured"));

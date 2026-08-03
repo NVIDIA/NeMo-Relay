@@ -165,16 +165,18 @@ fn collect_configuration(
         layer_status(&global_path)
     };
     let system = layer_status(&system_path);
+    let upstream_auth = if matches!(resolution.status, Status::Fail) {
+        UpstreamAuthInfo::unknown()
+    } else {
+        UpstreamAuthInfo::from_effective_gateway_auth(&resolved.gateway)
+    };
 
     ConfigurationInfo {
         explicit,
         workspace,
         global,
         system,
-        upstream_auth: UpstreamAuthInfo::from_gateway_headers(
-            resolved.gateway.openai_auth_header.as_deref(),
-            resolved.gateway.anthropic_auth_header.as_deref(),
-        ),
+        upstream_auth,
         plugin_configs: diagnostic_plugin_config_paths(
             gateway_overrides.config.as_ref(),
             gateway_overrides.plugin_config_path.as_ref(),
