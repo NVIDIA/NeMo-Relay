@@ -20,7 +20,7 @@ use crate::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionN
 use crate::codec::streaming::SseEventDecoder;
 use crate::error::{
     FlowError, MAX_UPSTREAM_FAILURE_BODY_BYTES, Result, UpstreamFailure, UpstreamFailureClass,
-    sanitize_upstream_failure_headers,
+    bounded_utf8, sanitize_upstream_failure_headers,
 };
 use crate::json::Json;
 
@@ -219,6 +219,16 @@ async fn dispatch_stream(
         let body = bounded_response_body(target, response).await?;
         return Err(http_error(status, headers, &body));
     }
+    if !is_event_stream_content_type(response.headers()) {
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<missing or invalid>")
+            .to_owned();
+        let body = bounded_response_body(target, response).await?;
+        return Err(unexpected_stream_content_type_error(&content_type, &body));
+    }
 
     let target = target.clone();
     let mut decoder = SseEventDecoder::new();
@@ -249,6 +259,28 @@ async fn dispatch_stream(
             Err(error) => yield Err(error),
         }
     }))
+}
+
+fn is_event_stream_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
+}
+
+fn unexpected_stream_content_type_error(content_type: &str, body: &[u8]) -> FlowError {
+    let detail = String::from_utf8_lossy(body);
+    let diagnostic = if detail.trim().is_empty() {
+        format!(
+            "targeted LLM provider expected Content-Type text/event-stream, received {content_type}"
+        )
+    } else {
+        format!(
+            "targeted LLM provider expected Content-Type text/event-stream, received {content_type}; provider response body: {detail}"
+        )
+    };
+    FlowError::Internal(bounded_utf8(diagnostic, MAX_UPSTREAM_FAILURE_BODY_BYTES))
 }
 
 async fn send(

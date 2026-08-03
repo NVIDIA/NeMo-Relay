@@ -2614,7 +2614,7 @@ impl Drop for PendingDropStream {
 struct EmbeddedFakeProvider {
     url: String,
     request: std::sync::mpsc::Receiver<Vec<u8>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<std::thread::JoinHandle<Result<(), String>>>,
 }
 
 impl EmbeddedFakeProvider {
@@ -2629,8 +2629,8 @@ impl EmbeddedFakeProvider {
             .expect("embedded provider listener should be nonblocking");
         let address = listener.local_addr().expect("embedded provider address");
         let (request_tx, request) = std::sync::mpsc::channel();
-        let thread = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let thread = std::thread::spawn(move || -> Result<(), String> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
             let (mut socket, _) = loop {
                 match listener.accept() {
                     Ok(connection) => break connection,
@@ -2640,19 +2640,30 @@ impl EmbeddedFakeProvider {
                     {
                         std::thread::sleep(Duration::from_millis(10));
                     }
-                    Err(error) => panic!("embedded provider should accept: {error}"),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        return Err(format!(
+                            "embedded provider timed out waiting for a request: {error}"
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(format!("embedded provider failed to accept: {error}"));
+                    }
                 }
             };
-            socket
-                .set_nonblocking(false)
-                .expect("embedded provider socket should be blocking");
+            socket.set_nonblocking(false).map_err(|error| {
+                format!("embedded provider failed to set blocking mode: {error}")
+            })?;
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
-                .expect("embedded provider timeout should configure");
+                .map_err(|error| {
+                    format!("embedded provider failed to set read timeout: {error}")
+                })?;
             let mut request_bytes = Vec::new();
             let mut buffer = [0_u8; 4096];
             loop {
-                let read = socket.read(&mut buffer).expect("provider request read");
+                let read = socket.read(&mut buffer).map_err(|error| {
+                    format!("embedded provider failed to read request: {error}")
+                })?;
                 if read == 0 {
                     break;
                 }
@@ -2679,17 +2690,18 @@ impl EmbeddedFakeProvider {
             }
             request_tx
                 .send(request_bytes)
-                .expect("embedded test should receive provider request");
+                .map_err(|_| "embedded provider request receiver was dropped".to_owned())?;
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             socket
                 .write_all(headers.as_bytes())
-                .expect("embedded provider should write headers");
+                .map_err(|error| format!("embedded provider failed to write headers: {error}"))?;
             socket
                 .write_all(body)
-                .expect("embedded provider should write body");
+                .map_err(|error| format!("embedded provider failed to write body: {error}"))?;
+            Ok(())
         });
         Self {
             url: format!("http://{address}/v1/chat/completions"),
@@ -2708,9 +2720,14 @@ impl EmbeddedFakeProvider {
 impl Drop for EmbeddedFakeProvider {
     fn drop(&mut self) {
         if let Some(thread) = self.thread.take() {
-            thread
-                .join()
-                .expect("embedded provider thread should finish");
+            let result = thread.join();
+            if !std::thread::panicking() {
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => panic!("embedded provider thread failed: {error}"),
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
+            }
         }
     }
 }

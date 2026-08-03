@@ -1165,6 +1165,8 @@ pub struct NemoRelayNativeHostApiV3 {
     /// discriminant. The host rejects unknown `u32` values and
     /// [`NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept`],
     /// which must use `plugin_context_register_async_stream_middleware`.
+    /// The host consumes `user_data` once this function is called and invokes
+    /// `free_fn` exactly once, including when validation or registration fails.
     pub plugin_context_register_async_middleware: unsafe extern "C" fn(
         ctx: *mut NemoRelayNativePluginContext,
         kind: u32,
@@ -1218,6 +1220,9 @@ pub struct NemoRelayNativeHostApiV3 {
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
     /// Registers an incremental asynchronous LLM stream intercept.
+    ///
+    /// The host consumes `user_data` once this function is called and invokes
+    /// `free_fn` exactly once, including when validation or registration fails.
     pub plugin_context_register_async_stream_middleware: unsafe extern "C" fn(
         ctx: *mut NemoRelayNativePluginContext,
         name: *const NemoRelayNativeString,
@@ -1251,6 +1256,10 @@ pub struct NemoRelayNativeHostApiV4 {
     pub v3: NemoRelayNativeHostApiV3,
     /// Invokes a unary LLM continuation with an explicit target and structured
     /// outcome.
+    ///
+    /// When the function returns [`NemoRelayStatus::Ok`], the host consumes
+    /// `user_data` and invokes `cb` exactly once. On any other status, the
+    /// caller retains `user_data` and the callback is not invoked.
     pub async_llm_next_invoke_result_v2: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,
@@ -1261,6 +1270,9 @@ pub struct NemoRelayNativeHostApiV4 {
     ///
     /// On success the callback receives an owned provider-stream handle whose
     /// items are read with `async_llm_stream_next_v2`.
+    /// When the function returns [`NemoRelayStatus::Ok`], the host consumes
+    /// `user_data` and invokes `cb` exactly once. On any other status, the
+    /// caller retains `user_data` and the callback is not invoked.
     pub async_llm_next_open_stream_v2: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,
@@ -1269,13 +1281,20 @@ pub struct NemoRelayNativeHostApiV4 {
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
     /// Requests one provider event from a native API v2 stream.
+    ///
+    /// When the function returns [`NemoRelayStatus::Ok`], the host consumes
+    /// `user_data` and invokes `cb` exactly once. On any other status, the
+    /// caller retains `user_data` and the callback is not invoked.
     pub async_llm_stream_next_v2: unsafe extern "C" fn(
         stream: *const NemoRelayNativeLlmStreamV2,
         cb: NemoRelayNativeAsyncLlmStreamNextCbV2,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
     /// Releases the plugin-owned provider-stream reference, cancelling provider
-    /// production first when the stream has not reached a terminal item.
+    /// production first when the stream has not reached a terminal item. If a
+    /// `next` operation is active, its callback receives the cancellation
+    /// outcome and remains the sole owner responsible for reclaiming its
+    /// `user_data`.
     pub async_llm_stream_release_v2:
         unsafe extern "C" fn(stream: *const NemoRelayNativeLlmStreamV2),
     /// Starts a cooperative task associated with an async completion.
@@ -1314,6 +1333,8 @@ pub struct NemoRelayNativeHostApiV4 {
     /// Relay owns event pumping and bounded backpressure. No provider event
     /// crosses the plugin boundary. The terminal callback runs exactly once
     /// after output settlement when this function returns [`NemoRelayStatus::Ok`].
+    /// An accepted call consumes `user_data`; a failed call does not consume it
+    /// and does not invoke the callback.
     pub async_llm_next_forward_stream_v2: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         request_json: *const NemoRelayNativeString,

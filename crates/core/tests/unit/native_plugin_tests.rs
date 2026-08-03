@@ -522,24 +522,19 @@ unsafe extern "C" fn poll_cooperative_task(
             let first = native_string_from_json(&json!({"chunk": 1})).unwrap();
             let second = native_string_from_json(&json!({"chunk": 2})).unwrap();
             let stream = state.stream as *const NemoRelayNativeAsyncStream;
+            let push_json = build_native_host_api_v4().v3.async_stream_push_json;
             let result = if poll == 0 {
+                assert_eq!(unsafe { push_json(stream, first) }, NemoRelayStatus::Ok);
                 assert_eq!(
-                    unsafe { native_async_stream_push_json(stream, first) },
-                    NemoRelayStatus::Ok
-                );
-                assert_eq!(
-                    unsafe { native_async_stream_push_json(stream, second) },
-                    NemoRelayStatus::Internal
+                    unsafe { push_json(stream, second) },
+                    NemoRelayStatus::WouldBlock
                 );
                 if let Some(started) = &state.started {
                     let _ = started.send(0);
                 }
                 NemoRelayNativeAsyncCallbackState::Pending as u32
             } else {
-                assert_eq!(
-                    unsafe { native_async_stream_push_json(stream, second) },
-                    NemoRelayStatus::Ok
-                );
+                assert_eq!(unsafe { push_json(stream, second) }, NemoRelayStatus::Ok);
                 assert_eq!(
                     unsafe { native_async_stream_finish(stream) },
                     NemoRelayStatus::Ok

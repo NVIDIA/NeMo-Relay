@@ -339,7 +339,7 @@ async fn redirects_are_returned_without_following() {
 async fn streaming_target_decodes_events_empty_streams_and_late_errors() {
     let provider = FakeProvider::spawn(response(
         "200 OK",
-        &[("Content-Type", "text/event-stream")],
+        &[("Content-Type", "Text/Event-Stream; Charset=UTF-8")],
         b"data: {\"delta\":\"hello\"}\n\ndata: not-json\n\n",
     ));
     let fallback_called = Arc::new(AtomicBool::new(false));
@@ -395,6 +395,36 @@ async fn streaming_target_decodes_events_empty_streams_and_late_errors() {
         .expect("stream should close cleanly");
     assert!(cancelled.next().await.is_none());
     let _ = cancelled_provider.request();
+}
+
+#[tokio::test]
+async fn streaming_target_rejects_missing_or_non_sse_content_type() {
+    for (headers, expected_type) in [
+        (vec![], "<missing or invalid>"),
+        (
+            vec![("Content-Type", "application/json")],
+            "application/json",
+        ),
+    ] {
+        let provider = FakeProvider::spawn(response(
+            "200 OK",
+            &headers,
+            br#"{"error":"not an event stream"}"#,
+        ));
+        let error = match dispatch_stream(&target(provider.url.clone(), BTreeMap::new()), request())
+            .await
+        {
+            Ok(_) => panic!("a successful non-SSE response should not open a stream"),
+            Err(error) => error,
+        };
+        let FlowError::Internal(message) = error else {
+            panic!("expected a non-HTTP stream setup failure");
+        };
+        assert!(message.contains("expected Content-Type text/event-stream"));
+        assert!(message.contains(expected_type));
+        assert!(message.contains("not an event stream"));
+        let _ = provider.request();
+    }
 }
 
 #[test]

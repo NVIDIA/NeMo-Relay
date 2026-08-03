@@ -303,6 +303,8 @@ impl LlmContinuationV2 {
             sender,
         });
         let state = Box::into_raw(state).cast::<c_void>();
+        // An accepted host call consumes this state and returns it through the
+        // callback exactly once. A failed call leaves it with this caller.
         let status = match HostString::from_json(&self.inner.host.v3.v1, &invocation) {
             Some(invocation) => unsafe {
                 (self.inner.host.async_llm_next_invoke_result_v2)(
@@ -385,6 +387,8 @@ impl LlmStreamContinuationV2 {
         let (sender, receiver) = oneshot::channel();
         let state = Box::new(StreamOpenCallback { host, sender });
         let state = Box::into_raw(state).cast::<c_void>();
+        // An accepted host call consumes this state and returns it through the
+        // callback exactly once. A failed call leaves it with this caller.
         let status = match HostString::from_json(&host.v3.v1, &invocation) {
             Some(invocation) => unsafe {
                 (host.async_llm_next_open_stream_v2)(
@@ -418,6 +422,8 @@ impl LlmStreamContinuationV2 {
         let (sender, receiver) = oneshot::channel();
         let state = Box::new(ForwardStreamCallback { sender });
         let state = Box::into_raw(state).cast::<c_void>();
+        // An accepted host call consumes this state and returns it through the
+        // terminal callback exactly once. A failed call leaves it here.
         let status = match HostString::from_json(&host.v3.v1, &request) {
             Some(request) => unsafe {
                 (host.async_llm_next_forward_stream_v2)(
@@ -463,6 +469,9 @@ impl Stream for LlmProviderStreamV2 {
                 sender,
             });
             let state = Box::into_raw(state).cast::<c_void>();
+            // A successful poll transfers the callback state to the host. A
+            // failed poll leaves it here; stream release cancels an accepted
+            // poll and lets its callback reclaim the state exactly once.
             let status = unsafe {
                 (self.host.async_llm_stream_next_v2)(self.raw, provider_next_callback, state)
             };
@@ -621,6 +630,9 @@ impl PluginContext<'_> {
         });
         let user_data = Box::into_raw(state).cast::<c_void>();
         let status = unsafe {
+            // Once invoked, the host consumes `user_data` on both success and
+            // failure and calls `free_fn` exactly once. Allocate the fallible
+            // name first so local ownership is never ambiguous.
             (host.v3.plugin_context_register_async_stream_middleware)(
                 self.raw,
                 name.as_ptr(),

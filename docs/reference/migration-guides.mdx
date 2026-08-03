@@ -343,7 +343,7 @@ Recompile native plugins against the 0.7
 The v3 table preserves the v2 prefix, and Relay retries a legacy v2 table when
 loading a plugin that rejects v3. That fallback supports loading, not
 compatibility with changed middleware, LLM sanitizer, ABI, or schema contracts.
-Rebuild native plugins that use the raw plugin ABI callbacks: native ABI v3
+Rebuild native plugins that use the raw plugin ABI callbacks: the V3 host table
 adds completion-based async middleware registration, async execution
 continuations, and explicit cancellation/late-settlement behavior. This is
 separate from the synchronous `nemo-relay-ffi` middleware registration API.

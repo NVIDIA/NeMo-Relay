@@ -191,7 +191,9 @@ invocations can run concurrently and have no stable OS-thread affinity.
 
 Rust authors use the safe SDK facade. Buffered callbacks receive
 `LlmContinuationV2`; streaming callbacks receive `LlmStreamContinuationV2`
-and return either a boxed Rust stream or an explicit pass-through request:
+and return either a boxed Rust stream or an explicit pass-through request.
+For this native API v2 example, use `nemo-relay-plugin = "0.8.0"` and add
+`futures = "0.3"` to the plugin's `Cargo.toml` dependencies.
 
 ```rust
 use futures::StreamExt;

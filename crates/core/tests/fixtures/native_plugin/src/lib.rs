@@ -16,7 +16,7 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
     NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString,
     NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime,
-    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
+    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome, NEMO_RELAY_NATIVE_ABI_VERSION,
 };
 use serde_json::{Map, json};
 
@@ -454,7 +454,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_api_v1_plugin(
     let Some(host_ref) = (unsafe { host.as_ref() }) else {
         return NemoRelayStatus::NullPointer;
     };
-    if host_ref.abi_version != 3
+    if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION
         || host_ref.struct_size != std::mem::size_of::<NemoRelayNativeHostApiV3>()
     {
         return NemoRelayStatus::InvalidArg;
