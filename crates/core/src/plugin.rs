@@ -44,6 +44,7 @@ use crate::api::runtime::{
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::observability::plugin_component::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
 pub mod dynamic;
@@ -72,6 +73,8 @@ pub(crate) enum PluginDeregistrationOutcome {
 
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
+    LazyLock::new(|| Mutex::new(None));
+static LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT: LazyLock<Mutex<Option<ConfigReport>>> =
     LazyLock::new(|| Mutex::new(None));
 static PLUGIN_MUTATION_OWNER: LazyLock<Mutex<PluginMutationOwner>> =
     LazyLock::new(|| Mutex::new(PluginMutationOwner::Idle));
@@ -186,6 +189,29 @@ pub struct ConfigReport {
     /// Validation and compatibility diagnostics in evaluation order.
     #[serde(default)]
     pub diagnostics: Vec<ConfigDiagnostic>,
+    /// Runtime delivery diagnostics recorded after activation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_diagnostics: Vec<RuntimeDiagnostic>,
+}
+
+/// Bounded aggregate for a runtime failure observed by an active plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RuntimeDiagnostic {
+    /// Stable failure classification.
+    pub code: String,
+    /// Plugin component that reported the failure.
+    pub component: String,
+    /// Optional configuration field associated with the failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Latest human-readable failure detail.
+    pub message: String,
+    /// Latest affected trajectory session identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Number of failures aggregated into this entry.
+    pub count: u64,
 }
 
 impl ConfigReport {
@@ -1508,7 +1534,10 @@ async fn initialize_plugins_exact_inner(
         component_count = enabled_component_count;
         "Plugin configuration activation started"
     );
-    let mut report = ConfigReport { diagnostics };
+    let mut report = ConfigReport {
+        diagnostics,
+        ..ConfigReport::default()
+    };
     report
         .diagnostics
         .extend(validate_plugin_config(&config).diagnostics);
@@ -1628,11 +1657,19 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
 /// one-time configuration resolution as regular harness-native initialization.
 pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<ResolvedPluginConfig> {
     let discovered = resolve_default_file_plugin_config()?;
-    let diagnostics = programmatic_enable_override_diagnostics(
+    resolve_programmatic_plugin_config(discovered, config)
+}
+
+fn resolve_programmatic_plugin_config(
+    discovered: DiscoveredPluginConfig,
+    config: PluginConfig,
+) -> Result<ResolvedPluginConfig> {
+    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources);
+    diagnostics.extend(programmatic_enable_override_diagnostics(
         &discovered.value,
         &discovered.enabled_sources,
         &config,
-    );
+    ));
     let mut base = discovered.value;
     layer_config(&mut base, plugin_config_overlay_value(&config)?);
     Ok(ResolvedPluginConfig {
@@ -1703,19 +1740,31 @@ fn resolve_default_file_plugin_config() -> Result<DiscoveredPluginConfig> {
     let paths =
         default_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir());
     let documents = read_plugin_config_files(paths)?;
+    resolve_discovered_plugin_config(documents)
+}
+
+fn resolve_discovered_plugin_config(
+    documents: Vec<(PathBuf, Json)>,
+) -> Result<DiscoveredPluginConfig> {
     let enabled_sources = component_enabled_sources(&documents);
-    let value = merge_plugin_config_documents(documents)?
-        .map(|(value, _sources)| value)
-        .unwrap_or_else(|| Json::Object(Map::new()));
+    let (value, sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
     Ok(DiscoveredPluginConfig {
         value,
         enabled_sources,
+        sources,
     })
 }
 
 struct DiscoveredPluginConfig {
     value: Json,
-    enabled_sources: HashMap<String, PathBuf>,
+    enabled_sources: HashMap<String, ComponentEnabledSource>,
+    sources: Vec<PathBuf>,
+}
+
+struct ComponentEnabledSource {
+    enabled: bool,
+    path: PathBuf,
 }
 
 use std::path::{Path, PathBuf};
@@ -1751,7 +1800,9 @@ where
     Ok(documents)
 }
 
-fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, PathBuf> {
+fn component_enabled_sources(
+    documents: &[(PathBuf, Json)],
+) -> HashMap<String, ComponentEnabledSource> {
     let mut sources = HashMap::new();
     for (path, document) in documents {
         let Some(components) = document.get("components").and_then(Json::as_array) else {
@@ -1761,17 +1812,45 @@ fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, P
             let Some(kind) = component_kind(component) else {
                 continue;
             };
-            if component.get("enabled").and_then(Json::as_bool).is_some() {
-                sources.insert(kind.to_string(), path.clone());
+            if let Some(enabled) = component.get("enabled").and_then(Json::as_bool) {
+                sources.insert(
+                    kind.to_string(),
+                    ComponentEnabledSource {
+                        enabled,
+                        path: path.clone(),
+                    },
+                );
             }
         }
     }
     sources
 }
 
+fn inherited_plugin_config_diagnostics(sources: &[PathBuf]) -> Vec<ConfigDiagnostic> {
+    sources
+        .iter()
+        .map(|source| {
+            let source = source.display().to_string();
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_inherited",
+                config_path = source.as_str();
+                "Inherited plugin configuration from discovered file"
+            );
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "plugin.configuration_inherited".to_string(),
+                component: None,
+                field: None,
+                message: format!("inherited plugin configuration from discovered file: {source}"),
+            }
+        })
+        .collect()
+}
+
 fn programmatic_enable_override_diagnostics(
     discovered: &Json,
-    enabled_sources: &HashMap<String, PathBuf>,
+    enabled_sources: &HashMap<String, ComponentEnabledSource>,
     programmatic: &PluginConfig,
 ) -> Vec<ConfigDiagnostic> {
     let Some(discovered_components) = discovered.get("components").and_then(Json::as_array) else {
@@ -1785,18 +1864,21 @@ fn programmatic_enable_override_diagnostics(
             nth_component_by_kind(discovered_components, &component.kind, *nth)
                 .and_then(|index| discovered_components.get(index));
         *nth += 1;
-        if !component.enabled
-            || discovered_component
-                .and_then(|component| component.get("enabled"))
-                .and_then(Json::as_bool)
-                != Some(false)
-        {
+        let discovered_enabled = discovered_component
+            .and_then(|component| component.get("enabled"))
+            .and_then(Json::as_bool);
+        let file_disabled = discovered_enabled == Some(false)
+            || (discovered_enabled.is_none()
+                && enabled_sources
+                    .get(&component.kind)
+                    .is_some_and(|source| !source.enabled));
+        if !component.enabled || !file_disabled {
             continue;
         }
 
         let source = enabled_sources
             .get(&component.kind)
-            .map(|path| format!(" from {}", path.display()))
+            .map(|source| format!(" from {}", source.path.display()))
             .unwrap_or_default();
         diagnostics.push(ConfigDiagnostic {
             level: DiagnosticLevel::Warning,
@@ -1842,13 +1924,23 @@ where
 {
     let mut merged = Json::Object(Map::new());
     let mut sources = Vec::new();
-    for (path, document) in documents {
+    for (path, mut document) in documents {
         validate_plugin_config_version(&path, &document)?;
         validate_unique_component_kinds(&path, &document)?;
+
+        filter_disabled_plugin_components(&mut document);
         layer_config(&mut merged, document);
         sources.push(path);
     }
     Ok((!sources.is_empty()).then_some((merged, sources)))
+}
+
+/// Removes disabled components from one discovered plugin document before layering.
+fn filter_disabled_plugin_components(document: &mut Json) {
+    let Some(components) = document.get_mut("components").and_then(Json::as_array_mut) else {
+        return;
+    };
+    components.retain(|component| component.get("enabled").and_then(Json::as_bool) != Some(false));
 }
 
 /// Rejects a file with an unsupported top-level plugin config version before layering can
@@ -2008,7 +2100,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     let flush_error = crate::api::runtime::subscriber_dispatcher::flush_queued_subscribers()
         .err()
         .map(|error| error.to_string());
-    let previous = {
+    let mut registrations = {
         let mut guard = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
             Ok(guard) => guard,
             Err(err) => {
@@ -2020,13 +2112,34 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
                 };
             }
         };
-        guard.take()
+        guard
+            .as_mut()
+            .map(|state| std::mem::take(&mut state.registrations))
     };
-    let deregistration_errors = previous
-        .map(|mut previous_state| rollback_registrations_checked(&mut previous_state.registrations))
+    // Keep the report installed while callbacks run so runtime diagnostics
+    // emitted by teardown work can be recorded against it.
+    let deregistration_errors = registrations
+        .as_mut()
+        .map(rollback_registrations_checked)
         .unwrap_or_default();
-    let callbacks_cleared = deregistration_errors.is_empty();
-    let deregistration_error = (!callbacks_cleared).then(|| {
+    let teardown_report = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
+        Ok(mut guard) => guard.take().map(|state| state.report),
+        Err(err) => {
+            return PluginHostClearOutcome {
+                result: Err(PluginError::Internal(format!(
+                    "active plugin configuration lock poisoned: {err}"
+                ))),
+                callbacks_cleared: false,
+            };
+        }
+    };
+    // Runtime delivery failures are reported by an otherwise successful
+    // deregistration callback. They must propagate without treating callback
+    // removal itself as unsafe.
+    let callbacks_cleared = deregistration_errors
+        .iter()
+        .all(|error| error.contains(ATIF_RUNTIME_DELIVERY_FAILURE_MARKER));
+    let deregistration_error = (!deregistration_errors.is_empty()).then(|| {
         PluginError::RegistrationFailed(format!(
             "plugin teardown failed: {}",
             deregistration_errors.join("; ")
@@ -2040,6 +2153,16 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
             "{deregister}; subscriber flush also failed: {flush}"
         ))),
     };
+    if result.is_ok() {
+        if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+            *guard = None;
+        }
+    } else if let Some(report) =
+        teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+        && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+    {
+        *guard = Some(report);
+    }
     PluginHostClearOutcome {
         result,
         callbacks_cleared,
@@ -2146,22 +2269,55 @@ fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
     PluginError::Conflict(message.into())
 }
 
-/// Returns the last successfully configured plugin report.
+/// Returns the active plugin report or a report retained after a failed teardown.
 ///
-/// `None` indicates that no plugin configuration is currently active.
+/// `None` indicates that no plugin configuration is active and no failed
+/// teardown report is retained.
 ///
 /// # Returns
-/// The last successful [`ConfigReport`], or `None` when no configuration is
-/// active.
+/// The active [`ConfigReport`], or the report containing runtime diagnostics
+/// from the last failed teardown.
 ///
 /// # Notes
 /// This is a snapshot of the last successful activation and does not re-run
 /// validation.
 pub fn active_plugin_report() -> Option<ConfigReport> {
-    ACTIVE_PLUGIN_CONFIGURATION
+    let active_report = ACTIVE_PLUGIN_CONFIGURATION
         .lock()
         .ok()
-        .and_then(|guard| guard.as_ref().map(|state| state.report.clone()))
+        .and_then(|guard| guard.as_ref().map(|state| state.report.clone()));
+    active_report.or_else(|| {
+        LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    })
+}
+
+/// Record a bounded runtime diagnostic against the active plugin report.
+pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
+    let Ok(mut guard) = ACTIVE_PLUGIN_CONFIGURATION.lock() else {
+        return;
+    };
+    let Some(state) = guard.as_mut() else {
+        return;
+    };
+    if let Some(existing) = state
+        .report
+        .runtime_diagnostics
+        .iter_mut()
+        .find(|existing| {
+            existing.code == diagnostic.code
+                && existing.component == diagnostic.component
+                && existing.field == diagnostic.field
+        })
+    {
+        existing.message = diagnostic.message;
+        existing.session_id = diagnostic.session_id;
+        existing.count += 1;
+    } else {
+        state.report.runtime_diagnostics.push(diagnostic);
+    }
 }
 
 /// Rolls back registrations in reverse order, ignoring rollback failures.
@@ -2331,6 +2487,9 @@ fn store_active_plugin_configuration(
         report,
         registrations,
     });
+    if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+        *guard = None;
+    }
     Ok(())
 }
 

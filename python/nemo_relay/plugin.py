@@ -80,10 +80,25 @@ class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
     field: str
 
 
+class _RuntimeDiagnosticRequired(TypedDict):
+    code: str
+    component: str
+    message: str
+    count: int
+
+
+class RuntimeDiagnostic(_RuntimeDiagnosticRequired, total=False):
+    """One aggregated runtime failure from an active plugin."""
+
+    field: str
+    session_id: str
+
+
 class ConfigReport(TypedDict):
     """Validation or activation report for a plugin config."""
 
     diagnostics: list[ConfigDiagnostic]
+    runtime_diagnostics: list[RuntimeDiagnostic]
 
 
 DynamicPluginKind = Literal["rust_dynamic", "worker"]
@@ -520,15 +535,16 @@ async def plugin(config: PluginConfig | JsonObject, *, clear_on_exit: bool = Tru
 
 
 def report() -> ConfigReport | None:
-    """Return the last successful plugin report.
+    """Return the active plugin report or a failed-teardown diagnostic report.
 
     Returns:
-        The active `ConfigReport`, or `None` when no plugin configuration is
-        currently active.
+        The active `ConfigReport`, a report retained after a teardown failure
+        with runtime diagnostics, or `None` when neither exists.
 
     Behavior:
-        This reports the last successfully activated configuration snapshot. It
-        does not revalidate plugin state or inspect pending registrations.
+        A retained teardown report is cleared by the next successful
+        activation or clean clear. This function does not revalidate plugin
+        state or inspect pending registrations.
     """
     return cast(ConfigReport | None, _active_plugin_report())
 
@@ -582,6 +598,7 @@ def deregister(plugin_kind: str) -> bool:
 __all__ = [
     "ComponentSpec",
     "ConfigDiagnostic",
+    "RuntimeDiagnostic",
     "ConfigPolicy",
     "ConfigReport",
     "DynamicPluginActivationSpec",

@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 #[cfg(feature = "object-store")]
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -64,9 +64,12 @@ use crate::plugin::{
     PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
     apply_global_config_policy, deregister_plugin, register_builtin_plugin,
 };
+use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
+/// Identifies teardown errors caused by recoverable ATIF delivery failures.
+pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime delivery failures";
 
 /// Top-level observability component wrapper.
 ///
@@ -1093,9 +1096,7 @@ struct AtifDispatcher {
     /// that cannot be isolated to a single sink. Once set, the dispatcher stops
     /// observing further events.
     fatal_error: Option<String>,
-    /// Per-sink last error. A sink that recorded an error is skipped on
-    /// subsequent trajectories; other sinks continue to receive writes.
-    sink_errors: HashMap<SinkLabel, String>,
+    runtime_failures: Vec<RuntimeDiagnostic>,
     validated_sinks: HashSet<SinkLabel>,
 }
 
@@ -1195,7 +1196,7 @@ impl AtifDispatcher {
             scope_owners: HashMap::new(),
             scope_subscribers: HashMap::new(),
             fatal_error: None,
-            sink_errors: HashMap::new(),
+            runtime_failures: Vec::new(),
             validated_sinks: HashSet::new(),
         }
     }
@@ -1227,6 +1228,12 @@ impl AtifDispatcher {
         let (filename, local_path) = match self.prepare_destination(&session_id, event.metadata()) {
             Ok(destination) => destination,
             Err(error) => {
+                self.record_runtime_failure(
+                    "atif.destination_render_failed",
+                    Some("filename_template".into()),
+                    error.clone(),
+                    Some(session_id.clone()),
+                );
                 log::warn!(
                     target: "nemo_relay.observability",
                     event = "atif_destination_render_failed",
@@ -1330,6 +1337,9 @@ impl AtifDispatcher {
         agent_uuid: Uuid,
         results: Vec<(SinkLabel, std::io::Result<()>)>,
     ) -> Option<(Uuid, String)> {
+        let is_remote_fallback = results
+            .iter()
+            .any(|(label, _)| matches!(label, SinkLabel::Remote(_)));
         for (label, result) in results {
             if result.is_ok()
                 && label == SinkLabel::Local
@@ -1345,6 +1355,10 @@ impl AtifDispatcher {
                     "ATIF storage access validated"
                 );
             } else if let Err(err) = result {
+                let (field, message) = match &label {
+                    SinkLabel::Local => ("output_directory".to_string(), err.to_string()),
+                    SinkLabel::Remote(index) => (format!("storage[{index}]"), err.to_string()),
+                };
                 match &label {
                     SinkLabel::Local => log::warn!(
                         target: "nemo_relay.observability",
@@ -1356,9 +1370,25 @@ impl AtifDispatcher {
                         reason = "write_failed";
                         "ATIF storage access failed"
                     ),
-                    SinkLabel::Remote(_) => {}
+                    SinkLabel::Remote(index) => log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "atif_remote_delivery_failed",
+                        plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                        exporter = "atif",
+                        storage_index = *index;
+                        "ATIF remote storage upload failed"
+                    ),
                 }
-                self.sink_errors.insert(label, err.to_string());
+                self.record_runtime_failure(
+                    match &label {
+                        SinkLabel::Local if is_remote_fallback => "atif.local_fallback_failed",
+                        SinkLabel::Local => "atif.local_write_failed",
+                        SinkLabel::Remote(_) => "atif.remote_delivery_failed",
+                    },
+                    Some(field),
+                    message,
+                    Some(agent_uuid.to_string()),
+                );
             }
         }
         if let Some(agent) = self.agents.get_mut(&agent_uuid) {
@@ -1413,6 +1443,16 @@ impl AtifDispatcher {
         if let Some(message) = &self.fatal_error {
             return Err(std::io::Error::other(message.clone()));
         }
+        if !self.runtime_failures.is_empty() {
+            return Err(std::io::Error::other(format!(
+                "{ATIF_RUNTIME_DELIVERY_FAILURE_MARKER}: {}",
+                self.runtime_failures
+                    .iter()
+                    .map(|diagnostic| format!("{} ({})", diagnostic.code, diagnostic.count))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         Ok(())
     }
 
@@ -1431,10 +1471,8 @@ impl AtifDispatcher {
         session_id: &str,
         metadata: Option<&Json>,
     ) -> Result<(String, Option<PathBuf>), String> {
+        validate_atif_filename_template(&self.config.filename_template)?;
         let filename = render_atif_filename(&self.config.filename_template, session_id, metadata)?;
-        if !self.config.storage.is_empty() {
-            return Ok((filename, None));
-        }
         let directory = self
             .config
             .output_directory
@@ -1446,17 +1484,41 @@ impl AtifDispatcher {
 
     fn sink_targets(&self) -> Vec<SinkLabel> {
         if self.config.storage.is_empty() {
-            if self.sink_errors.contains_key(&SinkLabel::Local) {
-                Vec::new()
-            } else {
-                vec![SinkLabel::Local]
-            }
+            vec![SinkLabel::Local]
         } else {
             (0..self.config.storage.len())
                 .map(SinkLabel::Remote)
-                .filter(|label| !self.sink_errors.contains_key(label))
                 .collect()
         }
+    }
+
+    fn record_runtime_failure(
+        &mut self,
+        code: &str,
+        field: Option<String>,
+        message: String,
+        session_id: Option<String>,
+    ) {
+        let diagnostic = RuntimeDiagnostic {
+            code: code.to_string(),
+            component: OBSERVABILITY_PLUGIN_KIND.to_string(),
+            field,
+            message,
+            session_id,
+            count: 1,
+        };
+        if let Some(existing) = self
+            .runtime_failures
+            .iter_mut()
+            .find(|existing| existing.code == diagnostic.code && existing.field == diagnostic.field)
+        {
+            existing.message = diagnostic.message.clone();
+            existing.session_id = diagnostic.session_id.clone();
+            existing.count += 1;
+        } else {
+            self.runtime_failures.push(diagnostic.clone());
+        }
+        record_active_plugin_runtime_diagnostic(diagnostic);
     }
 }
 
@@ -1487,6 +1549,23 @@ fn validate_atif_filename_template(template: &str) -> Result<(), String> {
 
     if !template.contains("{session_id}") {
         return Err("ATIF filename_template must contain '{session_id}'".to_string());
+    }
+
+    let literal_path = template
+        .replace("{session_id}", "session")
+        .replace("{metadata.", "metadata.");
+    if Path::new(&literal_path).is_absolute()
+        || Path::new(&literal_path).components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir
+                    | Component::CurDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
+            )
+        })
+    {
+        return Err("ATIF filename_template must be a path-safe relative path".to_string());
     }
 
     let mut cursor = 0;
@@ -1713,7 +1792,7 @@ fn write_atif(
     storage: &[Arc<AtifRemoteStorage>],
     targets: &[SinkLabel],
 ) -> Vec<(SinkLabel, std::io::Result<()>)> {
-    targets
+    let mut results = targets
         .iter()
         .map(|label| {
             let result = match label {
@@ -1727,7 +1806,22 @@ fn write_atif(
             };
             (label.clone(), result)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if !targets.is_empty()
+        && targets
+            .iter()
+            .all(|label| matches!(label, SinkLabel::Remote(_)))
+        && results.iter().all(|(_, result)| result.is_err())
+    {
+        let fallback = match &write.local_path {
+            Some(path) => write_atif_local(path, &write.payload),
+            None => Err(std::io::Error::other(
+                "ATIF local fallback has no output path",
+            )),
+        };
+        results.push((SinkLabel::Local, fallback));
+    }
+    results
 }
 
 fn write_atif_local(path: &PathBuf, payload: &[u8]) -> std::io::Result<()> {

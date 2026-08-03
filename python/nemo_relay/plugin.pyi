@@ -33,8 +33,19 @@ class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
     component: str
     field: str
 
+class _RuntimeDiagnosticRequired(TypedDict):
+    code: str
+    component: str
+    message: str
+    count: int
+
+class RuntimeDiagnostic(_RuntimeDiagnosticRequired, total=False):
+    field: str
+    session_id: str
+
 class ConfigReport(TypedDict):
     diagnostics: list[ConfigDiagnostic]
+    runtime_diagnostics: list[RuntimeDiagnostic]
 
 class PluginContext(Protocol):
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None: ...

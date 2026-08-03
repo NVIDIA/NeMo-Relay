@@ -494,7 +494,7 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
 }
 
 #[test]
-fn atif_storage_http_non_2xx_marks_sink_unhealthy() {
+fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
     let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
     reset_runtime();
     let mut server = start_http_server(2, vec![("/fail", 500)]);
@@ -532,11 +532,31 @@ fn atif_storage_http_non_2xx_marks_sink_unhealthy() {
     server.stop();
     {
         let requests = server.received.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "POST");
-        assert_eq!(requests[0].path, "/fail");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.method == "POST" && request.path == "/fail")
+        );
+        let request_session_ids = requests
+            .iter()
+            .map(|request| {
+                request
+                    .headers
+                    .get("x-nemo-relay-atif-session-id")
+                    .expect("ATIF HTTP requests should identify their trajectory")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        assert!(request_session_ids.contains(&handle.uuid.to_string()));
+        assert!(request_session_ids.contains(&second.uuid.to_string()));
     }
-    clear_plugin_configuration().expect("plugin teardown should ignore unhealthy sink errors");
+    let teardown =
+        clear_plugin_configuration().expect_err("plugin teardown should report failed uploads");
+    assert!(
+        teardown.to_string().contains("atif.remote_delivery_failed"),
+        "teardown should identify the failed remote destination: {teardown}"
+    );
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");

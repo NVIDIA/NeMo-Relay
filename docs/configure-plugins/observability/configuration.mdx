@@ -103,7 +103,15 @@ with higher-precedence entries first. The observability destination lists
 rule, so explicit-or-user, project, system, and programmatic layers can
 contribute destinations. Arbitrary lists nested inside structured values
 retain replacement semantics. List entries are not merged item by item.
-To change or remove an inherited endpoint, edit the layer that declares it.
+
+When library initialization discovers `plugins.toml` files, Relay emits one
+`plugin.configuration_inherited` warning per file. Each warning is written to
+the operational log and included in the initialization result and active plugin
+report. It names only the source path, never destination values or credentials.
+Relay continues with the layered destination set; validation or activation
+errors in that effective configuration still fail normally. To change or
+remove an inherited endpoint, edit the layer that declares it.
+
 For complete layering rules, refer to
 [Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
 
