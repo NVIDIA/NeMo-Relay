@@ -189,8 +189,11 @@ export interface ToolExecutionInterceptOutcome {
 
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
-  /** Register an infallible event subscriber for this component. */
-  registerSubscriber(name: string, callback: (event: Json) => void): void;
+  /**
+   * Register an event subscriber for this component. Callback failures are isolated and reported
+   * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
+   */
+  registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,
