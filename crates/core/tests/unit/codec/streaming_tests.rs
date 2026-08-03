@@ -74,6 +74,31 @@ fn preserves_completed_events_before_an_oversized_partial_frame() {
 }
 
 #[test]
+fn rejects_an_oversized_terminated_frame() {
+    let mut decoder = SseEventDecoder::new();
+    let mut frame = b"data: \"".to_vec();
+    frame.resize(MAX_SSE_FRAME_BYTES + 1, b'x');
+    frame.extend_from_slice(b"\n\n");
+
+    let error = decoder.push_bytes(&frame).unwrap_err().to_string();
+
+    assert!(error.contains("SSE frame exceeded"), "{error}");
+    assert!(error.contains(&MAX_SSE_FRAME_BYTES.to_string()), "{error}");
+}
+
+#[test]
+fn rejects_invalid_utf8_in_a_terminated_frame() {
+    let mut decoder = SseEventDecoder::new();
+
+    let error = decoder
+        .push_bytes(b"data: \xff\n\n")
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("invalid UTF-8 SSE frame"), "{error}");
+}
+
+#[test]
 fn normalizes_crlf_terminator_split_across_pushes() {
     let mut decoder = SseEventDecoder::new();
     assert!(
@@ -109,6 +134,19 @@ fn surfaces_final_partial_frame_on_finish() {
         .unwrap();
     let trailing = decoder.finish().unwrap().expect("trailing frame present");
     assert_eq!(trailing.data, json!({"end": true}));
+}
+
+#[test]
+fn rejects_invalid_utf8_in_a_final_partial_frame() {
+    let mut decoder = SseEventDecoder::new();
+    assert!(decoder.push_bytes(b"data: \xff").unwrap().is_empty());
+
+    let error = decoder.finish().unwrap_err().to_string();
+
+    assert!(
+        error.contains("incomplete or invalid UTF-8 at end of SSE stream"),
+        "{error}"
+    );
 }
 
 #[test]

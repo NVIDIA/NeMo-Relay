@@ -3180,6 +3180,57 @@ fn test_native_output_stream(
     )
 }
 
+#[test]
+fn cooperative_stream_error_settles_once_and_aborts_downstream() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (stream, mut receiver) = test_native_output_stream(1);
+    let downstream = runtime.spawn(std::future::pending::<()>());
+    stream
+        .downstream_aborts
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(downstream.id(), downstream.abort_handle());
+
+    runtime.block_on(settle_native_async_stream_error(
+        Arc::clone(&stream),
+        "cooperative policy failed".into(),
+    ));
+
+    let error = runtime
+        .block_on(receiver.recv())
+        .expect("error settlement should emit one terminal item")
+        .expect_err("settlement item should be an error");
+    assert!(matches!(
+        error,
+        FlowError::Internal(message) if message == "cooperative policy failed"
+    ));
+    assert!(stream.settled.load(Ordering::Acquire));
+    assert!(
+        stream
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none()
+    );
+    assert!(
+        stream
+            .downstream_aborts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+    );
+    assert!(runtime.block_on(downstream).unwrap_err().is_cancelled());
+
+    runtime.block_on(settle_native_async_stream_error(
+        Arc::clone(&stream),
+        "duplicate".into(),
+    ));
+    assert!(runtime.block_on(receiver.recv()).is_none());
+}
+
 fn test_native_provider_stream(
     runtime: &tokio::runtime::Runtime,
     stream: LlmJsonStream,
