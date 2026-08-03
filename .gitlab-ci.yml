@@ -68,7 +68,7 @@ collect:github-artifacts:
       fi
       export GH_TOKEN="${NEMO_RELAY_CI_GITHUB_TOKEN}"
 
-      mkdir -p collected/wheels collected/node collected/cli-npm downloaded
+      mkdir -p collected/wheels collected/sdists collected/node collected/cli-npm downloaded
 
       tag="${CI_COMMIT_TAG:-}"
       if [ -z "$tag" ]; then
@@ -135,15 +135,21 @@ collect:github-artifacts:
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'cli-python-wheel-*' --dir downloaded/cli-wheels
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'cli-npm-package-*' --dir downloaded/cli-npm
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name 'plugin-wheel' --dir downloaded/wheels
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name 'python-sdist' --dir downloaded/sdists
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'node-npm-package-*' --dir downloaded/node
 
       find downloaded/wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
       find downloaded/cli-wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
+      find downloaded/sdists -type f -name 'nemo_relay-*.tar.gz' -exec cp {} collected/sdists/ \;
       find downloaded/cli-npm -type f -name '*.tgz' -exec cp {} collected/cli-npm/ \;
       find downloaded/node -type f -name '*.tgz' -exec cp {} collected/node/ \;
 
       if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
         echo "Error: collected GitHub wheel artifacts did not contain any .whl files." >&2
+        exit 1
+      fi
+      if ! ls collected/sdists/nemo_relay-*.tar.gz >/dev/null 2>&1; then
+        echo "Error: collected GitHub Python source distribution artifact did not contain a nemo-relay sdist." >&2
         exit 1
       fi
       if ! ls collected/node/*.tgz >/dev/null 2>&1; then
@@ -169,6 +175,7 @@ collect:github-artifacts:
     expire_in: 7 days
     paths:
       - collected/wheels/*.whl
+      - collected/sdists/nemo_relay-*.tar.gz
       - collected/node/*.tgz
       - collected/cli-npm/*.tgz
       - collected/github-run.json
@@ -189,18 +196,18 @@ publish:artifactory:wheels:
       set -eu
 
       if [ -z "${NEMO_RELAY_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_PYPI_URL:-}" ]; then
-        echo "Error: uploading wheels to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_USER, NEMO_RELAY_CI_ARTIFACTORY_KEY, and NEMO_RELAY_CI_ARTIFACTORY_PYPI_URL." >&2
+        echo "Error: uploading Python package artifacts to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_USER, NEMO_RELAY_CI_ARTIFACTORY_KEY, and NEMO_RELAY_CI_ARTIFACTORY_PYPI_URL." >&2
         exit 1
       fi
-      if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
-        echo "Error: no collected wheel artifacts found." >&2
+      if ! ls collected/wheels/*.whl >/dev/null 2>&1 || ! ls collected/sdists/nemo_relay-*.tar.gz >/dev/null 2>&1; then
+        echo "Error: no complete set of collected Python package artifacts found." >&2
         exit 1
       fi
 
       UV_PUBLISH_USERNAME="${NEMO_RELAY_CI_ARTIFACTORY_USER}" \
         UV_PUBLISH_PASSWORD="${NEMO_RELAY_CI_ARTIFACTORY_KEY}" \
         UV_PUBLISH_URL="${NEMO_RELAY_CI_ARTIFACTORY_PYPI_URL}" \
-        uv publish --no-progress collected/wheels/*.whl
+        uv publish --no-progress collected/wheels/*.whl collected/sdists/nemo_relay-*.tar.gz
 
 publish:artifactory:cargo:
   stage: publish

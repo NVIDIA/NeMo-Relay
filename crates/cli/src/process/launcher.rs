@@ -706,6 +706,13 @@ pub(crate) fn exporter_destinations(config: &GatewayConfig) -> Vec<String> {
 
 fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<String> {
     let mut destinations = Vec::new();
+    append_atof_destinations(&mut destinations, config);
+    append_atif_destinations(&mut destinations, config);
+    append_opentelemetry_destinations(&mut destinations, config);
+    destinations
+}
+
+fn append_atof_destinations(destinations: &mut Vec<String>, config: &ObservabilityConfig) {
     if let Some(section) = config.atof.as_ref().filter(|section| section.enabled) {
         for sink in &section.sinks {
             match sink {
@@ -727,6 +734,9 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
             }
         }
     }
+}
+
+fn append_atif_destinations(destinations: &mut Vec<String>, config: &ObservabilityConfig) {
     if let Some(section) = config.atif.as_ref().filter(|section| section.enabled) {
         if section.storage.is_empty() {
             let directory = section
@@ -746,6 +756,9 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
             }
         }
     }
+}
+
+fn append_opentelemetry_destinations(destinations: &mut Vec<String>, config: &ObservabilityConfig) {
     if let Some(section) = config
         .opentelemetry
         .as_ref()
@@ -763,7 +776,6 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
             ));
         }
     }
-    destinations
 }
 
 // Renders a single ATIF remote storage backend as a human-readable destination for the status
