@@ -31,7 +31,7 @@ The release pipeline publishes these package surfaces from a tag push:
 | Ecosystem | Published Surface |
 |---|---|
 | crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-switchyard`, `nemo-relay-ffi`, `nemo-relay-cli` |
-| PyPI | `nemo-relay`, `nemo-relay-plugin` |
+| PyPI | `nemo-relay` wheels and source distribution, `nemo-relay-plugin` wheel |
 | npm | `nemo-relay-node`, `nemo-relay-openclaw` |
 | GitHub Releases | CLI binaries and `SHA256SUMS` |
 | Fern | The documentation site |
@@ -199,6 +199,7 @@ just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 packa
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-openclaw
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-rust
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python
+just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python-sdist
 ```
 
 Be aware that the local packaging recipes intentionally rewrite version fields
@@ -244,6 +245,8 @@ The release pipeline then:
    - `package-openclaw` packs the npm OpenClaw plugin package.
    - `package-python` builds platform `nemo-relay` wheels, including
      `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels.
+   - `package-python-sdist` builds one platform-independent `nemo-relay` source
+     distribution.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
    - The CLI release-asset job uploads each platform `nemo-relay` binary,
      validates the Linux binaries on musllinux, and includes those binaries in
@@ -257,9 +260,9 @@ The release pipeline then:
      `nemo-relay-switchyard`, `nemo-relay-ffi`, and `nemo-relay-cli` through
      trusted publishing from
      the top-level workflow
-   - `publish-python` downloads both the `nemo-relay` and `nemo-relay-plugin`
-     wheel artifacts and uploads them to PyPI with trusted publishing from the
-     top-level workflow
+   - `publish-python` downloads the `nemo-relay` wheel and source distribution
+     artifacts plus the `nemo-relay-plugin` wheel, then uploads them to PyPI
+     with trusted publishing from the top-level workflow
    - `publish-npm` publishes the Node.js and OpenClaw plugin npm packages
      through npm trusted publishing from the top-level workflow
      - Stable tags publish to the npm `latest` dist-tag
@@ -286,8 +289,8 @@ NVIDIA Artifactory publication for the same tag:
 - GitLab starts the pipeline from a tag push through `CI_COMMIT_TAG`; no GitLab
   cron or pipeline schedule is required.
 - The collector waits for the mirrored GitHub tag and matching GitHub Actions
-  run, then downloads the wheel, Cargo, and Node.js package
-  artifacts produced by GitHub Actions.
+  run, then downloads the Python wheel and source distribution, Cargo, and
+  Node.js package artifacts produced by GitHub Actions.
 - The Artifactory jobs publish those collected artifacts to the configured
   Python, Cargo, and npm Artifactory registries.
 
