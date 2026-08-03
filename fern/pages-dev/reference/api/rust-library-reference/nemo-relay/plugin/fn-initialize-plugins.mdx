@@ -1,7 +1,7 @@
 ---
 title: "Function initialize_plugins"
 sidebar-title: "initialize_plugins"
-description: "Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. Each file's schema version is validated before layering. Non-default values in `config` win on conflicts, while default `policy` and `enabled` values inherit from a matching file entry and component `config` bodies merge field-by-field. Delegates to `initialize_plugins_exact`. Call that function directly when `config` is already fully resolved and every value must be applied exactly."
+description: "Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. Each file's schema version is validated before layering. Declaring a component in `config` applies its `enabled` value, while default policy values inherit from discovered files and component `config` bodies merge field-by-field. The resolved configuration and diagnostics are passed to the shared `initialize_plugins_with_diagnostics` helper. Call `initialize_plugins_exact` directly when `config` is already fully resolved and every value must be applied exactly."
 position: 19
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,4 +11,4 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn initialize_plugins(config: <a href=\"struct-pluginconfig\">PluginConfig</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-configreport\">ConfigReport</a>&gt;"}} /></pre>
 
-Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. Each file's schema version is validated before layering. Non-default values in `config` win on conflicts, while default `policy` and `enabled` values inherit from a matching file entry and component `config` bodies merge field-by-field. Delegates to [`initialize_plugins_exact`]. Call that function directly when `config` is already fully resolved and every value must be applied exactly.
+Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. Each file's schema version is validated before layering. Declaring a component in `config` applies its `enabled` value, while default policy values inherit from discovered files and component `config` bodies merge field-by-field. The resolved configuration and diagnostics are passed to the shared `initialize_plugins_with_diagnostics` helper. Call [`initialize_plugins_exact`] directly when `config` is already fully resolved and every value must be applied exactly.
