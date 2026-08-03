@@ -507,18 +507,18 @@ fn native_abi_struct_sizes_are_self_describing() {
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 216);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 220);
         assert_eq!(
             host_api_v3_offsets(),
             [
-                0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
+                0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212, 216
             ]
         );
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 256);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
         assert_eq!(
             host_api_v4_offsets(),
-            [0, 216, 220, 224, 228, 232, 236, 240, 244, 248, 252]
+            [0, 220, 224, 228, 232, 236, 240, 244, 248, 252, 256]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
