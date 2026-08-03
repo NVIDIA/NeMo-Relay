@@ -3303,7 +3303,11 @@ pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
 /// isolated, reported to stderr and `getLastCallbackError()`, and do not reject
 /// `flushSubscribers()`. Throws if a subscriber with the same `name` already exists.
 #[napi]
-pub fn register_subscriber(env: Env, name: String, callback: JsFunction) -> Result<()> {
+pub fn register_subscriber(
+    env: Env,
+    name: String,
+    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: JsFunction,
+) -> Result<()> {
     let callback = callable::wrap_js_event_subscriber(&env, name.clone(), callback)?;
     core_subscriber_api::register_subscriber(&name, callback).map_err(to_napi_err)
 }
@@ -3942,7 +3946,7 @@ pub fn scope_register_subscriber(
     env: Env,
     scope_uuid: String,
     name: String,
-    callback: JsFunction,
+    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;

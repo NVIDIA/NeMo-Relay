@@ -1237,13 +1237,18 @@ pub fn wrap_js_event_subscriber(
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok()
                 {
-                    complete_js_subscriber_callback(callback_id);
                     if ctx.length > 0 {
-                        let message = ctx.get::<String>(0)?;
-                        record_callback_error(format!(
-                            "nemo_relay: JS event subscriber '{callback_name}' failed: {message}"
-                        ));
+                        match ctx.get::<String>(0) {
+                            Ok(message) => record_callback_error(format!(
+                                "nemo_relay: JS event subscriber '{callback_name}' failed: {message}"
+                            )),
+                            Err(error) => record_callback_error(format!(
+                                "nemo_relay: failed to read JS event subscriber \
+                                 '{callback_name}' failure: {error}"
+                            )),
+                        }
                     }
+                    complete_js_subscriber_callback(callback_id);
                 }
                 ctx.env.get_undefined()
             },
@@ -1278,10 +1283,10 @@ pub fn wrap_js_event_subscriber(
             ThreadsafeFunctionCallMode::NonBlocking,
         );
         if status != napi::Status::Ok {
-            complete_js_subscriber_callback(callback_id);
             record_callback_error(format!(
                 "nemo_relay: failed to queue JS event subscriber '{queue_error_name}' callback: {status:?}"
             ));
+            complete_js_subscriber_callback(callback_id);
         }
     }))
 }

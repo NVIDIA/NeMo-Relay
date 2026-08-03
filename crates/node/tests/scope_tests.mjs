@@ -87,11 +87,16 @@ function runSubscriberFailureChild({ callback, registration = 'global' }) {
       process.exitCode = 1;
     });
   `;
-  const output = execFileSync(process.execPath, ['--eval', script], {
-    cwd: nodeDir,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  let output;
+  try {
+    output = execFileSync(process.execPath, ['--eval', script], {
+      cwd: nodeDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    throw new Error(`subscriber failure child failed (${registration}):\n${error.stdout ?? ''}${error.stderr ?? ''}`);
+  }
   assert.match(output, /subscriber failure isolated/);
 }
 
@@ -448,6 +453,32 @@ describe('Subscribers', () => {
       assert.equal(called, true);
     } finally {
       deregisterSubscriber('node_flush_js_callback');
+    }
+  });
+
+  it('flushSubscribers waits for a fulfilled JavaScript subscriber promise', async () => {
+    let release;
+    let settled = false;
+    let flushed = false;
+    const deferred = new Promise((resolve) => {
+      release = resolve;
+    });
+    registerSubscriber('node_flush_js_promise_callback', async () => {
+      await deferred;
+      settled = true;
+    });
+    try {
+      event('node_flush_js_promise_callback_mark', null, null, null);
+      const flushing = flushSubscribers().then(() => {
+        flushed = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(flushed, false);
+      release();
+      await flushing;
+      assert.equal(settled, true);
+    } finally {
+      deregisterSubscriber('node_flush_js_promise_callback');
     }
   });
 
