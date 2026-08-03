@@ -52,10 +52,10 @@ compatibility information applies to the current 0.7 prerelease.
 - OpenTelemetry exporter dependencies, including OpenInference semantic
   support, are always enabled instead of being controlled by Cargo features.
 - OpenTelemetry Rust is upgraded to `0.32`.
-- Top-level plugin component `config` lists and the observability destination
-  lists `atof.sinks`, `opentelemetry.endpoints`, and `atif.storage`
-  concatenate across configuration layers, with higher-precedence entries
-  first.
+- Top-level plugin component `config` lists concatenate across configuration
+  layers. The observability destination lists `atof.sinks`,
+  `opentelemetry.endpoints`, and `atif.storage` concatenate across discovered
+  files, with higher-precedence entries first.
 - `object_store` is upgraded to `0.14.1`, which removes the temporary
   `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` advisory exceptions.
 
@@ -102,6 +102,11 @@ their values cannot be isolated between endpoints.
   over discovered file configuration. When code re-enables a component that a
   discovered file disabled, initialization reports a warning that names the
   component and source file.
+- A nonempty programmatic Observability destination array now replaces the
+  corresponding destinations contributed by discovered files. Omitted or empty
+  arrays inherit active file destinations. Initialization reports replacement
+  or inheritance warnings with source provenance without exposing destination
+  values or credentials.
 - LLM payload redaction now follows the codec active for each call instead of a
   codec captured from plugin configuration. Codec-dependent policies omit the
   observability payload and annotation when Relay cannot safely normalize the

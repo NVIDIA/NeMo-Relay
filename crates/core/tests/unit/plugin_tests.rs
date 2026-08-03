@@ -89,6 +89,26 @@ fn set_conflicting_runtime_owner_for_tests() {
     };
 }
 
+fn observability_destination_document(destination: &str) -> Json {
+    json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {"enabled": true, "sinks": [destination]},
+                "opentelemetry": {"enabled": true, "endpoints": [destination]},
+                "atif": {"enabled": true, "storage": [destination]}
+            }
+        }]
+    })
+}
+
+fn programmatic_observability_config(config: Json) -> PluginConfig {
+    serde_json::from_value(json!({
+        "components": [{"kind": "observability", "config": config}]
+    }))
+    .unwrap()
+}
+
 impl Plugin for TestPlugin {
     fn plugin_kind(&self) -> &str {
         "test.plugin"
@@ -647,6 +667,48 @@ fn test_layer_config_concatenates_nested_observability_lists() {
         json!([9]),
         "deeper implementation-specific lists retain replacement semantics"
     );
+}
+
+#[test]
+fn test_file_layers_concatenate_all_observability_destination_lists() {
+    let lower = PathBuf::from("lower/plugins.toml");
+    let higher = PathBuf::from("higher/plugins.toml");
+    let (merged, sources) = merge_plugin_config_documents(vec![
+        (
+            lower.clone(),
+            json!({
+                "components": [{
+                    "kind": "observability",
+                    "config": {
+                        "atof": {"sinks": ["lower"]},
+                        "opentelemetry": {"endpoints": ["lower"]},
+                        "atif": {"storage": ["lower"]}
+                    }
+                }]
+            }),
+        ),
+        (
+            higher.clone(),
+            json!({
+                "components": [{
+                    "kind": "observability",
+                    "config": {
+                        "atof": {"sinks": ["higher"]},
+                        "opentelemetry": {"endpoints": ["higher"]},
+                        "atif": {"storage": ["higher"]}
+                    }
+                }]
+            }),
+        ),
+    ])
+    .unwrap()
+    .expect("documents exist");
+
+    assert_eq!(sources, vec![lower, higher]);
+    let config = &merged["components"][0]["config"];
+    for (section, field, _) in OBSERVABILITY_DESTINATION_FIELDS {
+        assert_eq!(config[section][field], json!(["higher", "lower"]));
+    }
 }
 
 #[test]
@@ -2459,6 +2521,195 @@ fn test_plugin_config_overlay_enables_programmatically_declared_components() {
     // A kind the code config does not declare is inherited from the file.
     assert_eq!(typed.components[1].kind, "adaptive");
     assert!(!typed.components[1].enabled);
+}
+
+#[test]
+fn test_nonempty_programmatic_observability_destinations_replace_file_entries() {
+    let lower = PathBuf::from("lower/plugins.toml");
+    let higher = PathBuf::from("higher/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![
+        (
+            lower.clone(),
+            observability_destination_document("lower-secret-destination"),
+        ),
+        (
+            higher.clone(),
+            observability_destination_document("higher-secret-destination"),
+        ),
+    ])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true, "sinks": ["programmatic"]},
+        "opentelemetry": {"enabled": true, "endpoints": ["programmatic"]},
+        "atif": {"enabled": true, "storage": ["programmatic"]}
+    }));
+
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    let config = &resolved.config.components[0].config;
+    for (section, field, dotted_path) in OBSERVABILITY_DESTINATION_FIELDS {
+        assert_eq!(config[section][field], json!(["programmatic"]));
+        let diagnostic = resolved
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.field.as_deref() == Some(dotted_path))
+            .expect("a destination replacement diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            "plugin.observability_destinations_replaced"
+        );
+        assert_eq!(diagnostic.component.as_deref(), Some("observability"));
+        assert!(
+            diagnostic
+                .message
+                .contains("2 discovered destination entries")
+        );
+        assert!(diagnostic.message.contains(&lower.display().to_string()));
+        assert!(diagnostic.message.contains(&higher.display().to_string()));
+        assert!(!diagnostic.message.contains("secret-destination"));
+    }
+    assert_eq!(resolved.diagnostics.len(), 3);
+}
+
+#[test]
+fn test_empty_programmatic_observability_destinations_inherit_file_entries() {
+    let source = PathBuf::from("project/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![(
+        source.clone(),
+        observability_destination_document("file-destination"),
+    )])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true, "sinks": []},
+        "opentelemetry": {"enabled": true, "endpoints": []},
+        "atif": {"enabled": true, "storage": []}
+    }));
+
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    let config = &resolved.config.components[0].config;
+    for (section, field, dotted_path) in OBSERVABILITY_DESTINATION_FIELDS {
+        assert_eq!(config[section][field], json!(["file-destination"]));
+        let diagnostic = resolved
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.field.as_deref() == Some(dotted_path))
+            .expect("a destination inheritance diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            "plugin.observability_destinations_inherited"
+        );
+        assert!(diagnostic.message.contains(&source.display().to_string()));
+    }
+    assert_eq!(resolved.diagnostics.len(), 3);
+}
+
+#[test]
+fn test_omitted_programmatic_observability_destinations_inherit_file_entries() {
+    let source = PathBuf::from("project/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![(
+        source,
+        observability_destination_document("file-destination"),
+    )])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true},
+        "opentelemetry": {"enabled": true},
+        "atif": {"enabled": true}
+    }));
+
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    let config = &resolved.config.components[0].config;
+    for (section, field, dotted_path) in OBSERVABILITY_DESTINATION_FIELDS {
+        assert_eq!(config[section][field], json!(["file-destination"]));
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "plugin.observability_destinations_inherited"
+                && diagnostic.field.as_deref() == Some(dotted_path)
+        }));
+    }
+    assert_eq!(resolved.diagnostics.len(), 3);
+}
+
+#[test]
+fn test_inherited_destination_warnings_respect_effective_enablement() {
+    let source = PathBuf::from("project/plugins.toml");
+    let documents = || {
+        vec![(
+            source.clone(),
+            observability_destination_document("file-destination"),
+        )]
+    };
+
+    let disabled_component: PluginConfig = serde_json::from_value(json!({
+        "components": [{
+            "kind": "observability",
+            "enabled": false,
+            "config": {
+                "atof": {"enabled": true, "sinks": ["programmatic"]},
+                "opentelemetry": {"enabled": true, "endpoints": ["programmatic"]},
+                "atif": {"enabled": true, "storage": ["programmatic"]}
+            }
+        }]
+    }))
+    .unwrap();
+    let resolved = resolve_programmatic_plugin_config(
+        resolve_discovered_plugin_config(documents()).unwrap(),
+        disabled_component,
+    )
+    .unwrap();
+    assert!(resolved.diagnostics.is_empty());
+
+    let partially_disabled = programmatic_observability_config(json!({
+        "atof": {"enabled": false},
+        "opentelemetry": {"enabled": true},
+        "atif": {"enabled": false}
+    }));
+    let resolved = resolve_programmatic_plugin_config(
+        resolve_discovered_plugin_config(documents()).unwrap(),
+        partially_disabled,
+    )
+    .unwrap();
+    assert_eq!(resolved.diagnostics.len(), 1);
+    assert_eq!(
+        resolved.diagnostics[0].field.as_deref(),
+        Some("config.opentelemetry.endpoints")
+    );
+    assert_eq!(
+        resolved.diagnostics[0].code,
+        "plugin.observability_destinations_inherited"
+    );
+}
+
+#[test]
+fn test_destination_warnings_require_declared_observability_and_file_entries() {
+    let source = PathBuf::from("project/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![(
+        source.clone(),
+        observability_destination_document("file-destination"),
+    )])
+    .unwrap();
+    let resolved = resolve_programmatic_plugin_config(discovered, PluginConfig::default()).unwrap();
+    assert!(resolved.diagnostics.is_empty());
+
+    let discovered = resolve_discovered_plugin_config(vec![(
+        source,
+        json!({
+            "components": [{
+                "kind": "observability",
+                "config": {
+                    "atof": {"enabled": true, "sinks": []},
+                    "opentelemetry": {"enabled": true, "endpoints": []},
+                    "atif": {"enabled": true, "storage": []}
+                }
+            }]
+        }),
+    )])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true},
+        "opentelemetry": {"enabled": true},
+        "atif": {"enabled": true}
+    }));
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    assert!(resolved.diagnostics.is_empty());
 }
 
 #[test]

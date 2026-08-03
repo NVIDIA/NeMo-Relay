@@ -92,12 +92,30 @@ lossless; refer to [OpenTelemetry](/configure-plugins/observability/opentelemetr
 for queue sizing and drop-warning behavior.
 
 Top-level component `config` lists concatenate across configuration layers,
-with higher-precedence entries first. The observability destination lists
-`atof.sinks`, `opentelemetry.endpoints`, and `atif.storage` follow the same
-rule, so explicit-or-user, project, system, and programmatic layers can
-contribute destinations. Arbitrary lists nested inside structured values
-retain replacement semantics. List entries are not merged item by item.
-To change or remove an inherited endpoint, edit the layer that declares it.
+with higher-precedence entries first. Across discovered files, the
+observability destination lists `atof.sinks`, `opentelemetry.endpoints`, and
+`atif.storage` follow the same rule, so system, project, and
+explicit-or-user files can contribute destinations.
+
+Programmatic initialization treats these three destination arrays differently.
+A nonempty programmatic array replaces all entries from the merged file layer.
+An omitted or empty programmatic array inherits the file entries; an empty
+array is not a clear operation. This behavior avoids accidental destination
+loss when typed Rust or Go configuration omits empty lists during serialization
+or Python and Node.js helpers emit empty defaults. To remove inherited
+destinations, edit the file that declares them or disable the exporter section.
+
+When programmatic Observability configuration encounters active destinations
+from files, Relay reports one warning per affected field. The
+`plugin.observability_destinations_replaced` code identifies a nonempty
+programmatic replacement, and `plugin.observability_destinations_inherited`
+identifies omission or an empty list. Warnings include source file paths and
+entry counts, but never destination values or credentials. Disabled components
+and exporter sections do not emit these routing warnings.
+
+Arbitrary lists nested inside other structured values retain replacement
+semantics. List entries are not merged item by item.
+
 For complete layering rules, refer to
 [Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
 
