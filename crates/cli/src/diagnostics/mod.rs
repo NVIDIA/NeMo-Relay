@@ -282,6 +282,40 @@ fn dynamic_plugin_host_config_check(plugin: &DynamicPluginReferenceInfo) -> Chec
 }
 
 fn layer_status(path: &Path) -> ConfigLayer {
+    let mut layer = toml_layer_status(path);
+    if !matches!(layer.status, Status::Pass) {
+        return layer;
+    }
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            layer.status = Status::Fail;
+            layer.active = false;
+            layer.details = format!("unreadable: {err}");
+            return layer;
+        }
+    };
+    let table = match text.parse::<toml::Table>() {
+        Ok(table) => table,
+        Err(err) => {
+            layer.status = Status::Fail;
+            layer.active = false;
+            layer.details = format!("invalid TOML: {err}");
+            return layer;
+        }
+    };
+    match crate::configuration::validate_shared_config_shape(toml::Value::Table(table)) {
+        Ok(()) => layer,
+        Err(err) => ConfigLayer {
+            path: path.to_path_buf(),
+            status: Status::Fail,
+            active: false,
+            details: err.to_string(),
+        },
+    }
+}
+
+fn toml_layer_status(path: &Path) -> ConfigLayer {
     if !path.exists() {
         return ConfigLayer {
             path: path.to_path_buf(),
@@ -331,7 +365,7 @@ fn plugin_layer_status(
     contributing_paths: &[PathBuf],
     plugin_error: Option<&str>,
 ) -> ConfigLayer {
-    let mut layer = layer_status(path);
+    let mut layer = toml_layer_status(path);
     if let Some(error) = plugin_error.filter(|error| error.contains(&path.display().to_string()))
         && matches!(layer.status, Status::Pass)
     {

@@ -18,6 +18,7 @@
 //! metadata; their declared scope type is preserved in the exported event
 //! stream.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -52,6 +53,7 @@ use crate::observability::atof::{
 };
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySubscriber, OtlpTransport,
+    resolve_http_trace_endpoint,
 };
 use crate::observability::{
     MarkProjection, OpenTelemetryType, OtlpAttributeMapping, default_mark_exclude_names,
@@ -974,6 +976,7 @@ fn register_opentelemetry(
             "enabled OpenTelemetry section requires at least one endpoint".to_string(),
         ));
     }
+    validate_distinct_opentelemetry_destinations(&section.endpoints)?;
     let subscribers = build_opentelemetry_subscribers(section.endpoints)?;
     for (index, _) in subscribers.iter().enumerate() {
         log::info!(
@@ -2250,7 +2253,78 @@ fn validate_opentelemetry_section(
         }
         validate_opentelemetry_headers(diagnostics, policy, index, endpoint);
     }
+    for error in opentelemetry_destination_collision_errors(&section.endpoints) {
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "observability.unsafe_otel_destination_collision".to_string(),
+            component: Some("opentelemetry".to_string()),
+            field: Some(format!("endpoints[{}].endpoint", error.index)),
+            message: error.message,
+        });
+    }
     validate_opentelemetry_feature_support(diagnostics, policy, section);
+}
+
+struct OpenTelemetryDestinationCollision {
+    index: usize,
+    message: String,
+}
+
+fn validate_distinct_opentelemetry_destinations(
+    endpoints: &[OpenTelemetryEndpointConfig],
+) -> PluginResult<()> {
+    if let Some(error) = opentelemetry_destination_collision_errors(endpoints)
+        .into_iter()
+        .next()
+    {
+        return Err(PluginError::InvalidConfig(error.message));
+    }
+    Ok(())
+}
+
+fn opentelemetry_destination_collision_errors(
+    endpoints: &[OpenTelemetryEndpointConfig],
+) -> Vec<OpenTelemetryDestinationCollision> {
+    let mut errors = Vec::new();
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        for (other_index, other) in endpoints[..index].iter().enumerate() {
+            let endpoint_destination = opentelemetry_destination(endpoint);
+            let other_destination = opentelemetry_destination(other);
+            if endpoint.transport == other.transport
+                && endpoint_destination == other_destination
+                && endpoint.otel_type != other.otel_type
+            {
+                errors.push(OpenTelemetryDestinationCollision {
+                    index,
+                    message: format!(
+                        "OpenTelemetry endpoints[{other_index}] ({}) and endpoints[{index}] ({}) use the same {} destination {:?}; different projection types must use independent destinations",
+                        opentelemetry_type_name(other.otel_type),
+                        opentelemetry_type_name(endpoint.otel_type),
+                        endpoint.transport,
+                        endpoint_destination,
+                    ),
+                });
+            }
+        }
+    }
+    errors
+}
+
+fn opentelemetry_destination(endpoint: &OpenTelemetryEndpointConfig) -> Cow<'_, str> {
+    let configured_endpoint = endpoint.endpoint.trim();
+    if endpoint.transport == "http_binary" {
+        resolve_http_trace_endpoint(configured_endpoint)
+    } else {
+        Cow::Borrowed(configured_endpoint)
+    }
+}
+
+const fn opentelemetry_type_name(otel_type: OpenTelemetryType) -> &'static str {
+    match otel_type {
+        OpenTelemetryType::Full => "full",
+        OpenTelemetryType::GenAi => "gen_ai",
+        OpenTelemetryType::OpenInference => "openinference",
+    }
 }
 
 fn validate_opentelemetry_headers(

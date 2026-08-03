@@ -441,6 +441,22 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
     assert_eq!(valid_layer.status, Status::Pass);
     assert!(valid_layer.active);
 
+    let invalid_shape = temp.path().join("invalid-shape.toml");
+    std::fs::write(
+        &invalid_shape,
+        "[upstream.openai]\nbase_url = \"http://local\"\n",
+    )
+    .unwrap();
+    let invalid_shape_layer = layer_status(&invalid_shape);
+    assert_eq!(invalid_shape_layer.status, Status::Fail);
+    assert!(!invalid_shape_layer.active);
+    assert!(
+        invalid_shape_layer
+            .details
+            .contains("invalid gateway configuration shape")
+    );
+    assert!(invalid_shape_layer.details.contains("openai"));
+
     let invalid = temp.path().join("invalid.toml");
     std::fs::write(&invalid, "[upstream\n").unwrap();
     let invalid_layer = layer_status(&invalid);
