@@ -163,6 +163,91 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: uv cache prune --ci
 
+  Package-android:
+    name: Package (android-${{ matrix.architecture }})
+    needs: [Test]
+    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            rust_target: x86_64-linux-android
+          - architecture: arm64_v8a
+            rust_target: aarch64-linux-android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          target: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-relay-rust-android-${{ matrix.architecture }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+
+      - name: Derive Python package version
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [[ -z "$version" ]]; then
+            echo "Error: failed to read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "${{ inputs.ref_type }}" == "tag" ]]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${GITHUB_SHA::8}"
+          fi
+          printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Materialize Python package version
+        run: python scripts/python_package_version.py --version "$NEMO_RELAY_PACKAGE_VERSION"
+
+      - name: Build and smoke test Android wheel
+        uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c # v4.1.1
+        env:
+          ANDROID_API_LEVEL: "24"
+          CIBW_ARCHS: ${{ matrix.architecture }}
+          CIBW_BUILD: cp313-*
+          CIBW_BUILD_VERBOSITY: "1"
+          CIBW_PLATFORM: android
+          CIBW_TEST_COMMAND: ${{ matrix.architecture == 'x86_64' && 'python -c "import nemo_relay"' || '' }}
+        with:
+          output-dir: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-wheels
+
+      - name: Verify wheel platform tag
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wheels=("${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-wheels"/*-cp311-abi3-android_24_${{ matrix.architecture }}.whl)
+          if [[ "${#wheels[@]}" -ne 1 ]]; then
+            echo "Error: expected one cp311-abi3 Android wheel for ${{ matrix.architecture }}, found ${#wheels[@]}" >&2
+            exit 1
+          fi
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wheel-android-${{ matrix.architecture }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-wheels/*.whl
+          if-no-files-found: error
+
   Package-musllinux:
     name: Package (musllinux-${{ matrix.architecture }})
     needs: [Test]

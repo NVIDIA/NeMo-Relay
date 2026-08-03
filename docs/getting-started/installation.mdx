@@ -227,6 +227,12 @@ or source build. Alpine environments outside this wheel coverage must use a
 supported Python version and
 [build from source](/contribute/development-setup#source-development).
 
+NeMo Relay also publishes `android_24` wheels for x86_64 and ARM64. These
+wheels require official Android CPython 3.13 or newer, which implements the
+PEP 738 Android platform tags. Older Termux Python environments that report a
+Linux platform while linking against Android Bionic do not select these wheels
+and are not supported.
+
 ## Node.js
 
 Install the Node.js package when your application uses NeMo Relay through the
