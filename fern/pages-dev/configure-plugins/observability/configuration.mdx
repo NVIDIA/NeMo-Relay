@@ -55,7 +55,7 @@ service_name = "agent-service"
 
 [[components.config.opentelemetry.endpoints]]
 type = "gen_ai"
-endpoint = "http://localhost:4318/v1/traces"
+endpoint = "http://localhost:4319/v1/traces"
 service_name = "agent-service"
 
 [[components.config.opentelemetry.endpoints]]
@@ -65,8 +65,14 @@ service_name = "agent-service"
 ```
 
 When OpenTelemetry is enabled, `endpoints` must contain at least one entry.
-Endpoint types can be combined or repeated with independent destinations. All
-endpoints are constructed before the plugin registers its fan-out subscriber.
+Endpoint types can be combined. Repeated endpoint types can use the same
+endpoint and transport. Two different endpoint types must not use the same
+endpoint and transport: Relay
+rejects that configuration because their deterministic trace and span IDs would
+collide at the receiver. For `http_binary`, this comparison uses the effective
+trace destination, so a bare URL and the same URL with `/v1/traces` also
+collide. All endpoints are constructed before the plugin
+registers its fan-out subscriber.
 
 ## Multi-Endpoint Lifecycle
 
