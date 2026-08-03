@@ -44,7 +44,7 @@ pub(super) fn check_dir_writable(directory: &Path) -> Result<(), std::io::Error>
     std::fs::remove_file(probe)
 }
 
-pub(super) async fn probe_http_named(name: &'static str, url: &str) -> Check {
+pub(super) async fn probe_otlp_http_named(name: &'static str, url: &str) -> Check {
     let client = match reqwest::Client::builder().timeout(NETWORK_TIMEOUT).build() {
         Ok(client) => client,
         Err(error) => {
@@ -58,7 +58,10 @@ pub(super) async fn probe_http_named(name: &'static str, url: &str) -> Check {
     match client.get(url).send().await {
         Ok(response) => Check {
             name,
-            status: if response.status().is_success() || response.status().is_redirection() {
+            status: if response.status().is_success()
+                || response.status().is_redirection()
+                || response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED
+            {
                 Status::Pass
             } else {
                 Status::Warn

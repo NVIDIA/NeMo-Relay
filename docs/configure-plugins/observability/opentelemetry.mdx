@@ -77,7 +77,7 @@ work or delivery to the other exporters.
 | Field | Default | Notes |
 |---|---|---|
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
-| `endpoint` | Required | Nonblank OTLP endpoint. |
+| `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |

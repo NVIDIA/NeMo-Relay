@@ -693,6 +693,33 @@ fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
 }
 
 #[test]
+fn http_trace_endpoint_resolution_completes_only_bare_http_urls() {
+    for (endpoint, expected) in [
+        ("http://localhost:4318", "http://localhost:4318/v1/traces"),
+        ("http://localhost:4318/", "http://localhost:4318/"),
+        (
+            "https://collector.example?tenant=one",
+            "https://collector.example/v1/traces?tenant=one",
+        ),
+        (
+            "https://collector.example/?tenant=one",
+            "https://collector.example/?tenant=one",
+        ),
+        (
+            "http://localhost:4318/v1/traces",
+            "http://localhost:4318/v1/traces",
+        ),
+        (
+            "http://collector.example/custom-ingest",
+            "http://collector.example/custom-ingest",
+        ),
+        ("not a URL", "not a URL"),
+    ] {
+        assert_eq!(resolve_http_trace_endpoint(endpoint), expected);
+    }
+}
+
+#[test]
 fn grpc_config_owns_its_tokio_runtime() {
     let subscriber = OpenTelemetrySubscriber::new(
         OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4317")
@@ -1734,7 +1761,7 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
     reset_global();
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}/v1/traces", listener.local_addr().unwrap());
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let (request_tx, request_rx) = mpsc::channel();
     spawn_http_collector(listener, request_tx);
 

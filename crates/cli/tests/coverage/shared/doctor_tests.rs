@@ -980,7 +980,7 @@ async fn opentelemetry_doctor_uses_tcp_probe_for_grpc_endpoints() {
 }
 
 #[tokio::test]
-async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
+async fn opentelemetry_doctor_resolves_bare_http_endpoints_and_warns_on_missing_routes() {
     assert!(
         observability_http_exporter_checks(&serde_json::json!({
             "opentelemetry": {"enabled": true, "endpoints": "not-a-list"}
@@ -1006,7 +1006,7 @@ async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
         let mut stream = accept_bounded(&listener);
         let _ = read_headers(&mut stream);
         stream
-            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+            .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
     });
     let checks = observability_http_exporter_checks(&serde_json::json!({
@@ -1018,6 +1018,49 @@ async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
     .await;
     assert_eq!(checks[0].status, Status::Pass);
     assert!(checks[0].details.contains("endpoints[0] (full)"));
+    assert!(checks[0].details.contains("/v1/traces (HTTP 405)"));
+    accept.join().unwrap();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let accept = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&listener);
+        let request = read_headers(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        request
+    });
+    let checks = observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": endpoint}]
+        }
+    }))
+    .await;
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(checks[0].details.contains("/ (HTTP 405)"));
+    let request = accept.join().unwrap();
+    assert!(request.starts_with("GET / HTTP/1.1"));
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/wrong", listener.local_addr().unwrap());
+    let accept = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&listener);
+        let _ = read_headers(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let checks = observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": endpoint}]
+        }
+    }))
+    .await;
+    assert_eq!(checks[0].status, Status::Warn);
+    assert!(checks[0].details.contains("/wrong (HTTP 404)"));
     accept.join().unwrap();
 }
 
@@ -1620,7 +1663,7 @@ async fn atof_http_and_websocket_timeout_errors_are_reported() {
 }
 
 #[tokio::test]
-async fn probe_http_named_warns_on_http_errors() {
+async fn otlp_http_probe_warns_on_http_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
@@ -1632,14 +1675,14 @@ async fn probe_http_named_warns_on_http_errors() {
             .unwrap();
     });
 
-    let check = probe_http_named("OpenTelemetry endpoint", &url).await;
+    let check = probe_otlp_http_named("OpenTelemetry endpoint", &url).await;
     assert_eq!(check.status, Status::Warn);
     assert!(check.details.contains("HTTP 500"));
     handle.join().unwrap();
 }
 
 #[tokio::test]
-async fn http_probe_passes_success_and_ndjson_upload_success() {
+async fn otlp_http_probe_passes_success_method_not_allowed_and_ndjson_upload_success() {
     let success_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let success_url = format!("http://{}", success_listener.local_addr().unwrap());
     let success_handle = std::thread::spawn(move || {
@@ -1650,9 +1693,24 @@ async fn http_probe_passes_success_and_ndjson_upload_success() {
             .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
     });
-    let check = probe_http_named("OpenTelemetry endpoint", &success_url).await;
+    let check = probe_otlp_http_named("OpenTelemetry endpoint", &success_url).await;
     assert_eq!(check.status, Status::Pass);
     success_handle.join().unwrap();
+
+    let method_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let method_url = format!("http://{}", method_listener.local_addr().unwrap());
+    let method_handle = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&method_listener);
+        let mut buf = [0_u8; 1024];
+        let _ = stream.read(&mut buf).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let check = probe_otlp_http_named("OpenTelemetry endpoint", &method_url).await;
+    assert_eq!(check.status, Status::Pass);
+    assert!(check.details.contains("HTTP 405"));
+    method_handle.join().unwrap();
 
     let (url, body, server_thread) = start_doctor_http_capture_server();
     let check = probe_atof_ndjson(

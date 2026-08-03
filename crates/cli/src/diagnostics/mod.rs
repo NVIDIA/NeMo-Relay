@@ -25,6 +25,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, future::join_all};
 use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
 use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
+use nemo_relay::observability::otel::resolve_http_trace_endpoint;
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
@@ -798,7 +799,8 @@ async fn observability_http_exporter_checks(config: &Value) -> Vec<Check> {
                         let mut check = if transport == "grpc" {
                             probe_tcp_named(label, url).await
                         } else {
-                            probe_http_named(label, url).await
+                            let effective_url = resolve_http_trace_endpoint(url);
+                            probe_otlp_http_named(label, effective_url.as_ref()).await
                         };
                         check.details =
                             format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
