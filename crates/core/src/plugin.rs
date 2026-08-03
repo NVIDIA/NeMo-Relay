@@ -1205,12 +1205,7 @@ fn merge_plugin_components(left: &mut Json, right: Json) {
         *left = right;
         return;
     };
-    let mut base_slots: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, component) in left_components.iter().enumerate() {
-        if let Some(kind) = component_kind(component) {
-            base_slots.entry(kind.to_string()).or_default().push(index);
-        }
-    }
+    let base_component_count = left_components.len();
     let mut consumed: HashMap<String, usize> = HashMap::new();
     for component in right_components {
         let Some(kind) = component_kind(&component).map(str::to_owned) else {
@@ -1218,10 +1213,7 @@ fn merge_plugin_components(left: &mut Json, right: Json) {
             continue;
         };
         let nth = consumed.entry(kind.clone()).or_insert(0);
-        let slot = base_slots
-            .get(&kind)
-            .and_then(|slots| slots.get(*nth))
-            .copied();
+        let slot = nth_component_by_kind(&left_components[..base_component_count], &kind, *nth);
         *nth += 1;
         match slot {
             Some(index) => merge_plugin_component(&mut left_components[index], component),
@@ -1324,6 +1316,15 @@ fn merge_json_value(left: &mut Json, right: Json) {
 
 fn component_kind(component: &Json) -> Option<&str> {
     component.get("kind").and_then(Json::as_str)
+}
+
+fn nth_component_by_kind(components: &[Json], kind: &str, nth: usize) -> Option<usize> {
+    components
+        .iter()
+        .enumerate()
+        .filter(|(_index, component)| component_kind(component) == Some(kind))
+        .nth(nth)
+        .map(|(index, _component)| index)
 }
 
 /// Returns the JSON Schema for the canonical plugin configuration document.
@@ -1776,20 +1777,13 @@ fn programmatic_enable_override_diagnostics(
     let Some(discovered_components) = discovered.get("components").and_then(Json::as_array) else {
         return Vec::new();
     };
-    let mut discovered_slots: HashMap<&str, Vec<&Json>> = HashMap::new();
-    for component in discovered_components {
-        if let Some(kind) = component_kind(component) {
-            discovered_slots.entry(kind).or_default().push(component);
-        }
-    }
-
     let mut consumed = HashMap::new();
     let mut diagnostics = Vec::new();
     for component in &programmatic.components {
         let nth = consumed.entry(component.kind.as_str()).or_insert(0usize);
-        let discovered_component = discovered_slots
-            .get(component.kind.as_str())
-            .and_then(|slots| slots.get(*nth));
+        let discovered_component =
+            nth_component_by_kind(discovered_components, &component.kind, *nth)
+                .and_then(|index| discovered_components.get(index));
         *nth += 1;
         if !component.enabled
             || discovered_component

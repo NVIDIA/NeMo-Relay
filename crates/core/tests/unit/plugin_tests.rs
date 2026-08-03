@@ -2462,14 +2462,20 @@ fn test_plugin_config_overlay_enables_programmatically_declared_components() {
 }
 
 #[test]
-fn test_programmatic_enable_override_diagnostic_names_discovered_source() {
+fn test_programmatic_enable_override_diagnostic_matches_positionally_and_names_source() {
     let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
     let discovered = json!({
-        "components": [{ "kind": "observability", "enabled": false }]
+        "components": [
+            { "kind": "observability", "enabled": true },
+            { "kind": "observability", "enabled": false }
+        ]
     });
     let enabled_sources = HashMap::from([("observability".to_string(), source.clone())]);
     let programmatic = PluginConfig {
-        components: vec![PluginComponentSpec::new("observability")],
+        components: vec![
+            PluginComponentSpec::new("observability"),
+            PluginComponentSpec::new("observability"),
+        ],
         ..PluginConfig::default()
     };
 
