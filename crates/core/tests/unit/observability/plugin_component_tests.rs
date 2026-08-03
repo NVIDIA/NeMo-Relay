@@ -2552,12 +2552,12 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
                 },
                 {
                     "type": "openinference",
-                    "endpoint": "http://127.0.0.1:4318/v1/traces",
+                    "endpoint": "http://127.0.0.1:4319/v1/traces",
                     "service_name": "oi-service"
                 },
                 {
                     "type": "gen_ai",
-                    "endpoint": "http://127.0.0.1:4318/v1/traces"
+                    "endpoint": "http://127.0.0.1:4320/v1/traces"
                 }
             ]
         }
@@ -2614,6 +2614,57 @@ fn opentelemetry_endpoints_fan_out_to_heterogeneous_and_repeated_types() {
             .expect("each configured endpoint should receive the exported span");
         assert!(!body.is_empty());
     }
+}
+
+#[test]
+fn opentelemetry_rejects_different_projection_types_at_the_same_effective_destination() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {"type": "full", "endpoint": " http://127.0.0.1:4318 "},
+                {"type": "gen_ai", "endpoint": "http://127.0.0.1:4318/v1/traces"}
+            ]
+        }
+    }));
+
+    let report = validate_plugin_config(&config);
+    assert!(report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.unsafe_otel_destination_collision"
+            && diagnostic.field.as_deref() == Some("endpoints[1].endpoint")
+            && diagnostic.message.contains("endpoints[0] (full)")
+            && diagnostic.message.contains("endpoints[1] (gen_ai)")
+            && diagnostic
+                .message
+                .contains("http://127.0.0.1:4318/v1/traces")
+    }));
+    assert!(futures::executor::block_on(initialize_plugins_exact(config)).is_err());
+    assert!(
+        !global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+}
+
+#[test]
+fn opentelemetry_allows_repeated_projection_types_at_the_same_destination() {
+    let config = plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {"type": "full", "endpoint": "http://127.0.0.1:4318/v1/traces"},
+                {"type": "full", "endpoint": "http://127.0.0.1:4318/v1/traces"}
+            ]
+        }
+    }));
+
+    assert!(!validate_plugin_config(&config).has_errors());
 }
 
 #[test]

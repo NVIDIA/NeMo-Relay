@@ -688,10 +688,9 @@ fn build_plugin_context(
         move |ctx| {
             let name = format!("{}{}", subscriber_namespace, ctx.get::<String>(0)?);
             let callback = ctx.get::<JsFunction>(1)?;
-            let tsfn = json_callback_tsfn(ctx.env, &callback)?;
             core_subscriber_api::register_subscriber(
                 &name,
-                callable::wrap_js_event_subscriber(tsfn),
+                callable::wrap_js_event_subscriber(ctx.env, name.clone(), callback)?,
             )
             .map_err(to_napi_err)?;
 
@@ -3299,16 +3298,18 @@ pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
 
 /// Register a named event subscriber that receives all lifecycle events.
 ///
-/// The `callback` receives each event as the canonical JSON event object. Events are
-/// delivered asynchronously and non-blocking. Throws if a subscriber with the same `name`
-/// already exists.
+/// The `callback` receives each event as the canonical JSON event object and may return a
+/// Promise. Events are delivered asynchronously and non-blocking. Callback failures are
+/// isolated, reported to stderr and `getLastCallbackError()`, and do not reject
+/// `flushSubscribers()`. Throws if a subscriber with the same `name` already exists.
 #[napi]
 pub fn register_subscriber(
+    env: Env,
     name: String,
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: JsFunction,
 ) -> Result<()> {
-    core_subscriber_api::register_subscriber(&name, callable::wrap_js_event_subscriber(callback))
-        .map_err(to_napi_err)
+    let callback = callable::wrap_js_event_subscriber(&env, name.clone(), callback)?;
+    core_subscriber_api::register_subscriber(&name, callback).map_err(to_napi_err)
 }
 
 /// Deregister an event subscriber by name.
@@ -3935,23 +3936,22 @@ pub fn scope_deregister_llm_stream_execution_intercept(
 /// Register a scope-local named event subscriber that receives lifecycle events
 /// for the specified scope.
 ///
-/// The `callback` receives each event as the canonical JSON event object. Events are
-/// delivered asynchronously and non-blocking. Throws if a subscriber with the same `name`
-/// already exists on the specified scope.
+/// The `callback` receives each event as the canonical JSON event object and may return a
+/// Promise. Events are delivered asynchronously and non-blocking. Callback failures are
+/// isolated, reported to stderr and `getLastCallbackError()`, and do not reject
+/// `flushSubscribers()`. Throws if a subscriber with the same `name` already exists on the
+/// specified scope.
 #[napi]
 pub fn scope_register_subscriber(
+    env: Env,
     scope_uuid: String,
     name: String,
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core_subscriber_api::scope_register_subscriber(
-        &uuid,
-        &name,
-        callable::wrap_js_event_subscriber(callback),
-    )
-    .map_err(to_napi_err)
+    let callback = callable::wrap_js_event_subscriber(&env, name.clone(), callback)?;
+    core_subscriber_api::scope_register_subscriber(&uuid, &name, callback).map_err(to_napi_err)
 }
 
 /// Deregister a scope-local event subscriber by name.

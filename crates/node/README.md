@@ -103,6 +103,9 @@ the native dispatcher and waits for managed terminal publications registered
 before the call and the JavaScript subscriber callbacks they queue, without
 blocking the Node.js event loop. Native events emitted by a JavaScript subscriber
 are separate publications; flush again if those events must also be observed.
+Subscribers can return `Promise` objects. A synchronous throw or a rejected `Promise` from a subscriber is isolated:
+it does not terminate the host or reject `flushSubscribers()`, and Relay reports the
+failure to `stderr` and through `getLastCallbackError()`.
 
 The main runtime API is exported from `nemo-relay-node`. Additional entry points
 are available at `nemo-relay-node/typed`, `nemo-relay-node/plugin`,
