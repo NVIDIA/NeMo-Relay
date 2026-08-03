@@ -1859,6 +1859,16 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
         ))
         .exists()
     );
+
+    futures::executor::block_on(initialize_plugins_exact(plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "output_directory": dir,
+            "filename_template": "trajectory-{session_id}.json"
+        }
+    }))))
+    .expect("ATIF teardown errors should not block later activation");
+    clear_plugin_configuration().expect("later ATIF teardown should succeed");
 }
 
 #[test]
@@ -2290,7 +2300,7 @@ fn atif_dispatcher_records_failed_agent_writes() {
     assert_eq!(dispatcher.runtime_failures.len(), 1);
     assert_eq!(
         dispatcher.runtime_failures[0].code,
-        "atif.local_fallback_failed"
+        "atif.local_write_failed"
     );
     assert!(dispatcher.last_error_result().is_err());
     drop(dispatcher);

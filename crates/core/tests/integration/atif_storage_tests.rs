@@ -538,8 +538,25 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
                 .iter()
                 .all(|request| request.method == "POST" && request.path == "/fail")
         );
+        let request_session_ids = requests
+            .iter()
+            .map(|request| {
+                request
+                    .headers
+                    .get("x-nemo-relay-atif-session-id")
+                    .expect("ATIF HTTP requests should identify their trajectory")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        assert!(request_session_ids.contains(&handle.uuid.to_string()));
+        assert!(request_session_ids.contains(&second.uuid.to_string()));
     }
-    clear_plugin_configuration().expect_err("plugin teardown should report failed uploads");
+    let teardown =
+        clear_plugin_configuration().expect_err("plugin teardown should report failed uploads");
+    assert!(
+        teardown.to_string().contains("atif.remote_delivery_failed"),
+        "teardown should identify the failed remote destination: {teardown}"
+    );
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");

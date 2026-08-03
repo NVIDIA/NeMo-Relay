@@ -80,15 +80,18 @@ class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
     field: str
 
 
-class RuntimeDiagnostic(TypedDict, total=False):
-    """One aggregated runtime failure from an active plugin."""
-
+class _RuntimeDiagnosticRequired(TypedDict):
     code: str
     component: str
-    field: str
     message: str
-    session_id: str
     count: int
+
+
+class RuntimeDiagnostic(_RuntimeDiagnosticRequired, total=False):
+    """One aggregated runtime failure from an active plugin."""
+
+    field: str
+    session_id: str
 
 
 class ConfigReport(TypedDict):

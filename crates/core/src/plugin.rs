@@ -44,6 +44,7 @@ use crate::api::runtime::{
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::observability::plugin_component::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
 pub mod dynamic;
@@ -2056,7 +2057,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     // removal itself as unsafe.
     let callbacks_cleared = deregistration_errors
         .iter()
-        .all(|error| error.contains("ATIF runtime delivery failures"));
+        .all(|error| error.contains(ATIF_RUNTIME_DELIVERY_FAILURE_MARKER));
     let deregistration_error = (!deregistration_errors.is_empty()).then(|| {
         PluginError::RegistrationFailed(format!(
             "plugin teardown failed: {}",

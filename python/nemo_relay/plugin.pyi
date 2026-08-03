@@ -33,13 +33,15 @@ class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
     component: str
     field: str
 
-class RuntimeDiagnostic(TypedDict, total=False):
+class _RuntimeDiagnosticRequired(TypedDict):
     code: str
     component: str
-    field: str
     message: str
-    session_id: str
     count: int
+
+class RuntimeDiagnostic(_RuntimeDiagnosticRequired, total=False):
+    field: str
+    session_id: str
 
 class ConfigReport(TypedDict):
     diagnostics: list[ConfigDiagnostic]

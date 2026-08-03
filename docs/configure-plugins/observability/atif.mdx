@@ -163,8 +163,10 @@ also sets `x-nemo-relay-atif-filename` and
 identity that local files and S3 uploads use.
 
 HTTP `2xx` responses are treated as success. Any non-`2xx` response or
-transport error records the endpoint as unhealthy and skips it for later
-trajectories. Other configured destinations continue to receive writes.
+transport error records a runtime delivery diagnostic. Relay attempts every
+configured destination again for each later trajectory, while other configured
+destinations continue to receive writes. If every remote destination fails for
+a trajectory, Relay writes a local recovery copy under `output_directory`.
 
 The following table describes HTTP storage settings:
 
@@ -236,11 +238,15 @@ renders `filename_template` the same way it does for local files, so a
 local→remote transition keeps object names stable. Relay adds a trailing `/` to
 `key_prefix` when one is missing.
 
-If an upload fails for a destination, the ATIF exporter records that destination
-as unhealthy and skips it for later trajectories. Other destinations continue
-to receive writes. The exporter reports fatal dispatcher failures, such as
-trajectory serialization failures, during plugin teardown. It isolates
-per-destination sink failures to the failed sink.
+If an upload fails for a destination, the ATIF exporter records a runtime
+delivery diagnostic and retries that destination for each later trajectory.
+Other destinations continue to receive writes. When every remote destination
+fails for one trajectory, Relay writes a local recovery copy under
+`output_directory`; a successful remote destination does not create that copy.
+The diagnostic remains visible in the active plugin report and causes plugin
+teardown to report the degraded delivery, even when the local recovery write
+succeeds. Fatal dispatcher failures, such as trajectory serialization failures,
+are also reported during teardown.
 
 ## Expected Output
 

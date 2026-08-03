@@ -68,6 +68,8 @@ use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
+/// Identifies teardown errors caused by recoverable ATIF delivery failures.
+pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime delivery failures";
 
 /// Top-level observability component wrapper.
 ///
@@ -1335,6 +1337,9 @@ impl AtifDispatcher {
         agent_uuid: Uuid,
         results: Vec<(SinkLabel, std::io::Result<()>)>,
     ) -> Option<(Uuid, String)> {
+        let is_remote_fallback = results
+            .iter()
+            .any(|(label, _)| matches!(label, SinkLabel::Remote(_)));
         for (label, result) in results {
             if result.is_ok()
                 && label == SinkLabel::Local
@@ -1375,10 +1380,10 @@ impl AtifDispatcher {
                     ),
                 }
                 self.record_runtime_failure(
-                    if matches!(label, SinkLabel::Local) {
-                        "atif.local_fallback_failed"
-                    } else {
-                        "atif.remote_delivery_failed"
+                    match &label {
+                        SinkLabel::Local if is_remote_fallback => "atif.local_fallback_failed",
+                        SinkLabel::Local => "atif.local_write_failed",
+                        SinkLabel::Remote(_) => "atif.remote_delivery_failed",
                     },
                     Some(field),
                     message,
@@ -1440,7 +1445,7 @@ impl AtifDispatcher {
         }
         if !self.runtime_failures.is_empty() {
             return Err(std::io::Error::other(format!(
-                "ATIF runtime delivery failures: {}",
+                "{ATIF_RUNTIME_DELIVERY_FAILURE_MARKER}: {}",
                 self.runtime_failures
                     .iter()
                     .map(|diagnostic| format!("{} ({})", diagnostic.code, diagnostic.count))
