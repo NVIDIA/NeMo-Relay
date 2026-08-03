@@ -186,6 +186,29 @@ pub struct ConfigReport {
     /// Validation and compatibility diagnostics in evaluation order.
     #[serde(default)]
     pub diagnostics: Vec<ConfigDiagnostic>,
+    /// Runtime delivery diagnostics recorded after activation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_diagnostics: Vec<RuntimeDiagnostic>,
+}
+
+/// Bounded aggregate for a runtime failure observed by an active plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RuntimeDiagnostic {
+    /// Stable failure classification.
+    pub code: String,
+    /// Plugin component that reported the failure.
+    pub component: String,
+    /// Optional configuration field associated with the failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Latest human-readable failure detail.
+    pub message: String,
+    /// Latest affected trajectory session identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Number of failures aggregated into this entry.
+    pub count: u64,
 }
 
 impl ConfigReport {
@@ -1508,7 +1531,10 @@ async fn initialize_plugins_exact_inner(
         component_count = enabled_component_count;
         "Plugin configuration activation started"
     );
-    let mut report = ConfigReport { diagnostics };
+    let mut report = ConfigReport {
+        diagnostics,
+        ..ConfigReport::default()
+    };
     report
         .diagnostics
         .extend(validate_plugin_config(&config).diagnostics);
@@ -2025,8 +2051,13 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     let deregistration_errors = previous
         .map(|mut previous_state| rollback_registrations_checked(&mut previous_state.registrations))
         .unwrap_or_default();
-    let callbacks_cleared = deregistration_errors.is_empty();
-    let deregistration_error = (!callbacks_cleared).then(|| {
+    // Runtime delivery failures are reported by an otherwise successful
+    // deregistration callback. They must propagate without treating callback
+    // removal itself as unsafe.
+    let callbacks_cleared = deregistration_errors
+        .iter()
+        .all(|error| error.contains("ATIF runtime delivery failures"));
+    let deregistration_error = (!deregistration_errors.is_empty()).then(|| {
         PluginError::RegistrationFailed(format!(
             "plugin teardown failed: {}",
             deregistration_errors.join("; ")
@@ -2162,6 +2193,32 @@ pub fn active_plugin_report() -> Option<ConfigReport> {
         .lock()
         .ok()
         .and_then(|guard| guard.as_ref().map(|state| state.report.clone()))
+}
+
+/// Record a bounded runtime diagnostic against the active plugin report.
+pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
+    let Ok(mut guard) = ACTIVE_PLUGIN_CONFIGURATION.lock() else {
+        return;
+    };
+    let Some(state) = guard.as_mut() else {
+        return;
+    };
+    if let Some(existing) = state
+        .report
+        .runtime_diagnostics
+        .iter_mut()
+        .find(|existing| {
+            existing.code == diagnostic.code
+                && existing.component == diagnostic.component
+                && existing.field == diagnostic.field
+        })
+    {
+        existing.message = diagnostic.message;
+        existing.session_id = diagnostic.session_id;
+        existing.count += 1;
+    } else {
+        state.report.runtime_diagnostics.push(diagnostic);
+    }
 }
 
 /// Rolls back registrations in reverse order, ignoring rollback failures.

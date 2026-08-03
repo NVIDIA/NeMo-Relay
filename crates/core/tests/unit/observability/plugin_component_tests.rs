@@ -706,7 +706,7 @@ fn atof_stream_header_validation_reports_invalid_values_and_environment_names() 
 }
 
 #[test]
-fn atif_dispatcher_surfaces_fatal_and_disabled_local_sink_states() {
+fn atif_dispatcher_surfaces_fatal_and_runtime_failure_states() {
     let mut dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
     assert_eq!(dispatcher.sink_targets(), vec![SinkLabel::Local]);
     dispatcher.fatal_error = Some("fatal export failure".into());
@@ -719,10 +719,14 @@ fn atif_dispatcher_surfaces_fatal_and_disabled_local_sink_states() {
     );
 
     dispatcher.fatal_error = None;
-    dispatcher
-        .sink_errors
-        .insert(SinkLabel::Local, "local write failed".into());
-    assert!(dispatcher.sink_targets().is_empty());
+    dispatcher.record_runtime_failure(
+        "atif.local_fallback_failed",
+        Some("output_directory".into()),
+        "local write failed".into(),
+        Some("session".into()),
+    );
+    assert_eq!(dispatcher.sink_targets(), vec![SinkLabel::Local]);
+    assert!(dispatcher.last_error_result().is_err());
 }
 
 #[test]
@@ -1828,7 +1832,19 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
     .unwrap();
     pop(&valid);
 
-    clear_plugin_configuration().unwrap();
+    assert!(
+        crate::plugin::active_plugin_report()
+            .unwrap()
+            .runtime_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "atif.destination_render_failed")
+    );
+    let teardown = clear_plugin_configuration().unwrap_err();
+    assert!(
+        teardown
+            .to_string()
+            .contains("atif.destination_render_failed")
+    );
     let invalid_filename = format!("trajectory-{}.json", invalid.uuid);
     assert!(
         !dir.join(&invalid_filename).exists()
@@ -2222,7 +2238,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
 
     let dispatcher = manager.lock().unwrap();
     assert!(dispatcher.fatal_error.is_none());
-    assert!(dispatcher.sink_errors.is_empty());
+    assert!(dispatcher.runtime_failures.is_empty());
     assert!(!dispatcher.agents.contains_key(&agent.uuid));
     assert!(!dispatcher.scope_subscribers.contains_key(&agent.uuid));
     assert!(path.exists());
@@ -2270,14 +2286,12 @@ fn atif_dispatcher_records_failed_agent_writes() {
         vec![(SinkLabel::Local, Err(std::io::Error::other("disk full")))],
     );
     assert!(scope_subscriber.is_some());
+    assert_eq!(dispatcher.runtime_failures.len(), 1);
     assert_eq!(
-        dispatcher
-            .sink_errors
-            .get(&SinkLabel::Local)
-            .map(String::as_str),
-        Some("disk full")
+        dispatcher.runtime_failures[0].code,
+        "atif.local_fallback_failed"
     );
-    assert!(dispatcher.last_error_result().is_ok());
+    assert!(dispatcher.last_error_result().is_err());
     drop(dispatcher);
     pop(&agent);
 }
@@ -2309,6 +2323,28 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
     assert!(remote_error.contains("storage[0]"));
     #[cfg(not(feature = "object-store"))]
     assert!(remote_error.contains("ATIF storage support is not enabled in this build"));
+}
+
+#[test]
+fn write_atif_spills_to_local_when_all_remote_sinks_fail() {
+    let dir = temp_dir("observability-atif-remote-fallback");
+    let path = dir.join("trajectory.json");
+    let agent_uuid = Uuid::now_v7();
+    let write = PendingAtifWrite {
+        agent_uuid,
+        session_id: agent_uuid.to_string(),
+        filename: "trajectory.json".into(),
+        local_path: Some(path.clone()),
+        payload: b"{}".to_vec(),
+    };
+
+    let results = write_atif(&write, &[], &[SinkLabel::Remote(0)]);
+
+    assert_eq!(results.len(), 2);
+    assert!(results[0].1.is_err());
+    assert_eq!(results[1].0, SinkLabel::Local);
+    assert!(results[1].1.is_ok());
+    assert_eq!(fs::read(path).unwrap(), b"{}");
 }
 
 #[test]
@@ -2377,6 +2413,8 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
     );
 
     for template in [
+        "/tmp/trajectory-{session_id}.json",
+        "../trajectory-{session_id}.json",
         "{metadata.}/trajectory-{session_id}.json",
         "{metadata.tenant..id}/trajectory-{session_id}.json",
         "{metadata.tenant/trajectory-{session_id}.json",

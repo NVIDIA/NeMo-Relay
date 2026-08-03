@@ -744,6 +744,7 @@ fn test_config_report_has_errors() {
             field: None,
             message: "boom".into(),
         }],
+        ..ConfigReport::default()
     };
     assert!(report.has_errors());
 }
@@ -1028,7 +1029,13 @@ fn test_plugin_helper_defaults_and_policy_diagnostics() {
     assert_eq!(diagnostics[0].component.as_deref(), Some("warn.plugin"));
     assert_eq!(diagnostics[0].field.as_deref(), Some("field"));
     assert_eq!(diagnostics[1].level, DiagnosticLevel::Error);
-    assert_eq!(join_error_messages(&ConfigReport { diagnostics }), "error");
+    assert_eq!(
+        join_error_messages(&ConfigReport {
+            diagnostics,
+            ..ConfigReport::default()
+        }),
+        "error"
+    );
 
     reset_global();
 }

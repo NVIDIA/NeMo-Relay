@@ -218,7 +218,18 @@ type ConfigDiagnostic struct {
 
 // ConfigReport is the validation or activation report for a plugin config.
 type ConfigReport struct {
-	Diagnostics []ConfigDiagnostic `json:"diagnostics,omitempty"`
+	Diagnostics        []ConfigDiagnostic  `json:"diagnostics,omitempty"`
+	RuntimeDiagnostics []RuntimeDiagnostic `json:"runtime_diagnostics,omitempty"`
+}
+
+// RuntimeDiagnostic is one bounded aggregate of a runtime plugin failure.
+type RuntimeDiagnostic struct {
+	Code      string  `json:"code"`
+	Component string  `json:"component"`
+	Field     *string `json:"field,omitempty"`
+	Message   string  `json:"message"`
+	SessionID *string `json:"session_id,omitempty"`
+	Count     uint64  `json:"count"`
 }
 
 // PluginComponentSpec is one top-level plugin component.

@@ -68,7 +68,13 @@ live OTLP spans.
 - Metadata values must be relative path fragments using ASCII letters, digits,
   `-`, `_`, `.`, `~`, and safe `/`-separated segments.
 - Missing, non-string, or unsafe metadata values skip only the affected
-  trajectory and produce an `atif_destination_render_failed` warning.
+  trajectory, record an `atif.destination_render_failed` runtime diagnostic,
+  and cause plugin teardown to fail. Literal template text must be relative
+  and traversal-free.
+- Remote storage failures are retried for each later trajectory. If every
+  remote destination fails for a trajectory, Relay writes a local recovery
+  copy under `output_directory`; the failure remains visible in
+  `plugin.report()` and teardown still fails.
 
 ## Checklist
 

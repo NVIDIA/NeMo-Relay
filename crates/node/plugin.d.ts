@@ -49,6 +49,17 @@ export interface ConfigDiagnostic {
 /** Validation or activation report for a plugin configuration. */
 export interface ConfigReport {
   diagnostics: ConfigDiagnostic[];
+  runtime_diagnostics?: RuntimeDiagnostic[];
+}
+
+/** One bounded aggregate of a runtime plugin failure. */
+export interface RuntimeDiagnostic {
+  code: string;
+  component: string;
+  field?: string;
+  message: string;
+  session_id?: string;
+  count: number;
 }
 
 /** One top-level plugin component. */

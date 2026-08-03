@@ -67,9 +67,9 @@ The following table describes the top-level ATIF settings:
 | `model_name` | `unknown` | Default model metadata when no call-level model is present. |
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
-| `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is non-empty. |
+| `output_directory` | Current working directory | Directory containing trajectory files and the recovery copy when every configured remote destination fails. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
-| `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend instead of being written locally. Refer to [Remote Storage](#remote-storage). |
+| `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend. If all fail for one trajectory, Relay writes a local recovery copy. Refer to [Remote Storage](#remote-storage). |
 
 ### Metadata-Based Paths
 
@@ -97,9 +97,10 @@ relative path fragment. Slash-separated segments can contain ASCII letters,
 digits, `-`, `_`, `.`, and `~`. Relay rejects empty segments, `.` and `..`
 segments, absolute paths, backslashes, spaces, and other characters. If a
 placeholder has no fallback and is missing or non-string, or if its resolved
-value is unsafe, Relay skips that trajectory and logs
-`atif_destination_render_failed`. The rendered filename applies to local, S3,
-and HTTP storage in the same way as a static filename.
+value is unsafe, Relay skips that trajectory. It records a runtime diagnostic
+in `plugin.report()` and causes plugin teardown to fail. Literal template text
+must also be a relative, traversal-free path. The rendered filename applies to
+local, S3, and HTTP storage in the same way as a static filename.
 
 The CLI gateway parses `x-nemo-relay-session-metadata` as JSON and merges it
 into the top-level scope metadata:

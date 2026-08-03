@@ -80,10 +80,22 @@ class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
     field: str
 
 
+class RuntimeDiagnostic(TypedDict, total=False):
+    """One aggregated runtime failure from an active plugin."""
+
+    code: str
+    component: str
+    field: str
+    message: str
+    session_id: str
+    count: int
+
+
 class ConfigReport(TypedDict):
     """Validation or activation report for a plugin config."""
 
     diagnostics: list[ConfigDiagnostic]
+    runtime_diagnostics: list[RuntimeDiagnostic]
 
 
 DynamicPluginKind = Literal["rust_dynamic", "worker"]
@@ -582,6 +594,7 @@ def deregister(plugin_kind: str) -> bool:
 __all__ = [
     "ComponentSpec",
     "ConfigDiagnostic",
+    "RuntimeDiagnostic",
     "ConfigPolicy",
     "ConfigReport",
     "DynamicPluginActivationSpec",
