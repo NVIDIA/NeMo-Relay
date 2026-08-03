@@ -251,7 +251,7 @@ jobs:
             PIP_CONSTRAINT=${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-build-constraints.txt
           CIBW_PLATFORM: android
           CIBW_TEST_COMMAND: ${{ matrix.architecture == 'x86_64' && 'python -c "import nemo_relay"' || '' }}
-          CIBW_TEST_RUNTIME_ANDROID: "args: --managed minVersion"
+          CIBW_TEST_RUNTIME_ANDROID: "args: --managed maxVersion"
         with:
           output-dir: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-wheels
 
