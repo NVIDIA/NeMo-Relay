@@ -696,10 +696,14 @@ fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
 fn http_trace_endpoint_resolution_completes_only_bare_http_urls() {
     for (endpoint, expected) in [
         ("http://localhost:4318", "http://localhost:4318/v1/traces"),
-        ("http://localhost:4318/", "http://localhost:4318/v1/traces"),
+        ("http://localhost:4318/", "http://localhost:4318/"),
         (
             "https://collector.example?tenant=one",
             "https://collector.example/v1/traces?tenant=one",
+        ),
+        (
+            "https://collector.example/?tenant=one",
+            "https://collector.example/?tenant=one",
         ),
         (
             "http://localhost:4318/v1/traces",

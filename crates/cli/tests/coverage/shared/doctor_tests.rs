@@ -1022,6 +1022,28 @@ async fn opentelemetry_doctor_resolves_bare_http_endpoints_and_warns_on_missing_
     accept.join().unwrap();
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let accept = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&listener);
+        let request = read_headers(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        request
+    });
+    let checks = observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": endpoint}]
+        }
+    }))
+    .await;
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(checks[0].details.contains("/ (HTTP 405)"));
+    let request = accept.join().unwrap();
+    assert!(request.starts_with("GET / HTTP/1.1"));
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}/wrong", listener.local_addr().unwrap());
     let accept = std::thread::spawn(move || {
         let mut stream = accept_bounded(&listener);

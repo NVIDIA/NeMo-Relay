@@ -156,7 +156,15 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
     let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
         return Cow::Borrowed(endpoint);
     };
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.path() != "/" {
+
+    let has_explicit_root_path = endpoint
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|url| url.ends_with('/'));
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.path() != "/"
+        || has_explicit_root_path
+    {
         return Cow::Borrowed(endpoint);
     }
     parsed.set_path("/v1/traces");
