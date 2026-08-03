@@ -56,48 +56,8 @@ pub fn build_cache_key(
     request: &LlmRequest,
     config: &ResponseCacheConfig,
 ) -> KeyOutcome {
-    // Unparseable bodies arrive as null; they would all share one key.
-    if request.content.is_null() {
-        return KeyOutcome::Bypass("unparseable_body");
-    }
-    // Cacheability gates run on the RAW request, so they are correct regardless
-    // of which codec (if any) decodes the body — a chat codec may park `store`
-    // in `extra` rather than the typed field, so we must not rely on the decode.
-    if let Some(object) = request.content.as_object() {
-        // Any present, non-`false` `store` opts into server-side persistence —
-        // bypass even a malformed non-boolean rather than risk caching a stateful
-        // call (whose result is otherwise keyed with `store` stripped).
-        if object
-            .get("store")
-            .is_some_and(|value| !matches!(value, Json::Bool(false) | Json::Null))
-        {
-            return KeyOutcome::Bypass("stateful_store");
-        }
-        if object.contains_key("previous_response_id") {
-            return KeyOutcome::Bypass("stateful_previous_response_id");
-        }
-        // Server-side conversation state the key cannot see.
-        if object.contains_key("conversation") || object.contains_key("container") {
-            return KeyOutcome::Bypass("stateful_conversation");
-        }
-        // Responses persists by default; only an explicit opt-out is stateless.
-        // A `prompt` object is the Responses prompt-template reference; a bare
-        // string `prompt` is a completions body with no server-side state.
-        if (object.contains_key("input")
-            || object.contains_key("instructions")
-            || object.get("prompt").is_some_and(Json::is_object))
-            && !object
-                .get("store")
-                .is_some_and(|store| store == &Json::Bool(false))
-        {
-            return KeyOutcome::Bypass("stateful_store");
-        }
-    }
-    // Toggle off = explicit temperature 0 only; absent defaults to sampling.
-    if !config.cache_nondeterministic
-        && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0)
-    {
-        return KeyOutcome::Bypass("nondeterministic_temperature");
+    if let Some(reason) = cache_bypass_reason(request, config) {
+        return KeyOutcome::Bypass(reason);
     }
 
     // Body to fingerprint: the decoded/normalized form when a surface resolves
@@ -134,6 +94,44 @@ pub fn build_cache_key(
         Some(key) => KeyOutcome::Key(key),
         None => KeyOutcome::Bypass("canonicalization_failed"),
     }
+}
+
+fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Option<&'static str> {
+    if request.content.is_null() {
+        return Some("unparseable_body");
+    }
+    if let Some(reason) = request
+        .content
+        .as_object()
+        .and_then(stateful_request_bypass_reason)
+    {
+        return Some(reason);
+    }
+    (!config.cache_nondeterministic
+        && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0))
+    .then_some("nondeterministic_temperature")
+}
+
+fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<&'static str> {
+    if object
+        .get("store")
+        .is_some_and(|value| !matches!(value, Json::Bool(false) | Json::Null))
+    {
+        return Some("stateful_store");
+    }
+    if object.contains_key("previous_response_id") {
+        return Some("stateful_previous_response_id");
+    }
+    if object.contains_key("conversation") || object.contains_key("container") {
+        return Some("stateful_conversation");
+    }
+    let responses_surface = object.contains_key("input")
+        || object.contains_key("instructions")
+        || object.get("prompt").is_some_and(Json::is_object);
+    let explicitly_stateless = object
+        .get("store")
+        .is_some_and(|store| store == &Json::Bool(false));
+    (responses_surface && !explicitly_stateless).then_some("stateful_store")
 }
 
 /// Preserves which OpenAI Chat token-cap field the caller sent.
