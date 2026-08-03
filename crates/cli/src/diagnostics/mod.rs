@@ -1368,8 +1368,24 @@ pub(crate) async fn run_doctor(
     target_agent: Option<CodingAgent>,
     json: bool,
     gateway_overrides: &GatewayOverrides,
+    logging_fallback_error: Option<&CliError>,
 ) -> Result<std::process::ExitCode, CliError> {
-    let report = collect_report(target_agent, gateway_overrides).await?;
+    let mut report = collect_report(target_agent, gateway_overrides).await?;
+    if let Some(error) = logging_fallback_error {
+        let logging_details = format!(
+            "could not resolve logging configuration: {error}; repair or recreate the named logging configuration file"
+        );
+        if report.configuration.resolution.status == Status::Pass {
+            report.configuration.resolution.status = Status::Fail;
+            report.configuration.resolution.details = logging_details;
+        } else {
+            report
+                .configuration
+                .resolution
+                .details
+                .push_str(&format!("; additionally, {logging_details}"));
+        }
+    }
     log::info!(
         target: "nemo_relay.diagnostics",
         event = "diagnostics_completed",

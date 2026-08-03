@@ -3267,6 +3267,128 @@ fn cli_doctor_json_reports_a_missing_explicit_config() {
 }
 
 #[test]
+fn cli_doctor_reports_a_missing_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/logging.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .arg("doctor")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Configuration"));
+    assert!(stdout.contains("Resolution"));
+    assert!(stdout.contains("could not resolve logging configuration"));
+    assert!(stdout.contains(config.to_str().unwrap()));
+    assert!(stdout.contains("Agents detected"));
+    assert!(stdout.contains("Some checks FAILED"));
+}
+
+#[test]
+fn cli_doctor_json_reports_a_missing_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/logging.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let resolution = &report["configuration"]["resolution"];
+    assert_eq!(resolution["status"], "fail");
+    assert!(
+        resolution["details"]
+            .as_str()
+            .unwrap()
+            .contains(config.to_str().unwrap())
+    );
+}
+
+#[test]
+fn cli_doctor_reports_invalid_explicit_logging_config_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    for (path, expected) in [
+        (PathBuf::from("logging.toml"), "must be absolute"),
+        (
+            temp.path().join("logging.json"),
+            "must identify a .toml file",
+        ),
+    ] {
+        let output = Command::new(gateway_bin())
+            .current_dir(&cwd)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("HOME", temp.path())
+            .args(["--log-config-path"])
+            .arg(&path)
+            .args(["doctor", "--json"])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "path: {}", path.display());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let resolution = &report["configuration"]["resolution"];
+        assert_eq!(resolution["status"], "fail");
+        assert!(
+            resolution["details"].as_str().unwrap().contains(expected),
+            "path: {}, details: {}",
+            path.display(),
+            resolution["details"]
+        );
+    }
+}
+
+#[test]
+fn cli_doctor_accepts_a_valid_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let (config, _log_path) = write_jsonl_logging_config(temp.path());
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "pass");
+}
+
+#[test]
 fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("workspace");
