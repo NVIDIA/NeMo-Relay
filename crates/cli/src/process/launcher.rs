@@ -612,8 +612,16 @@ impl PreparedAgentLaunch {
         println!("gateway_url = {gateway_url}");
         println!("openai_base_url = {}", resolved.gateway.openai_base_url);
         println!(
+            "openai_auth = {}",
+            auth_presence_label(resolved.gateway.openai_auth_header.as_deref())
+        );
+        println!(
             "anthropic_base_url = {}",
             resolved.gateway.anthropic_base_url
+        );
+        println!(
+            "anthropic_auth = {}",
+            auth_presence_label(resolved.gateway.anthropic_auth_header.as_deref())
         );
         println!(
             "max_hook_payload_bytes = {}",
@@ -645,6 +653,14 @@ impl PreparedAgentLaunch {
         for note in &self.notes {
             println!("note = {note}");
         }
+    }
+}
+
+fn auth_presence_label(header: Option<&str>) -> &'static str {
+    if header.is_some() {
+        "configured"
+    } else {
+        "unset"
     }
 }
 

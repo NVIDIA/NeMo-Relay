@@ -123,10 +123,10 @@ pub(crate) async fn collect_report(
         configuration: collect_configuration(
             cwd.as_deref(),
             home.as_deref(),
+            &resolved,
             gateway_overrides,
             resolution,
             configured_agents,
-            &resolved.dynamic_plugins,
             &plugin_diagnostics,
         ),
         agents: collect_agents(target_agent, &resolved).await,
@@ -139,10 +139,10 @@ pub(crate) async fn collect_report(
 fn collect_configuration(
     cwd: Option<&Path>,
     home: Option<&Path>,
+    resolved: &ResolvedConfig,
     gateway_overrides: &GatewayOverrides,
     resolution: Check,
     configured_agents: Vec<String>,
-    dynamic_plugins: &[crate::configuration::ResolvedDynamicPluginConfig],
     plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
     let explicit_config = gateway_overrides.config.is_some();
@@ -171,6 +171,10 @@ fn collect_configuration(
         workspace,
         global,
         system,
+        upstream_auth: UpstreamAuthInfo::from_gateway_headers(
+            resolved.gateway.openai_auth_header.as_deref(),
+            resolved.gateway.anthropic_auth_header.as_deref(),
+        ),
         plugin_configs: diagnostic_plugin_config_paths(
             gateway_overrides.config.as_ref(),
             gateway_overrides.plugin_config_path.as_ref(),
@@ -190,7 +194,8 @@ fn collect_configuration(
         // out of FileConfig. Doctor reports `None` until that lands.
         default_agent: None,
         configured_agents,
-        dynamic_plugins: dynamic_plugins
+        dynamic_plugins: resolved
+            .dynamic_plugins
             .iter()
             .map(|plugin| DynamicPluginReferenceInfo {
                 plugin_id: plugin.plugin_id.clone(),

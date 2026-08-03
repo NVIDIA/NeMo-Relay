@@ -3305,6 +3305,44 @@ fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
 }
 
 #[test]
+fn cli_doctor_json_reports_effective_upstream_auth_presence() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("nested");
+    let project_config = project.join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        &project_config,
+        r#"
+[upstream]
+openai_base_url = "http://project-openai"
+openai_auth_header = "Bearer project-openai"
+anthropic_base_url = "http://project-anthropic"
+anthropic_auth_header = "Basic project-anthropic"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["upstream_auth"]["openai"], "unset");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "configured"
+    );
+}
+
+#[test]
 fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
@@ -3650,6 +3688,41 @@ mode = "append"
     assert!(stdout.contains("argv = codex"));
     let expected_atof_path = std::path::Path::new("logs").join("events.jsonl");
     assert!(stdout.contains(&format!("ATOF {}", expected_atof_path.display())));
+}
+
+#[test]
+fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let nested = project.join("nested");
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        project.join(".nemo-relay/config.toml"),
+        r#"
+[upstream]
+openai_base_url = "http://project-openai"
+openai_auth_header = "Bearer project-openai"
+anthropic_base_url = "http://project-anthropic"
+anthropic_auth_header = "Basic project-anthropic"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .args(["run", "--agent", "codex", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("openai_base_url = http://env-openai"));
+    assert!(stdout.contains("openai_auth = unset"));
+    assert!(stdout.contains("anthropic_auth = configured"));
 }
 
 #[test]

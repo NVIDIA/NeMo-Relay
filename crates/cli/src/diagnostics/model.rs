@@ -55,12 +55,55 @@ pub(crate) struct ConfigurationInfo {
     pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,
+    pub upstream_auth: UpstreamAuthInfo,
     pub plugin_configs: Vec<ConfigLayer>,
     pub plugin_resolution: Check,
     pub resolution: Check,
     pub default_agent: Option<String>,
     pub configured_agents: Vec<String>,
     pub dynamic_plugins: Vec<DynamicPluginReferenceInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct UpstreamAuthInfo {
+    pub openai: SecretPresence,
+    pub anthropic: SecretPresence,
+}
+
+impl UpstreamAuthInfo {
+    pub(crate) fn from_gateway_headers(
+        openai_auth_header: Option<&str>,
+        anthropic_auth_header: Option<&str>,
+    ) -> Self {
+        Self {
+            openai: SecretPresence::from_header(openai_auth_header),
+            anthropic: SecretPresence::from_header(anthropic_auth_header),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SecretPresence {
+    Configured,
+    Unset,
+}
+
+impl SecretPresence {
+    pub(crate) fn from_header(header: Option<&str>) -> Self {
+        if header.is_some() {
+            Self::Configured
+        } else {
+            Self::Unset
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Unset => "unset",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
