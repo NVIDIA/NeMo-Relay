@@ -1,8 +1,8 @@
 ---
 title: "Function active_plugin_report"
 sidebar-title: "active_plugin_report"
-description: "Returns the last successfully configured plugin report."
-position: 14
+description: "Returns the active plugin report or a report retained after a failed teardown."
+position: 15
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,13 +11,13 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn active_plugin_report() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-configreport\">ConfigReport</a>&gt;"}} /></pre>
 
-Returns the last successfully configured plugin report.
+Returns the active plugin report or a report retained after a failed teardown.
 
-`None` indicates that no plugin configuration is currently active.
+`None` indicates that no plugin configuration is active and no failed teardown report is retained.
 
 ## Returns
 
-The last successful [`ConfigReport`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport), or `None` when no configuration is active.
+The active [`ConfigReport`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport), or the report containing runtime diagnostics from the last failed teardown.
 
 ## Notes
 

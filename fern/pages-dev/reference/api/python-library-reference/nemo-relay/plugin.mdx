@@ -19,6 +19,10 @@ Generic plugin configuration and registration helpers.
 
 One plugin validation diagnostic.
 
+### `RuntimeDiagnostic(_RuntimeDiagnosticRequired)`
+
+One aggregated runtime failure from an active plugin.
+
 ### `ConfigReport(TypedDict)`
 
 Validation or activation report for a plugin config.
@@ -345,7 +349,7 @@ Context manager for plugin initialization and cleanup.
 def report() -> ConfigReport | None
 ```
 
-Return the last successful plugin report.
+Return the active plugin report or a failed-teardown diagnostic report.
 
 ### `list_kinds`
 

@@ -2,7 +2,7 @@
 title: "Function initialize_plugins"
 sidebar-title: "initialize_plugins"
 description: "Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. Each file's schema version is validated before layering. Declaring a component in `config` applies its `enabled` value, while default policy values inherit from discovered files and component `config` bodies merge field-by-field. The resolved configuration and diagnostics are passed to the shared `initialize_plugins_with_diagnostics` helper. Call `initialize_plugins_exact` directly when `config` is already fully resolved and every value must be applied exactly."
-position: 19
+position: 20
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}

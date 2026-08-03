@@ -67,9 +67,9 @@ The following table describes the top-level ATIF settings:
 | `model_name` | `unknown` | Default model metadata when no call-level model is present. |
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
-| `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is non-empty. |
+| `output_directory` | Current working directory | Directory containing trajectory files and the recovery copy when every configured remote destination fails. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
-| `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend instead of being written locally. Refer to [Remote Storage](#remote-storage). |
+| `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend. If all fail for one trajectory, Relay writes a local recovery copy. Refer to [Remote Storage](#remote-storage). |
 
 ### Metadata-Based Paths
 
@@ -97,9 +97,10 @@ relative path fragment. Slash-separated segments can contain ASCII letters,
 digits, `-`, `_`, `.`, and `~`. Relay rejects empty segments, `.` and `..`
 segments, absolute paths, backslashes, spaces, and other characters. If a
 placeholder has no fallback and is missing or non-string, or if its resolved
-value is unsafe, Relay skips that trajectory and logs
-`atif_destination_render_failed`. The rendered filename applies to local, S3,
-and HTTP storage in the same way as a static filename.
+value is unsafe, Relay skips that trajectory. It records a runtime diagnostic
+in `plugin.report()` and causes plugin teardown to fail. Literal template text
+must also be a relative, traversal-free path. The rendered filename applies to
+local, S3, and HTTP storage in the same way as a static filename.
 
 The CLI gateway parses `x-nemo-relay-session-metadata` as JSON and merges it
 into the top-level scope metadata:
@@ -113,7 +114,9 @@ x-nemo-relay-session-metadata: {"atif_prefix":"tenant-a/session-123"}
 Use `storage` when local trace files are not durable across sessions, such as in
 sandboxed runtimes. When `storage` is non-empty, Relay uploads each completed
 trajectory to every configured backend instead of writing a local file.
-`output_directory` is ignored.
+`output_directory` is ignored for successful remote writes, but Relay uses it
+for a local recovery copy when every configured remote destination fails for a
+trajectory.
 
 Each storage entry is tagged with a `type` discriminator so additional
 backends can be added without breaking existing configs. S3-compatible object
@@ -162,8 +165,10 @@ also sets `x-nemo-relay-atif-filename` and
 identity that local files and S3 uploads use.
 
 HTTP `2xx` responses are treated as success. Any non-`2xx` response or
-transport error records the endpoint as unhealthy and skips it for later
-trajectories. Other configured destinations continue to receive writes.
+transport error records a runtime delivery diagnostic. Relay attempts every
+configured destination again for each later trajectory, while other configured
+destinations continue to receive writes. If every remote destination fails for
+a trajectory, Relay writes a local recovery copy under `output_directory`.
 
 The following table describes HTTP storage settings:
 
@@ -235,11 +240,15 @@ renders `filename_template` the same way it does for local files, so a
 local→remote transition keeps object names stable. Relay adds a trailing `/` to
 `key_prefix` when one is missing.
 
-If an upload fails for a destination, the ATIF exporter records that destination
-as unhealthy and skips it for later trajectories. Other destinations continue
-to receive writes. The exporter reports fatal dispatcher failures, such as
-trajectory serialization failures, during plugin teardown. It isolates
-per-destination sink failures to the failed sink.
+If an upload fails for a destination, the ATIF exporter records a runtime
+delivery diagnostic and retries that destination for each later trajectory.
+Other destinations continue to receive writes. When every remote destination
+fails for one trajectory, Relay writes a local recovery copy under
+`output_directory`; a successful remote destination does not create that copy.
+The diagnostic remains visible in `plugin.report()` and is retained there after
+a failed teardown. Teardown also reports the degraded delivery, even when the
+local recovery write succeeds. Fatal dispatcher failures, such as trajectory
+serialization failures, are also reported during teardown.
 
 ## Expected Output
 

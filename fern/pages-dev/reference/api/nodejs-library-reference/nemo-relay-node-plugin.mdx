@@ -71,6 +71,22 @@ Validation or activation report for a plugin configuration.
 ```ts
 export interface ConfigReport {
   diagnostics: ConfigDiagnostic[];
+  runtime_diagnostics?: RuntimeDiagnostic[];
+}
+```
+
+### `RuntimeDiagnostic`
+
+One bounded aggregate of a runtime plugin failure.
+
+```ts
+export interface RuntimeDiagnostic {
+  code: string;
+  component: string;
+  field?: string;
+  message: string;
+  session_id?: string;
+  count: number;
 }
 ```
 

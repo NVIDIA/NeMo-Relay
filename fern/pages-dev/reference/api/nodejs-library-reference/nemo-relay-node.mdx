@@ -1443,7 +1443,7 @@ export declare function clearPluginConfiguration(): void
 
 ### `activePluginReport`
 
-Return the last successfully configured plugin report.
+Return the active plugin report or one retained after a teardown failure with runtime diagnostics.
 
 ```ts
 export declare function activePluginReport(): Json | null
