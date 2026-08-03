@@ -1612,9 +1612,10 @@ async fn initialize_plugin_components_catching_panics(
 /// layering as the gateway. Each file's schema version is validated before
 /// layering. Declaring a component in `config` applies its `enabled` value,
 /// while default policy values inherit from discovered files and component
-/// `config` bodies merge field-by-field. Delegates to
-/// [`initialize_plugins_exact`]. Call that function directly when `config` is
-/// already fully resolved and every value must be applied exactly.
+/// `config` bodies merge field-by-field. The resolved configuration and
+/// diagnostics are passed to the shared `initialize_plugins_with_diagnostics`
+/// helper. Call [`initialize_plugins_exact`] directly when `config` is already
+/// fully resolved and every value must be applied exactly.
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
     let resolved = resolve_plugin_config(config)?;
     initialize_plugins_with_diagnostics(resolved.config, resolved.diagnostics).await
