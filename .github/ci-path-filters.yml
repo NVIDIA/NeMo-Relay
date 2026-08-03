@@ -106,6 +106,8 @@ python_package:
   - 'python/nemo_relay/**'
   - 'rust-toolchain.toml'
   - 'scripts/package-cli-bin.py'
+  - 'scripts/package_python_musllinux.py'
+  - 'scripts/python_package_version.py'
   - 'uv.lock'
 
 python_integration_langchain:

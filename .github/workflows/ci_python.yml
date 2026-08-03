@@ -201,9 +201,21 @@ jobs:
           cache-all-crates: true
           cache-bin: false
 
-      - name: Derive Python package version
+      - name: Derive packaging configuration
         run: |
           set -euo pipefail
+          maturin_version="$(awk '
+            $0 == "name = \"maturin\"" { found = 1; next }
+            found && /^version = / {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' uv.lock)"
+          if [[ -z "$maturin_version" ]]; then
+            echo "Error: failed to read maturin version from uv.lock" >&2
+            exit 1
+          fi
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
           if [[ -z "$version" ]]; then
             echo "Error: failed to read workspace version from Cargo.toml" >&2
@@ -214,6 +226,9 @@ jobs:
           else
             version="${version}+${GITHUB_SHA::8}"
           fi
+          mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}"
+          printf 'maturin==%s\n' "$maturin_version" > \
+            "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-build-constraints.txt"
           printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Materialize Python package version
@@ -226,8 +241,11 @@ jobs:
           CIBW_ARCHS: ${{ matrix.architecture }}
           CIBW_BUILD: cp313-*
           CIBW_BUILD_VERBOSITY: "1"
+          CIBW_ENVIRONMENT_ANDROID: >-
+            PIP_CONSTRAINT=${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-build-constraints.txt
           CIBW_PLATFORM: android
           CIBW_TEST_COMMAND: ${{ matrix.architecture == 'x86_64' && 'python -c "import nemo_relay"' || '' }}
+          CIBW_TEST_RUNTIME_ANDROID: "args: --managed minVersion"
         with:
           output-dir: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/android-wheels
 

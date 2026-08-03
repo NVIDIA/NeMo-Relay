@@ -33,11 +33,26 @@ class PythonPackageVersionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
             pyproject = source / "pyproject.toml"
-            pyproject.write_text('[project]\ndynamic = ["version"]\n')
+            pyproject.write_text(
+                '[project]\ndynamic = ["version"]\n'
+                '[project.optional-dependencies]\ncli = ["nemo-relay-cli-bin==0.8.0"]\n'
+            )
 
             PYTHON_PACKAGE_VERSION.materialize_python_version(source, "0.8.0rc1")
 
-            self.assertEqual(pyproject.read_text(), '[project]\nversion = "0.8.0rc1"\n')
+            self.assertEqual(
+                pyproject.read_text(),
+                '[project]\nversion = "0.8.0rc1"\n'
+                '[project.optional-dependencies]\ncli = ["nemo-relay-cli-bin==0.8.0rc1"]\n',
+            )
+
+    def test_rejects_missing_cli_extra(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "pyproject.toml").write_text('[project]\ndynamic = ["version"]\n')
+
+            with self.assertRaisesRegex(ValueError, "CLI extra version"):
+                PYTHON_PACKAGE_VERSION.materialize_python_version(source, "0.8.0")
 
     def test_rejects_unsupported_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported Python package version"):

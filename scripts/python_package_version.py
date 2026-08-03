@@ -47,7 +47,16 @@ def materialize_python_version(source: Path, version: str) -> None:
     text = pyproject.read_text()
     if 'dynamic = ["version"]' not in text:
         raise ValueError("Failed to find dynamic version field in pyproject.toml")
-    pyproject.write_text(text.replace('dynamic = ["version"]', f'version = "{version}"', 1))
+    updated = text.replace('dynamic = ["version"]', f'version = "{version}"', 1)
+    updated, count = re.subn(
+        r'("nemo-relay-cli-bin==)[^"]+(")',
+        rf"\g<1>{version}\g<2>",
+        updated,
+        count=1,
+    )
+    if count != 1:
+        raise ValueError("Failed to update the nemo-relay CLI extra version")
+    pyproject.write_text(updated)
 
 
 def main() -> None:
