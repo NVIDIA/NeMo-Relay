@@ -114,7 +114,9 @@ x-nemo-relay-session-metadata: {"atif_prefix":"tenant-a/session-123"}
 Use `storage` when local trace files are not durable across sessions, such as in
 sandboxed runtimes. When `storage` is non-empty, Relay uploads each completed
 trajectory to every configured backend instead of writing a local file.
-`output_directory` is ignored.
+`output_directory` is ignored for successful remote writes, but Relay uses it
+for a local recovery copy when every configured remote destination fails for a
+trajectory.
 
 Each storage entry is tagged with a `type` discriminator so additional
 backends can be added without breaking existing configs. S3-compatible object
