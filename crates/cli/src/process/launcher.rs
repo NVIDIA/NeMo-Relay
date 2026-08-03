@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 
 use crate::agents::CodingAgent;
 use crate::configuration::{AgentConfigs, GatewayConfig, ResolvedConfig, resolve_run_config};
+use crate::diagnostics::UpstreamAuthInfo;
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
@@ -608,13 +609,16 @@ impl PreparedAgentLaunch {
     // Prints the resolved transparent-run plan, including dynamic gateway URL, upstream base URLs,
     // argv/env injection, and any agent-specific notes or temporary files.
     fn print(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
+        let upstream_auth = UpstreamAuthInfo::from_effective_gateway_auth(&resolved.gateway);
         println!("agent = {}", agent.as_arg());
         println!("gateway_url = {gateway_url}");
         println!("openai_base_url = {}", resolved.gateway.openai_base_url);
+        println!("openai_auth = {}", upstream_auth.openai.as_str());
         println!(
             "anthropic_base_url = {}",
             resolved.gateway.anthropic_base_url
         );
+        println!("anthropic_auth = {}", upstream_auth.anthropic.as_str());
         println!(
             "max_hook_payload_bytes = {}",
             resolved.gateway.max_hook_payload_bytes

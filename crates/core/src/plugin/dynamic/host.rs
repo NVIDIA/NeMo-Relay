@@ -79,7 +79,7 @@ impl PluginHostActivation {
     {
         let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
         validate_dynamic_plugin_specs(&dynamic_plugins)?;
-        Self::activate_validated(config, dynamic_plugins).await
+        Self::activate_validated(config, dynamic_plugins, Vec::new()).await
     }
 
     /// Load dynamic plugins after layering `config` over discovered `plugins.toml` files.
@@ -97,16 +97,17 @@ impl PluginHostActivation {
     {
         let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
         validate_dynamic_plugin_specs(&dynamic_plugins)?;
-        let config = resolve_plugin_config(config)?;
-        Self::activate_validated(config, dynamic_plugins).await
+        let resolved = resolve_plugin_config(config)?;
+        Self::activate_validated(resolved.config, dynamic_plugins, resolved.diagnostics).await
     }
 
     async fn activate_validated(
         config: PluginConfig,
         dynamic_plugins: Vec<DynamicPluginActivationSpec>,
+        diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     ) -> Result<(Self, ConfigReport)> {
         run_owned_plugin_mutation("dynamic plugin activation", move || async move {
-            Self::activate_inner(config, dynamic_plugins).await
+            Self::activate_inner(config, dynamic_plugins, diagnostics).await
         })
         .await
     }
@@ -114,6 +115,7 @@ impl PluginHostActivation {
     async fn activate_inner(
         mut config: PluginConfig,
         dynamic_plugins: Vec<DynamicPluginActivationSpec>,
+        diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     ) -> Result<(Self, ConfigReport)> {
         let dynamic_plugin_count = dynamic_plugins.len();
         log::info!(
@@ -190,6 +192,7 @@ impl PluginHostActivation {
             config,
             owner_id,
             Arc::clone(&rollback_failures),
+            diagnostics,
         ))
         .await
         .map_err(|error| {

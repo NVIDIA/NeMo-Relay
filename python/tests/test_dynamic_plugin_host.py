@@ -323,7 +323,8 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
 
     project_config = tmp_path / ".nemo-relay"
     project_config.mkdir()
-    (project_config / "plugins.toml").write_text(
+    plugins_toml = project_config / "plugins.toml"
+    plugins_toml.write_text(
         textwrap.dedent(
             f"""
             version = 1
@@ -343,6 +344,15 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
     activation = None
     try:
         activation = await plugin.initialize_with_dynamic_plugins(plugin.PluginConfig(), [native_dynamic_plugin.spec()])
+        assert activation.report == {
+            "diagnostics": [
+                {
+                    "level": "warning",
+                    "code": "plugin.configuration_inherited",
+                    "message": f"inherited plugin configuration from discovered file: {plugins_toml.resolve()}",
+                }
+            ]
+        }
         result = await tools.execute("python-file-static-base", {"input": True}, lambda args: args)
         assert result["file_static_base"] is True
         assert result["native_plugin_tool_execution"] is True

@@ -55,7 +55,7 @@ service_name = "agent-service"
 
 [[components.config.opentelemetry.endpoints]]
 type = "gen_ai"
-endpoint = "http://localhost:4318/v1/traces"
+endpoint = "http://localhost:4319/v1/traces"
 service_name = "agent-service"
 
 [[components.config.opentelemetry.endpoints]]
@@ -65,8 +65,14 @@ service_name = "agent-service"
 ```
 
 When OpenTelemetry is enabled, `endpoints` must contain at least one entry.
-Endpoint types can be combined or repeated with independent destinations. All
-endpoints are constructed before the plugin registers its fan-out subscriber.
+Endpoint types can be combined. Repeated endpoint types can use the same
+endpoint and transport. Two different endpoint types must not use the same
+endpoint and transport: Relay
+rejects that configuration because their deterministic trace and span IDs would
+collide at the receiver. For `http_binary`, this comparison uses the effective
+trace destination, so a bare URL and the same URL with `/v1/traces` also
+collide. All endpoints are constructed before the plugin
+registers its fan-out subscriber.
 
 ## Multi-Endpoint Lifecycle
 
@@ -97,7 +103,15 @@ with higher-precedence entries first. The observability destination lists
 rule, so explicit-or-user, project, system, and programmatic layers can
 contribute destinations. Arbitrary lists nested inside structured values
 retain replacement semantics. List entries are not merged item by item.
-To change or remove an inherited endpoint, edit the layer that declares it.
+
+When library initialization discovers `plugins.toml` files, Relay emits one
+`plugin.configuration_inherited` warning per file. Each warning is written to
+the operational log and included in the initialization result and active plugin
+report. It names only the source path, never destination values or credentials.
+Relay continues with the layered destination set; validation or activation
+errors in that effective configuration still fail normally. To change or
+remove an inherited endpoint, edit the layer that declares it.
+
 For complete layering rules, refer to
 [Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
 
