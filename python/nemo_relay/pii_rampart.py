@@ -37,7 +37,7 @@ class RampartPiiConfig:
     min_score: float = 0.4
     excluded_labels: list[str] = field(default_factory=list)
     replacement: str = "[REDACTED]"
-    max_windows_per_payload: int = 128
+    max_windows_per_payload: int = 4
     inference_batch_size: int = 16
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
 

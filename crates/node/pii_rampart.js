@@ -40,7 +40,7 @@ function defaultConfig(modelPath, config) {
     min_score: 0.4,
     excluded_labels: [],
     replacement: '[REDACTED]',
-    max_windows_per_payload: 128,
+    max_windows_per_payload: 4,
     inference_batch_size: 16,
     ...config,
     model_path: modelPath,

@@ -15,6 +15,7 @@ describe('pii_rampart plugin helpers', () => {
       target_path_patterns: ['/messages/*/content'],
     });
     assert.equal(config.model_path, '/models/rampart');
+    assert.equal(config.max_windows_per_payload, 4);
     assert.equal(config.inference_batch_size, 16);
     assert.equal(rampart.RAMPART_MODEL_ID, 'nationaldesignstudio/rampart');
     assert.equal(rampart.RAMPART_MODEL_REVISION, 'b1993e4e68b082835b80ffc65acc03325ea2e501');

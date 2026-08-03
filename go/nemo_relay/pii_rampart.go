@@ -56,7 +56,7 @@ func NewRampartPiiConfig(modelPath string) RampartPiiConfig {
 		MinScore:             0.4,
 		ExcludedLabels:       []string{},
 		Replacement:          "[REDACTED]",
-		MaxWindowsPerPayload: 128,
+		MaxWindowsPerPayload: 4,
 		InferenceBatchSize:   16,
 	}
 }

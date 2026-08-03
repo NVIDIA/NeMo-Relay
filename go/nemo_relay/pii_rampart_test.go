@@ -18,6 +18,9 @@ func TestRampartPiiConfigHelpers(t *testing.T) {
 	if component.Config["model_path"] != "/models/rampart" {
 		t.Fatalf("unexpected Rampart PII config: %#v", component.Config)
 	}
+	if config.MaxWindowsPerPayload != 4 {
+		t.Fatalf("unexpected Rampart PII window limit: %d", config.MaxWindowsPerPayload)
+	}
 	if RampartModelID != "nationaldesignstudio/rampart" ||
 		RampartModelRevision != "b1993e4e68b082835b80ffc65acc03325ea2e501" {
 		t.Fatalf("unexpected Rampart model identity: %s@%s", RampartModelID, RampartModelRevision)

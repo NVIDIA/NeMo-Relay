@@ -29,9 +29,8 @@ use crate::builtin::escape_json_pointer_segment;
 use crate::overlay::BuiltinCodecName;
 
 use super::RampartPiiConfig;
-use super::model::{Detection, RampartDetector};
+use super::model::{Detection, DetectionError, RampartDetector};
 
-const MAX_TEXT_BYTES: usize = 16 * 1024;
 const MAX_TEXTS_PER_PAYLOAD: usize = 256;
 const MAX_PAYLOAD_TEXT_BYTES: usize = 256 * 1024;
 // Cap CPU workers while respecting smaller hosts and container CPU quotas.
@@ -48,11 +47,11 @@ fn inference_worker_count() -> usize {
 }
 
 pub(super) trait DetectionModel: Send + Sync {
-    fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>>;
+    fn detect(&self, texts: &[&str]) -> Result<Vec<Detection>, DetectionError>;
 }
 
 impl DetectionModel for RampartDetector {
-    fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>> {
+    fn detect(&self, texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
         RampartDetector::detect(self, texts)
     }
 }
@@ -95,7 +94,12 @@ impl JsonPointerPattern {
 
 struct SelectedText {
     text: String,
-    eligible: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SanitizeError {
+    Codec,
+    PayloadLimit,
 }
 
 enum EventField {
@@ -218,13 +222,14 @@ impl RampartSanitizer {
         Json::String(self.replacement.to_string())
     }
 
-    fn sanitize_json(&self, value: Json) -> Json {
-        self.sanitize_json_values(vec![value])
+    fn sanitize_json(&self, value: Json) -> Result<Json, SanitizeError> {
+        Ok(self
+            .sanitize_json_values(vec![value])?
             .pop()
-            .expect("single-value sanitization returns one value")
+            .expect("single-value sanitization returns one value"))
     }
 
-    fn sanitize_json_values(&self, values: Vec<Json>) -> Vec<Json> {
+    fn sanitize_json_values(&self, values: Vec<Json>) -> Result<Vec<Json>, SanitizeError> {
         self.sanitize_json_roots(
             values
                 .into_iter()
@@ -233,28 +238,24 @@ impl RampartSanitizer {
         )
     }
 
-    fn sanitize_json_roots(&self, mut roots: Vec<(Vec<String>, Json)>) -> Vec<Json> {
+    fn sanitize_json_roots(
+        &self,
+        mut roots: Vec<(Vec<String>, Json)>,
+    ) -> Result<Vec<Json>, SanitizeError> {
         let mut texts = Vec::new();
         let mut total_bytes = 0;
-        let mut within_budget = true;
         for (path, value) in &roots {
             let mut path = path.clone();
-            self.collect_strings(
-                value,
-                &mut path,
-                &mut texts,
-                &mut total_bytes,
-                &mut within_budget,
-            );
+            self.collect_strings(value, &mut path, &mut texts, &mut total_bytes)?;
         }
 
-        let sanitized = self.sanitize_texts(texts);
+        let sanitized = self.sanitize_texts(texts)?;
         let mut index = 0;
         for (path, value) in &mut roots {
             let mut path = path.clone();
             self.replace_strings(value, &mut path, &sanitized, &mut index);
         }
-        roots.into_iter().map(|(_, value)| value).collect()
+        Ok(roots.into_iter().map(|(_, value)| value).collect())
     }
 
     fn collect_strings(
@@ -263,51 +264,40 @@ impl RampartSanitizer {
         path: &mut Vec<String>,
         texts: &mut Vec<SelectedText>,
         total_bytes: &mut usize,
-        within_budget: &mut bool,
-    ) {
+    ) -> Result<(), SanitizeError> {
         match value {
             Json::String(text) if self.matches_path(path) => {
-                if !*within_budget || texts.len() >= MAX_TEXTS_PER_PAYLOAD {
-                    *within_budget = false;
-                    return;
-                }
-                if text.len() > MAX_TEXT_BYTES {
-                    texts.push(SelectedText {
-                        text: self.replacement.to_string(),
-                        eligible: false,
-                    });
-                    return;
+                if texts.len() >= MAX_TEXTS_PER_PAYLOAD {
+                    return Err(SanitizeError::PayloadLimit);
                 }
                 let Some(next_total) = total_bytes.checked_add(text.len()) else {
-                    *within_budget = false;
-                    return;
+                    return Err(SanitizeError::PayloadLimit);
                 };
                 if next_total > MAX_PAYLOAD_TEXT_BYTES {
-                    *within_budget = false;
-                    return;
+                    return Err(SanitizeError::PayloadLimit);
                 }
                 *total_bytes = next_total;
-                texts.push(SelectedText {
-                    text: text.clone(),
-                    eligible: true,
-                });
+                texts.push(SelectedText { text: text.clone() });
             }
             Json::Array(items) => {
                 for (index, item) in items.iter().enumerate() {
                     path.push(index.to_string());
-                    self.collect_strings(item, path, texts, total_bytes, within_budget);
+                    let result = self.collect_strings(item, path, texts, total_bytes);
                     path.pop();
+                    result?;
                 }
             }
             Json::Object(fields) => {
                 for (key, value) in fields {
                     path.push(escape_json_pointer_segment(key));
-                    self.collect_strings(value, path, texts, total_bytes, within_budget);
+                    let result = self.collect_strings(value, path, texts, total_bytes);
                     path.pop();
+                    result?;
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn has_selected_string(&self, value: &Json) -> bool {
@@ -374,29 +364,37 @@ impl RampartSanitizer {
                 .any(|pattern| pattern.matches(path))
     }
 
-    fn sanitize_texts(&self, mut texts: Vec<SelectedText>) -> Vec<String> {
-        let eligible = texts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, text)| text.eligible.then_some(index))
-            .collect::<Vec<_>>();
-        if !eligible.is_empty() && self.sanitize_batch(&mut texts, &eligible).is_err() {
-            log::warn!(
-                target: "nemo_relay.plugin",
-                event = "rampart_pii_inference_failed",
-                plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
-                selected_text_count = eligible.len(),
-                reason = "model_or_output";
-                "Rampart PII inference failed closed"
-            );
-            for index in eligible {
-                texts[index].text = self.replacement.to_string();
+    fn sanitize_texts(&self, mut texts: Vec<SelectedText>) -> Result<Vec<String>, SanitizeError> {
+        let selected = (0..texts.len()).collect::<Vec<_>>();
+        if !selected.is_empty() {
+            match self.sanitize_batch(&mut texts, &selected) {
+                Ok(()) => {}
+                Err(DetectionError::PayloadLimit) => {
+                    return Err(SanitizeError::PayloadLimit);
+                }
+                Err(DetectionError::Model(_)) => {
+                    log::warn!(
+                        target: "nemo_relay.plugin",
+                        event = "rampart_pii_inference_failed",
+                        plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
+                        selected_text_count = selected.len(),
+                        reason = "model_or_output";
+                        "Rampart PII inference failed closed"
+                    );
+                    for index in selected {
+                        texts[index].text = self.replacement.to_string();
+                    }
+                }
             }
         }
-        texts.into_iter().map(|selected| selected.text).collect()
+        Ok(texts.into_iter().map(|selected| selected.text).collect())
     }
 
-    fn sanitize_batch(&self, texts: &mut [SelectedText], batch: &[usize]) -> PluginResult<()> {
+    fn sanitize_batch(
+        &self,
+        texts: &mut [SelectedText],
+        batch: &[usize],
+    ) -> Result<(), DetectionError> {
         let selected = batch
             .iter()
             .map(|index| texts[*index].text.as_str())
@@ -408,9 +406,9 @@ impl RampartSanitizer {
                 || !detection.score.is_finite()
                 || !(0.0..=1.0).contains(&detection.score)
             {
-                return Err(PluginError::Internal(
-                    "Rampart returned an invalid detection".into(),
-                ));
+                return Err(
+                    PluginError::Internal("Rampart returned an invalid detection".into()).into(),
+                );
             }
             by_text[detection.text_index].push(detection);
         }
@@ -435,7 +433,8 @@ impl RampartSanitizer {
                 {
                     return Err(PluginError::Internal(
                         "Rampart returned invalid or overlapping UTF-8 spans".into(),
-                    ));
+                    )
+                    .into());
                 }
                 previous_end = detection.end_utf8;
             }
@@ -455,40 +454,43 @@ impl RampartSanitizer {
         &self,
         codec: &dyn LlmCodec,
         request: &LlmRequest,
-    ) -> Option<LlmRequest> {
-        let annotated = codec.decode(request).ok()?;
-        let annotated = serde_json::to_value(annotated).ok()?;
+    ) -> Result<LlmRequest, SanitizeError> {
+        let annotated = codec.decode(request).map_err(|_| SanitizeError::Codec)?;
+        let annotated = serde_json::to_value(annotated).map_err(|_| SanitizeError::Codec)?;
         let (headers, annotated) =
             self.sanitize_request_parts(request.headers.clone(), annotated)?;
-        let annotated = serde_json::from_value(annotated).ok()?;
-        let mut encoded = codec.encode(&annotated, request).ok()?;
+        let annotated = serde_json::from_value(annotated).map_err(|_| SanitizeError::Codec)?;
+        let mut encoded = codec
+            .encode(&annotated, request)
+            .map_err(|_| SanitizeError::Codec)?;
         encoded.headers = headers;
-        Some(encoded)
+        Ok(encoded)
     }
 
-    fn sanitize_raw_request(&self, mut request: LlmRequest) -> Option<LlmRequest> {
+    fn sanitize_raw_request(&self, mut request: LlmRequest) -> Result<LlmRequest, SanitizeError> {
         let headers = std::mem::take(&mut request.headers);
         let content = std::mem::take(&mut request.content);
         let (headers, content) = self.sanitize_request_parts(headers, content)?;
         request.headers = headers;
         request.content = content;
-        Some(request)
+        Ok(request)
     }
 
     fn sanitize_request_parts(
         &self,
         headers: Map<String, Json>,
         content: Json,
-    ) -> Option<(Map<String, Json>, Json)> {
+    ) -> Result<(Map<String, Json>, Json), SanitizeError> {
         let mut values = self.sanitize_json_roots(vec![
             (vec!["headers".to_string()], Json::Object(headers)),
             (Vec::new(), content),
-        ]);
-        let content = values.pop()?;
-        let Json::Object(headers) = values.pop()? else {
-            return None;
+        ])?;
+        let content = values.pop().ok_or(SanitizeError::Codec)?;
+        let headers = values.pop().ok_or(SanitizeError::Codec)?;
+        let Json::Object(headers) = headers else {
+            return Err(SanitizeError::Codec);
         };
-        Some((headers, content))
+        Ok((headers, content))
     }
 
     fn sanitize_response_with_codec(
@@ -496,7 +498,7 @@ impl RampartSanitizer {
         codec: &dyn LlmResponseCodec,
         surface: ProviderSurface,
         payload: Json,
-    ) -> Option<Json> {
+    ) -> Result<Json, SanitizeError> {
         if surface == ProviderSurface::OpenAIChat
             && payload
                 .get("choices")
@@ -504,12 +506,14 @@ impl RampartSanitizer {
                 .is_some_and(|choices| choices.len() > 1)
             && self.targets_normalized_openai_chat_choice()
         {
-            return None;
+            return Err(SanitizeError::Codec);
         }
         let codec_name = BuiltinCodecName::from_provider_surface(surface);
-        let annotated = codec.decode_response(&payload).ok()?;
-        let sanitized = sanitize_serializable(self, annotated).ok()?;
-        Some(codec_name.overlay_response_payload(payload, &sanitized))
+        let annotated = codec
+            .decode_response(&payload)
+            .map_err(|_| SanitizeError::Codec)?;
+        let sanitized = sanitize_serializable(self, annotated)?;
+        Ok(codec_name.overlay_response_payload(payload, &sanitized))
     }
 
     fn targets_normalized_openai_chat_choice(&self) -> bool {
@@ -626,10 +630,8 @@ pub(super) fn event_sanitize_callback(
                     .iter_mut()
                     .map(|(_, value)| std::mem::take(value))
                     .collect();
-                for ((field, _), value) in selected
-                    .into_iter()
-                    .zip(backend.sanitize_json_values(values))
-                {
+                let sanitized_values = backend.sanitize_json_values(values)?;
+                for ((field, _), value) in selected.into_iter().zip(sanitized_values) {
                     match field {
                         EventField::Data => fields.data = Some(value),
                         EventField::CategoryProfile => {
@@ -638,7 +640,7 @@ pub(super) fn event_sanitize_callback(
                         EventField::Metadata => fields.metadata = Some(value),
                     }
                 }
-                fields
+                Ok(fields)
             })
             .await
         })
@@ -653,24 +655,30 @@ pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSan
                 return Ok(None);
             };
             run_inference("LLM request", permit, None, move || {
-                if matches!(context.codec(), LlmCodecIdentity::None)
+                let sanitized = if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
-                    return backend.sanitize_raw_request(request);
-                }
-                let resolved = context.resolve_codec();
-                let fallback = if resolved.is_none() {
-                    backend
-                        .selected_surface(context.codec())
-                        .map(build_request_codec)
+                    backend.sanitize_raw_request(request).map(Some)
                 } else {
-                    None
+                    let resolved = context.resolve_codec();
+                    let fallback = if resolved.is_none() {
+                        backend
+                            .selected_surface(context.codec())
+                            .map(build_request_codec)
+                    } else {
+                        None
+                    };
+                    resolved
+                        .as_deref()
+                        .or(fallback.as_deref())
+                        .ok_or(SanitizeError::Codec)
+                        .and_then(|codec| {
+                            backend
+                                .sanitize_request_with_codec(codec, &request)
+                                .map(Some)
+                        })
                 };
-                let sanitized = resolved
-                    .as_deref()
-                    .or(fallback.as_deref())
-                    .and_then(|codec| backend.sanitize_request_with_codec(codec, &request));
-                if sanitized.is_none() {
+                if matches!(sanitized, Err(SanitizeError::Codec)) {
                     backend.log_codec_failure(
                         "request",
                         context.codec(),
@@ -695,7 +703,7 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
-                    return Some(backend.sanitize_json(payload));
+                    return backend.sanitize_json(payload).map(Some);
                 }
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && !backend.uses_compatible_legacy_response_codec(&payload)
@@ -705,7 +713,7 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
                         context.codec(),
                         "no compatible legacy codec",
                     );
-                    return None;
+                    return Err(SanitizeError::Codec);
                 }
                 let surface = backend.selected_surface(context.codec());
                 let resolved = context.resolve_codec();
@@ -716,10 +724,13 @@ pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSa
                 };
                 let sanitized = surface
                     .zip(resolved.as_deref().or(fallback.as_deref()))
+                    .ok_or(SanitizeError::Codec)
                     .and_then(|(surface, codec)| {
-                        backend.sanitize_response_with_codec(codec, surface, payload)
+                        backend
+                            .sanitize_response_with_codec(codec, surface, payload)
+                            .map(Some)
                     });
-                if sanitized.is_none() {
+                if matches!(sanitized, Err(SanitizeError::Codec)) {
                     backend.log_codec_failure(
                         "response",
                         context.codec(),
@@ -737,7 +748,7 @@ async fn run_inference<T>(
     target: &'static str,
     permit: SanitizerPermit,
     fallback: T,
-    operation: impl FnOnce() -> T + Send + 'static,
+    operation: impl FnOnce() -> Result<T, SanitizeError> + Send + 'static,
 ) -> FlowResult<T>
 where
     T: Send + 'static,
@@ -749,7 +760,19 @@ where
         let _ = sender.send(catch_unwind(AssertUnwindSafe(operation)));
     });
     match receiver.await {
-        Ok(Ok(value)) => Ok(value),
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(Ok(Err(SanitizeError::PayloadLimit))) => {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "rampart_pii_inference_failed",
+                plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
+                reason = "payload_limit",
+                target;
+                "Rampart PII sanitization exceeded a payload limit and failed closed"
+            );
+            Ok(fallback)
+        }
+        Ok(Ok(Err(SanitizeError::Codec))) => Ok(fallback),
         Ok(Err(_)) => {
             log::error!(
                 target: "nemo_relay.plugin",
@@ -845,12 +868,12 @@ fn compile_json_pointer(pointer: String) -> Vec<String> {
     })
 }
 
-fn sanitize_serializable<T>(backend: &RampartSanitizer, value: T) -> PluginResult<T>
+fn sanitize_serializable<T>(backend: &RampartSanitizer, value: T) -> Result<T, SanitizeError>
 where
     T: Serialize + DeserializeOwned,
 {
-    let value = serde_json::to_value(value)?;
-    serde_json::from_value(backend.sanitize_json(value)).map_err(PluginError::from)
+    let value = serde_json::to_value(value).map_err(|_| SanitizeError::Codec)?;
+    serde_json::from_value(backend.sanitize_json(value)?).map_err(|_| SanitizeError::Codec)
 }
 
 #[cfg(test)]
@@ -863,7 +886,7 @@ mod tests {
     struct NameDetector;
 
     impl DetectionModel for NameDetector {
-        fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>> {
+        fn detect(&self, texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
             Ok(texts
                 .iter()
                 .enumerate()
@@ -883,15 +906,23 @@ mod tests {
     struct FailingDetector;
 
     impl DetectionModel for FailingDetector {
-        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
-            Err(PluginError::Internal("model failure".into()))
+        fn detect(&self, _texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
+            Err(PluginError::Internal("model failure".into()).into())
+        }
+    }
+
+    struct PayloadLimitedDetector;
+
+    impl DetectionModel for PayloadLimitedDetector {
+        fn detect(&self, _texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
+            Err(DetectionError::PayloadLimit)
         }
     }
 
     struct PanickingDetector;
 
     impl DetectionModel for PanickingDetector {
-        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
+        fn detect(&self, _texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
             panic!("model panic")
         }
     }
@@ -899,7 +930,7 @@ mod tests {
     struct CountingDetector(Arc<AtomicUsize>);
 
     impl DetectionModel for CountingDetector {
-        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
+        fn detect(&self, _texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Ok(Vec::new())
         }
@@ -912,7 +943,7 @@ mod tests {
     }
 
     impl DetectionModel for BlockingDetector {
-        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
+        fn detect(&self, _texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
             self.started.store(true, Ordering::Release);
             while !self.release.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(1));
@@ -928,7 +959,7 @@ mod tests {
     }
 
     impl DetectionModel for CountingBlockingDetector {
-        fn detect(&self, _texts: &[&str]) -> PluginResult<Vec<Detection>> {
+        fn detect(&self, _texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
             self.started.fetch_add(1, Ordering::Release);
             while !self.release.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(1));
@@ -961,7 +992,7 @@ mod tests {
             "model": "model-José"
         });
         assert_eq!(
-            sanitizer.sanitize_json(value),
+            sanitizer.sanitize_json(value).unwrap(),
             serde_json::json!({
                 "messages": [{"content": "Hello [REDACTED] Rivera"}],
                 "message": "[REDACTED]",
@@ -974,10 +1005,12 @@ mod tests {
     fn model_errors_fail_closed_only_for_selected_values() {
         let sanitizer = sanitizer(Arc::new(FailingDetector), vec!["/message"]);
         assert_eq!(
-            sanitizer.sanitize_json(serde_json::json!({
-                "message": "private",
-                "metadata": "visible"
-            })),
+            sanitizer
+                .sanitize_json(serde_json::json!({
+                    "message": "private",
+                    "metadata": "visible"
+                }))
+                .unwrap(),
             serde_json::json!({
                 "message": "[REDACTED]",
                 "metadata": "visible"
@@ -986,23 +1019,84 @@ mod tests {
     }
 
     #[test]
-    fn selected_values_over_payload_budget_fail_closed() {
+    fn sparse_selected_field_above_16_kib_is_sanitized() {
+        let sanitizer = sanitizer(Arc::new(NameDetector), vec!["/message"]);
+        let message = format!("{}José", " ".repeat(16 * 1024));
+        let sanitized = sanitizer
+            .sanitize_json(serde_json::json!({
+                "message": message,
+                "metadata": "visible"
+            }))
+            .unwrap();
+        let sanitized_message = sanitized["message"].as_str().unwrap();
+
+        assert_eq!(sanitized_message.len(), 16 * 1024 + "[REDACTED]".len());
+        assert!(sanitized_message.ends_with("[REDACTED]"));
+        assert_eq!(sanitized["metadata"], "visible");
+    }
+
+    #[test]
+    fn selected_text_count_limit_rejects_the_entire_payload() {
         let sanitizer = sanitizer(Arc::new(NameDetector), vec!["/*"]);
         let value = Json::Object(
             (0..=MAX_TEXTS_PER_PAYLOAD)
                 .map(|index| (index.to_string(), Json::String("safe".into())))
                 .collect(),
         );
-        let sanitized = sanitizer.sanitize_json(value);
         assert_eq!(
-            sanitized
-                .as_object()
-                .unwrap()
-                .values()
-                .filter(|value| **value == "[REDACTED]")
-                .count(),
-            1
+            sanitizer.sanitize_json(value),
+            Err(SanitizeError::PayloadLimit)
         );
+    }
+
+    #[test]
+    fn selected_payload_byte_limit_has_an_exact_boundary() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sanitizer = sanitizer(
+            Arc::new(CountingDetector(Arc::clone(&calls))),
+            vec!["/message"],
+        );
+        let exact = " ".repeat(MAX_PAYLOAD_TEXT_BYTES);
+        let sanitized = sanitizer
+            .sanitize_json(serde_json::json!({"message": exact}))
+            .unwrap();
+        assert_eq!(
+            sanitized["message"].as_str().unwrap().len(),
+            MAX_PAYLOAD_TEXT_BYTES
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert_eq!(
+            sanitizer.sanitize_json(serde_json::json!({
+                "message": " ".repeat(MAX_PAYLOAD_TEXT_BYTES + 1)
+            })),
+            Err(SanitizeError::PayloadLimit)
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn aggregate_limit_fails_closed_before_partial_tool_sanitization() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend = sanitizer(
+            Arc::new(CountingDetector(Arc::clone(&calls))),
+            vec!["/messages/*/content"],
+        );
+        let output = tool_sanitize_callback(backend)(
+            "tool".into(),
+            serde_json::json!({
+                "messages": [
+                    {"content": "first-private-value"},
+                    {"content": " ".repeat(MAX_PAYLOAD_TEXT_BYTES)}
+                ],
+                "metadata": "visible"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output, Json::String("[REDACTED]".into()));
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -1015,7 +1109,12 @@ mod tests {
                 .collect(),
         );
         assert_eq!(
-            sanitizer.sanitize_json(value).as_object().unwrap().len(),
+            sanitizer
+                .sanitize_json(value)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
             128
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -1221,6 +1320,66 @@ mod tests {
         assert!(
             llm_sanitize_response_callback(backend)(
                 serde_json::json!({"message": "private"}),
+                LlmSanitizeResponseContext::default(),
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn model_window_limit_fails_closed_for_every_surface() {
+        use nemo_relay::api::event::{BaseEvent, MarkEvent};
+        use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+
+        let backend = sanitizer(Arc::new(PayloadLimitedDetector), vec!["/message"]);
+        let private = "must-not-pass-through";
+        assert_eq!(
+            tool_sanitize_callback(backend.clone())(
+                "tool".into(),
+                serde_json::json!({"message": private, "metadata": "visible"}),
+            )
+            .await
+            .unwrap(),
+            Json::String("[REDACTED]".into())
+        );
+
+        let event = Arc::new(Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("mark")
+                .data(serde_json::json!({"message": private}))
+                .metadata(serde_json::json!({"message": private}))
+                .build(),
+            None,
+            None,
+        )));
+        assert_eq!(
+            event_sanitize_callback(backend.clone(), None)(
+                Arc::clone(&event),
+                event.sanitize_fields(),
+            )
+            .await
+            .unwrap(),
+            EventSanitizeFields::default()
+        );
+
+        let request = LlmRequest {
+            headers: Map::new(),
+            content: serde_json::json!({"message": private}),
+        };
+        assert!(
+            llm_sanitize_request_callback(backend.clone())(
+                request,
+                LlmSanitizeRequestContext::default(),
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            llm_sanitize_response_callback(backend)(
+                serde_json::json!({"message": private}),
                 LlmSanitizeResponseContext::default(),
             )
             .await
@@ -1600,19 +1759,21 @@ mod tests {
         });
         let codec = build_response_codec(ProviderSurface::OpenAIChat);
 
-        assert!(
-            exact
-                .sanitize_response_with_codec(
-                    codec.as_ref(),
-                    ProviderSurface::OpenAIChat,
-                    payload.clone(),
-                )
-                .is_none()
+        assert_eq!(
+            exact.sanitize_response_with_codec(
+                codec.as_ref(),
+                ProviderSurface::OpenAIChat,
+                payload.clone(),
+            ),
+            Err(SanitizeError::Codec)
         );
-        assert!(
-            wildcard
-                .sanitize_response_with_codec(codec.as_ref(), ProviderSurface::OpenAIChat, payload)
-                .is_none()
+        assert_eq!(
+            wildcard.sanitize_response_with_codec(
+                codec.as_ref(),
+                ProviderSurface::OpenAIChat,
+                payload,
+            ),
+            Err(SanitizeError::Codec)
         );
     }
 

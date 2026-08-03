@@ -42,6 +42,7 @@ const MAX_TARGET_PATH_BYTES: usize = 1024;
 const MAX_EXCLUDED_LABELS: usize = 128;
 const MAX_LABEL_BYTES: usize = 128;
 const MAX_REPLACEMENT_BYTES: usize = 1024;
+const MAX_WINDOWS_PER_PAYLOAD: usize = 16;
 
 /// One configured Rampart PII component.
 #[derive(Debug, Clone)]
@@ -547,10 +548,10 @@ fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
             format!("replacement must not exceed {MAX_REPLACEMENT_BYTES} UTF-8 bytes"),
         ));
     }
-    if !(1..=512).contains(&config.max_windows_per_payload) {
+    if !(1..=MAX_WINDOWS_PER_PAYLOAD).contains(&config.max_windows_per_payload) {
         violations.push(ConfigViolation::new(
             "max_windows_per_payload",
-            "max_windows_per_payload must be between 1 and 512",
+            format!("max_windows_per_payload must be between 1 and {MAX_WINDOWS_PER_PAYLOAD}"),
         ));
     }
     if !(1..=64).contains(&config.inference_batch_size) {
@@ -644,7 +645,7 @@ fn default_replacement() -> String {
 }
 
 fn default_max_windows_per_payload() -> usize {
-    128
+    4
 }
 
 fn default_inference_batch_size() -> usize {
@@ -700,6 +701,28 @@ mod tests {
             diagnostics
                 .iter()
                 .any(|item| item.field.as_deref() == Some("target_path_patterns"))
+        );
+    }
+
+    #[test]
+    fn bounds_the_configurable_window_budget() {
+        assert_eq!(RampartPiiConfig::default().max_windows_per_payload, 4);
+
+        let mut config = valid_config();
+        config.insert(
+            "max_windows_per_payload".into(),
+            Json::from(MAX_WINDOWS_PER_PAYLOAD),
+        );
+        assert!(validate_rampart_pii_config(&config, None).is_empty());
+
+        config.insert(
+            "max_windows_per_payload".into(),
+            Json::from(MAX_WINDOWS_PER_PAYLOAD + 1),
+        );
+        assert!(
+            validate_rampart_pii_config(&config, None)
+                .iter()
+                .any(|item| item.field.as_deref() == Some("max_windows_per_payload"))
         );
     }
 

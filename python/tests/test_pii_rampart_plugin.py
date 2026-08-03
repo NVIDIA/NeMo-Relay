@@ -20,6 +20,7 @@ def test_rampart_config_and_component_shape() -> None:
     )
     value = config.to_dict()
     assert value["model_path"] == "/models/rampart"
+    assert value["max_windows_per_payload"] == 4
     assert value["inference_batch_size"] == 16
     assert RAMPART_MODEL_ID == "nationaldesignstudio/rampart"
     assert RAMPART_MODEL_REVISION == "b1993e4e68b082835b80ffc65acc03325ea2e501"

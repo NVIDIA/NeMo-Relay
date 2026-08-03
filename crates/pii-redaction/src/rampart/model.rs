@@ -58,6 +58,26 @@ pub(super) struct Detection {
     pub(super) score: f64,
 }
 
+pub(super) enum DetectionError {
+    PayloadLimit,
+    Model(PluginError),
+}
+
+impl DetectionError {
+    fn into_plugin_error(self) -> PluginError {
+        match self {
+            Self::PayloadLimit => inference_error("Rampart warmup exceeded its payload limit"),
+            Self::Model(error) => error,
+        }
+    }
+}
+
+impl From<PluginError> for DetectionError {
+    fn from(error: PluginError) -> Self {
+        Self::Model(error)
+    }
+}
+
 pub(super) struct RampartDetector {
     tokenizer: RampartTokenizer,
     // Each run creates invocation-local tract state. The sanitizer bounds how
@@ -189,11 +209,13 @@ impl RampartDetector {
             max_windows_per_payload,
             inference_batch_size,
         };
-        detector.detect(&["warmup"])?;
+        detector
+            .detect(&["warmup"])
+            .map_err(DetectionError::into_plugin_error)?;
         Ok(detector)
     }
 
-    pub(super) fn detect(&self, texts: &[&str]) -> PluginResult<Vec<Detection>> {
+    pub(super) fn detect(&self, texts: &[&str]) -> Result<Vec<Detection>, DetectionError> {
         let prepared = texts
             .iter()
             .map(|text| PreparedText::new(text))
@@ -249,7 +271,8 @@ impl RampartDetector {
                 let Some((start, end)) = prepared[text_index].project(span.start, span.end) else {
                     return Err(inference_error(
                         "Rampart prefilter returned an invalid UTF-8 span",
-                    ));
+                    )
+                    .into());
                 };
                 span.start = start;
                 span.end = end;
@@ -264,7 +287,8 @@ impl RampartDetector {
                 {
                     return Err(inference_error(
                         "Rampart tokenizer returned an invalid UTF-8 span",
-                    ));
+                    )
+                    .into());
                 }
                 detections.push(Detection {
                     text_index,
@@ -278,7 +302,7 @@ impl RampartDetector {
         Ok(detections)
     }
 
-    fn build_windows(&self, texts: &[&str]) -> PluginResult<Vec<Window>> {
+    fn build_windows(&self, texts: &[&str]) -> Result<Vec<Window>, DetectionError> {
         let step = CONTENT_TOKEN_BUDGET - WINDOW_OVERLAP_TOKENS;
         let mut windows = Vec::new();
         for (text_index, text) in texts.iter().copied().enumerate() {
@@ -309,10 +333,7 @@ impl RampartDetector {
                     offsets: window_offsets,
                 });
                 if windows.len() > self.max_windows_per_payload {
-                    return Err(inference_error(format!(
-                        "selected content exceeded max_windows_per_payload={}",
-                        self.max_windows_per_payload
-                    )));
+                    return Err(DetectionError::PayloadLimit);
                 }
                 if end == ids.len() {
                     break;

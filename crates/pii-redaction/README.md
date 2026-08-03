@@ -298,7 +298,16 @@ expired wait fails closed: tool observability payloads become the configured
 replacement, LLM bodies are omitted, and mutable mark or generic scope fields
 are omitted. Tool and LLM scope metadata is omitted independently so an
 already-sanitized specialized payload remains available. These fallbacks do not
-change the arguments or return values seen by the underlying tool or model.
+pass selected content through unsanitized.
+
+The default compute budget is four overlapping 512-token windows across all
+selected strings in one payload. `max_windows_per_payload` can raise that budget
+to at most 16. Relay also caps one payload at 256 selected strings and 256 KiB of
+selected UTF-8 text to bound preprocessing memory. Exceeding any of these limits
+logs `reason=payload_limit` and applies the same whole-surface fail-closed
+behavior instead of partially sanitizing the payload. Sanitization only changes
+emitted observability; it does not change arguments or return values seen by the
+underlying tool or model.
 
 ## Documentation
 
