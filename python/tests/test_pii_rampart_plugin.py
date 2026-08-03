@@ -22,11 +22,22 @@ def test_rampart_config_and_component_shape() -> None:
     assert value["model_path"] == "/models/rampart"
     assert value["max_windows_per_payload"] == 4
     assert value["inference_batch_size"] == 16
+    assert value["custom_mark_payload_policy"] == "preserve"
     assert RAMPART_MODEL_ID == "nationaldesignstudio/rampart"
     assert RAMPART_MODEL_REVISION == "b1993e4e68b082835b80ffc65acc03325ea2e501"
     component = ComponentSpec(config).to_dict()
     assert component["kind"] == RAMPART_PII_PLUGIN_KIND
     assert component["enabled"] is True
+
+
+def test_rampart_trajectory_preset_shape_and_validation() -> None:
+    config = RampartPiiConfig(
+        model_path="/models/rampart",
+        preset="trajectory_context",
+    )
+
+    assert config.to_dict()["preset"] == "trajectory_context"
+    assert validate_config(config)["diagnostics"] == []
 
 
 def test_rampart_validation_and_discovery() -> None:

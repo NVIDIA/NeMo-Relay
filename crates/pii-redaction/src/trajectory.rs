@@ -188,7 +188,7 @@ fn sanitize_scope_metadata(value: Json, replacement: &str) -> Json {
     )
 }
 
-fn is_trusted_scope_metadata_value(key: &str, value: &Json) -> bool {
+pub(super) fn is_trusted_scope_metadata_value(key: &str, value: &Json) -> bool {
     match value {
         Json::String(_) => TRUSTED_STRING_SCOPE_METADATA_FIELDS.contains(&key),
         Json::Bool(_) => TRUSTED_BOOLEAN_SCOPE_METADATA_FIELDS.contains(&key),
@@ -196,7 +196,7 @@ fn is_trusted_scope_metadata_value(key: &str, value: &Json) -> bool {
     }
 }
 
-fn is_known_content_bearing_mark(name: &str) -> bool {
+pub(super) fn is_known_content_bearing_mark(name: &str) -> bool {
     matches!(
         name,
         "llm.chunk" | "nemo_relay.llm.optimization" | "skill.load"
@@ -433,7 +433,7 @@ fn preserve_analytical_number(key: &str) -> bool {
         || key.ends_with("_timestamp")
 }
 
-fn preserve_analytical_string(key: &str) -> bool {
+pub(super) fn preserve_analytical_string(key: &str) -> bool {
     if matches!(key, "token" | "token_id") {
         return false;
     }
@@ -494,7 +494,7 @@ fn preserve_analytical_string(key: &str) -> bool {
         || key.ends_with("_uuid")
 }
 
-fn preserves_tool_or_function_name(
+pub(super) fn preserves_tool_or_function_name(
     container: Option<&str>,
     object: &serde_json::Map<String, Json>,
 ) -> bool {

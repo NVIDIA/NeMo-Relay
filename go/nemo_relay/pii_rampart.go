@@ -14,23 +14,25 @@ const RampartModelRevision = "b1993e4e68b082835b80ffc65acc03325ea2e501"
 
 // RampartPiiConfig configures in-process Rampart PII redaction.
 type RampartPiiConfig struct {
-	Version              uint32        `json:"version"`
-	ModelPath            string        `json:"model_path"`
-	Input                bool          `json:"input"`
-	Output               bool          `json:"output"`
-	Mark                 bool          `json:"mark"`
-	ToolInput            bool          `json:"tool_input"`
-	ToolOutput           bool          `json:"tool_output"`
-	Priority             int32         `json:"priority"`
-	Codec                string        `json:"codec,omitempty"`
-	TargetPaths          []string      `json:"target_paths,omitempty"`
-	TargetPathPatterns   []string      `json:"target_path_patterns,omitempty"`
-	MinScore             float64       `json:"min_score"`
-	ExcludedLabels       []string      `json:"excluded_labels,omitempty"`
-	Replacement          string        `json:"replacement"`
-	MaxWindowsPerPayload int32         `json:"max_windows_per_payload"`
-	InferenceBatchSize   int32         `json:"inference_batch_size"`
-	Policy               *ConfigPolicy `json:"policy,omitempty"`
+	Version                 uint32        `json:"version"`
+	ModelPath               string        `json:"model_path"`
+	Input                   bool          `json:"input"`
+	Output                  bool          `json:"output"`
+	Mark                    bool          `json:"mark"`
+	ToolInput               bool          `json:"tool_input"`
+	ToolOutput              bool          `json:"tool_output"`
+	Priority                int32         `json:"priority"`
+	Codec                   string        `json:"codec,omitempty"`
+	Preset                  string        `json:"preset,omitempty"`
+	TargetPaths             []string      `json:"target_paths,omitempty"`
+	TargetPathPatterns      []string      `json:"target_path_patterns,omitempty"`
+	MinScore                float64       `json:"min_score"`
+	ExcludedLabels          []string      `json:"excluded_labels,omitempty"`
+	Replacement             string        `json:"replacement"`
+	CustomMarkPayloadPolicy string        `json:"custom_mark_payload_policy"`
+	MaxWindowsPerPayload    int32         `json:"max_windows_per_payload"`
+	InferenceBatchSize      int32         `json:"inference_batch_size"`
+	Policy                  *ConfigPolicy `json:"policy,omitempty"`
 }
 
 // RampartPiiComponentSpec wraps one Rampart PII config as a top-level plugin component.
@@ -40,24 +42,25 @@ type RampartPiiComponentSpec struct {
 }
 
 // NewRampartPiiConfig returns Rampart PII settings with runtime defaults.
-// Set TargetPaths or TargetPathPatterns before validation or activation.
+// Set Preset, TargetPaths, or TargetPathPatterns before validation or activation.
 func NewRampartPiiConfig(modelPath string) RampartPiiConfig {
 	return RampartPiiConfig{
-		Version:              1,
-		ModelPath:            modelPath,
-		Input:                true,
-		Output:               true,
-		Mark:                 true,
-		ToolInput:            true,
-		ToolOutput:           true,
-		Priority:             100,
-		TargetPaths:          []string{},
-		TargetPathPatterns:   []string{},
-		MinScore:             0.4,
-		ExcludedLabels:       []string{},
-		Replacement:          "[REDACTED]",
-		MaxWindowsPerPayload: 4,
-		InferenceBatchSize:   16,
+		Version:                 1,
+		ModelPath:               modelPath,
+		Input:                   true,
+		Output:                  true,
+		Mark:                    true,
+		ToolInput:               true,
+		ToolOutput:              true,
+		Priority:                100,
+		TargetPaths:             []string{},
+		TargetPathPatterns:      []string{},
+		MinScore:                0.4,
+		ExcludedLabels:          []string{},
+		Replacement:             "[REDACTED]",
+		CustomMarkPayloadPolicy: "preserve",
+		MaxWindowsPerPayload:    4,
+		InferenceBatchSize:      16,
 	}
 }
 

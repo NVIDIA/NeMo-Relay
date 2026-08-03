@@ -109,6 +109,10 @@ pub struct RampartPiiConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "codec_schema"))]
     pub codec: Option<String>,
+    /// Optional semantic content-selection preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "preset_schema"))]
+    pub preset: Option<String>,
     /// Exact JSON-pointer paths selected for model inspection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_paths: Vec<String>,
@@ -124,6 +128,13 @@ pub struct RampartPiiConfig {
     /// Replacement applied to accepted model spans and failed batches.
     #[serde(default = "default_replacement")]
     pub replacement: String,
+    /// How the trajectory preset handles opaque custom-mark payloads.
+    #[serde(default = "default_custom_mark_payload_policy")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "custom_mark_payload_policy_schema")
+    )]
+    pub custom_mark_payload_policy: String,
     /// Maximum token windows accepted from one observability payload.
     #[serde(default = "default_max_windows_per_payload")]
     pub max_windows_per_payload: usize,
@@ -149,11 +160,13 @@ impl Default for RampartPiiConfig {
             tool_output: true,
             priority: default_priority(),
             codec: None,
+            preset: None,
             target_paths: Vec::new(),
             target_path_patterns: Vec::new(),
             min_score: default_min_score(),
             excluded_labels: Vec::new(),
             replacement: default_replacement(),
+            custom_mark_payload_policy: default_custom_mark_payload_policy(),
             max_windows_per_payload: default_max_windows_per_payload(),
             inference_batch_size: default_inference_batch_size(),
             policy: ConfigPolicy::default(),
@@ -176,6 +189,12 @@ nemo_relay::editor_config! {
             values: ["openai_chat", "openai_responses", "anthropic_messages"],
             optional: true,
         },
+        preset => {
+            label: "preset",
+            kind: Enum,
+            values: ["trajectory_context"],
+            optional: true,
+        },
         target_paths => {
             label: "target_paths",
             kind: List,
@@ -193,6 +212,11 @@ nemo_relay::editor_config! {
             list: &nemo_relay::config_editor::STRING_LIST_ITEM,
         },
         replacement => { label: "replacement", kind: String },
+        custom_mark_payload_policy => {
+            label: "custom_mark_payload_policy",
+            kind: Enum,
+            values: ["preserve", "redact_all_leaves"],
+        },
         max_windows_per_payload => { label: "max_windows_per_payload", kind: Integer },
         inference_batch_size => { label: "inference_batch_size", kind: Integer },
         policy => {
@@ -379,11 +403,13 @@ fn validate_rampart_pii_config(
         "tool_output",
         "priority",
         "codec",
+        "preset",
         "target_paths",
         "target_path_patterns",
         "min_score",
         "excluded_labels",
         "replacement",
+        "custom_mark_payload_policy",
         "max_windows_per_payload",
         "inference_batch_size",
         "policy",
@@ -491,12 +517,7 @@ fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
             "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'",
         ));
     }
-    if config.target_paths.is_empty() && config.target_path_patterns.is_empty() {
-        violations.push(ConfigViolation::new(
-            "target_paths",
-            "target_paths or target_path_patterns must select explicit content fields",
-        ));
-    }
+    validate_content_selection(config, &mut violations);
     if config.target_paths.len() + config.target_path_patterns.len() > MAX_TARGET_PATHS {
         violations.push(ConfigViolation::new(
             "target_paths",
@@ -563,6 +584,46 @@ fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
         ));
     }
     violations
+}
+
+fn validate_content_selection(config: &RampartPiiConfig, violations: &mut Vec<ConfigViolation>) {
+    match config.preset.as_deref() {
+        Some("trajectory_context") => {
+            if !config.target_paths.is_empty() || !config.target_path_patterns.is_empty() {
+                violations.push(ConfigViolation::new(
+                    "preset",
+                    "preset cannot be combined with target_paths or target_path_patterns",
+                ));
+            }
+        }
+        Some(_) => violations.push(ConfigViolation::new(
+            "preset",
+            "preset must be 'trajectory_context'",
+        )),
+        None => {
+            if config.target_paths.is_empty() && config.target_path_patterns.is_empty() {
+                violations.push(ConfigViolation::new(
+                    "target_paths",
+                    "preset, target_paths, or target_path_patterns must select content fields",
+                ));
+            }
+            if config.custom_mark_payload_policy != "preserve" {
+                violations.push(ConfigViolation::new(
+                    "custom_mark_payload_policy",
+                    "custom_mark_payload_policy requires preset = 'trajectory_context'",
+                ));
+            }
+        }
+    }
+    if !matches!(
+        config.custom_mark_payload_policy.as_str(),
+        "preserve" | "redact_all_leaves"
+    ) {
+        violations.push(ConfigViolation::new(
+            "custom_mark_payload_policy",
+            "custom_mark_payload_policy must be 'preserve' or 'redact_all_leaves'",
+        ));
+    }
 }
 
 fn push_unsupported(
@@ -646,6 +707,10 @@ fn default_replacement() -> String {
     "[REDACTED]".into()
 }
 
+fn default_custom_mark_payload_policy() -> String {
+    "preserve".into()
+}
+
 fn default_max_windows_per_payload() -> usize {
     4
 }
@@ -660,6 +725,29 @@ fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::s
         <String as schemars::JsonSchema>::json_schema(generator).into();
     schema.enum_values = Some(
         ["openai_chat", "openai_responses", "anthropic_messages"]
+            .into_iter()
+            .map(|value| Json::String(value.into()))
+            .collect(),
+    );
+    schema.into()
+}
+
+#[cfg(feature = "schema")]
+fn preset_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    let mut schema: schemars::schema::SchemaObject =
+        <String as schemars::JsonSchema>::json_schema(generator).into();
+    schema.enum_values = Some(vec![Json::String("trajectory_context".into())]);
+    schema.into()
+}
+
+#[cfg(feature = "schema")]
+fn custom_mark_payload_policy_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    let mut schema: schemars::schema::SchemaObject =
+        <String as schemars::JsonSchema>::json_schema(generator).into();
+    schema.enum_values = Some(
+        ["preserve", "redact_all_leaves"]
             .into_iter()
             .map(|value| Json::String(value.into()))
             .collect(),
@@ -732,6 +820,51 @@ mod tests {
             validate_rampart_pii_config(&config, None)
                 .iter()
                 .any(|item| item.field.as_deref() == Some("max_windows_per_payload"))
+        );
+    }
+
+    #[test]
+    fn validates_trajectory_preset_without_explicit_paths() {
+        let Json::Object(config) = serde_json::to_value(RampartPiiConfig {
+            model_path: "/tmp/rampart".into(),
+            preset: Some("trajectory_context".into()),
+            ..RampartPiiConfig::default()
+        })
+        .unwrap() else {
+            unreachable!()
+        };
+
+        assert!(validate_rampart_pii_config(&config, None).is_empty());
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_unsupported_preset_configuration() {
+        let mut config = valid_config();
+        config.insert("preset".into(), Json::String("trajectory_context".into()));
+        assert!(
+            validate_rampart_pii_config(&config, None)
+                .iter()
+                .any(|item| item.field.as_deref() == Some("preset"))
+        );
+
+        config.remove("target_path_patterns");
+        config.insert("preset".into(), Json::String("unknown".into()));
+        assert!(
+            validate_rampart_pii_config(&config, None)
+                .iter()
+                .any(|item| item.field.as_deref() == Some("preset"))
+        );
+
+        config.remove("preset");
+        config.insert(
+            "custom_mark_payload_policy".into(),
+            Json::String("redact_all_leaves".into()),
+        );
+        let diagnostics = validate_rampart_pii_config(&config, None);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.field.as_deref() == Some("custom_mark_payload_policy"))
         );
     }
 

@@ -59,3 +59,20 @@ func TestValidateConfig(t *testing.T) {
 	}
 	t.Fatalf("expected target_path_patterns diagnostic, got %#v", report.Diagnostics)
 }
+
+func TestValidateTrajectoryPreset(t *testing.T) {
+	modelPath, err := filepath.Abs("testdata/rampart")
+	if err != nil {
+		t.Fatalf("resolve model path: %v", err)
+	}
+	config := NewConfig(modelPath)
+	config.Preset = "trajectory_context"
+
+	report, err := ValidateConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+	}
+}

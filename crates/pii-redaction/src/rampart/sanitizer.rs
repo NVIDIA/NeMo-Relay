@@ -27,6 +27,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::builtin::escape_json_pointer_segment;
 use crate::overlay::BuiltinCodecName;
+use crate::trajectory::{
+    CustomMarkPayloadPolicy, is_known_content_bearing_mark, is_trusted_scope_metadata_value,
+    preserve_analytical_string, preserves_tool_or_function_name,
+};
 
 use super::RampartPiiConfig;
 use super::model::{Detection, DetectionError, RampartDetector};
@@ -61,6 +65,7 @@ pub(super) struct RampartSanitizer {
     detector: Arc<dyn DetectionModel>,
     target_paths: Arc<HashSet<Vec<String>>>,
     target_path_patterns: Arc<Vec<JsonPointerPattern>>,
+    trajectory_policy: Option<CustomMarkPayloadPolicy>,
     min_score: f64,
     excluded_labels: Arc<HashSet<String>>,
     replacement: Arc<str>,
@@ -96,12 +101,21 @@ struct SelectedText {
     text: String,
 }
 
+#[derive(Clone, Copy)]
+enum StringSelection {
+    Configured,
+    All,
+    Semantic,
+    ScopeMetadata,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum SanitizeError {
     Codec,
     PayloadLimit,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum EventField {
     Data,
     CategoryProfile,
@@ -150,6 +164,20 @@ impl RampartSanitizer {
         };
         let worker_count = inference_worker_count();
         let executor = Arc::new(SanitizerExecutor::new(worker_count)?);
+        let trajectory_policy = config
+            .preset
+            .as_deref()
+            .map(|_| {
+                CustomMarkPayloadPolicy::parse(&config.custom_mark_payload_policy).ok_or_else(
+                    || {
+                        PluginError::InvalidConfig(format!(
+                            "unsupported custom-mark payload policy '{}'",
+                            config.custom_mark_payload_policy
+                        ))
+                    },
+                )
+            })
+            .transpose()?;
         Ok(Self {
             detector,
             target_paths: Arc::new(
@@ -159,6 +187,7 @@ impl RampartSanitizer {
                     .map(compile_json_pointer)
                     .collect(),
             ),
+            trajectory_policy,
             target_path_patterns: Arc::new(
                 config
                     .target_path_patterns
@@ -223,50 +252,65 @@ impl RampartSanitizer {
     }
 
     fn sanitize_json(&self, value: Json) -> Result<Json, SanitizeError> {
+        self.sanitize_json_with_selection(value, StringSelection::Configured)
+    }
+
+    fn sanitize_json_with_selection(
+        &self,
+        value: Json,
+        selection: StringSelection,
+    ) -> Result<Json, SanitizeError> {
         Ok(self
-            .sanitize_json_values(vec![value])?
+            .sanitize_json_roots(vec![(Vec::new(), value, selection)])?
             .pop()
             .expect("single-value sanitization returns one value"))
     }
 
-    fn sanitize_json_values(&self, values: Vec<Json>) -> Result<Vec<Json>, SanitizeError> {
-        self.sanitize_json_roots(
-            values
-                .into_iter()
-                .map(|value| (Vec::new(), value))
-                .collect(),
-        )
-    }
-
     fn sanitize_json_roots(
         &self,
-        mut roots: Vec<(Vec<String>, Json)>,
+        mut roots: Vec<(Vec<String>, Json, StringSelection)>,
     ) -> Result<Vec<Json>, SanitizeError> {
         let mut texts = Vec::new();
         let mut total_bytes = 0;
-        for (path, value) in &roots {
+        for (path, value, selection) in &roots {
             let mut path = path.clone();
-            self.collect_strings(value, &mut path, &mut texts, &mut total_bytes)?;
+            self.collect_strings(
+                value,
+                &mut path,
+                *selection,
+                None,
+                false,
+                true,
+                &mut texts,
+                &mut total_bytes,
+            )?;
         }
 
         let sanitized = self.sanitize_texts(texts)?;
         let mut index = 0;
-        for (path, value) in &mut roots {
+        for (path, value, selection) in &mut roots {
             let mut path = path.clone();
-            self.replace_strings(value, &mut path, &sanitized, &mut index);
+            self.replace_strings(
+                value, &mut path, *selection, None, false, true, &sanitized, &mut index,
+            );
         }
-        Ok(roots.into_iter().map(|(_, value)| value).collect())
+        Ok(roots.into_iter().map(|(_, value, _)| value).collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn collect_strings(
         &self,
         value: &Json,
         path: &mut Vec<String>,
+        selection: StringSelection,
+        field: Option<&str>,
+        preserve: bool,
+        selection_root: bool,
         texts: &mut Vec<SelectedText>,
         total_bytes: &mut usize,
     ) -> Result<(), SanitizeError> {
         match value {
-            Json::String(text) if self.matches_path(path) => {
+            Json::String(text) if self.selects_string(selection, path, field, preserve) => {
                 if texts.len() >= MAX_TEXTS_PER_PAYLOAD {
                     return Err(SanitizeError::PayloadLimit);
                 }
@@ -282,15 +326,38 @@ impl RampartSanitizer {
             Json::Array(items) => {
                 for (index, item) in items.iter().enumerate() {
                     path.push(index.to_string());
-                    let result = self.collect_strings(item, path, texts, total_bytes);
+                    let result = self.collect_strings(
+                        item,
+                        path,
+                        selection,
+                        field,
+                        false,
+                        false,
+                        texts,
+                        total_bytes,
+                    );
                     path.pop();
                     result?;
                 }
             }
             Json::Object(fields) => {
+                let preserve_name = preserves_tool_or_function_name(field, fields);
                 for (key, value) in fields {
                     path.push(escape_json_pointer_segment(key));
-                    let result = self.collect_strings(value, path, texts, total_bytes);
+                    let preserve = (key == "name" && preserve_name && value.is_string())
+                        || (matches!(selection, StringSelection::ScopeMetadata)
+                            && selection_root
+                            && is_trusted_scope_metadata_value(key, value));
+                    let result = self.collect_strings(
+                        value,
+                        path,
+                        selection,
+                        Some(key),
+                        preserve,
+                        false,
+                        texts,
+                        total_bytes,
+                    );
                     path.pop();
                     result?;
                 }
@@ -300,38 +367,66 @@ impl RampartSanitizer {
         Ok(())
     }
 
-    fn has_selected_string(&self, value: &Json) -> bool {
-        self.has_selected_string_at(value, &mut Vec::new())
+    fn has_selected_string_with_selection(&self, value: &Json, selection: StringSelection) -> bool {
+        self.has_selected_string_at(value, &mut Vec::new(), selection, None, false, true)
     }
 
-    fn has_selected_string_at(&self, value: &Json, path: &mut Vec<String>) -> bool {
+    fn has_selected_string_at(
+        &self,
+        value: &Json,
+        path: &mut Vec<String>,
+        selection: StringSelection,
+        field: Option<&str>,
+        preserve: bool,
+        selection_root: bool,
+    ) -> bool {
         match value {
-            Json::String(_) => self.matches_path(path),
+            Json::String(_) => self.selects_string(selection, path, field, preserve),
             Json::Array(items) => items.iter().enumerate().any(|(index, item)| {
                 path.push(index.to_string());
-                let selected = self.has_selected_string_at(item, path);
+                let selected =
+                    self.has_selected_string_at(item, path, selection, field, false, false);
                 path.pop();
                 selected
             }),
-            Json::Object(fields) => fields.iter().any(|(key, value)| {
-                path.push(escape_json_pointer_segment(key));
-                let selected = self.has_selected_string_at(value, path);
-                path.pop();
-                selected
-            }),
+            Json::Object(fields) => {
+                let preserve_name = preserves_tool_or_function_name(field, fields);
+                fields.iter().any(|(key, value)| {
+                    path.push(escape_json_pointer_segment(key));
+                    let preserve = (key == "name" && preserve_name && value.is_string())
+                        || (matches!(selection, StringSelection::ScopeMetadata)
+                            && selection_root
+                            && is_trusted_scope_metadata_value(key, value));
+                    let selected = self.has_selected_string_at(
+                        value,
+                        path,
+                        selection,
+                        Some(key),
+                        preserve,
+                        false,
+                    );
+                    path.pop();
+                    selected
+                })
+            }
             _ => false,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn replace_strings(
         &self,
         value: &mut Json,
         path: &mut Vec<String>,
+        selection: StringSelection,
+        field: Option<&str>,
+        preserve: bool,
+        selection_root: bool,
         sanitized: &[String],
         index: &mut usize,
     ) {
         match value {
-            Json::String(text) if self.matches_path(path) => {
+            Json::String(text) if self.selects_string(selection, path, field, preserve) => {
                 *text = sanitized
                     .get(*index)
                     .cloned()
@@ -341,18 +436,50 @@ impl RampartSanitizer {
             Json::Array(items) => {
                 for (item_index, item) in items.iter_mut().enumerate() {
                     path.push(item_index.to_string());
-                    self.replace_strings(item, path, sanitized, index);
+                    self.replace_strings(
+                        item, path, selection, field, false, false, sanitized, index,
+                    );
                     path.pop();
                 }
             }
             Json::Object(fields) => {
+                let preserve_name = preserves_tool_or_function_name(field, fields);
                 for (key, value) in fields {
                     path.push(escape_json_pointer_segment(key));
-                    self.replace_strings(value, path, sanitized, index);
+                    let preserve = (key == "name" && preserve_name && value.is_string())
+                        || (matches!(selection, StringSelection::ScopeMetadata)
+                            && selection_root
+                            && is_trusted_scope_metadata_value(key, value));
+                    self.replace_strings(
+                        value,
+                        path,
+                        selection,
+                        Some(key),
+                        preserve,
+                        false,
+                        sanitized,
+                        index,
+                    );
                     path.pop();
                 }
             }
             _ => {}
+        }
+    }
+
+    fn selects_string(
+        &self,
+        selection: StringSelection,
+        path: &[String],
+        field: Option<&str>,
+        preserve: bool,
+    ) -> bool {
+        match selection {
+            StringSelection::Configured => self.matches_path(path),
+            StringSelection::All => true,
+            StringSelection::Semantic | StringSelection::ScopeMetadata => {
+                !preserve && !field.is_some_and(preserve_analytical_string)
+            }
         }
     }
 
@@ -453,8 +580,12 @@ impl RampartSanitizer {
     ) -> Result<LlmRequest, SanitizeError> {
         let annotated = codec.decode(request).map_err(|_| SanitizeError::Codec)?;
         let annotated = serde_json::to_value(annotated).map_err(|_| SanitizeError::Codec)?;
-        let (headers, annotated) =
-            self.sanitize_request_parts(request.headers.clone(), annotated)?;
+        let (headers, annotated) = self.sanitize_request_parts(
+            request.headers.clone(),
+            annotated,
+            StringSelection::Configured,
+            StringSelection::Configured,
+        )?;
         let annotated = serde_json::from_value(annotated).map_err(|_| SanitizeError::Codec)?;
         let mut encoded = codec
             .encode(&annotated, request)
@@ -466,7 +597,13 @@ impl RampartSanitizer {
     fn sanitize_raw_request(&self, mut request: LlmRequest) -> Result<LlmRequest, SanitizeError> {
         let headers = std::mem::take(&mut request.headers);
         let content = std::mem::take(&mut request.content);
-        let (headers, content) = self.sanitize_request_parts(headers, content)?;
+        let (header_selection, content_selection) = if self.trajectory_policy.is_some() {
+            (StringSelection::All, StringSelection::Semantic)
+        } else {
+            (StringSelection::Configured, StringSelection::Configured)
+        };
+        let (headers, content) =
+            self.sanitize_request_parts(headers, content, header_selection, content_selection)?;
         request.headers = headers;
         request.content = content;
         Ok(request)
@@ -476,10 +613,16 @@ impl RampartSanitizer {
         &self,
         headers: Map<String, Json>,
         content: Json,
+        header_selection: StringSelection,
+        content_selection: StringSelection,
     ) -> Result<(Map<String, Json>, Json), SanitizeError> {
         let mut values = self.sanitize_json_roots(vec![
-            (vec!["headers".to_string()], Json::Object(headers)),
-            (Vec::new(), content),
+            (
+                vec!["headers".to_string()],
+                Json::Object(headers),
+                header_selection,
+            ),
+            (Vec::new(), content, content_selection),
         ])?;
         let content = values.pop().ok_or(SanitizeError::Codec)?;
         let headers = values.pop().ok_or(SanitizeError::Codec)?;
@@ -569,7 +712,12 @@ impl RampartSanitizer {
 pub(super) fn tool_sanitize_callback(backend: RampartSanitizer) -> ToolSanitizeFn {
     Arc::new(move |_name, payload| {
         let backend = backend.clone();
-        if !backend.has_selected_string(&payload) {
+        let selection = if backend.trajectory_policy.is_some() {
+            StringSelection::All
+        } else {
+            StringSelection::Configured
+        };
+        if !backend.has_selected_string_with_selection(&payload, selection) {
             return Box::pin(async move { Ok(payload) });
         }
         let fallback = backend.fail_closed_payload();
@@ -578,7 +726,7 @@ pub(super) fn tool_sanitize_callback(backend: RampartSanitizer) -> ToolSanitizeF
                 return Ok(fallback);
             };
             run_inference("tool payload", permit, fallback, move || {
-                backend.sanitize_json(payload)
+                backend.sanitize_json_with_selection(payload, selection)
             })
             .await
         })
@@ -606,28 +754,33 @@ pub(super) fn event_sanitize_callback(
                 return Ok(fallback);
             };
             run_inference("event fields", permit, fallback, move || {
-                let specialized_scope = is_specialized_scope(event.as_ref());
-
                 let mut selected = Vec::with_capacity(3);
-                if !specialized_scope && let Some(data) = fields.data.take() {
-                    selected.push((EventField::Data, data));
+                if let Some(selection) =
+                    event_field_selection(&backend, event.as_ref(), EventField::Data)
+                    && let Some(data) = fields.data.take()
+                {
+                    selected.push((EventField::Data, data, selection));
                 }
-                if !specialized_scope
+                if let Some(selection) =
+                    event_field_selection(&backend, event.as_ref(), EventField::CategoryProfile)
                     && let Some(profile) = fields.category_profile.take()
                     && let Ok(profile) = serde_json::to_value(profile)
                 {
-                    selected.push((EventField::CategoryProfile, profile));
+                    selected.push((EventField::CategoryProfile, profile, selection));
                 }
-                if let Some(metadata) = fields.metadata.take() {
-                    selected.push((EventField::Metadata, metadata));
+                if let Some(selection) =
+                    event_field_selection(&backend, event.as_ref(), EventField::Metadata)
+                    && let Some(metadata) = fields.metadata.take()
+                {
+                    selected.push((EventField::Metadata, metadata, selection));
                 }
 
-                let values = selected
+                let roots = selected
                     .iter_mut()
-                    .map(|(_, value)| std::mem::take(value))
+                    .map(|(_, value, selection)| (Vec::new(), std::mem::take(value), *selection))
                     .collect();
-                let sanitized_values = backend.sanitize_json_values(values)?;
-                for ((field, _), value) in selected.into_iter().zip(sanitized_values) {
+                let sanitized_values = backend.sanitize_json_roots(roots)?;
+                for ((field, _, _), value) in selected.into_iter().zip(sanitized_values) {
                     match field {
                         EventField::Data => fields.data = Some(value),
                         EventField::CategoryProfile => {
@@ -646,13 +799,23 @@ pub(super) fn event_sanitize_callback(
 pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSanitizeRequestFn {
     Arc::new(move |request, context| {
         let backend = backend.clone();
+        if backend.trajectory_policy.is_some()
+            && !request.headers.values().any(|value| {
+                backend.has_selected_string_with_selection(value, StringSelection::All)
+            })
+            && !backend
+                .has_selected_string_with_selection(&request.content, StringSelection::Semantic)
+        {
+            return Box::pin(async move { Ok(Some(request)) });
+        }
         Box::pin(async move {
             let Some(permit) = backend.admit("llm_request").await else {
                 return Ok(None);
             };
             run_inference("LLM request", permit, None, move || {
-                let sanitized = if matches!(context.codec(), LlmCodecIdentity::None)
-                    && backend.legacy_surface.is_none()
+                let sanitized = if backend.trajectory_policy.is_some()
+                    || (matches!(context.codec(), LlmCodecIdentity::None)
+                        && backend.legacy_surface.is_none())
                 {
                     backend.sanitize_raw_request(request).map(Some)
                 } else {
@@ -691,11 +854,21 @@ pub(super) fn llm_sanitize_request_callback(backend: RampartSanitizer) -> LlmSan
 pub(super) fn llm_sanitize_response_callback(backend: RampartSanitizer) -> LlmSanitizeResponseFn {
     Arc::new(move |payload, context| {
         let backend = backend.clone();
+        if backend.trajectory_policy.is_some()
+            && !backend.has_selected_string_with_selection(&payload, StringSelection::Semantic)
+        {
+            return Box::pin(async move { Ok(Some(payload)) });
+        }
         Box::pin(async move {
             let Some(permit) = backend.admit("llm_response").await else {
                 return Ok(None);
             };
             run_inference("LLM response", permit, None, move || {
+                if backend.trajectory_policy.is_some() {
+                    return backend
+                        .sanitize_json_with_selection(payload, StringSelection::Semantic)
+                        .map(Some);
+                }
                 if matches!(context.codec(), LlmCodecIdentity::None)
                     && backend.legacy_surface.is_none()
                 {
@@ -830,25 +1003,57 @@ fn event_fields_have_selected_strings(
     event: &Event,
     fields: &EventSanitizeFields,
 ) -> bool {
-    if is_specialized_scope(event) {
-        return fields
-            .metadata
-            .as_ref()
-            .is_some_and(|metadata| backend.has_selected_string(metadata));
-    }
+    let has_selected = |field, value: &Json| {
+        event_field_selection(backend, event, field)
+            .is_some_and(|selection| backend.has_selected_string_with_selection(value, selection))
+    };
+
     fields
         .data
         .as_ref()
-        .is_some_and(|data| backend.has_selected_string(data))
-        || fields
-            .category_profile
-            .as_ref()
-            .and_then(|profile| serde_json::to_value(profile).ok())
-            .is_some_and(|profile| backend.has_selected_string(&profile))
+        .is_some_and(|data| has_selected(EventField::Data, data))
+        || fields.category_profile.as_ref().is_some_and(|profile| {
+            serde_json::to_value(profile)
+                .ok()
+                .is_some_and(|profile| has_selected(EventField::CategoryProfile, &profile))
+        })
         || fields
             .metadata
             .as_ref()
-            .is_some_and(|metadata| backend.has_selected_string(metadata))
+            .is_some_and(|metadata| has_selected(EventField::Metadata, metadata))
+}
+
+fn event_field_selection(
+    backend: &RampartSanitizer,
+    event: &Event,
+    field: EventField,
+) -> Option<StringSelection> {
+    if backend.trajectory_policy.is_none() {
+        return (!is_specialized_scope(event) || field == EventField::Metadata)
+            .then_some(StringSelection::Configured);
+    }
+
+    let unknown_custom_mark = matches!(event, Event::Mark(_))
+        && event
+            .category()
+            .is_some_and(|category| category.as_str() == "custom")
+        && !is_known_content_bearing_mark(event.name());
+    if unknown_custom_mark {
+        return (backend.trajectory_policy == Some(CustomMarkPayloadPolicy::RedactAllLeaves))
+            .then_some(StringSelection::All);
+    }
+
+    if is_specialized_scope(event) {
+        return (field == EventField::Metadata).then_some(StringSelection::ScopeMetadata);
+    }
+
+    Some(
+        if field == EventField::Metadata && matches!(event, Event::Scope(_)) {
+            StringSelection::ScopeMetadata
+        } else {
+            StringSelection::Semantic
+        },
+    )
 }
 
 fn is_specialized_scope(event: &Event) -> bool {
@@ -974,6 +1179,177 @@ mod tests {
             detector,
         )
         .unwrap()
+    }
+
+    fn trajectory_sanitizer(
+        detector: Arc<dyn DetectionModel>,
+        custom_mark_payload_policy: &str,
+    ) -> RampartSanitizer {
+        RampartSanitizer::new(
+            RampartPiiConfig {
+                model_path: "/tmp/rampart".into(),
+                preset: Some("trajectory_context".into()),
+                custom_mark_payload_policy: custom_mark_payload_policy.into(),
+                ..RampartPiiConfig::default()
+            },
+            detector,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn trajectory_preset_sanitizes_multi_message_anthropic_request_without_projection() {
+        use nemo_relay::api::runtime::LlmSanitizeRequestContext;
+
+        let backend = trajectory_sanitizer(Arc::new(NameDetector), "preserve");
+        let request = LlmRequest {
+            headers: Map::from_iter([(
+                "x-user-context".into(),
+                Json::String("José header".into()),
+            )]),
+            content: serde_json::json!({
+                "model": "claude-José",
+                "system": "Help José safely",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Initial prompt from José"}]
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{
+                            "type": "tool_use",
+                            "id": "toolu_José",
+                            "name": "read_file",
+                            "input": {"path": "/tmp/José.txt"}
+                        }]
+                    },
+                    {
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_José",
+                            "content": "The file belongs to José"
+                        }]
+                    }
+                ],
+                "tools": [{
+                    "name": "read_file",
+                    "description": "Read files for José",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "José's file path"}
+                        }
+                    }
+                }]
+            }),
+        };
+
+        let sanitized = llm_sanitize_request_callback(backend)(
+            request,
+            LlmSanitizeRequestContext::with_identity(LlmCodecIdentity::BuiltIn(
+                BuiltinLlmCodec::AnthropicMessages,
+            )),
+        )
+        .await
+        .unwrap()
+        .expect("trajectory content should remain observable after sanitization");
+
+        assert_eq!(sanitized.headers["x-user-context"], "[REDACTED] header");
+        assert_eq!(sanitized.content["model"], "claude-José");
+        assert_eq!(sanitized.content["system"], "Help [REDACTED] safely");
+        assert_eq!(
+            sanitized.content["messages"][0]["content"][0]["text"],
+            "Initial prompt from [REDACTED]"
+        );
+        assert_eq!(
+            sanitized.content["messages"][1]["content"][0]["name"],
+            "read_file"
+        );
+        assert_eq!(
+            sanitized.content["messages"][1]["content"][0]["id"],
+            "toolu_José"
+        );
+        assert_eq!(
+            sanitized.content["messages"][1]["content"][0]["input"]["path"],
+            "/tmp/[REDACTED].txt"
+        );
+        assert_eq!(
+            sanitized.content["messages"][2]["content"][0]["tool_use_id"],
+            "toolu_José"
+        );
+        assert_eq!(
+            sanitized.content["messages"][2]["content"][0]["content"],
+            "The file belongs to [REDACTED]"
+        );
+        assert_eq!(sanitized.content["tools"][0]["name"], "read_file");
+        assert_eq!(
+            sanitized.content["tools"][0]["description"],
+            "Read files for [REDACTED]"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn trajectory_preset_sanitizes_root_scalar_tool_results() {
+        let output = tool_sanitize_callback(trajectory_sanitizer(
+            Arc::new(NameDetector),
+            "preserve",
+        ))("read_file".into(), Json::String("Owned by José".into()))
+        .await
+        .unwrap();
+
+        assert_eq!(output, "Owned by [REDACTED]");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn trajectory_preset_preserves_unknown_custom_marks_by_default() {
+        use nemo_relay::api::event::{BaseEvent, EventCategory, MarkEvent};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let event = Arc::new(Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("application.checkpoint")
+                .data(serde_json::json!({"message": "José"}))
+                .metadata(serde_json::json!({"owner": "José"}))
+                .build(),
+            Some(EventCategory::custom()),
+            None,
+        )));
+        let fields = event.sanitize_fields();
+        let output = event_sanitize_callback(
+            trajectory_sanitizer(Arc::new(CountingDetector(Arc::clone(&calls))), "preserve"),
+            None,
+        )(Arc::clone(&event), fields.clone())
+        .await
+        .unwrap();
+
+        assert_eq!(output, fields);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn trajectory_preset_can_inspect_all_unknown_custom_mark_strings() {
+        use nemo_relay::api::event::{BaseEvent, EventCategory, MarkEvent};
+
+        let event = Arc::new(Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("application.checkpoint")
+                .data(serde_json::json!({"id": "José"}))
+                .metadata(serde_json::json!({"owner": "José"}))
+                .build(),
+            Some(EventCategory::custom()),
+            None,
+        )));
+        let output = event_sanitize_callback(
+            trajectory_sanitizer(Arc::new(NameDetector), "redact_all_leaves"),
+            None,
+        )(Arc::clone(&event), event.sanitize_fields())
+        .await
+        .unwrap();
+
+        assert_eq!(output.data.unwrap()["id"], "[REDACTED]");
+        assert_eq!(output.metadata.unwrap()["owner"], "[REDACTED]");
     }
 
     #[test]

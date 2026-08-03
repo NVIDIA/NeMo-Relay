@@ -238,9 +238,32 @@ mismatches before installing sanitizer callbacks.
 
 ### Activate the Component
 
-Add a `pii_rampart` component with explicit content selectors. This example
-sanitizes normalized LLM request and response content without sending marks,
-tool payloads, or provider metadata to the model:
+Use the trajectory preset to inspect conversational content while preserving
+analytical fields such as provider and model identifiers, roles, status values,
+tool names, and correlation IDs:
+
+```toml
+[[components]]
+kind = "pii_rampart"
+enabled = true
+
+[components.config]
+version = 1
+model_path = "/absolute/path/to/rampart"
+preset = "trajectory_context"
+```
+
+The preset sanitizes provider-native LLM payloads without decoding and
+re-encoding them through a codec. This keeps repeated message and content-block
+locations distinct in long tool-use histories. It also inspects all string
+leaves in tool payloads, including a root string result. Unknown custom marks
+are preserved by default; set
+`custom_mark_payload_policy = "redact_all_leaves"` to inspect all of their
+string leaves.
+
+For narrower control, configure explicit content selectors instead. This
+example sanitizes normalized LLM request and response content without sending
+marks, tool payloads, or provider metadata to the model:
 
 ```toml
 [[components]]
@@ -264,7 +287,8 @@ target_path_patterns = [
 ```
 
 `target_paths` contains exact JSON pointers. `target_path_patterns` also
-accepts `*` as one complete path segment. At least one selector is required.
+accepts `*` as one complete path segment. A preset or at least one selector is
+required, and a preset cannot be combined with explicit selectors.
 When a supported codec is active, selectors address the normalized Relay
 request or response shape.
 For OpenAI Chat responses with multiple choices, selectors under `message`,
@@ -301,13 +325,14 @@ already-sanitized specialized payload remains available. These fallbacks do not
 pass selected content through unsanitized.
 
 The default compute budget is four overlapping 512-token windows across all
-selected strings in one payload. `max_windows_per_payload` can raise that budget
-to at most 16. Relay also caps one payload at 256 selected strings and 256 KiB of
-selected UTF-8 text to bound preprocessing memory. Exceeding any of these limits
-logs `reason=payload_limit` and applies the same whole-surface fail-closed
-behavior instead of partially sanitizing the payload. Sanitization only changes
-emitted observability; it does not change arguments or return values seen by the
-underlying tool or model.
+selected strings in one payload. Short strings remain separate model sequences
+but share that budget based on their padded inference-token volume.
+`max_windows_per_payload` can raise the budget to at most 16. Relay also caps one
+payload at 256 selected strings and 256 KiB of selected UTF-8 text to bound
+preprocessing memory. Exceeding any of these limits logs `reason=payload_limit`
+and applies the same whole-surface fail-closed behavior instead of partially
+sanitizing the payload. Sanitization only changes emitted observability; it does
+not change arguments or return values seen by the underlying tool or model.
 
 ## Documentation
 

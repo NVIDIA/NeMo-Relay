@@ -22,6 +22,9 @@ func TestRampartPiiConfigHelpers(t *testing.T) {
 	if config.MaxWindowsPerPayload != 4 {
 		t.Fatalf("unexpected Rampart PII window limit: %d", config.MaxWindowsPerPayload)
 	}
+	if config.CustomMarkPayloadPolicy != "preserve" {
+		t.Fatalf("unexpected Rampart PII custom mark policy: %s", config.CustomMarkPayloadPolicy)
+	}
 	if RampartModelID != "nationaldesignstudio/rampart" ||
 		RampartModelRevision != "b1993e4e68b082835b80ffc65acc03325ea2e501" {
 		t.Fatalf("unexpected Rampart model identity: %s@%s", RampartModelID, RampartModelRevision)
@@ -31,6 +34,23 @@ func TestRampartPiiConfigHelpers(t *testing.T) {
 	disabled.Enabled = false
 	if disabled.PluginComponent().Enabled {
 		t.Fatal("disabled Rampart PII component was enabled")
+	}
+}
+
+func TestValidateRampartPiiTrajectoryPreset(t *testing.T) {
+	modelPath, err := filepath.Abs("testdata/rampart")
+	if err != nil {
+		t.Fatalf("resolve model path: %v", err)
+	}
+	config := NewRampartPiiConfig(modelPath)
+	config.Preset = "trajectory_context"
+
+	report, err := ValidateRampartPiiConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateRampartPiiConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
 	}
 }
 

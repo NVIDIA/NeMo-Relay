@@ -32,11 +32,13 @@ class RampartPiiConfig:
     tool_output: bool = True
     priority: int = 100
     codec: Literal["openai_chat", "openai_responses", "anthropic_messages"] | str | None = None
+    preset: Literal["trajectory_context"] | str | None = None
     target_paths: list[str] = field(default_factory=list)
     target_path_patterns: list[str] = field(default_factory=list)
     min_score: float = 0.4
     excluded_labels: list[str] = field(default_factory=list)
     replacement: str = "[REDACTED]"
+    custom_mark_payload_policy: Literal["preserve", "redact_all_leaves"] | str = "preserve"
     max_windows_per_payload: int = 4
     inference_batch_size: int = 16
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
@@ -57,12 +59,15 @@ class RampartPiiConfig:
             "min_score": self.min_score,
             "excluded_labels": self.excluded_labels,
             "replacement": self.replacement,
+            "custom_mark_payload_policy": self.custom_mark_payload_policy,
             "max_windows_per_payload": self.max_windows_per_payload,
             "inference_batch_size": self.inference_batch_size,
             "policy": self.policy.to_dict(),
         }
         if self.codec is not None:
             value["codec"] = self.codec
+        if self.preset is not None:
+            value["preset"] = self.preset
         return value
 
 

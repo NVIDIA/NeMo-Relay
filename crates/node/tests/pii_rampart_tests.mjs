@@ -17,6 +17,7 @@ describe('pii_rampart plugin helpers', () => {
     assert.equal(config.model_path, '/models/rampart');
     assert.equal(config.max_windows_per_payload, 4);
     assert.equal(config.inference_batch_size, 16);
+    assert.equal(config.custom_mark_payload_policy, 'preserve');
     assert.equal(rampart.RAMPART_MODEL_ID, 'nationaldesignstudio/rampart');
     assert.equal(rampart.RAMPART_MODEL_REVISION, 'b1993e4e68b082835b80ffc65acc03325ea2e501');
     const component = rampart.ComponentSpec(config);
@@ -26,7 +27,7 @@ describe('pii_rampart plugin helpers', () => {
     assert.deepEqual(rampart.validateConfig(config).diagnostics, []);
   });
 
-  it('requires explicit selectors in the config helper', () => {
+  it('requires one content selection mode in the config helper', () => {
     const exact = rampart.defaultConfig('/models/rampart', {
       target_paths: ['/message'],
     });
@@ -34,11 +35,11 @@ describe('pii_rampart plugin helpers', () => {
 
     assert.throws(
       () => rampart.defaultConfig('/models/rampart'),
-      /requires target_paths or target_path_patterns/,
+      /requires preset, target_paths, or target_path_patterns/,
     );
     assert.throws(
       () => rampart.defaultConfig('/models/rampart', {}),
-      /requires target_paths or target_path_patterns/,
+      /requires preset, target_paths, or target_path_patterns/,
     );
     assert.throws(
       () =>
@@ -46,7 +47,20 @@ describe('pii_rampart plugin helpers', () => {
           target_paths: [],
           target_path_patterns: [],
         }),
-      /requires target_paths or target_path_patterns/,
+      /requires preset, target_paths, or target_path_patterns/,
+    );
+
+    const preset = rampart.defaultConfig('/models/rampart', {
+      preset: 'trajectory_context',
+    });
+    assert.deepEqual(rampart.validateConfig(preset).diagnostics, []);
+    assert.throws(
+      () =>
+        rampart.defaultConfig('/models/rampart', {
+          preset: 'trajectory_context',
+          target_paths: ['/message'],
+        }),
+      /cannot combine preset with explicit target selectors/,
     );
     assert.equal(
       rampart.defaultConfig('/models/rampart', {

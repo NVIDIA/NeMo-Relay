@@ -304,6 +304,8 @@ impl RampartDetector {
 
     fn build_windows(&self, texts: &[&str]) -> Result<Vec<Window>, DetectionError> {
         let step = CONTENT_TOKEN_BUDGET - WINDOW_OVERLAP_TOKENS;
+        let max_model_tokens = self.max_windows_per_payload * MODEL_MAX_TOKENS;
+        let mut modeled_tokens = 0;
         let mut windows = Vec::new();
         for (text_index, text) in texts.iter().copied().enumerate() {
             let encoding = self.tokenizer.encode(text)?;
@@ -326,19 +328,25 @@ impl RampartDetector {
                 window_offsets.push(None);
                 window_offsets.extend(offsets[start..end].iter().copied().map(Some));
                 window_offsets.push(None);
+                modeled_tokens += input_ids.len();
+                if modeled_tokens > max_model_tokens {
+                    return Err(DetectionError::PayloadLimit);
+                }
                 windows.push(Window {
                     text_index,
                     input_ids,
                     token_type_ids: window_type_ids,
                     offsets: window_offsets,
                 });
-                if windows.len() > self.max_windows_per_payload {
-                    return Err(DetectionError::PayloadLimit);
-                }
                 if end == ids.len() {
                     break;
                 }
             }
+        }
+        // Keep strings as separate model sequences, but charge the configured
+        // budget by the padded token volume that inference actually processes.
+        if padded_token_volume(&windows, self.inference_batch_size) > max_model_tokens {
+            return Err(DetectionError::PayloadLimit);
         }
         Ok(windows)
     }
@@ -443,6 +451,20 @@ impl RampartDetector {
         }
         Ok(spans)
     }
+}
+
+fn padded_token_volume(windows: &[Window], max_batch_size: usize) -> usize {
+    inference_batches(windows, max_batch_size)
+        .iter()
+        .map(|batch| {
+            batch.len()
+                * batch
+                    .iter()
+                    .map(|index| windows[*index].input_ids.len())
+                    .max()
+                    .unwrap_or_default()
+        })
+        .sum()
 }
 
 fn validate_model_inputs(model: &InferenceModel) -> PluginResult<()> {
@@ -702,6 +724,38 @@ mod tests {
                     .unwrap()
                 <= MAX_PADDED_TOKENS_PER_BATCH
         }));
+    }
+
+    #[test]
+    fn compute_budget_charges_padded_tokens_instead_of_string_count() {
+        let short_windows = (0..100)
+            .map(|text_index| Window {
+                text_index,
+                input_ids: vec![101, 1, 102],
+                token_type_ids: vec![0; 3],
+                offsets: vec![None, Some((0, 1)), None],
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(padded_token_volume(&short_windows, 16), 300);
+        assert!(padded_token_volume(&short_windows, 16) <= MODEL_MAX_TOKENS);
+
+        let long_windows = [
+            Window {
+                text_index: 0,
+                input_ids: vec![0; MODEL_MAX_TOKENS],
+                token_type_ids: vec![0; MODEL_MAX_TOKENS],
+                offsets: vec![None; MODEL_MAX_TOKENS],
+            },
+            Window {
+                text_index: 0,
+                input_ids: vec![0; 156],
+                token_type_ids: vec![0; 156],
+                offsets: vec![None; 156],
+            },
+        ];
+        assert_eq!(padded_token_volume(&long_windows, 16), 668);
+        assert!(padded_token_volume(&long_windows, 16) > MODEL_MAX_TOKENS);
+        assert!(padded_token_volume(&long_windows, 16) <= 2 * MODEL_MAX_TOKENS);
     }
 
     #[test]

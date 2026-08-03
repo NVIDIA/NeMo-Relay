@@ -12,19 +12,25 @@ const RAMPART_MODEL_REVISION = 'b1993e4e68b082835b80ffc65acc03325ea2e501';
 /**
  * Create Rampart PII settings with runtime defaults applied.
  *
- * At least one exact path or path pattern is required because Relay does not
- * send unselected observability fields to the model.
+ * Select content with the trajectory preset or at least one exact path or path
+ * pattern. Relay does not send unselected observability fields to the model.
  *
  * @param {string} modelPath - Absolute path to the pinned Rampart snapshot.
- * @param {object} config - Partial settings including explicit target selectors.
+ * @param {object} config - Partial settings including one content selection mode.
  * @returns {object} A normalized Rampart PII config object.
  */
 function defaultConfig(modelPath, config) {
   const hasTargetPaths = Array.isArray(config?.target_paths) && config.target_paths.length > 0;
   const hasTargetPathPatterns =
     Array.isArray(config?.target_path_patterns) && config.target_path_patterns.length > 0;
-  if (!hasTargetPaths && !hasTargetPathPatterns) {
-    throw new TypeError('Rampart PII config requires target_paths or target_path_patterns');
+  const hasPreset = config?.preset === 'trajectory_context';
+  if (hasPreset && (hasTargetPaths || hasTargetPathPatterns)) {
+    throw new TypeError('Rampart PII config cannot combine preset with explicit target selectors');
+  }
+  if (!hasPreset && !hasTargetPaths && !hasTargetPathPatterns) {
+    throw new TypeError(
+      'Rampart PII config requires preset, target_paths, or target_path_patterns',
+    );
   }
   return {
     version: 1,
@@ -39,6 +45,7 @@ function defaultConfig(modelPath, config) {
     min_score: 0.4,
     excluded_labels: [],
     replacement: '[REDACTED]',
+    custom_mark_payload_policy: 'preserve',
     max_windows_per_payload: 4,
     inference_batch_size: 16,
     ...config,
