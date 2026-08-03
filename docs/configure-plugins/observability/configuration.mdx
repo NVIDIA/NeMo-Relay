@@ -69,7 +69,9 @@ Endpoint types can be combined. Repeated endpoint types can use the same
 endpoint and transport. Two different endpoint types must not use the same
 endpoint and transport: Relay
 rejects that configuration because their deterministic trace and span IDs would
-collide at the receiver. All endpoints are constructed before the plugin
+collide at the receiver. For `http_binary`, this comparison uses the effective
+trace destination, so a bare URL and the same URL with `/v1/traces` also
+collide. All endpoints are constructed before the plugin
 registers its fan-out subscriber.
 
 ## Multi-Endpoint Lifecycle

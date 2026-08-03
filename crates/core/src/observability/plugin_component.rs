@@ -18,6 +18,7 @@
 //! metadata; their declared scope type is preserved in the exported event
 //! stream.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -52,6 +53,7 @@ use crate::observability::atof::{
 };
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySubscriber, OtlpTransport,
+    resolve_http_trace_endpoint,
 };
 use crate::observability::{
     MarkProjection, OpenTelemetryType, OtlpAttributeMapping, default_mark_exclude_names,
@@ -2286,8 +2288,10 @@ fn opentelemetry_destination_collision_errors(
     let mut errors = Vec::new();
     for (index, endpoint) in endpoints.iter().enumerate() {
         for (other_index, other) in endpoints[..index].iter().enumerate() {
+            let endpoint_destination = opentelemetry_destination(endpoint);
+            let other_destination = opentelemetry_destination(other);
             if endpoint.transport == other.transport
-                && endpoint.endpoint.trim() == other.endpoint.trim()
+                && endpoint_destination == other_destination
                 && endpoint.otel_type != other.otel_type
             {
                 errors.push(OpenTelemetryDestinationCollision {
@@ -2297,13 +2301,22 @@ fn opentelemetry_destination_collision_errors(
                         opentelemetry_type_name(other.otel_type),
                         opentelemetry_type_name(endpoint.otel_type),
                         endpoint.transport,
-                        endpoint.endpoint.trim(),
+                        endpoint_destination,
                     ),
                 });
             }
         }
     }
     errors
+}
+
+fn opentelemetry_destination(endpoint: &OpenTelemetryEndpointConfig) -> Cow<'_, str> {
+    let configured_endpoint = endpoint.endpoint.trim();
+    if endpoint.transport == "http_binary" {
+        resolve_http_trace_endpoint(configured_endpoint)
+    } else {
+        Cow::Borrowed(configured_endpoint)
+    }
 }
 
 const fn opentelemetry_type_name(otel_type: OpenTelemetryType) -> &'static str {

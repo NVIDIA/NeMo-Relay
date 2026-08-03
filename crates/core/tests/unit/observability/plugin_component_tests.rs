@@ -2617,7 +2617,7 @@ fn opentelemetry_endpoints_fan_out_to_heterogeneous_and_repeated_types() {
 }
 
 #[test]
-fn opentelemetry_rejects_different_projection_types_at_the_same_destination() {
+fn opentelemetry_rejects_different_projection_types_at_the_same_effective_destination() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let config = plugin_config(json!({
@@ -2625,7 +2625,7 @@ fn opentelemetry_rejects_different_projection_types_at_the_same_destination() {
         "opentelemetry": {
             "enabled": true,
             "endpoints": [
-                {"type": "full", "endpoint": " http://127.0.0.1:4318/v1/traces "},
+                {"type": "full", "endpoint": " http://127.0.0.1:4318 "},
                 {"type": "gen_ai", "endpoint": "http://127.0.0.1:4318/v1/traces"}
             ]
         }
