@@ -14,6 +14,14 @@ import (
 	"time"
 )
 
+const (
+	newOpenTelemetrySubscriberFailed = "NewOpenTelemetrySubscriber failed: %v"
+	otelRegisterFailed               = "Register failed: %v"
+	otelTestEndpoint                 = "http://localhost:4318/v1/traces"
+	otelTestPath                     = "/v1/traces"
+	otelTimeFormat                   = "150405.000000"
+)
+
 func assertOtlpStringAttribute(t *testing.T, body []byte, key string, value string) {
 	t.Helper()
 	encoded := append([]byte{0x0a}, binary.AppendUvarint(nil, uint64(len(key)))...)
@@ -29,7 +37,7 @@ func assertOtlpStringAttribute(t *testing.T, body []byte, key string, value stri
 }
 
 func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
-	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelTestEndpoint)
 
 	if config.Transport != OpenTelemetryTransportHTTPBinary {
 		t.Fatalf("expected default transport http_binary, got %q", config.Transport)
@@ -61,7 +69,7 @@ func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
 }
 
 func TestOpenTelemetrySubscriberAcceptsProjectionControls(t *testing.T) {
-	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelTestEndpoint)
 	config.MarkProjection = MarkProjectionTool
 	config.MarkExcludeNames = []string{"custom.mark"}
 	config.AttributeMappings = []OtlpAttributeMapping{{
@@ -77,7 +85,7 @@ func TestOpenTelemetrySubscriberAcceptsProjectionControls(t *testing.T) {
 }
 
 func TestOpenTelemetrySubscriberRejectsInvalidAttributeMappings(t *testing.T) {
-	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelTestEndpoint)
 	config.AttributeMappings = []OtlpAttributeMapping{{Key: "", Alias: "model.alias"}}
 
 	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
@@ -86,7 +94,7 @@ func TestOpenTelemetrySubscriberRejectsInvalidAttributeMappings(t *testing.T) {
 }
 
 func TestOpenTelemetrySubscriberLifecycle(t *testing.T) {
-	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelTestEndpoint)
 	config.ServiceName = "go-agent"
 	config.ServiceNamespace = "agents"
 	config.ServiceVersion = "1.0.0"
@@ -96,13 +104,13 @@ func TestOpenTelemetrySubscriberLifecycle(t *testing.T) {
 	config.ResourceAttributes["deployment.environment"] = "test"
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
-		t.Fatalf("NewOpenTelemetrySubscriber failed: %v", err)
+		t.Fatalf(newOpenTelemetrySubscriberFailed, err)
 	}
 	defer subscriber.Close()
 
-	name := "go_otel_subscriber_" + time.Now().Format("150405.000000")
+	name := "go_otel_subscriber_" + time.Now().Format(otelTimeFormat)
 	if err := subscriber.Register(name); err != nil {
-		t.Fatalf("Register failed: %v", err)
+		t.Fatalf(otelRegisterFailed, err)
 	}
 	if err := subscriber.Deregister(name); err != nil {
 		t.Fatalf("Deregister failed: %v", err)
@@ -119,7 +127,7 @@ func TestOpenTelemetrySubscriberLifecycle(t *testing.T) {
 }
 
 func TestOpenTelemetrySubscriberRejectsInvalidTransport(t *testing.T) {
-	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelTestEndpoint)
 	config.Transport = OpenTelemetryTransport("invalid")
 
 	_, err := NewOpenTelemetrySubscriber(config)
@@ -135,11 +143,11 @@ func TestOpenTelemetrySubscriberRejectsInvalidRequiredFields(t *testing.T) {
 	}{
 		{
 			name:   "missing type",
-			config: NewOpenTelemetryConfig("", "http://localhost:4318/v1/traces"),
+			config: NewOpenTelemetryConfig("", otelTestEndpoint),
 		},
 		{
 			name:   "unknown type",
-			config: NewOpenTelemetryConfig(OpenTelemetryType("invalid"), "http://localhost:4318/v1/traces"),
+			config: NewOpenTelemetryConfig(OpenTelemetryType("invalid"), otelTestEndpoint),
 		},
 		{
 			name:   "missing endpoint",
@@ -184,17 +192,17 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, server.URL+"/v1/traces")
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, server.URL+otelTestPath)
 	config.ServiceName = "go-agent"
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
-		t.Fatalf("NewOpenTelemetrySubscriber failed: %v", err)
+		t.Fatalf(newOpenTelemetrySubscriberFailed, err)
 	}
 	defer subscriber.Close()
 
-	name := "go_otel_e2e_" + time.Now().Format("150405.000000")
+	name := "go_otel_e2e_" + time.Now().Format(otelTimeFormat)
 	if err := subscriber.Register(name); err != nil {
-		t.Fatalf("Register failed: %v", err)
+		t.Fatalf(otelRegisterFailed, err)
 	}
 	defer func() { _ = subscriber.Deregister(name) }()
 
@@ -221,7 +229,7 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 
 	select {
 	case request := <-requests:
-		if request.Path != "/v1/traces" {
+		if request.Path != otelTestPath {
 			t.Fatalf("expected /v1/traces path, got %q", request.Path)
 		}
 		if request.ContentType != "application/x-protobuf" {
@@ -241,16 +249,16 @@ func TestOpenTelemetrySubscriberExportsGenAIAgentProjection(t *testing.T) {
 	server := NewOtelTestServer(t, requests)
 	defer server.Close()
 
-	config := NewOpenTelemetryConfig(OpenTelemetryTypeGenAI, server.URL+"/v1/traces")
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeGenAI, server.URL+otelTestPath)
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
-		t.Fatalf("NewOpenTelemetrySubscriber failed: %v", err)
+		t.Fatalf(newOpenTelemetrySubscriberFailed, err)
 	}
 	defer subscriber.Close()
 
-	name := "go_gen_ai_e2e_" + time.Now().Format("150405.000000")
+	name := "go_gen_ai_e2e_" + time.Now().Format(otelTimeFormat)
 	if err := subscriber.Register(name); err != nil {
-		t.Fatalf("Register failed: %v", err)
+		t.Fatalf(otelRegisterFailed, err)
 	}
 	defer func() { _ = subscriber.Deregister(name) }()
 

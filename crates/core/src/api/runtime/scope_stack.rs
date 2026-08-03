@@ -452,7 +452,7 @@ pub fn create_scope_stack_from_propagation(
 /// # Examples
 ///
 /// ```no_run
-/// # async fn example() -> nemo_relay::Result<()> {
+/// # async fn example() -> nemo_relay::error::Result<()> {
 /// use nemo_relay::api::runtime::{TASK_SCOPE_STACK, fork_scope_stack};
 ///
 /// let stack = fork_scope_stack()?;

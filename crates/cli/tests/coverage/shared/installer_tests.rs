@@ -580,6 +580,13 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
 fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../integrations/coding-agents");
+
+    assert_agent_plugin_manifests(&root);
+    assert_agent_mcp_manifests(&root);
+    assert_agent_marketplace_manifests(&root);
+}
+
+fn assert_agent_plugin_manifests(root: &std::path::Path) {
     let claude_path = root.join("claude-code/.claude-plugin/plugin.json");
     let claude =
         serde_json::from_str::<Value>(&std::fs::read_to_string(&claude_path).unwrap()).unwrap();
@@ -595,7 +602,9 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
     assert_eq!(codex["version"], json!(env!("CARGO_PKG_VERSION")));
     assert!(codex.get("hooks").is_none());
     assert_eq!(codex["mcpServers"], json!("./.mcp.json"));
+}
 
+fn assert_agent_mcp_manifests(root: &std::path::Path) {
     let codex_mcp_path = root.join("codex/.mcp.json");
     let codex_mcp =
         serde_json::from_str::<Value>(&std::fs::read_to_string(&codex_mcp_path).unwrap()).unwrap();
@@ -628,7 +637,9 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
         json!({"NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632"})
     );
     assert_eq!(claude_server["alwaysLoad"], json!(true));
+}
 
+fn assert_agent_marketplace_manifests(root: &std::path::Path) {
     let codex_marketplace_path = root.join("../../.agents/plugins/marketplace.json");
     let codex_marketplace =
         serde_json::from_str::<Value>(&std::fs::read_to_string(&codex_marketplace_path).unwrap())

@@ -723,29 +723,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
     );
 
     let config_path = hermes_home.join("config.yaml");
-    let config: serde_json::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
-    let server = &config["mcp_servers"]["nemo-relay"];
-    assert_eq!(server["command"], gateway_bin());
-    assert_eq!(server["args"], serde_json::json!(["mcp"]));
-    assert_eq!(server["env"]["NEMO_RELAY_GATEWAY_BIND"], "127.0.0.1:47632");
-    assert_eq!(server["env"]["OPENAI_API_KEY"], "${OPENAI_API_KEY}");
-    assert!(
-        !std::fs::read_to_string(&config_path)
-            .unwrap()
-            .contains("not-written-to-config")
-    );
-    let command = config["hooks"]["on_session_start"][0]["command"]
-        .as_str()
-        .unwrap();
-    assert!(command.contains("hook-forward hermes"));
-    let approvals: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(hermes_home.join("shell-hooks-allowlist.json")).unwrap(),
-    )
-    .unwrap();
-    let approvals = approvals["approvals"].as_array().unwrap();
-    assert_eq!(approvals.len(), 13);
-    assert!(approvals.iter().all(|entry| entry["command"] == command));
+    assert_hermes_install_config(&config_path, &hermes_home);
 
     let relay_config_dir = xdg.join("nemo-relay");
     std::fs::create_dir_all(&relay_config_dir).unwrap();
@@ -774,14 +752,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
         String::from_utf8_lossy(&doctor.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
-    assert_eq!(report["agents"][0]["name"], "hermes");
-    assert_eq!(report["agents"][0]["status"], "pass");
-    assert!(
-        report["agents"][0]["annotation"]
-            .as_str()
-            .unwrap()
-            .contains("MCP lifecycle")
-    );
+    assert_hermes_doctor_report(&report);
 
     let uninstall = Command::new(gateway_bin())
         .args(["uninstall", "hermes"])
@@ -799,6 +770,45 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
     assert!(!config_path.exists());
     assert!(!hermes_home.join("shell-hooks-allowlist.json").exists());
     assert!(!hermes_home.join(".nemo-relay-generation").exists());
+}
+
+#[cfg(unix)]
+fn assert_hermes_install_config(config_path: &std::path::Path, hermes_home: &std::path::Path) {
+    let config: serde_json::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
+    let server = &config["mcp_servers"]["nemo-relay"];
+    assert_eq!(server["command"], gateway_bin());
+    assert_eq!(server["args"], serde_json::json!(["mcp"]));
+    assert_eq!(server["env"]["NEMO_RELAY_GATEWAY_BIND"], "127.0.0.1:47632");
+    assert_eq!(server["env"]["OPENAI_API_KEY"], "${OPENAI_API_KEY}");
+    assert!(
+        !std::fs::read_to_string(config_path)
+            .unwrap()
+            .contains("not-written-to-config")
+    );
+    let command = config["hooks"]["on_session_start"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(command.contains("hook-forward hermes"));
+    let approvals: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(hermes_home.join("shell-hooks-allowlist.json")).unwrap(),
+    )
+    .unwrap();
+    let approvals = approvals["approvals"].as_array().unwrap();
+    assert_eq!(approvals.len(), 13);
+    assert!(approvals.iter().all(|entry| entry["command"] == command));
+}
+
+#[cfg(unix)]
+fn assert_hermes_doctor_report(report: &serde_json::Value) {
+    assert_eq!(report["agents"][0]["name"], "hermes");
+    assert_eq!(report["agents"][0]["status"], "pass");
+    assert!(
+        report["agents"][0]["annotation"]
+            .as_str()
+            .unwrap()
+            .contains("MCP lifecycle")
+    );
 }
 
 fn start_mcp_client(temp: &std::path::Path, bind: SocketAddr) -> (Child, ChildStdin) {
@@ -1971,6 +1981,7 @@ fn cli_plugins_list_json_emits_empty_versioned_success_output() {
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "").unwrap();
     let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .args([
@@ -2088,6 +2099,7 @@ allowed = false
     .unwrap();
 
     let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", &xdg)
         .env("HOME", temp.path())
         .args(["plugins", "validate"])
@@ -3513,6 +3525,7 @@ command = "hermes --yolo chat"
     .unwrap();
 
     let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", &xdg)
         .env("HOME", temp.path())
         .args([
@@ -3891,6 +3904,7 @@ finally:
     .unwrap();
 
     let output = Command::new("python3")
+        .current_dir(temp.path())
         .arg(&driver)
         .arg(gateway_bin())
         .arg(&config)
@@ -3986,6 +4000,7 @@ fn assert_non_tty_signal_forwarding(
 ) {
     let pids = root.join(format!("agent-pids-{signal_name}"));
     let mut relay = Command::new(gateway_bin())
+        .current_dir(root)
         .args([
             "--config",
             config.to_str().unwrap(),

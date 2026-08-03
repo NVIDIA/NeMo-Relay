@@ -3,14 +3,26 @@
 use super::native::{
     DispatcherLoopState, DispatcherMessage, PendingFlush, PublicationLineage, PublicationPermit,
     dispatcher_sender, enqueue_dispatch_message, flush_queued_subscribers, flush_subscribers,
-    register_async_publication, register_pending_publication, sanitize_event_snapshot,
-    set_sanitizer_runtime_failure_for_test, spawn_background_publication,
+    prepare_for_fork, register_async_publication, register_pending_publication,
+    resume_after_fork_parent, sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test,
+    spawn_background_publication,
 };
 use super::{EventSubscriberFn, publication_context};
 use crate::api::registry::RegistryRecord;
 use crate::api::runtime::EventSanitizeFn;
 use crate::api::runtime::scope_stack::current_scope_stack;
 use std::sync::{Arc, Mutex, mpsc};
+
+#[test]
+fn subscriber_dispatcher_parent_fork_hooks_validate_balanced_calls() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    prepare_for_fork();
+    assert!(std::panic::catch_unwind(prepare_for_fork).is_err());
+    resume_after_fork_parent();
+    assert!(std::panic::catch_unwind(resume_after_fork_parent).is_err());
+}
 
 #[test]
 fn flush_waits_for_active_but_not_later_publication_barriers() {

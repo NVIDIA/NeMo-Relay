@@ -1705,6 +1705,34 @@ package-python:
     fi
 
 # --set [output_dir=<path>] [ref_name=<name>]
+package-python-sdist:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    output_dir="{{ output_dir }}"
+    export_uv_python_runtime
+    cd "$NEMO_RELAY_REPO_ROOT"
+    package_dir="$(prepare_package_dir sdists)"
+    sync_args=(--no-install-project --no-install-package nemo-relay)
+    uv sync --inexact "${sync_args[@]}"
+    activate_project_venv
+    if [[ -z "{{ ref_name }}" ]]; then
+        sha="$(head_git_sha)"
+        version="$(read_workspace_version)"
+        echo "Non-release build: appending commit hash to version"
+        set_python_package_version "${version}+${sha}" true
+    else
+        echo "Using explicit version {{ ref_name }}"
+        set_python_package_version "{{ ref_name }}" true
+    fi
+    maturin sdist --out "$package_dir"
+    shopt -s nullglob
+    sdists=("$package_dir"/nemo_relay-*.tar.gz)
+    if ((${#sdists[@]} == 0)); then
+        echo "Error: No nemo-relay source distributions found in $package_dir"
+        exit 1
+    fi
+
+# --set [output_dir=<path>] [ref_name=<name>]
 package-python-plugin:
     #!/usr/bin/env bash
     {{ bash_helpers }}

@@ -207,11 +207,14 @@ fn llm_request_serializes_explicit_headers_and_content() {
 #[test]
 fn event_accessors_cover_scope_tool_llm_and_mark_variants() {
     let parent_uuid = Some(Uuid::now_v7());
-    let scope_uuid = Uuid::now_v7();
-    let tool_uuid = Uuid::now_v7();
-    let llm_uuid = Uuid::now_v7();
-    let mark_uuid = Uuid::now_v7();
+    assert_scope_event_accessors(parent_uuid);
+    assert_tool_event_accessors(parent_uuid);
+    assert_llm_event_accessors(parent_uuid);
+    assert_mark_event_accessors(parent_uuid);
+}
 
+fn assert_scope_event_accessors(parent_uuid: Option<Uuid>) {
+    let scope_uuid = Uuid::now_v7();
     let scope_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .parent_uuid_opt(parent_uuid)
@@ -239,7 +242,10 @@ fn event_accessors_cover_scope_tool_llm_and_mark_variants() {
     assert_eq!(scope_event.scope_type(), Some(ScopeType::Function));
     assert_eq!(scope_event.input(), Some(&json!({"task": "classify"})));
     assert!(scope_event.timestamp().timestamp() > 0);
+}
 
+fn assert_tool_event_accessors(parent_uuid: Option<Uuid>) {
+    let tool_uuid = Uuid::now_v7();
     let tool_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .parent_uuid_opt(parent_uuid)
@@ -266,7 +272,10 @@ fn event_accessors_cover_scope_tool_llm_and_mark_variants() {
     assert_eq!(tool_event.tool_call_id(), Some("tool-call-1"));
     assert_eq!(tool_event.scope_type(), Some(ScopeType::Tool));
     assert_eq!(tool_event.model_name(), None);
+}
 
+fn assert_llm_event_accessors(parent_uuid: Option<Uuid>) {
+    let llm_uuid = Uuid::now_v7();
     let llm_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .parent_uuid_opt(parent_uuid)
@@ -288,7 +297,10 @@ fn event_accessors_cover_scope_tool_llm_and_mark_variants() {
     assert_eq!(llm_event.model_name(), Some("gpt-test"));
     assert_eq!(llm_event.scope_type(), Some(ScopeType::Llm));
     assert_eq!(llm_event.output(), None);
+}
 
+fn assert_mark_event_accessors(parent_uuid: Option<Uuid>) {
+    let mark_uuid = Uuid::now_v7();
     let mark_event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
             .parent_uuid_opt(parent_uuid)
@@ -818,6 +830,11 @@ fn atof_event_builders_construct_concrete_events() {
 
 #[test]
 fn base_event_and_flattened_specialized_builders_work() {
+    assert_base_and_tool_builders();
+    assert_llm_and_mark_builders();
+}
+
+fn assert_base_and_tool_builders() {
     let base = BaseEvent::builder()
         .parent_uuid(Uuid::nil())
         .name("base-name")
@@ -869,7 +886,9 @@ fn base_event_and_flattened_specialized_builders_work() {
     assert_eq!(tool_end.base.data, None);
     assert_eq!(tool_end.base.metadata, None);
     assert_eq!(tool_end.category_profile, None);
+}
 
+fn assert_llm_and_mark_builders() {
     let llm_start = ScopeEvent::new(
         BaseEvent::builder().name("llm-start").build(),
         ScopeCategory::Start,

@@ -300,4 +300,82 @@ fn noninteractive_editor_guard_is_deterministic() {
         error,
         "configuration error: interactive configuration editing requires a TTY"
     );
+    assert!(ensure_tty_with(true).is_ok());
+}
+
+#[test]
+fn document_accessors_cover_inline_values_defaults_and_invalid_shapes() {
+    let mut document = document(
+        "gateway = { max_hook_payload_bytes = 64, max_passthrough_body_bytes = -1 }\nupstream = { openai_base_url = \"https://example.test\", openai_auth_header = 7 }\nlogging = { level = 9 }\n",
+    );
+
+    assert_eq!(document.path(), Path::new("config.toml"));
+    assert_eq!(document.gateway_summary(), "configured");
+    assert_eq!(document.upstream_summary(), "configured");
+    assert_eq!(document.logging_summary(), "configured");
+    assert_eq!(
+        document.integer_summary("gateway", "max_hook_payload_bytes"),
+        "64"
+    );
+    assert_eq!(
+        document.integer_summary("gateway", "max_passthrough_body_bytes"),
+        "invalid"
+    );
+    assert_eq!(
+        document.string_summary("upstream", "openai_base_url"),
+        "https://example.test"
+    );
+    assert_eq!(document.string_summary("logging", "level"), "invalid");
+    assert_eq!(document.string_summary("logging", "missing"), "unset");
+    assert_eq!(document.secret_summary("anthropic_auth_header"), "unset");
+
+    document
+        .set_string("upstream", "openai_base_url", "https://changed.test".into())
+        .unwrap();
+    assert_eq!(
+        document.string("upstream", "openai_base_url").as_deref(),
+        Some("https://changed.test")
+    );
+    document.clear_key("missing", "value").unwrap();
+    assert!(!document.has_key("missing", "value"));
+}
+
+#[test]
+fn sink_accessors_report_invalid_and_incomplete_entries() {
+    let mut document = document(
+        "[[logging.sinks]]\npath = 7\nlevel = \"debug\"\nqueue_capacity = -1\nmax_file_size_bytes = 1024\n",
+    );
+
+    assert_eq!(document.sink_labels(), ["sink 1 (invalid path)"]);
+    assert_eq!(document.sink_string_summary(0, "path"), "invalid");
+    assert_eq!(document.sink_string_summary(0, "level"), "debug");
+    assert_eq!(document.sink_string_summary(0, "format"), "unset");
+    assert_eq!(
+        document.sink_integer_summary(0, "queue_capacity"),
+        "invalid"
+    );
+    assert_eq!(document.sink_integer_summary(0, "retained_files"), "unset");
+    assert_eq!(document.sink_rotation_summary(0), "incomplete");
+
+    document
+        .set_sink_string(0, "path", "relay.log".into())
+        .unwrap();
+    document.clear_sink_key(0, "level").unwrap();
+    assert!(!document.sink_has_key(0, "level").unwrap());
+    assert_eq!(
+        document.sink_string(0, "path").as_deref(),
+        Some("relay.log")
+    );
+}
+
+#[test]
+fn project_path_defaults_to_start_when_no_ancestor_config_exists() {
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("a/b");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    assert_eq!(
+        project_config_path_with_boundary(&nested, Some(root.path())),
+        nested.join(".nemo-relay/config.toml")
+    );
 }

@@ -98,26 +98,7 @@ fn run_discovered_config_activation_test() {
     // below proves this attempt did not retain the process-wide host claim.
     let config = cstring(r#"{"version":1,"components":[]}"#);
     let empty_specs = cstring("[]");
-    let mut empty_activation = ptr::null_mut();
-    let mut empty_report = ptr::null_mut();
-    assert_eq!(
-        unsafe {
-            api::nemo_relay_initialize_with_dynamic_plugins(
-                config.as_ptr(),
-                empty_specs.as_ptr(),
-                &mut empty_activation,
-                &mut empty_report,
-            )
-        },
-        NemoRelayStatus::InvalidArg
-    );
-    assert!(empty_activation.is_null());
-    assert!(empty_report.is_null());
-    assert!(
-        unsafe { read_last_error() }
-            .unwrap_or_default()
-            .contains("at least one dynamic plugin")
-    );
+    assert_empty_dynamic_specs_rejected(&config, &empty_specs);
 
     std::fs::write(
         &plugins_toml,
@@ -158,22 +139,7 @@ source = "project-file"
         "config": {}
     }]));
 
-    // The file-only component and its config must survive the merge.
-    assert_eq!(report["diagnostics"], json!([]));
-    assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(),
-        Some(&json!({"source": "project-file"}))
-    );
-    assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
-
-    // Mutating the file after startup has no effect: discovery is one-shot.
-    std::fs::write(&plugins_toml, "invalid = [").expect("mutate plugin config after startup");
-    let intercepted = tool_request_intercepts("ffi-layered-tool", json!({"input": true}));
-    assert_eq!(intercepted["file_static"], true);
-    assert_eq!(intercepted["static_saw_dynamic"], false);
-    assert_eq!(intercepted["native_plugin"], true);
-    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 1);
+    write_and_assert_discovered_activation(&report, &plugins_toml);
 
     unsafe {
         assert_eq!(
@@ -192,6 +158,50 @@ source = "project-file"
         unsafe { api::nemo_relay_deregister_plugin(plugin_kind.as_ptr()) },
         NemoRelayStatus::Ok
     );
+}
+
+#[track_caller]
+fn assert_empty_dynamic_specs_rejected(config: &CString, empty_specs: &CString) {
+    let mut empty_activation = ptr::null_mut();
+    let mut empty_report = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_initialize_with_dynamic_plugins(
+                config.as_ptr(),
+                empty_specs.as_ptr(),
+                &mut empty_activation,
+                &mut empty_report,
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(empty_activation.is_null());
+    assert!(empty_report.is_null());
+    assert!(
+        unsafe { read_last_error() }
+            .unwrap_or_default()
+            .contains("at least one dynamic plugin")
+    );
+}
+
+#[track_caller]
+fn write_and_assert_discovered_activation(report: &Json, plugins_toml: &Path) {
+    // The file-only component and its config must survive the merge.
+    assert_eq!(report["diagnostics"], json!([]));
+    assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(),
+        Some(&json!({"source": "project-file"}))
+    );
+    assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
+
+    // Mutating the file after startup has no effect: discovery is one-shot.
+    std::fs::write(plugins_toml, "invalid = [").expect("mutate plugin config after startup");
+    let intercepted = tool_request_intercepts("ffi-layered-tool", json!({"input": true}));
+    assert_eq!(intercepted["file_static"], true);
+    assert_eq!(intercepted["static_saw_dynamic"], false);
+    assert_eq!(intercepted["native_plugin"], true);
+    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 1);
 }
 
 unsafe extern "C" fn discovered_static_register(

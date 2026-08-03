@@ -169,6 +169,10 @@ func TestValidatePluginConfigWarnsMissingStateForTelemetry(t *testing.T) {
 }
 
 func TestConfigureAdaptiveComponentLifecycle(t *testing.T) {
+	runTestInIsolatedWorkingDirectory(t, testConfigureAdaptiveComponentLifecycle)
+}
+
+func testConfigureAdaptiveComponentLifecycle(t *testing.T) {
 	config := NewAdaptiveConfig()
 	config.State = &AdaptiveStateConfig{
 		Backend: NewInMemoryAdaptiveBackend(),

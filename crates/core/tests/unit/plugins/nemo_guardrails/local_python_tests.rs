@@ -113,6 +113,26 @@ fn python_executable_uses_python_environment_before_default() {
 }
 
 #[test]
+fn local_worker_start_reports_an_unavailable_python_executable() {
+    let config = NeMoGuardrailsConfig {
+        local: Some(LocalBackendConfig {
+            python_executable: Some("nemo-relay-python-that-does-not-exist".to_string()),
+            ..LocalBackendConfig::default()
+        }),
+        ..NeMoGuardrailsConfig::default()
+    };
+
+    let error = LocalGuardrailsWorker::start(&config)
+        .err()
+        .expect("an unavailable executable should fail worker startup");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to start NeMo Guardrails local Python worker")
+    );
+}
+
+#[test]
 fn worker_python_path_prepends_configured_path_to_inherited_pythonpath() {
     let configured = std::path::PathBuf::from("fake-guardrails");
     let stdlib = std::path::PathBuf::from("stdlib");
@@ -514,6 +534,200 @@ async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
     assert!(chunk_rx.recv().await.is_none());
 }
 
+#[tokio::test]
+async fn stream_monitor_errors_are_forwarded_to_the_provider_stream() {
+    async fn panicking_monitor() -> FlowResult<()> {
+        panic!("monitor panicked");
+    }
+
+    let blocked = Arc::new(Mutex::new(None));
+
+    for monitor in [
+        tokio::spawn(async { Err(FlowError::Internal("monitor failed".into())) }),
+        tokio::spawn(panicking_monitor()),
+    ] {
+        let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+        assert!(send_stream_monitor_error(monitor, &chunk_tx, &blocked).await);
+        assert!(chunk_rx.recv().await.unwrap().is_err());
+    }
+
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+    *blocked.lock().unwrap() = Some("blocked output".into());
+    assert!(send_stream_monitor_error(tokio::spawn(async { Ok(()) }), &chunk_tx, &blocked).await);
+    assert!(
+        chunk_rx
+            .recv()
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("blocked output")
+    );
+
+    *blocked.lock().unwrap() = None;
+    assert!(!send_stream_monitor_error(tokio::spawn(async { Ok(()) }), &chunk_tx, &blocked).await);
+}
+
+#[tokio::test]
+async fn guarded_provider_stream_forwards_provider_and_channel_failures() {
+    let provider_error = FlowError::Internal("provider failed".into());
+    let provider_stream = LlmJsonStream::new(tokio_stream::iter(vec![Err(provider_error)]));
+    let (text_tx, mut text_rx) = mpsc::channel(2);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        provider_stream,
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Ok(()) }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert!(chunk_rx.recv().await.unwrap().is_err());
+    assert_eq!(text_rx.recv().await, Some(None));
+    assert!(closed_rx.borrow().as_ref().unwrap().is_ok());
+
+    let provider_stream = LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+        "choices": [{"delta": {"content": "hello"}}]
+    }))]));
+    let (text_tx, text_rx) = mpsc::channel(1);
+    drop(text_rx);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        provider_stream,
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Err(FlowError::Internal("monitor closed".into())) }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert!(chunk_rx.recv().await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn guarded_provider_stream_handles_preblocked_dropped_and_cancelled_consumers() {
+    let stream_chunk = || {
+        LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+            "choices": [{"delta": {"content": "hello"}}]
+        }))]))
+    };
+
+    let (text_tx, _text_rx) = mpsc::channel(3);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(2);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        stream_chunk(),
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Ok(()) }),
+        Arc::new(Mutex::new(Some("already blocked".into()))),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert!(chunk_rx.recv().await.unwrap().is_err());
+
+    let (text_tx, _text_rx) = mpsc::channel(3);
+    let (chunk_tx, chunk_rx) = mpsc::channel(1);
+    drop(chunk_rx);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        stream_chunk(),
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { Ok(()) }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+
+    let (text_tx, mut text_rx) = mpsc::channel(1);
+    let (chunk_tx, _chunk_rx) = mpsc::channel(1);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    cancel_tx.send_replace(true);
+    let (closed_tx, _closed_rx) = watch::channel(None);
+    forward_guarded_provider_stream(
+        stream_chunk(),
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        tokio::spawn(async { std::future::pending::<FlowResult<()>>().await }),
+        Arc::new(Mutex::new(None)),
+        cancel_rx,
+        closed_tx,
+    )
+    .await;
+    assert_eq!(text_rx.recv().await, Some(None));
+}
+
+#[test]
+fn local_codec_and_rewrite_helpers_cover_all_provider_surfaces() {
+    for (codec, surface) in [
+        (
+            LocalGuardrailsCodec::OpenAIChat,
+            ProviderSurface::OpenAIChat,
+        ),
+        (
+            LocalGuardrailsCodec::OpenAIResponses,
+            ProviderSurface::OpenAIResponses,
+        ),
+        (
+            LocalGuardrailsCodec::AnthropicMessages,
+            ProviderSurface::AnthropicMessages,
+        ),
+    ] {
+        assert_eq!(codec.provider_surface(), surface);
+        assert_eq!(
+            LocalGuardrailsCodec::from_provider_surface(surface).provider_surface(),
+            surface
+        );
+    }
+
+    let mut config = NeMoGuardrailsConfig {
+        input: false,
+        output: false,
+        ..Default::default()
+    };
+    assert!(resolve_codec(&config).unwrap().is_none());
+    config.input = true;
+    assert!(resolve_codec(&config).is_err());
+    config.codec = Some("unsupported".into());
+    assert!(resolve_codec(&config).is_err());
+
+    let mut annotated = AnnotatedLlmRequest {
+        messages: vec![Message::Assistant {
+            content: None,
+            tool_calls: None,
+            name: None,
+        }],
+        ..Default::default()
+    };
+    replace_last_role_content(&mut annotated, "assistant", "rewritten".into()).unwrap();
+    assert!(matches!(
+        &annotated.messages[0],
+        Message::Assistant {
+            content: Some(MessageContent::Text(content)),
+            ..
+        } if content == "rewritten"
+    ));
+    assert!(replace_last_role_content(&mut annotated, "user", "missing".into()).is_err());
+    assert!(modified_tool_payload("[]", "arguments").is_err());
+}
+
 #[test]
 fn parse_check_result_rejects_unknown_status() {
     assert!(matches!(
@@ -530,6 +744,293 @@ fn parse_check_result_rejects_unknown_status() {
             .to_string()
             .contains("unexpected worker check status: surprising"),
         "unexpected error: {error}"
+    );
+    assert!(parse_check_result(json!({"status": 7})).is_err());
+}
+
+#[test]
+fn worker_envelope_helpers_cover_delivery_shutdown_and_default_results() {
+    assert!(set_request_id(&mut Json::Null, "1").is_err());
+    let mut payload = json!({"command": "check"});
+    set_request_id(&mut payload, "request-1").unwrap();
+    assert_eq!(payload["id"], json!("request-1"));
+
+    let waiters = Arc::new(Mutex::new(HashMap::new()));
+    let stream_events = Arc::new(Mutex::new(HashMap::new()));
+    let (waiter_tx, waiter_rx) = std_mpsc::channel();
+    waiters.lock().unwrap().insert("unary".into(), waiter_tx);
+    dispatch_worker_envelope(
+        &waiters,
+        &stream_events,
+        WorkerEnvelope {
+            id: "unary".into(),
+            ok: true,
+            result: Some(json!({"ok": true})),
+            error: None,
+            event: None,
+            message: None,
+        },
+    );
+    assert!(waiter_rx.recv().unwrap().ok);
+
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+    stream_events
+        .lock()
+        .unwrap()
+        .insert("stream".into(), stream_tx);
+    dispatch_worker_envelope(
+        &waiters,
+        &stream_events,
+        WorkerEnvelope {
+            id: "stream".into(),
+            ok: true,
+            result: None,
+            error: None,
+            event: Some("done".into()),
+            message: None,
+        },
+    );
+    assert_eq!(stream_rx.try_recv().unwrap().event.as_deref(), Some("done"));
+
+    let (waiter_tx, waiter_rx) = std_mpsc::channel();
+    waiters.lock().unwrap().insert("closed".into(), waiter_tx);
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+    stream_events
+        .lock()
+        .unwrap()
+        .insert("closed-stream".into(), stream_tx);
+    notify_worker_closed(&waiters, &stream_events, "worker gone".into());
+    assert_eq!(
+        waiter_rx.recv().unwrap().error.as_deref(),
+        Some("worker gone")
+    );
+    assert_eq!(
+        stream_rx.try_recv().unwrap().error.as_deref(),
+        Some("worker gone")
+    );
+
+    assert_eq!(
+        worker_result(WorkerEnvelope {
+            id: "ok".into(),
+            ok: true,
+            result: None,
+            error: None,
+            event: None,
+            message: None,
+        })
+        .unwrap(),
+        Json::Null
+    );
+    assert!(
+        worker_result(WorkerEnvelope {
+            id: "error".into(),
+            ok: false,
+            result: None,
+            error: None,
+            event: None,
+            message: None,
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("worker failed")
+    );
+}
+
+#[test]
+fn worker_command_writer_reports_stored_and_closed_channel_errors() {
+    let (sender, receiver) = std_mpsc::channel();
+    let writer = WorkerCommandWriter {
+        sender,
+        error: Arc::new(Mutex::new(Some("broken pipe".into()))),
+        handle: None,
+    };
+    assert!(
+        writer
+            .send("ignored".into())
+            .unwrap_err()
+            .to_string()
+            .contains("broken pipe")
+    );
+    drop(receiver);
+
+    let (sender, receiver) = std_mpsc::channel();
+    drop(receiver);
+    let writer = WorkerCommandWriter {
+        sender,
+        error: Arc::new(Mutex::new(None)),
+        handle: None,
+    };
+    assert!(
+        writer
+            .send("ignored".into())
+            .unwrap_err()
+            .to_string()
+            .contains("channel closed")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_reader_handles_blank_valid_invalid_and_eof_lines() {
+    {
+        let worker = monitor_test_worker();
+        let (sender, receiver) = std_mpsc::channel();
+        worker.waiters.lock().unwrap().insert("ok".into(), sender);
+        let mut valid_source = Command::new("sh")
+            .arg("-c")
+            .arg("printf '\n{\"id\":\"ok\",\"ok\":true}\n'")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        worker.spawn_reader(valid_source.stdout.take().unwrap());
+        assert!(receiver.recv_timeout(Duration::from_secs(1)).unwrap().ok);
+        valid_source.wait().unwrap();
+    }
+
+    let worker = monitor_test_worker();
+    let (sender, receiver) = std_mpsc::channel();
+    worker
+        .waiters
+        .lock()
+        .unwrap()
+        .insert("invalid".into(), sender);
+    let mut invalid_source = Command::new("sh")
+        .arg("-c")
+        .arg("printf 'not-json\n'")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    worker.spawn_reader(invalid_source.stdout.take().unwrap());
+    assert!(
+        receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .error
+            .unwrap()
+            .contains("invalid worker response")
+    );
+    invalid_source.wait().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_worker_writer_cleans_up_unary_and_stream_registrations() {
+    let worker = monitor_test_worker();
+    let mut request = json!({"command": "check"});
+    assert!(worker.send_request(&mut request).is_err());
+    assert!(worker.waiters.lock().unwrap().is_empty());
+
+    assert!(worker.start_stream(vec![json!({"role": "user"})]).is_err());
+    assert!(worker.stream_events.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn guarded_stream_close_reports_an_early_cleanup_exit() {
+    let (_chunk_tx, chunk_rx) = mpsc::channel(1);
+    let (cancel, _cancel_rx) = watch::channel(false);
+    let (closed_tx, closed) = watch::channel(None);
+    drop(closed_tx);
+    let mut stream = GuardedProviderStream {
+        receiver: ReceiverStream::new(chunk_rx),
+        cancel,
+        closed,
+    };
+    assert!(
+        Pin::new(&mut stream)
+            .close()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("cleanup task ended early")
+    );
+}
+
+#[cfg(unix)]
+fn monitor_test_worker() -> Arc<LocalGuardrailsWorker> {
+    Arc::new(LocalGuardrailsWorker {
+        writer: Mutex::new(None),
+        child: Mutex::new(Command::new("sleep").arg("60").spawn().unwrap()),
+        waiters: Arc::new(Mutex::new(HashMap::new())),
+        stream_events: Arc::new(Mutex::new(HashMap::new())),
+        next_id: AtomicU64::new(0),
+        shutdown_started: AtomicBool::new(false),
+    })
+}
+
+#[cfg(unix)]
+async fn run_monitor_event(event: Option<WorkerEnvelope>) -> (FlowResult<()>, Option<String>) {
+    let worker = monitor_test_worker();
+    let (text_tx, text_rx) = mpsc::channel(1);
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let blocked = Arc::new(Mutex::new(None));
+    if let Some(event) = event {
+        event_tx.send(event).unwrap();
+    }
+    drop(event_tx);
+    let result = monitor_guardrails_stream(
+        worker,
+        "stream-id".into(),
+        text_rx,
+        event_rx,
+        Arc::clone(&blocked),
+    )
+    .await;
+    drop(text_tx);
+    let message = blocked.lock().unwrap().clone();
+    (result, message)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stream_monitor_handles_terminal_worker_event_variants() {
+    let envelope = |ok, event: &str, error: Option<&str>, message: Option<&str>| WorkerEnvelope {
+        id: "stream-id".into(),
+        ok,
+        result: None,
+        error: error.map(str::to_string),
+        event: Some(event.into()),
+        message: message.map(str::to_string),
+    };
+
+    let (result, blocked) = run_monitor_event(Some(envelope(
+        true,
+        "blocked",
+        None,
+        Some("policy blocked output"),
+    )))
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(blocked.as_deref(), Some("policy blocked output"));
+
+    assert!(
+        run_monitor_event(Some(envelope(true, "done", None, None)))
+            .await
+            .0
+            .is_ok()
+    );
+    assert!(
+        run_monitor_event(Some(envelope(false, "error", None, None)))
+            .await
+            .0
+            .unwrap_err()
+            .to_string()
+            .contains("worker stream failed")
+    );
+    assert!(
+        run_monitor_event(Some(envelope(true, "unexpected", None, None)))
+            .await
+            .0
+            .unwrap_err()
+            .to_string()
+            .contains("unknown stream event")
+    );
+    assert!(
+        run_monitor_event(None)
+            .await
+            .0
+            .unwrap_err()
+            .to_string()
+            .contains("closed unexpectedly")
     );
 }
 
@@ -573,6 +1074,23 @@ fn stream_text_extraction_handles_supported_codecs() {
         ),
         Some("hello".to_string())
     );
+    for (codec, chunk) in [
+        (LocalGuardrailsCodec::OpenAIChat, Json::Null),
+        (
+            LocalGuardrailsCodec::OpenAIResponses,
+            json!({"type": "response.completed", "delta": "ignored"}),
+        ),
+        (
+            LocalGuardrailsCodec::AnthropicMessages,
+            json!({"type": "message_delta", "delta": {"type": "text_delta", "text": "ignored"}}),
+        ),
+        (
+            LocalGuardrailsCodec::AnthropicMessages,
+            json!({"type": "content_block_delta", "delta": {"type": "input_json_delta"}}),
+        ),
+    ] {
+        assert_eq!(extract_stream_text(codec, &chunk), None);
+    }
 }
 
 #[cfg(unix)]
