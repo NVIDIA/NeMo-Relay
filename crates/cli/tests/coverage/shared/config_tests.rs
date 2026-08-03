@@ -3429,6 +3429,38 @@ fn malformed_shared_config_reports_context() {
 
     assert!(error.contains("invalid gateway configuration shape"));
 
+    let invalid_upstream_key = temp.path().join("invalid-upstream-key.toml");
+    std::fs::write(
+        &invalid_upstream_key,
+        "[upstream]\nopenai_baseurl = \"https://example.test/v1\"\n",
+    )
+    .unwrap();
+    let args = GatewayOverrides {
+        config: Some(invalid_upstream_key),
+        ..GatewayOverrides::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("invalid gateway configuration shape"));
+    assert!(error.contains("openai_baseurl"));
+
+    let invalid_nested_upstream = temp.path().join("invalid-nested-upstream.toml");
+    std::fs::write(
+        &invalid_nested_upstream,
+        "[upstream.openai]\nbase_url = \"https://example.test/v1\"\n",
+    )
+    .unwrap();
+    let args = GatewayOverrides {
+        config: Some(invalid_nested_upstream),
+        ..GatewayOverrides::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("invalid gateway configuration shape"));
+    assert!(error.contains("openai"));
+
     let plugin_config = temp.path().join("config-with-invalid-plugins.toml");
     std::fs::write(&plugin_config, "").unwrap();
     std::fs::write(temp.path().join("plugins.toml"), "version = [").unwrap();

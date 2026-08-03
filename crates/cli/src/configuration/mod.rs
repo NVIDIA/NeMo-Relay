@@ -65,6 +65,7 @@ struct FileGatewayConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileUpstreamConfig {
     openai_base_url: Option<String>,
     openai_auth_header: Option<String>,
@@ -1214,14 +1215,23 @@ pub(crate) fn user_config_dir() -> Option<PathBuf> {
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
 // are ignored, preserving defaults and prior merge layers.
 fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Result<(), CliError> {
-    let config: FileConfig = value.try_into().map_err(|error| {
-        CliError::Config(format!("invalid gateway configuration shape: {error}"))
-    })?;
+    let config = parse_file_config(value)?;
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);
     logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
     Ok(())
+}
+
+pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<(), CliError> {
+    let _ = parse_file_config(value)?;
+    Ok(())
+}
+
+fn parse_file_config(value: toml::Value) -> Result<FileConfig, CliError> {
+    value
+        .try_into()
+        .map_err(|error| CliError::Config(format!("invalid gateway configuration shape: {error}")))
 }
 
 fn apply_file_gateway_config(
