@@ -422,6 +422,7 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
     .unwrap();
     let invalid_shape_layer = layer_status(&invalid_shape);
     assert_eq!(invalid_shape_layer.status, Status::Fail);
+    assert!(!invalid_shape_layer.active);
     assert!(
         invalid_shape_layer
             .details
