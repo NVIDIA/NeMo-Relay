@@ -365,9 +365,9 @@ impl RampartSanitizer {
     }
 
     fn sanitize_texts(&self, mut texts: Vec<SelectedText>) -> Result<Vec<String>, SanitizeError> {
-        let selected = (0..texts.len()).collect::<Vec<_>>();
-        if !selected.is_empty() {
-            match self.sanitize_batch(&mut texts, &selected) {
+        if !texts.is_empty() {
+            let selected_text_count = texts.len();
+            match self.sanitize_batch(&mut texts) {
                 Ok(()) => {}
                 Err(DetectionError::PayloadLimit) => {
                     return Err(SanitizeError::PayloadLimit);
@@ -377,12 +377,12 @@ impl RampartSanitizer {
                         target: "nemo_relay.plugin",
                         event = "rampart_pii_inference_failed",
                         plugin_kind = super::RAMPART_PII_PLUGIN_KIND,
-                        selected_text_count = selected.len(),
+                        selected_text_count,
                         reason = "model_or_output";
                         "Rampart PII inference failed closed"
                     );
-                    for index in selected {
-                        texts[index].text = self.replacement.to_string();
+                    for selected in &mut texts {
+                        selected.text = self.replacement.to_string();
                     }
                 }
             }
@@ -390,19 +390,15 @@ impl RampartSanitizer {
         Ok(texts.into_iter().map(|selected| selected.text).collect())
     }
 
-    fn sanitize_batch(
-        &self,
-        texts: &mut [SelectedText],
-        batch: &[usize],
-    ) -> Result<(), DetectionError> {
-        let selected = batch
+    fn sanitize_batch(&self, texts: &mut [SelectedText]) -> Result<(), DetectionError> {
+        let selected = texts
             .iter()
-            .map(|index| texts[*index].text.as_str())
+            .map(|selected| selected.text.as_str())
             .collect::<Vec<_>>();
         let detections = self.detector.detect(&selected)?;
-        let mut by_text = vec![Vec::<Detection>::new(); batch.len()];
+        let mut by_text = vec![Vec::<Detection>::new(); texts.len()];
         for detection in detections {
-            if detection.text_index >= batch.len()
+            if detection.text_index >= texts.len()
                 || !detection.score.is_finite()
                 || !(0.0..=1.0).contains(&detection.score)
             {
@@ -413,7 +409,7 @@ impl RampartSanitizer {
             by_text[detection.text_index].push(detection);
         }
 
-        for (original_index, mut detections) in batch.iter().copied().zip(by_text) {
+        for (selected, mut detections) in texts.iter_mut().zip(by_text) {
             detections.retain(|detection| {
                 detection.score >= self.min_score
                     && !self.excluded_labels.contains(&detection.label)
@@ -422,7 +418,7 @@ impl RampartSanitizer {
                 continue;
             }
             detections.sort_by_key(|detection| (detection.start_utf8, detection.end_utf8));
-            let text = &texts[original_index].text;
+            let text = &selected.text;
             let mut previous_end = 0;
             for detection in &detections {
                 if detection.start_utf8 >= detection.end_utf8
@@ -445,7 +441,7 @@ impl RampartSanitizer {
                     self.replacement.as_ref(),
                 );
             }
-            texts[original_index].text = redacted;
+            selected.text = redacted;
         }
         Ok(())
     }
@@ -1403,13 +1399,32 @@ mod tests {
             .is_none()
         );
         assert!(
-            llm_sanitize_response_callback(backend)(
+            llm_sanitize_response_callback(backend.clone())(
                 serde_json::json!({"message": private}),
                 LlmSanitizeResponseContext::default(),
             )
             .await
             .unwrap()
             .is_none()
+        );
+
+        let codec = build_response_codec(ProviderSurface::OpenAIChat);
+        let payload = serde_json::json!({
+            "id": "chatcmpl-payload-limit",
+            "model": "model",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": private},
+                "finish_reason": "stop"
+            }]
+        });
+        assert_eq!(
+            backend.sanitize_response_with_codec(
+                codec.as_ref(),
+                ProviderSurface::OpenAIChat,
+                payload,
+            ),
+            Err(SanitizeError::PayloadLimit)
         );
     }
 

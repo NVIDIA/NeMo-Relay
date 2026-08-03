@@ -726,6 +726,13 @@ mod tests {
                 .iter()
                 .any(|item| item.field.as_deref() == Some("max_windows_per_payload"))
         );
+
+        config.insert("max_windows_per_payload".into(), Json::from(0_usize));
+        assert!(
+            validate_rampart_pii_config(&config, None)
+                .iter()
+                .any(|item| item.field.as_deref() == Some("max_windows_per_payload"))
+        );
     }
 
     #[tokio::test]

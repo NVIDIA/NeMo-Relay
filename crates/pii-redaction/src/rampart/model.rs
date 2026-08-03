@@ -64,7 +64,7 @@ pub(super) enum DetectionError {
 }
 
 impl DetectionError {
-    fn into_plugin_error(self) -> PluginError {
+    fn into_warmup_error(self) -> PluginError {
         match self {
             Self::PayloadLimit => inference_error("Rampart warmup exceeded its payload limit"),
             Self::Model(error) => error,
@@ -211,7 +211,7 @@ impl RampartDetector {
         };
         detector
             .detect(&["warmup"])
-            .map_err(DetectionError::into_plugin_error)?;
+            .map_err(DetectionError::into_warmup_error)?;
         Ok(detector)
     }
 
