@@ -89,6 +89,26 @@ fn set_conflicting_runtime_owner_for_tests() {
     };
 }
 
+fn observability_destination_document(destination: &str) -> Json {
+    json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {"enabled": true, "sinks": [destination]},
+                "opentelemetry": {"enabled": true, "endpoints": [destination]},
+                "atif": {"enabled": true, "storage": [destination]}
+            }
+        }]
+    })
+}
+
+fn programmatic_observability_config(config: Json) -> PluginConfig {
+    serde_json::from_value(json!({
+        "components": [{"kind": "observability", "config": config}]
+    }))
+    .unwrap()
+}
+
 impl Plugin for TestPlugin {
     fn plugin_kind(&self) -> &str {
         "test.plugin"
@@ -2487,6 +2507,61 @@ fn test_plugin_config_overlay_enables_programmatically_declared_components() {
     // A kind the code config does not declare is inherited from the file.
     assert_eq!(typed.components[1].kind, "adaptive");
     assert!(!typed.components[1].enabled);
+}
+
+#[test]
+fn test_programmatic_observability_destinations_concatenate_with_discovered_files_and_warn() {
+    let lower = PathBuf::from("lower/plugins.toml");
+    let higher = PathBuf::from("higher/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![
+        (
+            lower.clone(),
+            observability_destination_document("lower-secret-destination"),
+        ),
+        (
+            higher.clone(),
+            observability_destination_document("higher-secret-destination"),
+        ),
+    ])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true, "sinks": ["programmatic"]},
+        "opentelemetry": {"enabled": true, "endpoints": ["programmatic"]},
+        "atif": {"enabled": true, "storage": ["programmatic"]}
+    }));
+
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    let config = &resolved.config.components[0].config;
+    for (section, field) in [
+        ("atof", "sinks"),
+        ("opentelemetry", "endpoints"),
+        ("atif", "storage"),
+    ] {
+        assert_eq!(
+            config[section][field],
+            json!([
+                "programmatic",
+                "higher-secret-destination",
+                "lower-secret-destination"
+            ])
+        );
+    }
+    assert_eq!(resolved.diagnostics.len(), 2);
+    for (diagnostic, source) in resolved.diagnostics.iter().zip([lower, higher]) {
+        assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+        assert_eq!(diagnostic.code, "plugin.configuration_inherited");
+        assert!(diagnostic.component.is_none());
+        assert!(diagnostic.field.is_none());
+        assert!(diagnostic.message.contains(&source.display().to_string()));
+        assert!(!diagnostic.message.contains("secret-destination"));
+    }
+}
+
+#[test]
+fn test_no_inherited_configuration_warning_without_discovered_files() {
+    let discovered = resolve_discovered_plugin_config(Vec::new()).unwrap();
+    let resolved = resolve_programmatic_plugin_config(discovered, PluginConfig::default()).unwrap();
+    assert!(resolved.diagnostics.is_empty());
 }
 
 #[test]

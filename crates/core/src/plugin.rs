@@ -1628,11 +1628,19 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
 /// one-time configuration resolution as regular harness-native initialization.
 pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<ResolvedPluginConfig> {
     let discovered = resolve_default_file_plugin_config()?;
-    let diagnostics = programmatic_enable_override_diagnostics(
+    resolve_programmatic_plugin_config(discovered, config)
+}
+
+fn resolve_programmatic_plugin_config(
+    discovered: DiscoveredPluginConfig,
+    config: PluginConfig,
+) -> Result<ResolvedPluginConfig> {
+    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources);
+    diagnostics.extend(programmatic_enable_override_diagnostics(
         &discovered.value,
         &discovered.enabled_sources,
         &config,
-    );
+    ));
     let mut base = discovered.value;
     layer_config(&mut base, plugin_config_overlay_value(&config)?);
     Ok(ResolvedPluginConfig {
@@ -1703,19 +1711,26 @@ fn resolve_default_file_plugin_config() -> Result<DiscoveredPluginConfig> {
     let paths =
         default_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir());
     let documents = read_plugin_config_files(paths)?;
+    resolve_discovered_plugin_config(documents)
+}
+
+fn resolve_discovered_plugin_config(
+    documents: Vec<(PathBuf, Json)>,
+) -> Result<DiscoveredPluginConfig> {
     let enabled_sources = component_enabled_sources(&documents);
-    let value = merge_plugin_config_documents(documents)?
-        .map(|(value, _sources)| value)
-        .unwrap_or_else(|| Json::Object(Map::new()));
+    let (value, sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
     Ok(DiscoveredPluginConfig {
         value,
         enabled_sources,
+        sources,
     })
 }
 
 struct DiscoveredPluginConfig {
     value: Json,
     enabled_sources: HashMap<String, ComponentEnabledSource>,
+    sources: Vec<PathBuf>,
 }
 
 struct ComponentEnabledSource {
@@ -1780,6 +1795,28 @@ fn component_enabled_sources(
         }
     }
     sources
+}
+
+fn inherited_plugin_config_diagnostics(sources: &[PathBuf]) -> Vec<ConfigDiagnostic> {
+    sources
+        .iter()
+        .map(|source| {
+            let source = source.display().to_string();
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_inherited",
+                config_path = source.as_str();
+                "Inherited plugin configuration from discovered file"
+            );
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "plugin.configuration_inherited".to_string(),
+                component: None,
+                field: None,
+                message: format!("inherited plugin configuration from discovered file: {source}"),
+            }
+        })
+        .collect()
 }
 
 fn programmatic_enable_override_diagnostics(

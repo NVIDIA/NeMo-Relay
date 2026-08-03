@@ -123,10 +123,10 @@ pub(crate) async fn collect_report(
         configuration: collect_configuration(
             cwd.as_deref(),
             home.as_deref(),
+            &resolved,
             gateway_overrides,
             resolution,
             configured_agents,
-            &resolved.dynamic_plugins,
             &plugin_diagnostics,
         ),
         agents: collect_agents(target_agent, &resolved).await,
@@ -139,10 +139,10 @@ pub(crate) async fn collect_report(
 fn collect_configuration(
     cwd: Option<&Path>,
     home: Option<&Path>,
+    resolved: &ResolvedConfig,
     gateway_overrides: &GatewayOverrides,
     resolution: Check,
     configured_agents: Vec<String>,
-    dynamic_plugins: &[crate::configuration::ResolvedDynamicPluginConfig],
     plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
     let explicit_config = gateway_overrides.config.is_some();
@@ -165,12 +165,18 @@ fn collect_configuration(
         layer_status(&global_path)
     };
     let system = layer_status(&system_path);
+    let upstream_auth = if matches!(resolution.status, Status::Fail) {
+        UpstreamAuthInfo::unknown()
+    } else {
+        UpstreamAuthInfo::from_effective_gateway_auth(&resolved.gateway)
+    };
 
     ConfigurationInfo {
         explicit,
         workspace,
         global,
         system,
+        upstream_auth,
         plugin_configs: diagnostic_plugin_config_paths(
             gateway_overrides.config.as_ref(),
             gateway_overrides.plugin_config_path.as_ref(),
@@ -190,7 +196,8 @@ fn collect_configuration(
         // out of FileConfig. Doctor reports `None` until that lands.
         default_agent: None,
         configured_agents,
-        dynamic_plugins: dynamic_plugins
+        dynamic_plugins: resolved
+            .dynamic_plugins
             .iter()
             .map(|plugin| DynamicPluginReferenceInfo {
                 plugin_id: plugin.plugin_id.clone(),
@@ -1368,8 +1375,24 @@ pub(crate) async fn run_doctor(
     target_agent: Option<CodingAgent>,
     json: bool,
     gateway_overrides: &GatewayOverrides,
+    logging_fallback_error: Option<&CliError>,
 ) -> Result<std::process::ExitCode, CliError> {
-    let report = collect_report(target_agent, gateway_overrides).await?;
+    let mut report = collect_report(target_agent, gateway_overrides).await?;
+    if let Some(error) = logging_fallback_error {
+        let logging_details = format!(
+            "could not resolve logging configuration: {error}; repair or recreate the named logging configuration file"
+        );
+        if report.configuration.resolution.status == Status::Pass {
+            report.configuration.resolution.status = Status::Fail;
+            report.configuration.resolution.details = logging_details;
+        } else {
+            report
+                .configuration
+                .resolution
+                .details
+                .push_str(&format!("; additionally, {logging_details}"));
+        }
+    }
     log::info!(
         target: "nemo_relay.diagnostics",
         event = "diagnostics_completed",
