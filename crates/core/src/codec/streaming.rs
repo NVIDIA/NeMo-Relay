@@ -27,6 +27,11 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 use serde::{Deserialize, Serialize};
 
+// Bound one provider event independently of Relay's bounded event queue. Keep the limit generous
+// for large tool or multimodal deltas; without a terminator there is no event to enqueue and
+// backpressure cannot apply.
+const MAX_SSE_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
 /// Provider-neutral incremental stream item used by cross-protocol transcoders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -98,7 +103,7 @@ pub trait StreamingCodec: Send + Sync {
 /// terminator are retained for the next call.
 #[derive(Default)]
 pub struct SseEventDecoder {
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 /// One decoded SSE frame, paired with the parsed `data:` payload.
@@ -118,15 +123,13 @@ impl SseEventDecoder {
 
     /// Appends `bytes` to the internal buffer and returns every now-complete SSE event.
     ///
-    /// Bytes are interpreted as UTF-8 with replacement characters for invalid sequences; provider
-    /// SSE streams are well-formed UTF-8 in practice, but lossy decoding keeps the decoder honest
-    /// rather than failing on a single corrupt chunk.
+    /// UTF-8 is validated only after a complete frame arrives, so a multibyte code point may span
+    /// arbitrary transport chunks without being replaced or corrupted.
     ///
     /// Returns `Ok(events)` containing zero or more events whose `data:` payloads parsed
-    /// successfully. Frames whose `data:` line is non-empty but does not parse as JSON are
-    /// surfaced as [`FlowError::Internal`] so the caller can decide whether to abort the stream
-    /// or skip the frame; frames with no `data:` line at all (e.g. SSE heartbeats) are silently
-    /// dropped.
+    /// successfully. Invalid UTF-8, oversized frames, and non-empty `data:` payloads that do not
+    /// parse as JSON are surfaced as [`FlowError::Internal`] so the caller can abort the stream;
+    /// frames with no `data:` line at all (e.g. SSE heartbeats) are silently dropped.
     pub fn push_bytes(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>> {
         self.push_bytes_results(bytes).into_iter().collect()
     }
@@ -141,24 +144,65 @@ impl SseEventDecoder {
         // providers emit mixed line endings on the wire; normalizing once here keeps the inner
         // loop cheap. If CRLF is split across chunks, retain the trailing CR until the next append
         // and remove it only when the next byte completes the sequence.
-        if self.buffer.ends_with('\r') && bytes.first() == Some(&b'\n') {
+        // The previous call drained every complete frame, so a new delimiter can begin only at
+        // the former trailing byte or inside this chunk. Avoid rescanning a growing partial frame
+        // from its beginning on every network read.
+        let mut scan_from = self.buffer.len().saturating_sub(1);
+        let mut offset = 0;
+        if self.buffer.last() == Some(&b'\r') && bytes.first() == Some(&b'\n') {
             self.buffer.pop();
+            scan_from = self.buffer.len().saturating_sub(1);
+            self.buffer.push(b'\n');
+            offset = 1;
         }
-        let chunk = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
-        self.buffer.push_str(&chunk);
+        while offset < bytes.len() {
+            if bytes[offset] == b'\r' && bytes.get(offset + 1) == Some(&b'\n') {
+                self.buffer.push(b'\n');
+                offset += 2;
+            } else {
+                self.buffer.push(bytes[offset]);
+                offset += 1;
+            }
+        }
+
         let mut results = Vec::new();
-        while let Some(cut) = self.buffer.find("\n\n") {
-            let frame: String = self.buffer.drain(..cut).collect();
+        while let Some(relative_cut) = self.buffer[scan_from..]
+            .windows(2)
+            .position(|pair| pair == b"\n\n")
+        {
+            let cut = scan_from + relative_cut;
+            if cut > MAX_SSE_FRAME_BYTES {
+                self.buffer.clear();
+                results.push(Err(oversized_sse_frame_error()));
+                return results;
+            }
+            let frame: Vec<u8> = self.buffer.drain(..cut).collect();
             // Drop the `\n\n` terminator itself.
             self.buffer.drain(..2);
-            match parse_sse_frame(&frame) {
+            scan_from = 0;
+            let frame = match std::str::from_utf8(&frame) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    self.buffer.clear();
+                    results.push(Err(FlowError::Internal(format!(
+                        "streaming codec received invalid UTF-8 SSE frame: {error}"
+                    ))));
+                    return results;
+                }
+            };
+            match parse_sse_frame(frame) {
                 Ok(Some(event)) => results.push(Ok(event)),
                 Ok(None) => {}
                 Err(error) => {
+                    self.buffer.clear();
                     results.push(Err(error));
-                    break;
+                    return results;
                 }
             }
+        }
+        if self.buffer.len() > MAX_SSE_FRAME_BYTES {
+            self.buffer.clear();
+            results.push(Err(oversized_sse_frame_error()));
         }
         results
     }
@@ -170,12 +214,23 @@ impl SseEventDecoder {
     /// captures the last bytes the upstream sent before disconnect.
     pub fn finish(mut self) -> Result<Option<SseEvent>> {
         let trailing = std::mem::take(&mut self.buffer);
+        let trailing = std::str::from_utf8(&trailing).map_err(|error| {
+            FlowError::Internal(format!(
+                "streaming codec received incomplete or invalid UTF-8 at end of SSE stream: {error}"
+            ))
+        })?;
         if trailing.trim().is_empty() {
             Ok(None)
         } else {
-            parse_sse_frame(&trailing)
+            parse_sse_frame(trailing)
         }
     }
+}
+
+fn oversized_sse_frame_error() -> FlowError {
+    FlowError::Internal(format!(
+        "streaming codec SSE frame exceeded the {MAX_SSE_FRAME_BYTES}-byte limit"
+    ))
 }
 
 // Parses a single SSE frame. Returns `None` for frames without a `data:` line, `Some(event)` for

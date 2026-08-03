@@ -32,6 +32,48 @@ fn buffers_partial_frames_across_pushes() {
 }
 
 #[test]
+fn preserves_utf8_code_points_split_across_transport_chunks() {
+    let mut decoder = SseEventDecoder::new();
+    let frame = "data: {\"text\":\"hello 🦀\"}\n\n".as_bytes();
+    let split = frame.iter().position(|byte| *byte == 0xf0).unwrap() + 2;
+
+    assert!(decoder.push_bytes(&frame[..split]).unwrap().is_empty());
+    let events = decoder.push_bytes(&frame[split..]).unwrap();
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].data, json!({"text": "hello 🦀"}));
+}
+
+#[test]
+fn rejects_an_unterminated_frame_above_the_retention_limit() {
+    let mut decoder = SseEventDecoder::new();
+    let mut frame = b"data: \"".to_vec();
+    frame.resize(MAX_SSE_FRAME_BYTES + 1, b'x');
+
+    let error = decoder.push_bytes(&frame).unwrap_err().to_string();
+
+    assert!(error.contains("SSE frame exceeded"), "{error}");
+    assert!(error.contains(&MAX_SSE_FRAME_BYTES.to_string()), "{error}");
+}
+
+#[test]
+fn preserves_completed_events_before_an_oversized_partial_frame() {
+    let mut decoder = SseEventDecoder::new();
+    let mut bytes = b"data: {\"chunk\":\"first\"}\n\ndata: \"".to_vec();
+    bytes.resize(MAX_SSE_FRAME_BYTES + 32, b'x');
+
+    let mut results = decoder.push_bytes_results(&bytes).into_iter();
+
+    assert_eq!(
+        results.next().unwrap().unwrap().data,
+        json!({"chunk": "first"})
+    );
+    let error = results.next().unwrap().unwrap_err().to_string();
+    assert!(error.contains("SSE frame exceeded"), "{error}");
+    assert!(results.next().is_none());
+}
+
+#[test]
 fn normalizes_crlf_terminator_split_across_pushes() {
     let mut decoder = SseEventDecoder::new();
     assert!(
